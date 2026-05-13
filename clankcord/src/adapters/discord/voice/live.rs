@@ -16,7 +16,7 @@ use serenity::model::application::{ComponentInteraction, Interaction};
 use serenity::model::gateway::{GatewayIntents, Ready};
 use serenity::model::id::{ChannelId, GuildId};
 use serenity::model::voice::VoiceState;
-use songbird::driver::DecodeMode;
+use songbird::driver::{DecodeConfig, DecodeMode};
 use songbird::events::{CoreEvent, Event, EventContext, EventHandler as VoiceEventHandler};
 use songbird::serenity::SerenityInit;
 use songbird::{Config as SongbirdConfig, Songbird};
@@ -138,7 +138,7 @@ impl LiveVoiceAdapter {
 
     async fn start_bot(self: &Arc<Self>, bot_id: String, token: String) -> Result<()> {
         let voice = Songbird::serenity_from_config(
-            SongbirdConfig::default().decode_mode(DecodeMode::Decode),
+            SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default())),
         );
         let handler = LiveDiscordHandler {
             adapter: Arc::downgrade(self),
@@ -280,11 +280,10 @@ impl LiveVoiceAdapter {
                 );
             }
             Err(error) => {
-                let status = self
-                    .mark_join_failed(&request.bot_id, &error.to_string())
-                    .await;
+                let error_text = error_chain(&error);
+                let status = self.mark_join_failed(&request.bot_id, &error_text).await;
                 return Err(discord_tool_error(format!(
-                    "failed to join {} with {}: {error}",
+                    "failed to join {} with {}: {error_text}",
                     room.channel_name, request.bot_id
                 ))
                 .context(format!("bot status after failure: {status:?}")));
@@ -1067,6 +1066,19 @@ fn clipped_text(content: &str, limit: usize) -> String {
         clipped.push_str("...");
     }
     clipped
+}
+
+fn error_chain(error: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = error.source();
+    while let Some(error) = source {
+        let text = error.to_string();
+        if !text.trim().is_empty() {
+            parts.push(text);
+        }
+        source = error.source();
+    }
+    parts.join(": ")
 }
 
 fn first_non_empty(values: impl IntoIterator<Item = String>) -> String {

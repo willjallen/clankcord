@@ -127,12 +127,14 @@ impl Runtime {
             }));
         }
 
-        self.set_room_manual_hold(
-            &room,
-            self.manual_join_hold_seconds,
-            reason,
-            requested_by_user_id,
-        )?;
+        if should_record_manual_hold_for_join(reason) {
+            self.set_room_manual_hold(
+                &room,
+                self.manual_join_hold_seconds,
+                reason,
+                requested_by_user_id,
+            )?;
+        }
 
         let Some(bot) = self.available_voice_bot() else {
             return Ok(json!({
@@ -222,6 +224,13 @@ impl Runtime {
             }
             Err(error) => {
                 self.mark_bot_join_failed(&bot.bot_id, &error.to_string())?;
+                let _ = self.suppress_room_auto_join(
+                    &room,
+                    self.manual_leave_cooldown_seconds,
+                    "join_failed",
+                    requested_by_user_id,
+                    true,
+                );
                 let _ = self.timeline_store.close_capture_run(
                     &room.guild_id,
                     &room.channel_id,
@@ -396,4 +405,8 @@ fn session_directory(
         .join("capture-run-scratch")
         .join(local.format("%Y/%m/%d").to_string())
         .join(format!("{}-{prefix}", local.format("%H-%M-%S")))
+}
+
+fn should_record_manual_hold_for_join(reason: &str) -> bool {
+    !matches!(reason, "auto_join" | "manual_hold")
 }
