@@ -44,7 +44,7 @@ static ROOM_TARGET_RE: Lazy<Regex> = Lazy::new(|| {
 });
 
 pub const COMMAND_KINDS: &[&str] = &[
-    "voice_agent_task",
+    "agent_task",
     "start_live_transcript",
     "start_draft_transcript",
     "materialize_transcript",
@@ -483,7 +483,7 @@ pub fn evaluate_router_candidate(
     let relative_start = normalize_relative_time(&instruction_text, "-10m");
     let mut arguments = Map::new();
     if [
-        "voice_agent_task",
+        "agent_task",
         "start_live_transcript",
         "start_draft_transcript",
         "materialize_transcript",
@@ -526,7 +526,7 @@ pub fn evaluate_router_candidate(
         );
         arguments.insert("refine".to_string(), Value::Bool(true));
     }
-    if command_kind == "voice_agent_task" {
+    if command_kind == "agent_task" {
         arguments.insert(
             "request".to_string(),
             Value::String(clean_question_text(&instruction_text)),
@@ -614,8 +614,8 @@ pub fn evaluate_router_candidate(
         },
     );
     let command_match = matched_text(&COMMAND_HINT_RE, &instruction_text);
-    let recognized_as = if command_kind == "voice_agent_task" {
-        "a request for the worker"
+    let recognized_as = if command_kind == "agent_task" {
+        "a request for an agent task"
     } else {
         "a built-in voice control"
     };
@@ -715,7 +715,7 @@ pub fn validate_router_result(result: &Value) -> (bool, String) {
 
 pub fn command_to_job_kind(command_kind: &str) -> String {
     BTreeMap::from([
-        ("voice_agent_task", "voice_agent_task"),
+        ("agent_task", "agent_task"),
         ("start_live_transcript", "materialize_transcript"),
         ("start_draft_transcript", "materialize_transcript"),
         ("materialize_transcript", "materialize_transcript"),
@@ -757,9 +757,9 @@ Return JSON only. Do not answer the user. The transcript context is from exactly
 
 When the user names another voice room, such as "art lounge", preserve that phrase in arguments.target_room or arguments.voice_channel_name rather than silently using the current channel. When the user gives a date phrase such as "today", "yesterday", or YYYY-MM-DD, preserve it in arguments.date_reference. When the user asks for "work-related" material, set arguments.work_related=true.
 
-Use action="wait_for_more" only when the collected settle window clearly indicates the user intentionally addressed Clanky but has not provided enough actionable detail. Use action="ignore" when the wake phrase was accidental, third-person, quoted, joking, or has no actionable information need. Use action="dispatch_now" for a clear actionable request. Do not require imperative grammar: direct questions, requests for opinions, corrections, complaints about a prior Clanky answer, and statements like "what I want to know is ..." are actionable when they are addressed to Clanky. Use action="cancel_job", "amend_job", or "replace_job" only when the interaction context makes the target prior job clear and the job is still cancellable; for corrections to completed work, dispatch a new voice_agent_task. If interaction_context.turn_history or interaction_context.recent_jobs contains a prior Clanky job, interpret the current window as a possible answer, correction, or replacement. When routing a request that references prior Clanky work, include arguments.previous_job_id from interaction_context.recent_jobs when identifiable. If you route any action that Clawcord should acknowledge, include a short "acknowledgement_text" that Clawcord can post before work starts; do not include a Discord mention because Clawcord adds it.
+Use action="wait_for_more" only when the collected settle window clearly indicates the user intentionally addressed Clanky but has not provided enough actionable detail. Use action="ignore" when the wake phrase was accidental, third-person, quoted, joking, or has no actionable information need. Use action="dispatch_now" for a clear actionable request. Do not require imperative grammar: direct questions, requests for opinions, corrections, complaints about a prior Clanky answer, and statements like "what I want to know is ..." are actionable when they are addressed to Clanky. Use action="cancel_job", "amend_job", or "replace_job" only when the interaction context makes the target prior job clear and the job is still cancellable; for corrections to completed work, dispatch a new agent_task. If interaction_context.turn_history or interaction_context.recent_jobs contains a prior Clanky job, interpret the current window as a possible answer, correction, or replacement. When routing a request that references prior Clanky work, include arguments.previous_job_id from interaction_context.recent_jobs when identifiable. If you route any action that Clawcord should acknowledge, include a short "acknowledgement_text" that Clawcord can post before work starts; do not include a Discord mention because Clawcord adds it.
 
-For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, set command_kind="voice_agent_task" or omit command_kind. The worker agent selects the workflow after dispatch. Use a specific command_kind only for built-in Clawcord voice controls that the router should dispatch directly: join_room, leave_room, deafen_listening, resume_listening, pause_listening, start_live_transcript, start_draft_transcript, materialize_transcript, make_permanent, or forget_window."#;
+For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, set command_kind="agent_task" or omit command_kind. The agent task selects the workflow after dispatch. Use a specific command_kind only for built-in Clawcord voice controls that the router should dispatch directly: join_room, leave_room, deafen_listening, resume_listening, pause_listening, start_live_transcript, start_draft_transcript, materialize_transcript, make_permanent, or forget_window."#;
 
 pub fn packet_event_view(event: &Value) -> Value {
     serde_json::json!({
@@ -865,7 +865,7 @@ pub fn router_candidate_packet(
             "Address override: if the wake-gated request says 'actually do this' or 'actually <verb>', treat it as intentionally addressed to Clanky even if the speaker frames it as an example.",
             "When the address override is present, do not reject solely because of third-person, hypothetical, quoted, or example framing; normalize the concrete action from surrounding words.",
             "Route when it is pretty clear someone is talking to Clanky and giving Clanky something to answer, redo, investigate, summarize, or operate.",
-            "For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, use command_kind=voice_agent_task or omit command_kind.",
+            "For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, use command_kind=agent_task or omit command_kind.",
             "Use specific command_kind values only for built-in voice controls and transcript materialization commands that Clawcord should execute directly.",
             "Return wait_for_more only if the idle-closed settle window shows an intentional but incomplete Clanky request.",
             "Use interaction_context to understand previous acknowledgements, active jobs, recent completed jobs, and whether this is a correction or cancellation.",
@@ -904,7 +904,7 @@ pub fn router_candidate_packet(
             "is_command": "boolean",
             "confidence": "optional diagnostic number from 0 to 1; never use this to decide whether to route",
             "wake_phrase_detected": "boolean",
-            "command_kind": "voice_agent_task for normal agent work, a built-in voice control kind for direct controls, or omitted when action alone is sufficient",
+            "command_kind": "agent_task for normal agent work, a built-in voice control kind for direct controls, or omitted when action alone is sufficient",
             "arguments": "object with normalized command arguments",
             "arguments.target_room": "room name/slug/id when the request names a voice room",
             "arguments.date_reference": "today, yesterday, or YYYY-MM-DD when the request names a date",

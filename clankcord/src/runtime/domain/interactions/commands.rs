@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config::string_field;
 use crate::runtime::core::execution::RuntimeEffects;
-use crate::runtime::domain::voice_commands::requires_confirmation;
+use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::{isoformat_z, utc_now};
 use crate::runtime::{
     ForgetRequest, Job, JobKind, MaterializeTranscriptRequest, RouterCommand, RouterCommandKind,
@@ -241,10 +241,10 @@ impl Runtime {
             }
             _ => {
                 let job_kind: JobKind = job_kind.parse()?;
-                if !job_kind.is_voice_worker() {
+                if !job_kind.is_agent_task() {
                     anyhow::bail!("unsupported queued job kind: {job_kind}");
                 }
-                let job = Job::voice_agent_task(
+                let job = Job::agent_task(
                     &guild_id,
                     &channel_id,
                     command.requested_by_user_id.clone(),

@@ -9,21 +9,21 @@ use clankcord::runtime::{
 #[test]
 fn job_round_trips_as_binary_record() {
     let command = RouterCommand::from_json(&json!({
-        "command_kind": "voice_agent_task",
+        "command_kind": "agent_task",
         "guild_id": "guild",
         "voice_channel_id": "channel",
         "requested_by_user_id": "requester",
         "arguments": {"question": "what happened?", "relative_start": "-20m"}
     }))
     .unwrap();
-    let job = Job::voice_agent_task("guild", "channel", "requester", command);
+    let job = Job::agent_task("guild", "channel", "requester", command);
 
     let encoded = job.encode().unwrap();
     let parsed = Job::decode(&encoded).unwrap();
 
-    assert_eq!(parsed.kind, JobKind::VoiceAgentTask);
+    assert_eq!(parsed.kind, JobKind::AgentTask);
     assert_eq!(parsed.state, JobState::Queued);
-    assert_eq!(parsed.command_kind(), "voice_agent_task");
+    assert_eq!(parsed.command_kind(), "agent_task");
     assert_eq!(
         parsed.command().unwrap().arguments.question,
         "what happened?"

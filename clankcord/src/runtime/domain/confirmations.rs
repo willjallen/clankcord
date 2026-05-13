@@ -6,7 +6,7 @@ use crate::Result;
 use crate::adapters::discord::api::discord_request;
 use crate::config::string_field;
 use crate::errors::discord_tool_error;
-use crate::runtime::domain::voice_commands::requires_confirmation;
+use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::isoformat_z;
 use crate::runtime::{ConfirmationContext, Job, JobKind, JobState, RouterCommand};
 

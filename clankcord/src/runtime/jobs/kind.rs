@@ -8,7 +8,7 @@ use crate::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JobKind {
     AudioSegment,
-    VoiceAgentTask,
+    AgentTask,
     RefineTranscript,
     ConfirmationRequired,
     RouterCommand,
@@ -20,7 +20,7 @@ impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AudioSegment => "audio_segment",
-            Self::VoiceAgentTask => "voice_agent_task",
+            Self::AgentTask => "agent_task",
             Self::RefineTranscript => "refine_transcript",
             Self::ConfirmationRequired => "confirmation_required",
             Self::RouterCommand => "router_command",
@@ -29,8 +29,8 @@ impl JobKind {
         }
     }
 
-    pub fn is_voice_worker(self) -> bool {
-        matches!(self, Self::VoiceAgentTask)
+    pub fn is_agent_task(self) -> bool {
+        matches!(self, Self::AgentTask)
     }
 }
 
@@ -46,7 +46,7 @@ impl FromStr for JobKind {
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
             "audio_segment" => Ok(Self::AudioSegment),
-            "voice_agent_task" => Ok(Self::VoiceAgentTask),
+            "agent_task" => Ok(Self::AgentTask),
             "refine_transcript" => Ok(Self::RefineTranscript),
             "confirmation_required" => Ok(Self::ConfirmationRequired),
             "router_command" => Ok(Self::RouterCommand),
@@ -70,7 +70,7 @@ pub enum JobState {
     ApprovalFailed,
     Failed,
     FailedTimeout,
-    WorkerDispatchFailed,
+    AgentDispatchFailed,
     FailedDraftRetained,
 }
 
@@ -88,7 +88,7 @@ impl JobState {
             Self::ApprovalFailed => "approval_failed",
             Self::Failed => "failed",
             Self::FailedTimeout => "failed_timeout",
-            Self::WorkerDispatchFailed => "worker_dispatch_failed",
+            Self::AgentDispatchFailed => "agent_dispatch_failed",
             Self::FailedDraftRetained => "failed_draft_retained",
         }
     }
@@ -112,7 +112,7 @@ impl JobState {
                 | Self::ApprovalFailed
                 | Self::Failed
                 | Self::FailedTimeout
-                | Self::WorkerDispatchFailed
+                | Self::AgentDispatchFailed
                 | Self::FailedDraftRetained
         )
     }
@@ -140,7 +140,7 @@ impl FromStr for JobState {
             "approval_failed" => Ok(Self::ApprovalFailed),
             "failed" => Ok(Self::Failed),
             "failed_timeout" => Ok(Self::FailedTimeout),
-            "worker_dispatch_failed" => Ok(Self::WorkerDispatchFailed),
+            "agent_dispatch_failed" => Ok(Self::AgentDispatchFailed),
             "failed_draft_retained" => Ok(Self::FailedDraftRetained),
             value => anyhow::bail!("unknown job state: {value}"),
         }

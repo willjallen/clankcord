@@ -6,12 +6,13 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::adapters::codex::{CodexAdapter, CodexRunRequest, parse_codex_stdout_payload};
+use crate::adapters::codex::parse_codex_stdout_payload;
 use crate::adapters::discord::api::send_message;
 use crate::config::{
     MESSAGE_CHUNK_LIMIT, non_empty, split_message_chunks, string_field, write_json,
 };
-use crate::runtime::domain::voice_commands::{
+use crate::runtime::agents::{AgentInvocationRequest, AgentRole, AgentSessionPolicy};
+use crate::runtime::domain::interactions::{
     acknowledgement_text_for_command, dedupe_hash, requires_confirmation, router_action,
 };
 
@@ -97,7 +98,7 @@ impl Runtime {
             "The request may be explained across the idle-closed settle window.",
             "Do not require imperative grammar: direct questions, requests for opinions, corrections, complaints about a prior Clanky answer, and statements like 'what I want to know is ...' are actionable when addressed to Clanky.",
             "Reject casual discussion, jokes, examples, quoted text, third-person mentions, and wake windows with no actionable information need.",
-            "For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, use command_kind=voice_agent_task or omit command_kind.",
+            "For requests that need reasoning, retrieval, summarization, research, planning, or external tool use, use command_kind=agent_task or omit command_kind.",
             "Use specific command_kind values only for built-in voice controls or transcript materialization that Clawcord should execute directly, including join_room and leave_room.",
             "If activation_mode=followup, a new wake phrase is not required; compose the current window with interaction_context.turn_history and the prior wait_for_more request.",
             "Address override: if the wake-gated request says 'actually do this' or 'actually <verb>', treat it as intentionally addressed to Clanky even if the speaker frames it as an example.",
@@ -105,7 +106,7 @@ impl Runtime {
             "Use interaction_context for previous acknowledgements, active jobs, recent completed jobs, cancellable job ids, and follow-up corrections.",
             "Use interaction_context.recent_jobs to resolve references like 'your last response', 'my last question', or 'the thing you just said'.",
             "When routing a request that references prior Clanky work, include arguments.previous_job_id from interaction_context.recent_jobs when identifiable.",
-            "For corrections to completed Clanky work, dispatch a new voice_agent_task rather than trying to cancel or amend a terminal job.",
+            "For corrections to completed Clanky work, dispatch a new agent_task rather than trying to cancel or amend a terminal job.",
             "If the user names another voice room, preserve that phrase in arguments.target_room or arguments.voice_channel_name.",
             "If the user says today, yesterday, or an explicit YYYY-MM-DD date, preserve it in arguments.date_reference.",
             "If the user asks for work-related material, set arguments.work_related=true.",
@@ -420,7 +421,6 @@ impl Runtime {
         fs::write(&message_path, &message)?;
         let result_path = router_dir.join(format!("{packet_id}.agent-result.json"));
         let raw_result_path = router_dir.join(format!("{packet_id}.codex.jsonl"));
-        let codex = CodexAdapter::default();
         let mut attempts = Vec::new();
         let mut last_failure_reason = String::new();
         for model in Self::router_model_candidates() {
@@ -429,9 +429,14 @@ impl Runtime {
             } else {
                 model.clone()
             };
-            let codex_result = codex.run(CodexRunRequest {
+            let invocation = self.agents.invoke(AgentInvocationRequest {
+                role: AgentRole::Router,
+                session_policy: AgentSessionPolicy::Ephemeral,
+                session_key: String::new(),
+                job_id: packet_id.clone(),
+                guild_id: guild_id.to_string(),
+                voice_channel_id: channel_id.to_string(),
                 prompt: message.clone(),
-                session_id: None,
                 cwd: env::current_dir().ok(),
                 model: if model.trim().is_empty() {
                     None
@@ -440,28 +445,25 @@ impl Runtime {
                 },
                 timeout: Duration::from_secs(router_model_timeout_seconds()),
                 env: env::vars().collect(),
-                output_last_message_path: result_path.clone(),
+                result_path: result_path.clone(),
+                raw_result_path: raw_result_path.clone(),
             })?;
-            fs::write(
-                &raw_result_path,
-                format!("{}\n", codex_result.stdout.trim()),
-            )?;
             let mut attempt = json!({
                 "model": model_name,
-                "returncode": codex_result.returncode,
-                "stderr": preview_tail(&codex_result.stderr, 2000),
-                "command": codex_result.command_display,
-                "timed_out": codex_result.timed_out,
+                "returncode": invocation.returncode,
+                "stderr": preview_tail(&invocation.stderr, 2000),
+                "command": invocation.command_display,
+                "timed_out": invocation.timed_out,
             });
-            if !codex_result.success {
+            if !invocation.success {
                 last_failure_reason = first_non_empty([
-                    codex_result.stderr.trim().to_string(),
-                    codex_result.stdout.trim().to_string(),
+                    invocation.stderr.trim().to_string(),
+                    invocation.stdout.trim().to_string(),
                 ]);
                 if last_failure_reason.is_empty() {
                     last_failure_reason = format!(
                         "router codex invocation exited {}",
-                        codex_result
+                        invocation
                             .returncode
                             .map(|code| code.to_string())
                             .unwrap_or_else(|| "without a status code".to_string())
@@ -474,10 +476,8 @@ impl Runtime {
                 attempts.push(attempt);
                 continue;
             }
-            let classifier_output = first_non_empty([
-                codex_result.final_message.clone(),
-                codex_result.stdout.clone(),
-            ]);
+            let classifier_output =
+                first_non_empty([invocation.final_message.clone(), invocation.stdout.clone()]);
             let Some(agent_result) =
                 Self::parse_voice_command_classifier_stdout(&classifier_output)
             else {
@@ -496,7 +496,7 @@ impl Runtime {
             update_object_fields(
                 &mut result,
                 [
-                    ("router_model", json!(model)),
+                    ("router_model", json!(invocation.model.clone())),
                     ("router_model_attempts", json!(attempts)),
                     (
                         "router_inference_command",

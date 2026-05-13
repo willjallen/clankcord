@@ -3,7 +3,7 @@ use serde_json::json;
 mod common;
 
 use clankcord::runtime::Runtime;
-use clankcord::runtime::domain::voice_commands::{
+use clankcord::runtime::domain::interactions::{
     evaluate_router_candidate, router_candidate_packet, validate_router_result,
 };
 
@@ -12,7 +12,7 @@ use common::{dt, merge_json};
 #[test]
 fn voice_command_classifier_stdout_parser_normalizes_against_heuristic() {
     let wrapped = json!({
-        "payloads": [{"text": "{\"action\":\"dispatch_now\",\"command_kind\":\"voice_agent_task\",\"arguments\":{\"question\":\"what did I miss\"}}"}],
+        "payloads": [{"text": "{\"action\":\"dispatch_now\",\"command_kind\":\"agent_task\",\"arguments\":{\"question\":\"what did I miss\"}}"}],
         "meta": {"agentMeta": {"model": "test"}}
     })
     .to_string();
@@ -41,7 +41,7 @@ fn voice_command_classifier_stdout_parser_normalizes_against_heuristic() {
 fn router_result_hydrates_previous_job_context() {
     let mut result = json!({
         "action": "dispatch_now",
-        "command_kind": "voice_agent_task",
+        "command_kind": "agent_task",
         "activated_text": "Hey Clanky, can you explain what you said in your last response?",
         "arguments": {"request": "explain your last response"}
     });

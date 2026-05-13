@@ -194,7 +194,7 @@ async fn submit_to_intake(
         .map_err(|_| anyhow::anyhow!("runtime intake queue is closed"))?;
     result
         .await
-        .map_err(|_| anyhow::anyhow!("runtime intake worker stopped"))?
+        .map_err(|_| anyhow::anyhow!("runtime intake loop stopped"))?
 }
 
 fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSubmission>) {

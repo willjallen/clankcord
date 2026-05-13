@@ -145,7 +145,7 @@ impl FromStr for RouterAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouterCommandKind {
-    VoiceAgentTask,
+    AgentTask,
     StartLiveTranscript,
     StartDraftTranscript,
     MaterializeTranscript,
@@ -161,7 +161,7 @@ pub enum RouterCommandKind {
 impl RouterCommandKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::VoiceAgentTask => "voice_agent_task",
+            Self::AgentTask => "agent_task",
             Self::StartLiveTranscript => "start_live_transcript",
             Self::StartDraftTranscript => "start_draft_transcript",
             Self::MaterializeTranscript => "materialize_transcript",
@@ -177,7 +177,7 @@ impl RouterCommandKind {
 
     pub fn job_kind(self) -> &'static str {
         match self {
-            Self::VoiceAgentTask => "voice_agent_task",
+            Self::AgentTask => "agent_task",
             Self::StartLiveTranscript
             | Self::StartDraftTranscript
             | Self::MaterializeTranscript => "materialize_transcript",
@@ -194,7 +194,7 @@ impl RouterCommandKind {
 
 impl Default for RouterCommandKind {
     fn default() -> Self {
-        Self::VoiceAgentTask
+        Self::AgentTask
     }
 }
 
@@ -203,7 +203,7 @@ impl FromStr for RouterCommandKind {
 
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
-            "" | "voice_agent_task" => Ok(Self::VoiceAgentTask),
+            "" | "agent_task" => Ok(Self::AgentTask),
             "start_live_transcript" => Ok(Self::StartLiveTranscript),
             "start_draft_transcript" => Ok(Self::StartDraftTranscript),
             "materialize_transcript" => Ok(Self::MaterializeTranscript),
@@ -493,7 +493,7 @@ pub struct AudioSegmentPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct VoiceAgentTaskPayload {
+pub struct AgentTaskPayload {
     pub command: RouterCommand,
 }
 
@@ -565,7 +565,7 @@ pub struct RuntimeControlPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
-    VoiceAgentTask(VoiceAgentTaskPayload),
+    AgentTask(AgentTaskPayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
     RouterCommand(RouterCommandPayload),
@@ -577,7 +577,7 @@ impl JobPayload {
     pub fn kind(&self) -> JobKind {
         match self {
             Self::AudioSegment(_) => JobKind::AudioSegment,
-            Self::VoiceAgentTask(_) => JobKind::VoiceAgentTask,
+            Self::AgentTask(_) => JobKind::AgentTask,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
             Self::RouterCommand(_) => JobKind::RouterCommand,
@@ -589,7 +589,7 @@ impl JobPayload {
     pub fn command(&self) -> Option<&RouterCommand> {
         match self {
             Self::AudioSegment(_) => None,
-            Self::VoiceAgentTask(payload) => Some(&payload.command),
+            Self::AgentTask(payload) => Some(&payload.command),
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::RouterCommand(payload) => Some(&payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -601,7 +601,7 @@ impl JobPayload {
     pub fn command_mut(&mut self) -> Option<&mut RouterCommand> {
         match self {
             Self::AudioSegment(_) => None,
-            Self::VoiceAgentTask(payload) => Some(&mut payload.command),
+            Self::AgentTask(payload) => Some(&mut payload.command),
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::RouterCommand(payload) => Some(&mut payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -643,7 +643,7 @@ impl JobPayload {
                 "sample_width_bits": payload.sample_width_bits,
                 "post_processing": payload.post_processing,
             }),
-            Self::VoiceAgentTask(payload) => json!({"command": payload.command.to_json()}),
+            Self::AgentTask(payload) => json!({"command": payload.command.to_json()}),
             Self::RefineTranscript(payload) => json!({
                 "window_id": payload.window_id,
                 "publication_id": payload.publication_id,

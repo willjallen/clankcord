@@ -41,7 +41,7 @@ There are currently three Discord bot identities:
 1. **`Clanky`**
     - Codex-native Discord bot.
     - Text/agent interaction surface.
-    - Handles agent-chat replies, confirmations, worker results, summaries, issue proposals, status replies, and general Codex-native Discord behavior.
+    - Handles agent-chat replies, confirmations, agent-task results, summaries, issue proposals, status replies, and general Codex-native Discord behavior.
     - Lives in the Discord text interface, especially the dedicated `agent-chat` channel.
     - Should not be treated as the voice capture bot.
     - Should not be moved between voice channels as part of Clawcord's capture pool.
@@ -92,7 +92,7 @@ Discord text / agent surface:
   Clanky
     owned by Codex
     speaks in text channels
-    handles confirmations, responses, worker results
+    handles confirmations, responses, agent-task results
 
 Discord voice capture pool:
   clanky-vc1
@@ -379,7 +379,7 @@ Default behavior:
 
 Important nuance:
 
-A person may hop from one channel to another for five minutes to ask a question, then return. That short excursion may be relevant to the original conversation. The system should preserve participant movement events and let the worker/context resolver follow those context clues when asked.
+A person may hop from one channel to another for five minutes to ask a question, then return. That short excursion may be relevant to the original conversation. The system should preserve participant movement events and let the agent-task context resolver follow those context clues when asked.
 
 Do not overbuild cross-channel conversation reconstruction in v1, but do design the timeline and search APIs so this is possible.
 
@@ -424,7 +424,7 @@ timeline key = clanky-vc1
 timeline key = clanky-vc2
 ```
 
-A voice bot is just the capture worker assigned to a channel at a point in time.
+A voice bot is just the capture agent task assigned to a channel at a point in time.
 
 ### 6.3 Raw Audio, Draft STT, and Refined STT
 
@@ -708,11 +708,11 @@ The Discord-facing state for a materialized transcript window:
 
 A very cheap command detection agent/process that looks at a rolling recent transcript window only when there is a wake-word/command candidate.
 
-### Codex Worker
+### Codex Agent Task
 
 A strong, job-scoped agent that acts on selected transcript windows. It has no ambient cron. It exists only because a command/job asks for involved work.
 
-### Refinement Worker
+### Refinement Routine
 
 A background job runner, mostly not an LLM agent, that submits source mixed audio to ElevenLabs or equivalent and updates authoritative transcript spans.
 
@@ -732,7 +732,7 @@ This plugin exposes:
 
 1. an event bridge from Clawcord to Codex
 2. a small set of Codex tools backed by Clawcord CLI/API
-3. a job queue bridge for strong worker invocations
+3. a job queue bridge for strong agent task invocations
 4. a model-call helper for cheap router classification
 
 Codex should not run free-form autonomous cron agents for voice. Clawcord should run deterministic schedulers for pool/retention/status, and Codex should be invoked only through events/jobs.
@@ -749,10 +749,10 @@ Use separate agent prompt files:
 
 ```text
 host/linux/codex/config/seeds/agents/clanky-voice-router/AGENTS.md
-host/linux/codex/config/seeds/agents/clanky-voice-worker/AGENTS.md
+host/linux/codex/config/seeds/agents/clanky-agent-task/AGENTS.md
 ```
 
-The maintainer and refinement worker should be configured as Clawcord/Codex job routines, not normal chat agents.
+The maintainer and refinement agent task should be configured as Clawcord/Codex job routines, not normal chat agents.
 
 If Codex's actual config system requires a different file shape, implement a thin adapter that reads this desired config and registers the equivalent hooks/tools/jobs. Do not change the architecture to fit a bad cron-based default.
 
@@ -777,7 +777,7 @@ Use deterministic scheduled jobs for:
 
 The scheduled jobs should not read transcript text unless triggered by a concrete boundary/delta event.
 
-### 9.4 Job-Scoped Worker Invocation
+### 9.4 Job-Scoped Agent task Invocation
 
 Clawcord invokes strong Codex work by creating a voice job and then calling Codex with a compact job packet.
 
@@ -790,7 +790,7 @@ codex exec \
   -
 ```
 
-The job packet contains IDs and bounded instructions, not a giant transcript blob. The worker then uses Clawcord tools to fetch exactly the transcript window it needs.
+The job packet contains IDs and bounded instructions, not a giant transcript blob. The agent task then uses Clawcord tools to fetch exactly the transcript window it needs.
 
 Clawcord owns the session lane and passes the prompt on stdin. The Codex adapter captures stdout/stderr and the final message; the runtime agent harness records the session id for later reuse.
 
@@ -807,7 +807,7 @@ codex exec \
   -
 ```
 
-The router returns JSON only. Clawcord validates it and emits a command event. The router is stateless from Clawcord's perspective; worker jobs use sticky Codex sessions, but router classification does not.
+The router returns JSON only. Clawcord validates it and emits a command event. The router is stateless from Clawcord's perspective; agent-task jobs use sticky Codex sessions, but router classification does not.
 
 ### 9.6 Tool Permission Model
 
@@ -822,7 +822,7 @@ Router:
 - cannot write arbitrary Discord messages
 - cannot access Linear/GitHub/web
 
-Worker:
+Agent task:
 
 - can render bounded transcript windows
 - can search transcripts within declared scope
@@ -838,7 +838,7 @@ Maintainer:
 - cannot call external research/tools
 - usually uses no model
 
-Refinement worker:
+Refinement agent task:
 
 - can export audio windows
 - can call ElevenLabs
@@ -856,16 +856,16 @@ The agents are intelligent. They can generalize across tasks. We should split on
 
 Recommended default split:
 
-1. **`clanky-voice-router`**  
+1. **`clanky-voice-router`**
    Cheap, ambient, narrow. Detects commands from rolling recent transcript context. No heavy tools. Implemented as a plugin model call, not a full autonomous cron agent.
 
-2. **`clanky-voice-worker`**  
+2. **`clanky-agent-task`**
    Strong, job-scoped. Handles involved user-requested work: materialization planning, summarization, fact-checking, Linear issue proposals, transcript search, research, and tool use.
 
-3. **`clanky-voice-maintainer`**  
+3. **`clanky-voice-maintainer`**
    Mostly deterministic Clawcord/Codex routine, not a normal agent. Handles routine timeline/index/job hygiene. Uses cheap model calls sparingly for conversation titles/summaries only when necessary.
 
-4. **`clanky-refinement-worker`**  
+4. **`clanky-refinement-routine`**
    Background job runner, not a general agent. Handles audio export, ElevenLabs calls, transcript alignment, Discord draft replacement, and authoritative span updates.
 
 Everything else should be a hook, job type, command mode, deterministic function, or Clawcord service.
@@ -888,7 +888,7 @@ clanky-vc2 captures audio in Art Lounge
   -> Codex creates/handles jobs
 ```
 
-The router/worker can be channel-aware without becoming per-bot.
+The router/agent task can be channel-aware without becoming per-bot.
 
 ### 10.3 Why These Splits Make Sense
 
@@ -899,8 +899,8 @@ The split is justified by different cost/risk profiles:
 | Clawcord voice bots | yes | no LLM; capture/STT only | local STT/provider | Discord voice | Discord one-bot-per-VC constraint |
 | Router | yes, but gated | rolling 3 minutes only | very cheap | minimal | must be always available but should not burn tokens |
 | Maintainer | yes, low cadence/event-driven | rarely, deltas only | cheap/none | Clawcord metadata | routine upkeep, indexing, summaries |
-| Worker | no | selected job windows | strong | broad | involved reasoning and tool use |
-| Refinement Worker | job queue | selected windows/audio | provider cost, little LLM | STT provider + Clawcord | async transcript quality loop |
+| Agent task | no | selected job windows | strong | broad | involved reasoning and tool use |
+| Refinement Routine | job queue | selected windows/audio | provider cost, little LLM | STT provider + Clawcord | async transcript quality loop |
 
 This prevents the common Codex failure mode:
 
@@ -1157,7 +1157,7 @@ Recognized command kinds:
 - start_draft_transcript
 - materialize_transcript
 - make_permanent
-- voice_agent_task
+- agent_task
 - pause_listening
 - resume_listening
 - forget_window
@@ -1180,20 +1180,20 @@ When routing, include `acknowledgement_text`, a short status phrase Clawcord can
 
 ### 11.9 Job Cancellation and Replacement
 
-Voice-originated worker jobs must be cancellable enough for normal interaction repair.
+Voice-originated agent-task jobs must be cancellable enough for normal interaction repair.
 
 Minimum behavior:
 
 - queued jobs can be marked `cancelled`
-- running jobs can be marked `cancel_requested` and their worker process group is killed
+- running jobs can be marked `cancel_requested` and their agent-task process group is killed
 - if a cancelled running job finishes anyway, Clawcord suppresses the Discord result post
-- the job record should preserve the worker output for debugging
+- the job record should preserve the agent-task output for debugging
 - the router packet should expose active and cancellable jobs for the originating channel
 
 Better behavior:
 
-- worker subprocesses should expose richer lifecycle/status on the debug dashboard
-- worker prompts should receive a cancellation token or job status file path and check it before posting expensive results
+- agent-task subprocesses should expose richer lifecycle/status on the debug dashboard
+- agent-task prompts should receive a cancellation token or job status file path and check it before posting expensive results
 
 Replacement behavior:
 
@@ -1227,9 +1227,9 @@ Runtime behavior:
 - `routerInteractions` in the debug overview shows active/recent interaction state
 - router packets include `interaction_context.turn_history` so the router can compose follow-up turns with prior decisions
 - router packet artifacts are still written under the channel `router/` directory
-- queued voice worker jobs can be marked `cancelled`
-- running voice worker jobs are marked `cancel_requested` and the tracked Codex worker process group is killed
-- cancelled running worker results are retained on the job record but suppressed from Discord
+- queued voice agent-task jobs can be marked `cancelled`
+- running voice agent-task jobs are marked `cancel_requested` and the tracked Codex agent-task process group is killed
+- cancelled running agent-task results are retained on the job record but suppressed from Discord
 
 This is intentionally enough to make follow-up correction work without introducing a new schema or migration. If Clawcord restarts, active in-memory interactions are forgotten, but durable jobs and router packet/result artifacts remain in SQLite/channel storage.
 
@@ -1315,7 +1315,7 @@ Do not run a cron job that repeatedly reads the last hour of transcript text in 
 - Per active conversation: at most 1 semantic model call every 10 minutes, unless the conversation closes.
 - Retention/status/job loops: zero tokens.
 
-## 13. Agent 3: `clanky-voice-worker`
+## 13. Agent 3: `clanky-agent-task`
 
 ### 13.1 Purpose
 
@@ -1356,7 +1356,7 @@ Cross-channel jobs must be explicit or contextually justified:
 }
 ```
 
-The worker should not silently search all channel timelines when the user asked from one voice room unless:
+The agent task should not silently search all channel timelines when the user asked from one voice room unless:
 
 - the user asked for "all transcripts", "everywhere", or an absolute time range without a channel qualifier, or
 - context resolution identifies a participant excursion that is probably relevant, or
@@ -1364,7 +1364,7 @@ The worker should not silently search all channel timelines when the user asked 
 
 ### 13.3 Participant Excursions
 
-The worker/context resolver should be able to notice:
+The agent-task context resolver should be able to notice:
 
 1. user leaves Channel A
 2. user joins Channel B for a short interval
@@ -1378,7 +1378,7 @@ Do not try to solve this with a complicated global conversation graph in v1. Ins
 
 - record participant movement events
 - expose a `participant_trace` Clawcord command
-- let the worker follow the trace when a query implies it
+- let the agent task follow the trace when a query implies it
 - include excursion snippets only when likely relevant
 
 Example:
@@ -1395,7 +1395,7 @@ clawcord voice participant trace \
 
 ### 13.4 Task Kinds
 
-The same worker can handle:
+The same agent task can handle:
 
 - materialize transcript window
 - summarize selected conversation
@@ -1423,18 +1423,18 @@ Allow:
 
 Important restriction:
 
-> Discord/transcript operations must go through Clawcord commands or APIs. The worker should not directly manipulate Discord state or raw transcript files when a Clawcord primitive exists.
+> Discord/transcript operations must go through Clawcord commands or APIs. The agent task should not directly manipulate Discord state or raw transcript files when a Clawcord primitive exists.
 
-### 13.6 Worker Context
+### 13.6 Agent task Context
 
-The worker should receive a curated job packet, not the entire history.
+The agent task should receive a curated job packet, not the entire history.
 
 Example:
 
 ```json
 {
   "job_id": "job_01J...",
-  "kind": "voice_agent_task",
+  "kind": "agent_task",
   "requested_by_user_id": "123",
   "guild_id": "456",
   "voice_channel_id": "789",
@@ -1453,7 +1453,7 @@ Example:
 }
 ```
 
-The worker can then call:
+The agent task can then call:
 
 ```bash
 clawcord voice transcript render --window win_01J --prefer-refined --format markdown
@@ -1465,7 +1465,7 @@ or:
 clawcord voice transcript search --guild 456 --query "fixed point" --since -7d
 ```
 
-### 13.7 Worker Budget
+### 13.7 Agent task Budget
 
 Set task budgets by job kind.
 
@@ -1479,9 +1479,9 @@ Set task budgets by job kind.
 | search old transcripts | medium/strong | search snippets first | transcript search |
 | code follow-up | strong/Codex | selected transcript + repo context | GitHub/Codex |
 
-The worker should not pull a full multi-day transcript unless a user explicitly asks for broad search/synthesis and the tool path is bounded.
+The agent task should not pull a full multi-day transcript unless a user explicitly asks for broad search/synthesis and the tool path is bounded.
 
-## 14. Component 4: `clanky-refinement-worker`
+## 14. Component 4: `clanky-refinement-routine`
 
 ### 14.1 Purpose
 
@@ -1742,8 +1742,8 @@ agents:
       format: json
       schema: clanky.voice.CommandDetectionResult
 
-  clanky-voice-worker:
-    description: Strong job-scoped worker for involved voice tasks.
+  clanky-agent-task:
+    description: Strong job-scoped agent task for involved voice tasks.
     invocation: codex_exec_sticky_session
     model:
       preferred: gpt-5.5-codex-or-strongest-configured
@@ -1871,7 +1871,7 @@ Deterministic steps:
 5. If confirmation required, create confirmation card.
 6. Otherwise create a `TranscriptJob` or direct Clawcord action.
 
-No strong worker unless the command needs involved reasoning.
+No strong agent task unless the command needs involved reasoning.
 
 ### 16.5 Hook: `on_confirmation_approved`
 
@@ -1887,21 +1887,21 @@ Deterministic steps:
 
 1. Resolve approval to pending command/job.
 2. Create or continue job.
-3. Invoke worker only if reasoning/tool use is required.
+3. Invoke agent task only if reasoning/tool use is required.
 
 ### 16.6 Hook: `on_job_created`
 
-Routes job to deterministic path or worker.
+Routes job to deterministic path or agent task.
 
 | Job | Path |
 |---|---|
 | exact `start_live_transcript --since -10m` | deterministic materialization + live sink |
 | `make_permanent` with resolved window | deterministic publication + refinement |
-| `summarize this` | strong worker |
-| `fact-check that` | strong worker |
-| `propose Linear issues` | strong worker |
+| `summarize this` | strong agent task |
+| `fact-check that` | strong agent task |
+| `propose Linear issues` | strong agent task |
 | `forget last 10m` | deterministic after confirmation |
-| `search where we talked about Lumen` | worker using transcript search |
+| `search where we talked about Lumen` | agent task using transcript search |
 
 ### 16.7 Hook: `on_publication_created`
 
@@ -1911,7 +1911,7 @@ If `refine_requested=true`:
 2. Announce permanent rendering if this is a permanent transcript.
 3. Ping everyone currently in the relevant voice room.
 4. Update status: draft published, refinement queued.
-5. Refinement worker handles audio export/provider call.
+5. Refinement agent task handles audio export/provider call.
 
 ### 16.8 Hook: `on_refinement_complete`
 
@@ -1945,7 +1945,7 @@ This deserves its own section because it is the easiest way for the system to be
 3. No agent should read the full transcript corpus by default.
 4. The router only sees one channel's rolling 3-minute window after deterministic prefilter.
 5. The maintainer reads transcript deltas, not whole conversations, except on close/materialization.
-6. Strong worker agents are job-scoped.
+6. Strong agent tasks are job-scoped.
 7. Subagents are opt-in and capped.
 8. Status, retention, and voice bot pool management are deterministic.
 9. Use cursors and event ids everywhere.
@@ -2009,21 +2009,21 @@ Better:
 Deterministic job sweeper reads job states and timestamps.
 ```
 
-### 17.4 Worker Cost Control
+### 17.4 Agent task Cost Control
 
 Bad:
 
 ```text
 User: "make issues from this"
-Worker reads last 7 days of transcripts across every voice channel.
+Agent task reads last 7 days of transcripts across every voice channel.
 ```
 
 Better:
 
 ```text
 Context resolver selects current channel's active conversation or requested window.
-Worker reads only that window.
-Worker proposes issues.
+Agent task reads only that window.
+Agent task proposes issues.
 Linear creation requires approval.
 ```
 
@@ -2047,7 +2047,7 @@ Codex subagents are useful when there is real parallel decomposition. They are d
 
 Rules:
 
-- The strong worker may spawn at most 2 subagents by default.
+- The strong agent task may spawn at most 2 subagents by default.
 - No recursive subagents.
 - Subagents must have a narrow tool/domain purpose.
 - Subagents receive only the relevant excerpt, not the whole transcript.
@@ -2064,7 +2064,7 @@ Bad subagent uses:
 - three agents all summarizing the same conversation
 - a subagent that "thinks about privacy"
 - a subagent that reads the whole transcript just in case
-- router spawning a worker spawning a router
+- router spawning a agent task spawning a router
 
 ## 18. Clawcord API/CLI Contract
 
@@ -2250,7 +2250,7 @@ clawcord voice transcript render \
   --format markdown
 ```
 
-The worker uses this instead of raw file access.
+The agent task uses this instead of raw file access.
 
 ### 18.11 Search
 
@@ -2332,7 +2332,7 @@ User types in `agent-chat`:
 Flow:
 
 1. Codex-native `Clanky` receives text command.
-2. Worker or deterministic command handler calls `clawcord voice pool assign`.
+2. Agent task or deterministic command handler calls `clawcord voice pool assign`.
 3. If available, Clawcord assigns a VC bot and replies with status.
 4. If no bot is available, `Clanky` says no spare VC bot and lists current assignments.
 
@@ -2411,8 +2411,8 @@ Flow:
 1. This is not anchored to a single current voice room.
 2. Context resolver treats it as an absolute-time multi-timeline query.
 3. Clawcord pulls all channel timelines with events in that interval.
-4. Worker groups results by channel and conversation.
-5. Worker summarizes or offers transcripts for each group.
+4. Agent task groups results by channel and conversation.
+5. Agent task summarizes or offers transcripts for each group.
 
 ### 19.7 Participant Excursion Query
 
@@ -2428,7 +2428,7 @@ Flow:
 2. It traces Will's channel movement during the conversation window.
 3. It finds a short Art Lounge excursion.
 4. It pulls the relevant Art Lounge snippet.
-5. Worker includes it as a related excerpt, not as if it were part of the Code Lounge timeline.
+5. Agent task includes it as a related excerpt, not as if it were part of the Code Lounge timeline.
 6. Summary notes the channel switch if relevant.
 
 ### 19.8 Cross-Channel Transcript Search
@@ -2440,14 +2440,14 @@ User says or types:
 Flow:
 
 1. Router or text command detects explicit cross-corpus search intent.
-2. Worker calls transcript search with `--all-channels`.
+2. Agent task calls transcript search with `--all-channels`.
 3. Search returns snippets grouped by channel/conversation.
-4. Worker reports:
+4. Agent task reports:
     - Code Lounge conversation
     - Art Lounge conversation
     - Environment Lounge conversation
     - agent transcript archives if included by policy
-5. Worker does not materialize full transcripts unless requested.
+5. Agent task does not materialize full transcripts unless requested.
 
 ### 19.9 Fact-Checking a Recent Claim
 
@@ -2457,10 +2457,10 @@ User says:
 
 Flow:
 
-1. Router dispatches a `voice_agent_task`.
-2. Worker resolves the referenced claim, selecting the last Vince speaker turn or ±2 minutes in the originating channel.
-3. Strong worker extracts claims.
-4. Strong worker researches bounded claim set.
+1. Router dispatches a `agent_task`.
+2. Agent task resolves the referenced claim, selecting the last Vince speaker turn or ±2 minutes in the originating channel.
+3. Strong agent task extracts claims.
+4. Strong agent task researches bounded claim set.
 5. Response goes to `agent-chat` or configured channel:
     - claim
     - verdict
@@ -2477,14 +2477,14 @@ User says:
 
 Flow:
 
-1. Router dispatches a `voice_agent_task`.
-2. Worker selects the exact last 20 minutes or active conversation subset in the originating channel.
-3. Worker renders transcript window, preferring refined spans.
-4. Worker drafts issue proposals.
+1. Router dispatches a `agent_task`.
+2. Agent task selects the exact last 20 minutes or active conversation subset in the originating channel.
+3. Agent task renders transcript window, preferring refined spans.
+4. Agent task drafts issue proposals.
 5. Discord/agent chat displays proposals.
 6. User approves:
     - "Create issues 1, 3, and 4."
-7. Worker creates Linear issues and links them back to the transcript window.
+7. Agent task creates Linear issues and links them back to the transcript window.
 
 ### 19.11 Forgetting Unpublished Context
 
@@ -3204,7 +3204,7 @@ Exit criteria:
 - Routine work is visible and stable without token burn.
 - Multi-channel status is clear.
 
-### Phase 8: Strong Worker
+### Phase 8: Strong Agent Task
 
 - Summaries.
 - Fact-checking.
@@ -3276,8 +3276,8 @@ It is:
 - refined transcript overlays
 - cheap gated router model call
 - low-token deterministic maintainer routines
-- job-scoped strong worker
-- background ElevenLabs refinement worker
+- job-scoped strong agent task
+- background ElevenLabs refinement agent task
 - Clawcord as the stable Discord/voice/transcript API
 - Codex as the agent/job/tool orchestration layer
 

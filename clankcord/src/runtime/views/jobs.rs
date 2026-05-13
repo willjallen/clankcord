@@ -60,14 +60,14 @@ impl Runtime {
         })
     }
 
-    pub fn public_router_job_context(job: &Job) -> Value {
+    pub fn public_interaction_job_context(job: &Job) -> Value {
         let state = job.state.as_str().to_string();
         let request = job
             .command()
             .map(|command| command.arguments.request_text())
             .unwrap_or_default();
         let response_preview = first_non_empty([
-            job.string_field("worker_dispatch_stdout_preview"),
+            job.string_field("agent_task_dispatch_stdout_preview"),
             job.string_field("response_text"),
         ]);
         json!({
@@ -116,7 +116,7 @@ impl Runtime {
             .collect())
     }
 
-    pub fn recent_router_jobs_for_channel(
+    pub fn recent_agent_task_jobs_for_channel(
         &self,
         guild_id: &str,
         channel_id: &str,
@@ -130,7 +130,7 @@ impl Runtime {
             .into_iter()
             .filter(|job| {
                 job.voice_channel_id == channel_id
-                    && job.kind.is_voice_worker()
+                    && job.kind.is_agent_task()
                     && matches!(
                         job.state,
                         JobState::Queued
@@ -139,7 +139,7 @@ impl Runtime {
                             | JobState::CancelRequested
                             | JobState::Complete
                             | JobState::FailedTimeout
-                            | JobState::WorkerDispatchFailed
+                            | JobState::AgentDispatchFailed
                     )
             })
             .collect::<Vec<_>>();
@@ -155,7 +155,7 @@ impl Runtime {
         Ok(jobs
             .into_iter()
             .take(limit)
-            .map(|job| Self::public_router_job_context(&job))
+            .map(|job| Self::public_interaction_job_context(&job))
             .collect())
     }
 
@@ -168,7 +168,7 @@ impl Runtime {
         let active_jobs = self.cancellable_jobs_for_channel(guild_id, channel_id, 10)?;
         let requester_id = string_field(interaction, "current_requester_user_id");
         let recent_jobs =
-            self.recent_router_jobs_for_channel(guild_id, channel_id, &requester_id, 5)?;
+            self.recent_agent_task_jobs_for_channel(guild_id, channel_id, &requester_id, 5)?;
         let cancellable_job_ids = active_jobs
             .iter()
             .filter(|job| job.get("cancellable").and_then(Value::as_bool) == Some(true))
@@ -201,7 +201,7 @@ impl Runtime {
         let mut job = self.timeline_store.get_job(job_id)?;
         job.set_state(JobState::Queued);
         job.metadata.error.clear();
-        job.metadata.reset_worker_retry();
+        job.metadata.reset_agent_task_retry();
         self.timeline_store.update_job(&job)?;
         Ok(job.to_value())
     }

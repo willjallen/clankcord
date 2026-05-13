@@ -10,14 +10,14 @@ use super::util::{
     first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
 };
 use super::{
-    AudioSegmentPayload, BinaryPayload, ConfirmationContext, ConfirmationRequiredPayload, JobKind,
-    JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RouterCommand, RouterCommandPayload, RuntimeControlAction,
-    RuntimeControlPayload, VoiceAgentTaskPayload,
+    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, ConfirmationContext,
+    ConfirmationRequiredPayload, JobKind, JobPayload, JobState, RefineTranscriptPayload,
+    RoomAgentPlacementAction, RoomAgentPlacementPayload, RouterCommand, RouterCommandPayload,
+    RuntimeControlAction, RuntimeControlPayload,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct WorkerPreflightCheck {
+pub(crate) struct AgentPreflightCheck {
     pub command: String,
     pub returncode: Option<i32>,
     pub ok: bool,
@@ -26,7 +26,7 @@ pub(crate) struct WorkerPreflightCheck {
     pub error: String,
 }
 
-impl WorkerPreflightCheck {
+impl AgentPreflightCheck {
     pub(crate) fn to_json(&self) -> Value {
         json!({
             "command": self.command,
@@ -40,18 +40,18 @@ impl WorkerPreflightCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct WorkerPreflightMetadata {
+pub(crate) struct AgentPreflightMetadata {
     pub ok: bool,
     pub checked_at: String,
-    pub checks: Vec<WorkerPreflightCheck>,
+    pub checks: Vec<AgentPreflightCheck>,
 }
 
-impl WorkerPreflightMetadata {
+impl AgentPreflightMetadata {
     pub(crate) fn to_json(&self) -> Value {
         json!({
             "ok": self.ok,
             "checked_at": self.checked_at,
-            "checks": self.checks.iter().map(WorkerPreflightCheck::to_json).collect::<Vec<_>>(),
+            "checks": self.checks.iter().map(AgentPreflightCheck::to_json).collect::<Vec<_>>(),
         })
     }
 
@@ -78,14 +78,14 @@ impl WorkerPreflightMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct WorkerAgentMetadata {
+pub(crate) struct AgentInvocationMetadata {
     pub session_id: String,
     pub provider: String,
     pub model: String,
     pub usage: BinaryPayload,
 }
 
-impl WorkerAgentMetadata {
+impl AgentInvocationMetadata {
     pub(crate) fn to_json(&self) -> Value {
         let mut object = Map::new();
         insert_non_empty(&mut object, "session_id", &self.session_id);
@@ -125,7 +125,7 @@ impl DiscordPostMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct WorkerJobMetadata {
+pub(crate) struct AgentTaskMetadata {
     pub dispatch_attempts: i64,
     pub dispatch_error: String,
     pub dispatch_error_after_cancel: String,
@@ -133,15 +133,15 @@ pub(crate) struct WorkerJobMetadata {
     pub result_path: String,
     pub dispatch_stdout_preview: String,
     pub dispatch_stderr: String,
-    pub agent: WorkerAgentMetadata,
-    pub preflight: Option<WorkerPreflightMetadata>,
+    pub agent: AgentInvocationMetadata,
+    pub preflight: Option<AgentPreflightMetadata>,
     pub response_text: String,
     pub command: String,
     pub result_suppressed: bool,
     pub discord_post: Option<DiscordPostMetadata>,
 }
 
-impl WorkerJobMetadata {
+impl AgentTaskMetadata {
     pub(crate) fn to_json(&self) -> Value {
         let mut object = Map::new();
         insert_i64_if_nonzero(&mut object, "dispatch_attempts", self.dispatch_attempts);
@@ -159,7 +159,7 @@ impl WorkerJobMetadata {
             &self.dispatch_stdout_preview,
         );
         insert_non_empty(&mut object, "dispatch_stderr", &self.dispatch_stderr);
-        if self.agent != WorkerAgentMetadata::default() {
+        if self.agent != AgentInvocationMetadata::default() {
             object.insert("agent".to_string(), self.agent.to_json());
         }
         if let Some(preflight) = &self.preflight {
@@ -208,7 +208,7 @@ impl ConfirmationJobMetadata {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum JobMetadataDetail {
-    Worker(WorkerJobMetadata),
+    AgentTask(AgentTaskMetadata),
     Confirmation(ConfirmationJobMetadata),
 }
 
@@ -223,33 +223,36 @@ pub struct JobMetadata {
 }
 
 impl JobMetadata {
-    pub(crate) fn worker(&self) -> Option<&WorkerJobMetadata> {
+    pub(crate) fn agent_task(&self) -> Option<&AgentTaskMetadata> {
         match self.detail.as_deref() {
-            Some(JobMetadataDetail::Worker(worker)) => Some(worker),
+            Some(JobMetadataDetail::AgentTask(task)) => Some(task),
             _ => None,
         }
     }
 
-    pub(crate) fn worker_mut(&mut self) -> &mut WorkerJobMetadata {
-        if !matches!(self.detail.as_deref(), Some(JobMetadataDetail::Worker(_))) {
-            self.detail = Some(Box::new(JobMetadataDetail::Worker(
-                WorkerJobMetadata::default(),
+    pub(crate) fn agent_task_mut(&mut self) -> &mut AgentTaskMetadata {
+        if !matches!(
+            self.detail.as_deref(),
+            Some(JobMetadataDetail::AgentTask(_))
+        ) {
+            self.detail = Some(Box::new(JobMetadataDetail::AgentTask(
+                AgentTaskMetadata::default(),
             )));
         }
         match self.detail.as_deref_mut() {
-            Some(JobMetadataDetail::Worker(worker)) => worker,
-            _ => unreachable!("worker metadata detail was just initialized"),
+            Some(JobMetadataDetail::AgentTask(task)) => task,
+            _ => unreachable!("agent task metadata detail was just initialized"),
         }
     }
 
-    pub(crate) fn set_worker(&mut self, worker: WorkerJobMetadata) {
-        self.detail = Some(Box::new(JobMetadataDetail::Worker(worker)));
+    pub(crate) fn set_agent_task(&mut self, task: AgentTaskMetadata) {
+        self.detail = Some(Box::new(JobMetadataDetail::AgentTask(task)));
     }
 
-    pub(crate) fn reset_worker_retry(&mut self) {
-        if let Some(worker) = self.worker_mut_if_present() {
-            worker.dispatch_attempts = 0;
-            worker.dispatch_error.clear();
+    pub(crate) fn reset_agent_task_retry(&mut self) {
+        if let Some(task) = self.agent_task_mut_if_present() {
+            task.dispatch_attempts = 0;
+            task.dispatch_error.clear();
         }
     }
 
@@ -278,8 +281,8 @@ impl JobMetadata {
     pub fn to_json(&self) -> Value {
         let mut object = Map::new();
         match self.detail.as_deref() {
-            Some(JobMetadataDetail::Worker(worker)) => {
-                object.insert("worker".to_string(), worker.to_json());
+            Some(JobMetadataDetail::AgentTask(task)) => {
+                object.insert("agent_task".to_string(), task.to_json());
             }
             Some(JobMetadataDetail::Confirmation(confirmation)) => {
                 object.insert("confirmation".to_string(), confirmation.to_json());
@@ -302,9 +305,9 @@ impl JobMetadata {
         Value::Object(object)
     }
 
-    fn worker_mut_if_present(&mut self) -> Option<&mut WorkerJobMetadata> {
+    fn agent_task_mut_if_present(&mut self) -> Option<&mut AgentTaskMetadata> {
         match self.detail.as_deref_mut() {
-            Some(JobMetadataDetail::Worker(worker)) => Some(worker),
+            Some(JobMetadataDetail::AgentTask(task)) => Some(task),
             _ => None,
         }
     }
@@ -381,7 +384,7 @@ impl Job {
         Ok(())
     }
 
-    pub fn voice_agent_task(
+    pub fn agent_task(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
@@ -392,7 +395,7 @@ impl Job {
             voice_channel_id,
             requested_by_user_id,
             JobState::Queued,
-            JobPayload::VoiceAgentTask(VoiceAgentTaskPayload { command }),
+            JobPayload::AgentTask(AgentTaskPayload { command }),
         )
     }
 
@@ -637,20 +640,20 @@ impl Job {
             "parent_job_id" => self.parent_job_id.clone().unwrap_or_default(),
             "root_job_id" => self.root_job_id.clone(),
             "lineage_depth" => self.lineage_depth.to_string(),
-            "worker_dispatch_stdout_preview" | "worker.dispatch_stdout_preview" => self
+            "agent_task_dispatch_stdout_preview" | "agent_task.dispatch_stdout_preview" => self
                 .metadata
-                .worker()
-                .map(|worker| worker.dispatch_stdout_preview.clone())
+                .agent_task()
+                .map(|task| task.dispatch_stdout_preview.clone())
                 .unwrap_or_default(),
-            "response_text" | "worker.response_text" => self
+            "response_text" | "agent_task.response_text" => self
                 .metadata
-                .worker()
-                .map(|worker| worker.response_text.clone())
+                .agent_task()
+                .map(|task| task.response_text.clone())
                 .unwrap_or_default(),
-            "worker_dispatch_error" | "worker.dispatch_error" => self
+            "agent_task_dispatch_error" | "agent_task.dispatch_error" => self
                 .metadata
-                .worker()
-                .map(|worker| worker.dispatch_error.clone())
+                .agent_task()
+                .map(|task| task.dispatch_error.clone())
                 .unwrap_or_default(),
             "error" => self.metadata.error.clone(),
             "confirmation_delivery" | "confirmation.delivery" => self

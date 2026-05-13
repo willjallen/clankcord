@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::Result;
 use crate::adapters::codex::CodexAdapter;
-use crate::runtime::agents::worker::{self, WorkerAgentRequest};
-use crate::runtime::jobs::WorkerJobMetadata;
+use crate::runtime::agents::AgentRole;
 use crate::runtime::timeline::isoformat_z;
 
 #[derive(Debug, Clone)]
@@ -23,27 +21,16 @@ impl Default for AgentRuntime {
 }
 
 impl AgentRuntime {
-    pub(crate) fn dispatch_worker_job(
+    pub(crate) fn begin_invocation(
         &self,
-        request: WorkerAgentRequest,
-    ) -> Result<WorkerJobMetadata> {
-        worker::dispatch_worker_job(self, request)
-    }
-
-    pub(crate) fn begin_worker_invocation(
-        &self,
+        role: AgentRole,
+        key: &str,
         guild_id: &str,
         voice_channel_id: &str,
         job_id: &str,
     ) -> AgentSession {
         self.with_registry(|registry| {
-            registry.begin_invocation(
-                AgentSessionKey::worker(guild_id, voice_channel_id),
-                AgentRole::Worker,
-                guild_id,
-                voice_channel_id,
-                job_id,
-            )
+            registry.begin_invocation(key.to_string(), role, guild_id, voice_channel_id, job_id)
         })
     }
 
@@ -67,8 +54,12 @@ impl AgentRuntime {
         self.with_registry(|registry| registry.sessions.get(key).cloned())
     }
 
-    pub fn worker_session_key(guild_id: &str, voice_channel_id: &str) -> String {
-        AgentSessionKey::worker(guild_id, voice_channel_id).value
+    pub fn task_session_key(guild_id: &str, voice_channel_id: &str) -> String {
+        format!(
+            "task:{}:{}",
+            normalize_key_part(guild_id),
+            normalize_key_part(voice_channel_id)
+        )
     }
 
     fn with_registry<T>(&self, f: impl FnOnce(&mut AgentRegistry) -> T) -> T {
@@ -88,7 +79,7 @@ struct AgentRegistry {
 impl AgentRegistry {
     fn begin_invocation(
         &mut self,
-        key: AgentSessionKey,
+        key: String,
         role: AgentRole,
         guild_id: &str,
         voice_channel_id: &str,
@@ -97,9 +88,9 @@ impl AgentRegistry {
         let now = isoformat_z(None);
         let session = self
             .sessions
-            .entry(key.value.clone())
+            .entry(key.clone())
             .or_insert_with(|| AgentSession {
-                key: key.value.clone(),
+                key: key.clone(),
                 role: role.as_str().to_string(),
                 guild_id: guild_id.to_string(),
                 voice_channel_id: voice_channel_id.to_string(),
@@ -163,36 +154,6 @@ pub enum AgentSessionStatus {
     Idle,
     Running,
     Failed,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AgentRole {
-    Worker,
-}
-
-impl AgentRole {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Worker => "worker",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct AgentSessionKey {
-    value: String,
-}
-
-impl AgentSessionKey {
-    fn worker(guild_id: &str, voice_channel_id: &str) -> Self {
-        Self {
-            value: format!(
-                "worker:{}:{}",
-                normalize_key_part(guild_id),
-                normalize_key_part(voice_channel_id)
-            ),
-        }
-    }
 }
 
 fn normalize_key_part(value: &str) -> String {

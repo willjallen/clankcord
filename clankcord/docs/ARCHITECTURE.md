@@ -7,20 +7,20 @@
 - A job that needs child work before it can finish enters `waiting`; child completion resolves the parent. This is not a general workflow language.
 - Job payloads are strongly typed native Rust data. JSON is only a boundary wire format.
 - Core runtime code operates on native Rust types. JSON may be parsed at ingress and rendered at egress, but runtime domains must not use `serde_json::Value` as their working data model.
-- Job-specific details belong in typed payload or metadata structs, such as `VoiceAgentTaskPayload` or worker metadata. Do not flatten every possible field onto every job.
+- Job-specific details belong in typed payload or metadata structs, such as `AgentTaskPayload` or agent-task metadata. Do not flatten every possible field onto every job.
 - Specialized job metadata is a single typed detail slot, not one optional field per concern.
 - The timeline/sqlite database is the canonical history object and is internal to the runtime.
 - The runtime should be minimal, directional, and easy to reason about.
 - Boundary modules translate between the outside world and runtime APIs. They do not own orchestration.
 - `mod.rs` files are maps: module declarations, narrow re-exports, and no authoritative implementation.
 - `src/runtime/core/` is the minimal runtime engine: state, lifecycle, intake, dispatch, effect traits, and job maintenance. Do not put domain execution, views, rooms, sessions, agents, or adapter concerns in core.
-- Job-consuming or job-emitting runtime domains live under `src/runtime/domain/`: `audio_segments`, `workers`, `confirmations`, `publication`, `commands`, `voice_commands`, `responses`, and similar. Domain modules receive canonical typed jobs; they do not own adapter capture loops or transport state.
+- Job-consuming or job-emitting runtime domains live under `src/runtime/domain/`: `audio_segments`, `interactions`, `confirmations`, `publication`, `responses`, and similar. Domain modules receive canonical typed jobs; they do not own adapter capture loops or transport state.
 - Runtime support/data modules such as `rooms`, `sessions`, `bots`, `views`, `timeline`, `jobs`, and `agents` live at top-level under `src/runtime/`.
 - Do not add generic `handlers` or `pipeline` buckets. They hide ownership and imply the wrong mental model.
 - Job graph transitions are flexible: any job handler may complete one typed job and emit any next typed job that fits the workflow.
 - `src/runtime/views/` owns rendered read APIs for HTTP/CLI/agent tools. Views can read runtime/timeline state, but they are not canonical state.
 - `src/runtime/rooms/`, `src/runtime/sessions/`, `src/runtime/bots/`, and `src/runtime/runtime_config.rs` own their domain data and helpers.
-- `src/runtime/agents/` owns Codex agent infrastructure. Worker execution may call it, but core must not know Codex exists.
+- `src/runtime/agents/` owns generic Codex invocation infrastructure. Interaction routing and agent-task execution may call it, but core must not know Codex exists.
 - CLI code has one parser surface at the root `clawcord` command. It is an agent tool surface organized by capability: `messages`, `transcripts`, `timeline`, `context`, `participants`, `jobs`, and `rooms`.
 - State-changing CLI commands lower to typed `router_command` jobs; read commands query rendered timeline/runtime views. Commands that need terminal output should use a dependent stdout sink job instead of doing runtime work inside command modules.
 - `clawcord start` starts the persistent runtime process: HTTP API, Discord listener, room management, job manager, maintainer loop, and live capture loops.
@@ -56,7 +56,7 @@
 
 ## Runtime Job Handling
 
-- Runtime domain modules own job fulfillment: routing, state transitions, retries, cancellation, confirmations, timeline writes, audio segment transcription, transcript refinement, command interpretation, worker dispatch, and follow-up job creation.
+- Runtime domain modules own job fulfillment: routing, state transitions, retries, cancellation, confirmations, timeline writes, audio segment transcription, transcript refinement, command interpretation, agent-task dispatch, and follow-up job creation.
 - A domain executor may call an adapter to perform an external effect, but the adapter is not the executor.
 - `src/runtime/agents/` is the runtime agent harness over the Codex adapter. It owns session allocation, session reuse, context packet construction, preflight, active invocation tracking, and conversion between typed runtime requests and Codex adapter calls.
 - Automations decide by reading runtime state and writing jobs. Domain executors do work. Adapters perform effects only when called by runtime code. Results return through jobs and timeline events.
@@ -71,12 +71,12 @@
 - Do not add new job runners under adapters, command modules, or feature folders. Add a job kind, a typed payload, and a `runtime/domain` executor.
 - Examples:
   - Voice audio arrives through `src/adapters/discord/voice` as a typed `audio_segment` job that references a ready WAV artifact.
-  - An audio segment job may write transcript events and emit router-command jobs, worker jobs, response jobs, or nothing.
+  - An audio segment job may write transcript events and emit router-command jobs, agent-task jobs, response jobs, or nothing.
   - A later detection job may be introduced if routing grows enough to need a separate job boundary, but do not add it before it removes real complexity.
-  - A router command job may complete a built-in control directly or create a worker/refinement child job.
+  - A router command job may complete a built-in control directly or create an agent-task/refinement child job.
   - Room agent placement automation may create a room-agent placement job; that handler calls the voice adapter to join or leave.
   - A confirmation job creates a router command child after approval.
-  - A worker job may call the Codex agent subsystem and then the Discord adapter to publish its result.
+  - An agent-task job may call the Codex agent subsystem and then the Discord adapter to publish its result.
 
 ## Timeline
 

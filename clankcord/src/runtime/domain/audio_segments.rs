@@ -4,7 +4,7 @@ use crate::Result;
 use crate::adapters::stt::{
     should_drop_low_confidence_transcription, stt_drop_decision, transcribe_file_result_sync,
 };
-use crate::runtime::domain::voice_commands::{
+use crate::runtime::domain::interactions::{
     ROUTER_LOOKBACK_SECONDS, acknowledgement_text_for_command, clean_question_text, dedupe_hash,
     evaluate_router_candidate, router_action, validate_router_result,
 };
@@ -249,7 +249,7 @@ fn promote_general_voice_request(mut result: Value, event: &Value) -> Value {
         &guild_id,
         &channel_id,
         &source_event_ids.join("|"),
-        "voice_agent_task",
+        "agent_task",
         &arguments,
     );
     merge_object(
@@ -258,7 +258,7 @@ fn promote_general_voice_request(mut result: Value, event: &Value) -> Value {
             "action": "dispatch_now",
             "is_command": true,
             "confidence": 0.76,
-            "command_kind": "voice_agent_task",
+            "command_kind": "agent_task",
             "guild_id": guild_id,
             "voice_channel_id": channel_id,
             "requested_by_user_id": requested_by_user_id,
@@ -266,8 +266,8 @@ fn promote_general_voice_request(mut result: Value, event: &Value) -> Value {
             "source_event_ids": source_event_ids,
             "arguments": arguments,
             "requires_confirmation": false,
-            "acknowledgement_text": acknowledgement_text_for_command("voice_agent_task"),
-            "reason": "Native router promoted a wake-addressed non-control request to voice_agent_task.",
+            "acknowledgement_text": acknowledgement_text_for_command("agent_task"),
+            "reason": "Native router promoted a wake-addressed non-control request to agent_task.",
             "dedupe_hash": dedupe,
         }),
     );

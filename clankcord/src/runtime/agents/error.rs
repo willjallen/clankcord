@@ -1,11 +1,11 @@
 use std::fmt;
 
-use crate::runtime::jobs::WorkerPreflightMetadata;
+use crate::runtime::jobs::AgentPreflightMetadata;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentInfrastructureError {
     detail: String,
-    preflight: Option<WorkerPreflightMetadata>,
+    preflight: Option<AgentPreflightMetadata>,
 }
 
 impl AgentInfrastructureError {
@@ -18,7 +18,7 @@ impl AgentInfrastructureError {
 
     pub(crate) fn with_preflight(
         detail: impl Into<String>,
-        preflight: WorkerPreflightMetadata,
+        preflight: AgentPreflightMetadata,
     ) -> Self {
         Self {
             detail: detail.into(),
@@ -26,7 +26,7 @@ impl AgentInfrastructureError {
         }
     }
 
-    pub(crate) fn preflight(&self) -> Option<&WorkerPreflightMetadata> {
+    pub(crate) fn preflight(&self) -> Option<&AgentPreflightMetadata> {
         self.preflight.as_ref()
     }
 }

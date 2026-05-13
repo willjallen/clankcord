@@ -30,12 +30,12 @@ impl Runtime {
         for kind in [
             JobKind::AudioSegment,
             JobKind::RefineTranscript,
-            JobKind::VoiceAgentTask,
+            JobKind::AgentTask,
         ] {
             let result = match kind {
                 JobKind::AudioSegment => self.dispatch_audio_segment_jobs()?,
                 JobKind::RefineTranscript => self.dispatch_next_refine_transcript_job()?,
-                JobKind::VoiceAgentTask => self.dispatch_next_due_worker_job()?,
+                JobKind::AgentTask => self.dispatch_next_due_agent_task_job()?,
                 _ => unreachable!("blocking dispatcher kind list is fixed"),
             };
             results.insert(kind.as_str().to_string(), result);
