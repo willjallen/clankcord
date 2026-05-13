@@ -1,0 +1,56 @@
+# Rust build output
+target/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Runtime state and generated data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+logs/
+tmp/
+temp/
+clankcord/data/
+clankcord/runtime-data/
+clankcord/artifacts/
+clankcord/recordings/
+clankcord/audio-segments/
+clankcord/transcripts/
+
+# Logs and diagnostics
+*.log
+*.trace
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Tool caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local agent/tooling scratch space
+.agents/tmp/
+.agents/cache/
