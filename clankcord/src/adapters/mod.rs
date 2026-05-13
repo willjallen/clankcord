@@ -1,3 +1,4 @@
+pub(crate) mod codex;
 pub mod discord;
 pub mod http;
 pub mod publish;

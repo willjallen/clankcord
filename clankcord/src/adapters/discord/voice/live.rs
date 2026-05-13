@@ -1012,7 +1012,7 @@ fn load_bot_token_specs() -> Result<Vec<(String, String)>> {
 
 fn raw_bot_token_lines() -> Result<Vec<String>> {
     let mut lines = Vec::new();
-    if let Ok(value) = env::var("VOICE_POOL_BOT_TOKENS") {
+    if let Ok(value) = env::var("CLAWCORD_BOT_TOKENS") {
         lines.extend(value.lines().map(str::to_string));
     }
     let path = tokens_path();

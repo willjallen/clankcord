@@ -15,7 +15,7 @@ pub const THREAD_CHANNEL_TYPES: &[i64] = &[10, 11, 12];
 pub const FORUM_CHANNEL_TYPE: i64 = 15;
 
 pub fn discord_api_base() -> String {
-    env::var("OPENCLAW_DISCORD_API_BASE")
+    env::var("CLAWCORD_DISCORD_API_BASE")
         .unwrap_or_else(|_| "https://discord.com/api/v10".to_string())
         .trim_end_matches('/')
         .to_string()
@@ -51,12 +51,12 @@ pub fn read_secret_value(env_key: &str, file_env_key: &str, default_secret_path:
 
 pub fn load_discord_bot_token() -> Result<String> {
     let token = read_secret_value(
-        "OPENCLAW_DISCORD_BOT_TOKEN",
-        "OPENCLAW_DISCORD_BOT_TOKEN_FILE",
-        "/run/secrets/openclaw_discord_bot_token",
+        "CLAWCORD_DISCORD_BOT_TOKEN",
+        "CLAWCORD_DISCORD_BOT_TOKEN_FILE",
+        "/run/secrets/clawcord_discord_bot_token",
     );
     if token.is_empty() {
-        Err(discord_tool_error("OPENCLAW_DISCORD_BOT_TOKEN is not set"))
+        Err(discord_tool_error("CLAWCORD_DISCORD_BOT_TOKEN is not set"))
     } else {
         Ok(token)
     }

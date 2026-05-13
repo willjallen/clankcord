@@ -4,7 +4,8 @@ use chrono::{DateTime, Utc};
 
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{
-    ControlConfig, GuildConfig, RoomConfig, RoomControl, RuntimeBotStatus, RuntimeSessionStatus,
+    AgentRuntime, ControlConfig, GuildConfig, RoomConfig, RoomControl, RuntimeBotStatus,
+    RuntimeSessionStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -16,6 +17,7 @@ pub struct Runtime {
     pub room_controls: BTreeMap<String, RoomControl>,
     pub sessions: BTreeMap<String, RuntimeSessionStatus>,
     pub bots: BTreeMap<String, RuntimeBotStatus>,
+    pub agents: AgentRuntime,
     pub timeline_store: TimelineStore,
     pub auto_join_enabled: bool,
     pub manual_leave_cooldown_seconds: i64,

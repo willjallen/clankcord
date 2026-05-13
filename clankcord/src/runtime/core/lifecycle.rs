@@ -9,7 +9,7 @@ use crate::config::{
 use crate::runtime::timeline::{TimelineStore, utc_now};
 
 use crate::runtime::util::parse_duration_seconds;
-use crate::runtime::{ControlConfig, GuildConfig, RoomConfig, Runtime};
+use crate::runtime::{AgentRuntime, ControlConfig, GuildConfig, RoomConfig, Runtime};
 
 impl Runtime {
     pub fn new() -> Result<Self> {
@@ -21,6 +21,7 @@ impl Runtime {
             room_controls: BTreeMap::new(),
             sessions: BTreeMap::new(),
             bots: BTreeMap::new(),
+            agents: AgentRuntime::default(),
             timeline_store: TimelineStore::new(None)?,
             auto_join_enabled: true,
             manual_leave_cooldown_seconds: 20 * 60,

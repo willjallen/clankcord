@@ -1,4 +1,4 @@
-pub(crate) mod agents;
+pub mod agents;
 pub(crate) mod automations;
 pub mod bots;
 pub(crate) mod core;
@@ -13,6 +13,7 @@ pub mod timeline;
 pub(crate) mod util;
 pub mod views;
 
+pub use agents::AgentRuntime;
 pub use bots::RuntimeBotStatus;
 pub use core::Runtime;
 pub use jobs::{

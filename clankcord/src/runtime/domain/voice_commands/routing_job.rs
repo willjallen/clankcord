@@ -1,11 +1,12 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::adapters::codex::{CodexAdapter, CodexRunRequest, parse_codex_stdout_payload};
 use crate::adapters::discord::api::send_message;
 use crate::config::{
     MESSAGE_CHUNK_LIMIT, non_empty, split_message_chunks, string_field, write_json,
@@ -16,7 +17,8 @@ use crate::runtime::domain::voice_commands::{
 
 use crate::runtime::Runtime;
 use crate::runtime::util::{
-    first_non_empty, preview, preview_tail, set_if_blank, update_object_fields,
+    first_non_empty, preview, preview_tail, router_model_timeout_seconds, set_if_blank,
+    update_object_fields,
 };
 
 impl Runtime {
@@ -41,7 +43,7 @@ impl Runtime {
     }
 
     pub fn parse_voice_command_classifier_stdout(stdout: &str) -> Option<Value> {
-        let payload = Self::parse_openclaw_agent_stdout(stdout);
+        let payload = parse_codex_stdout_payload(stdout);
         if payload.is_object()
             && (payload.get("is_command").is_some() || payload.get("action").is_some())
         {
@@ -374,20 +376,23 @@ impl Runtime {
     }
 
     pub fn router_model_candidates() -> Vec<String> {
-        let default_model = env::var("OPENCLAW_ROUTER_MODEL")
+        let default_model = env::var("CLAWCORD_ROUTER_MODEL")
             .ok()
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| "openrouter/auto".to_string());
-        let fallback_model = env::var("OPENCLAW_ROUTER_FALLBACK_MODEL")
+            .unwrap_or_default();
+        let fallback_model = env::var("CLAWCORD_ROUTER_FALLBACK_MODEL")
             .ok()
             .map(|value| value.trim().to_string())
             .unwrap_or_default();
         let mut models = Vec::new();
         for model in [default_model, fallback_model] {
-            if !model.is_empty() && !models.contains(&model) {
+            if !models.contains(&model) {
                 models.push(model);
             }
+        }
+        if models.is_empty() {
+            models.push(String::new());
         }
         models
     }
@@ -414,34 +419,50 @@ impl Runtime {
         let message_path = router_dir.join(format!("{packet_id}.prompt.txt"));
         fs::write(&message_path, &message)?;
         let result_path = router_dir.join(format!("{packet_id}.agent-result.json"));
-        let openclaw_bin = env::var("OPENCLAW_BIN").unwrap_or_else(|_| "openclaw".to_string());
+        let raw_result_path = router_dir.join(format!("{packet_id}.codex.jsonl"));
+        let codex = CodexAdapter::default();
         let mut attempts = Vec::new();
         let mut last_failure_reason = String::new();
         for model in Self::router_model_candidates() {
-            let model_name = model.clone();
-            let output = Command::new(&openclaw_bin)
-                .args([
-                    "infer", "model", "run", "--local", "--model", &model, "--prompt", &message,
-                    "--json",
-                ])
-                .output()?;
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            fs::write(&result_path, format!("{}\n", stdout.trim()))?;
+            let model_name = if model.trim().is_empty() {
+                "codex-default".to_string()
+            } else {
+                model.clone()
+            };
+            let codex_result = codex.run(CodexRunRequest {
+                prompt: message.clone(),
+                session_id: None,
+                cwd: env::current_dir().ok(),
+                model: if model.trim().is_empty() {
+                    None
+                } else {
+                    Some(model.clone())
+                },
+                timeout: Duration::from_secs(router_model_timeout_seconds()),
+                env: env::vars().collect(),
+                output_last_message_path: result_path.clone(),
+            })?;
+            fs::write(
+                &raw_result_path,
+                format!("{}\n", codex_result.stdout.trim()),
+            )?;
             let mut attempt = json!({
                 "model": model_name,
-                "returncode": output.status.code(),
-                "stderr": preview_tail(&stderr, 2000),
+                "returncode": codex_result.returncode,
+                "stderr": preview_tail(&codex_result.stderr, 2000),
+                "command": codex_result.command_display,
+                "timed_out": codex_result.timed_out,
             });
-            if !output.status.success() {
-                last_failure_reason =
-                    first_non_empty([stderr.trim().to_string(), stdout.trim().to_string()]);
+            if !codex_result.success {
+                last_failure_reason = first_non_empty([
+                    codex_result.stderr.trim().to_string(),
+                    codex_result.stdout.trim().to_string(),
+                ]);
                 if last_failure_reason.is_empty() {
                     last_failure_reason = format!(
-                        "router model exited {}",
-                        output
-                            .status
-                            .code()
+                        "router codex invocation exited {}",
+                        codex_result
+                            .returncode
                             .map(|code| code.to_string())
                             .unwrap_or_else(|| "without a status code".to_string())
                     );
@@ -453,7 +474,13 @@ impl Runtime {
                 attempts.push(attempt);
                 continue;
             }
-            let Some(agent_result) = Self::parse_voice_command_classifier_stdout(&stdout) else {
+            let classifier_output = first_non_empty([
+                codex_result.final_message.clone(),
+                codex_result.stdout.clone(),
+            ]);
+            let Some(agent_result) =
+                Self::parse_voice_command_classifier_stdout(&classifier_output)
+            else {
                 last_failure_reason = "router model did not return a JSON object".to_string();
                 update_object_fields(&mut attempt, [("reason", json!(last_failure_reason))])?;
                 attempts.push(attempt);
@@ -473,7 +500,7 @@ impl Runtime {
                     ("router_model_attempts", json!(attempts)),
                     (
                         "router_inference_command",
-                        json!("openclaw infer model run --local --prompt --json"),
+                        json!("codex exec --json --output-last-message"),
                     ),
                     (
                         "router_packet_path",
@@ -486,6 +513,10 @@ impl Runtime {
                     (
                         "router_result_path",
                         json!(result_path.display().to_string()),
+                    ),
+                    (
+                        "router_raw_result_path",
+                        json!(raw_result_path.display().to_string()),
                     ),
                 ],
             )?;
@@ -502,12 +533,13 @@ impl Runtime {
                 last_failure_reason
             },
             "router_model_invoked": !attempts.is_empty(),
-            "router_model": attempts.last().map(|attempt| string_field(attempt, "model")).unwrap_or_else(|| env::var("OPENCLAW_ROUTER_MODEL").unwrap_or_else(|_| "openrouter/auto".to_string())),
+            "router_model": attempts.last().map(|attempt| string_field(attempt, "model")).unwrap_or_else(|| "codex-default".to_string()),
             "router_model_attempts": attempts,
-            "router_inference_command": "openclaw infer model run --local --prompt --json",
+            "router_inference_command": "codex exec --json --output-last-message",
             "router_packet_path": packet_path.display().to_string(),
             "router_prompt_path": message_path.display().to_string(),
             "router_result_path": result_path.display().to_string(),
+            "router_raw_result_path": raw_result_path.display().to_string(),
         }))
     }
 

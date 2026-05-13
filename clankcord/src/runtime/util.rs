@@ -51,12 +51,20 @@ pub fn duration_to_seconds(raw: &str) -> i64 {
         .unwrap_or(0)
 }
 
-pub fn voice_worker_agent_timeout_seconds() -> u64 {
-    env::var("VOICE_POOL_WORKER_AGENT_TIMEOUT_SECONDS")
+pub fn worker_agent_timeout_seconds() -> u64 {
+    env::var("CLAWCORD_WORKER_AGENT_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(240)
         .max(30)
+}
+
+pub fn router_model_timeout_seconds() -> u64 {
+    env::var("CLAWCORD_ROUTER_MODEL_TIMEOUT_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60)
+        .max(10)
 }
 
 pub fn first_non_empty<const N: usize>(values: [String; N]) -> String {

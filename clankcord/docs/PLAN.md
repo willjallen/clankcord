@@ -1,4 +1,4 @@
-﻿# Clanky Voice Memory and OpenClaw Agent Plan
+﻿# Clanky Voice Memory and Codex Agent Plan
 
 Status: living design document  
 Last updated: 2026-05-12  
@@ -17,20 +17,20 @@ The desired system is not a traditional recorder. It is a trustworthy ambient me
 5. Conversations, summaries, transcripts, Linear issues, fact-checks, and Discord artifacts are derived from selected windows of those timelines.
 6. Nothing becomes a permanent Discord transcript unless a user asks for it.
 7. When a transcript is made permanent, the rough local STT should be replaced by a high-quality transcription from the corresponding mixed source audio, initially via ElevenLabs.
-8. OpenClaw should provide agent orchestration, model routing, hooks, jobs, and tool access.
+8. Codex should provide agent orchestration, model routing, hooks, jobs, and tool access.
 9. Clawcord should remain the source of truth for Discord voice capture, Discord publishing, voice bot assignment, transcript storage, and Discord-specific control.
 
 The most important architectural rule is:
 
-> Build the boring multi-channel timeline substrate first. Then make OpenClaw agents elegant dispatchers over stable Clawcord primitives.
+> Build the boring multi-channel timeline substrate first. Then make Codex agents elegant dispatchers over stable Clawcord primitives.
 
-The most important OpenClaw rule is:
+The most important Codex rule is:
 
 > Do not create many cron-driven agents that repeatedly read transcript text. Use deterministic event hooks, cheap wake/command detection, cached cursors, and job-scoped strong agents only when needed.
 
 The most important Discord topology rule is:
 
-> The OpenClaw-native `Clanky` bot and the Clawcord-owned voice bots `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` bots are different actors with different responsibilities. Do not blur them.
+> The Codex-native `Clanky` bot and the Clawcord-owned voice bots `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` bots are different actors with different responsibilities. Do not blur them.
 
 ## 1. Discord Bot Topology
 
@@ -39,9 +39,9 @@ This is a hard architectural constraint, not an implementation detail.
 There are currently three Discord bot identities:
 
 1. **`Clanky`**
-    - OpenClaw-native Discord bot.
+    - Codex-native Discord bot.
     - Text/agent interaction surface.
-    - Handles agent-chat replies, confirmations, worker results, summaries, issue proposals, status replies, and general OpenClaw-native Discord behavior.
+    - Handles agent-chat replies, confirmations, worker results, summaries, issue proposals, status replies, and general Codex-native Discord behavior.
     - Lives in the Discord text interface, especially the dedicated `agent-chat` channel.
     - Should not be treated as the voice capture bot.
     - Should not be moved between voice channels as part of Clawcord's capture pool.
@@ -53,7 +53,7 @@ There are currently three Discord bot identities:
     - Feeds per-speaker audio into Clawcord.
     - Emits local STT transcript events into the voice timeline.
     - May participate in live transcript publication through Clawcord-controlled Discord operations.
-    - Is not an OpenClaw agent.
+    - Is not an Codex agent.
 
 3. **`clanky-vc2`**
     - Same role as `clanky-vc1`.
@@ -80,17 +80,17 @@ This creates several requirements:
 - Capture runs record which bot identity captured them.
 - A voice bot can move between channels over time.
 - A channel timeline may have multiple capture runs captured by different bot identities across days.
-- OpenClaw should not directly manage `clanky-vc1`/`clanky-vc2` as agents.
+- Codex should not directly manage `clanky-vc1`/`clanky-vc2` as agents.
 - Clawcord owns voice bot assignment, presence, audio capture, and low-level Discord behavior.
-- OpenClaw receives events and creates jobs through Clawcord APIs.
-- Results from OpenClaw should generally be posted by `Clanky` in `agent-chat` or by Clawcord in transcript publication surfaces, depending on the interaction.
+- Codex receives events and creates jobs through Clawcord APIs.
+- Results from Codex should generally be posted by `Clanky` in `agent-chat` or by Clawcord in transcript publication surfaces, depending on the interaction.
 
 The conceptual split:
 
 ```text
 Discord text / agent surface:
   Clanky
-    owned by OpenClaw
+    owned by Codex
     speaks in text channels
     handles confirmations, responses, worker results
 
@@ -105,7 +105,7 @@ Discord voice capture pool:
     publish live transcripts when asked
 ```
 
-Do not describe `clanky-vc1` or `clanky-vc2` as OpenClaw agents. They are Discord bot identities controlled by Clawcord.
+Do not describe `clanky-vc1` or `clanky-vc2` as Codex agents. They are Discord bot identities controlled by Clawcord.
 
 ## 3. Product Thesis
 
@@ -132,7 +132,7 @@ The product should not require users to know whether they need a transcript, a s
 
 ### 4.1 What Clanky Does Today
 
-Clanky is a Discord-integrated bot/agent system. It can participate in text channels, interact with prior transcripts, and use OpenClaw-style agent infrastructure. There is also Clawcord, which is the custom Discord integration layer. Clawcord exists because generic Discord harnesses are not good enough for the Discord-specific behavior needed here.
+Clanky is a Discord-integrated bot/agent system. It can participate in text channels, interact with prior transcripts, and use Codex-style agent infrastructure. There is also Clawcord, which is the custom Discord integration layer. Clawcord exists because generic Discord harnesses are not good enough for the Discord-specific behavior needed here.
 
 The current voice transcription direction already has useful pieces:
 
@@ -140,7 +140,7 @@ The current voice transcription direction already has useful pieces:
 - Audio can be buffered per speaker.
 - Local speech-to-text can produce rough transcript events.
 - There is a manager pipeline that can publish transcript-like artifacts.
-- There is agent infrastructure available through OpenClaw.
+- There is agent infrastructure available through Codex.
 - Discord is already the team-facing place where transcripts and agent messages should appear.
 - There are two Clawcord-owned voice capture bot accounts, `clanky-vc1` and `clanky-vc2`, to support parallel voice channels.
 
@@ -152,7 +152,7 @@ That is not the product we want.
 
 The new model should be:
 
-> Clawcord assigns an available voice bot to a room → capture local ephemeral channel timeline → later materialize selected windows → publish/refine only when requested → let OpenClaw agents act on selected context
+> Clawcord assigns an available voice bot to a room → capture local ephemeral channel timeline → later materialize selected windows → publish/refine only when requested → let Codex agents act on selected context
 
 ### 4.2 Why Inviting Clanky Late Fails
 
@@ -295,7 +295,7 @@ Force move should:
 4. start a new capture run in the new channel
 5. post a status message in `agent-chat`
 
-Admin force-move should be a Clawcord operation exposed to OpenClaw as a tool/command.
+Admin force-move should be a Clawcord operation exposed to Codex as a tool/command.
 
 ### 5.6 Retention Policy
 
@@ -624,7 +624,7 @@ This is preferable to surprising users by moving a voice bot away from an active
 
 ### Clanky
 
-The OpenClaw-native Discord bot. Text and agent surface.
+The Codex-native Discord bot. Text and agent surface.
 
 ### Clawcord Voice Bot
 
@@ -704,11 +704,11 @@ The Discord-facing state for a materialized transcript window:
 - recording artifact
 - refinement job id
 
-### OpenClaw Router
+### Codex Router
 
 A very cheap command detection agent/process that looks at a rolling recent transcript window only when there is a wake-word/command candidate.
 
-### OpenClaw Worker
+### Codex Worker
 
 A strong, job-scoped agent that acts on selected transcript windows. It has no ambient cron. It exists only because a command/job asks for involved work.
 
@@ -716,13 +716,13 @@ A strong, job-scoped agent that acts on selected transcript windows. It has no a
 
 A background job runner, mostly not an LLM agent, that submits source mixed audio to ElevenLabs or equivalent and updates authoritative transcript spans.
 
-## 9. Chosen OpenClaw Integration Model
+## 9. Chosen Codex Integration Model
 
 This section makes a concrete decision instead of leaving "hooks vs cron" ambiguous.
 
 ### 9.1 Chosen Pattern
 
-Use an OpenClaw plugin-style integration named:
+Use an Codex plugin-style integration named:
 
 ```text
 clawcord_voice
@@ -730,31 +730,31 @@ clawcord_voice
 
 This plugin exposes:
 
-1. an event bridge from Clawcord to OpenClaw
-2. a small set of OpenClaw tools backed by Clawcord CLI/API
+1. an event bridge from Clawcord to Codex
+2. a small set of Codex tools backed by Clawcord CLI/API
 3. a job queue bridge for strong worker invocations
 4. a model-call helper for cheap router classification
 
-OpenClaw should not run free-form autonomous cron agents for voice. Clawcord should run deterministic schedulers for pool/retention/status, and OpenClaw should be invoked only through events/jobs.
+Codex should not run free-form autonomous cron agents for voice. Clawcord should run deterministic schedulers for pool/retention/status, and Codex should be invoked only through events/jobs.
 
 ### 9.2 Config Location
 
 Use one voice integration config file:
 
 ```text
-host/linux/openclaw/config/clanky_voice.yaml
+host/linux/codex/config/clanky_voice.yaml
 ```
 
 Use separate agent prompt files:
 
 ```text
-host/linux/openclaw/config/seeds/agents/clanky-voice-router/AGENTS.md
-host/linux/openclaw/config/seeds/agents/clanky-voice-worker/AGENTS.md
+host/linux/codex/config/seeds/agents/clanky-voice-router/AGENTS.md
+host/linux/codex/config/seeds/agents/clanky-voice-worker/AGENTS.md
 ```
 
-The maintainer and refinement worker should be configured as Clawcord/OpenClaw job routines, not normal chat agents.
+The maintainer and refinement worker should be configured as Clawcord/Codex job routines, not normal chat agents.
 
-If OpenClaw's actual config system requires a different file shape, implement a thin adapter that reads this desired config and registers the equivalent hooks/tools/jobs. Do not change the architecture to fit a bad cron-based default.
+If Codex's actual config system requires a different file shape, implement a thin adapter that reads this desired config and registers the equivalent hooks/tools/jobs. Do not change the architecture to fit a bad cron-based default.
 
 ### 9.3 Event-Driven Hooks, Not Cron Agents
 
@@ -779,21 +779,20 @@ The scheduled jobs should not read transcript text unless triggered by a concret
 
 ### 9.4 Job-Scoped Worker Invocation
 
-Clawcord invokes strong OpenClaw work by creating a voice job and then calling OpenClaw with a compact job packet.
+Clawcord invokes strong Codex work by creating a voice job and then calling Codex with a compact job packet.
 
 Canonical invocation:
 
 ```bash
-openclaw task create \
-  --agent clanky-voice-worker \
-  --kind voice_job \
-  --input-json /path/to/job_packet.json \
-  --correlation-id job_01J...
+codex exec \
+  --json \
+  --output-last-message /path/to/job_result.txt \
+  -
 ```
 
 The job packet contains IDs and bounded instructions, not a giant transcript blob. The worker then uses Clawcord tools to fetch exactly the transcript window it needs.
 
-This is the chosen interface. If OpenClaw later exposes a better native task API, wrap this command, but keep the semantic contract.
+Clawcord owns the session lane and passes the prompt on stdin. The Codex adapter captures stdout/stderr and the final message; the runtime agent harness records the session id for later reuse.
 
 ### 9.5 Router Invocation
 
@@ -802,14 +801,13 @@ The router should be a cheap model call inside the `clawcord_voice` plugin, not 
 Canonical invocation:
 
 ```bash
-openclaw infer model run \
-  --local \
-  --model "${OPENCLAW_ROUTER_MODEL:-openrouter/auto}" \
-  --prompt "$(cat /path/to/router_candidate_prompt.txt)" \
-  --json
+codex exec \
+  --json \
+  --output-last-message /path/to/router_result.json \
+  -
 ```
 
-The router returns JSON only. The plugin validates it and emits a command event. Do not invoke the router through `openclaw agent`; the agent harness uses the strict-agentic contract and can fail planning-only turns even when a plain JSON classifier response is correct. If the configured router model exits nonzero or returns no parseable JSON, Clawcord should try `OPENCLAW_ROUTER_FALLBACK_MODEL`, defaulting to `openrouter/auto`.
+The router returns JSON only. Clawcord validates it and emits a command event. The router is stateless from Clawcord's perspective; worker jobs use sticky Codex sessions, but router classification does not.
 
 ### 9.6 Tool Permission Model
 
@@ -848,11 +846,11 @@ Refinement worker:
 - can update publication artifacts
 - cannot do broad agent reasoning
 
-## 10. Minimal OpenClaw Agent Architecture
+## 10. Minimal Codex Agent Architecture
 
 ### 10.1 Do Not Build Many Agents
 
-The design should not become a dozen independent OpenClaw agents with cron jobs. That would be expensive, hard to debug, and unnecessary.
+The design should not become a dozen independent Codex agents with cron jobs. That would be expensive, hard to debug, and unnecessary.
 
 The agents are intelligent. They can generalize across tasks. We should split only where the operational requirements are genuinely different.
 
@@ -865,29 +863,29 @@ Recommended default split:
    Strong, job-scoped. Handles involved user-requested work: materialization planning, summarization, fact-checking, Linear issue proposals, transcript search, research, and tool use.
 
 3. **`clanky-voice-maintainer`**  
-   Mostly deterministic Clawcord/OpenClaw routine, not a normal agent. Handles routine timeline/index/job hygiene. Uses cheap model calls sparingly for conversation titles/summaries only when necessary.
+   Mostly deterministic Clawcord/Codex routine, not a normal agent. Handles routine timeline/index/job hygiene. Uses cheap model calls sparingly for conversation titles/summaries only when necessary.
 
 4. **`clanky-refinement-worker`**  
    Background job runner, not a general agent. Handles audio export, ElevenLabs calls, transcript alignment, Discord draft replacement, and authoritative span updates.
 
 Everything else should be a hook, job type, command mode, deterministic function, or Clawcord service.
 
-### 10.2 Voice Bots Are Not OpenClaw Agents
+### 10.2 Voice Bots Are Not Codex Agents
 
-`clanky-vc1` and `clanky-vc2` should not be represented as OpenClaw agents. They are Clawcord-managed Discord bot identities.
+`clanky-vc1` and `clanky-vc2` should not be represented as Codex agents. They are Clawcord-managed Discord bot identities.
 
-OpenClaw should see their output as events:
+Codex should see their output as events:
 
 ```text
 clanky-vc1 captures audio in Code Lounge
   -> Clawcord emits transcript events
   -> router may detect command
-  -> OpenClaw creates/handles jobs
+  -> Codex creates/handles jobs
 
 clanky-vc2 captures audio in Art Lounge
   -> Clawcord emits transcript events
   -> router may detect command
-  -> OpenClaw creates/handles jobs
+  -> Codex creates/handles jobs
 ```
 
 The router/worker can be channel-aware without becoming per-bot.
@@ -904,7 +902,7 @@ The split is justified by different cost/risk profiles:
 | Worker | no | selected job windows | strong | broad | involved reasoning and tool use |
 | Refinement Worker | job queue | selected windows/audio | provider cost, little LLM | STT provider + Clawcord | async transcript quality loop |
 
-This prevents the common OpenClaw failure mode:
+This prevents the common Codex failure mode:
 
 > cron agent wakes up, reads a bunch of context, thinks a little, does nothing, repeats forever
 
@@ -918,7 +916,7 @@ It should not answer the user. It should not summarize conversations. It should 
 
 ### 11.2 Multi-Channel Behavior
 
-The router is logically one OpenClaw/plugin routine, but it processes candidate events from multiple channel timelines.
+The router is logically one Codex/plugin routine, but it processes candidate events from multiple channel timelines.
 
 It must always be channel-scoped:
 
@@ -1204,19 +1202,19 @@ Replacement behavior:
 
 ### 11.10 Current Implementation Notes
 
-The first implementation pass lives in Clawcord, not in the generic OpenClaw Discord harness.
+The first implementation pass lives in Clawcord, not in the generic Codex Discord harness.
 
 Current defaults:
 
-- `OPENCLAW_ROUTER_LOOKBACK_SECONDS=30`
-- `OPENCLAW_ROUTER_MODEL=openrouter/auto`
-- `OPENCLAW_ROUTER_FALLBACK_MODEL=openrouter/auto`
-- `OPENCLAW_ROUTER_IDLE_SECONDS=3`
-- `OPENCLAW_ROUTER_MIN_SETTLE_SECONDS=1.5`
-- `OPENCLAW_ROUTER_STT_FLUSH_GRACE_SECONDS=2`
-- `OPENCLAW_ROUTER_TURN_MAX_SECONDS=300`
-- `OPENCLAW_ROUTER_INTERACTION_TTL_SECONDS=600`
-- `OPENCLAW_ROUTER_MAX_FOLLOWUP_SECONDS=300`
+- `CLAWCORD_ROUTER_LOOKBACK_SECONDS=30`
+- `CLAWCORD_ROUTER_MODEL=` (empty means Codex default)
+- `CLAWCORD_ROUTER_FALLBACK_MODEL=` (empty means no fallback)
+- `CLAWCORD_ROUTER_IDLE_SECONDS=3`
+- `CLAWCORD_ROUTER_MIN_SETTLE_SECONDS=1.5`
+- `CLAWCORD_ROUTER_STT_FLUSH_GRACE_SECONDS=2`
+- `CLAWCORD_ROUTER_TURN_MAX_SECONDS=300`
+- `CLAWCORD_ROUTER_INTERACTION_TTL_SECONDS=600`
+- `CLAWCORD_ROUTER_MAX_FOLLOWUP_SECONDS=300`
 
 Runtime behavior:
 
@@ -1230,7 +1228,7 @@ Runtime behavior:
 - router packets include `interaction_context.turn_history` so the router can compose follow-up turns with prior decisions
 - router packet artifacts are still written under the channel `router/` directory
 - queued voice worker jobs can be marked `cancelled`
-- running voice worker jobs are marked `cancel_requested` and the tracked OpenClaw worker process group is killed
+- running voice worker jobs are marked `cancel_requested` and the tracked Codex worker process group is killed
 - cancelled running worker results are retained on the job record but suppressed from Discord
 
 This is intentionally enough to make follow-up correction work without introducing a new schema or migration. If Clawcord restarts, active in-memory interactions are forgotten, but durable jobs and router packet/result artifacts remain in SQLite/channel storage.
@@ -1241,7 +1239,7 @@ This is intentionally enough to make follow-up correction work without introduci
 
 Maintain the voice timeline system without burning tokens.
 
-This component should be mostly deterministic. It can be implemented as an OpenClaw routine/job if OpenClaw gives good scheduling/hooks, but it should not be a free-roaming chat agent.
+This component should be mostly deterministic. It can be implemented as an Codex routine/job if Codex gives good scheduling/hooks, but it should not be a free-roaming chat agent.
 
 Responsibilities:
 
@@ -1329,7 +1327,7 @@ It is not ambient. It has no cron. It is invoked by a job created from:
 - Discord button/action
 - text command
 - operator CLI
-- another approved OpenClaw workflow
+- another approved Codex workflow
 
 It can handle many task kinds. Do not create separate strong agents for every task unless the split is operationally necessary.
 
@@ -1651,7 +1649,7 @@ If Discord edits fail:
 - optionally post a replacement refined message if easy
 - do not overbuild around rare edit failure in v1
 
-## 15. Proposed OpenClaw Configuration
+## 15. Proposed Codex Configuration
 
 This is the chosen config contract for the plan.
 
@@ -1659,7 +1657,7 @@ This is the chosen config contract for the plan.
 plugins:
   clawcord_voice:
     enabled: true
-    config_path: host/linux/openclaw/config/clanky_voice.yaml
+    config_path: host/linux/codex/config/clanky_voice.yaml
     event_source: clawcord.voice.events
     tool_namespace: clawcord.voice
     job_queue: clawcord.voice.jobs
@@ -1700,7 +1698,7 @@ storage:
   primary_event_store: sqlite
   sqlite_enabled: true
   sqlite:
-    path: runtime/openclaw-home/clawcord/voice/voice.sqlite3
+    path: runtime/codex-home/clawcord/voice/voice.sqlite3
     journal_mode: WAL
     synchronous: NORMAL
     fts5_enabled: true
@@ -1746,7 +1744,7 @@ agents:
 
   clanky-voice-worker:
     description: Strong job-scoped worker for involved voice tasks.
-    invocation: openclaw_task_create
+    invocation: codex_exec_sticky_session
     model:
       preferred: gpt-5.5-codex-or-strongest-configured
       fallback: strong-openrouter-model
@@ -1816,7 +1814,7 @@ refinement:
 
 ## 16. Hooks and Job Flow
 
-OpenClaw should use hooks to trigger narrow work. Hooks are cheap. Agents are expensive. Prefer hooks.
+Codex should use hooks to trigger narrow work. Hooks are cheap. Agents are expensive. Prefer hooks.
 
 ### 16.1 Hook: `on_voice_bot_assignment_changed`
 
@@ -2045,7 +2043,7 @@ Research at most 3 claims unless user asks for more.
 
 ### 17.5 Subagent Cost Control
 
-OpenClaw subagents are useful when there is real parallel decomposition. They are dangerous when they become "ask three agents to think about the same transcript."
+Codex subagents are useful when there is real parallel decomposition. They are dangerous when they become "ask three agents to think about the same transcript."
 
 Rules:
 
@@ -2070,7 +2068,7 @@ Bad subagent uses:
 
 ## 18. Clawcord API/CLI Contract
 
-The OpenClaw agents need stable primitives. The exact implementation language can change, but the command contract should be stable.
+The Codex agents need stable primitives. The exact implementation language can change, but the command contract should be stable.
 
 ### 18.1 Voice Bot Pool Status
 
@@ -2109,7 +2107,7 @@ clawcord voice pool move \
   --json
 ```
 
-This is Clawcord-owned. OpenClaw may request assignment through Clawcord, but Clawcord decides capacity/locks.
+This is Clawcord-owned. Codex may request assignment through Clawcord, but Clawcord decides capacity/locks.
 
 ### 18.3 Channel Status
 
@@ -2333,7 +2331,7 @@ User types in `agent-chat`:
 
 Flow:
 
-1. OpenClaw-native `Clanky` receives text command.
+1. Codex-native `Clanky` receives text command.
 2. Worker or deterministic command handler calls `clawcord voice pool assign`.
 3. If available, Clawcord assigns a VC bot and replies with status.
 4. If no bot is available, `Clanky` says no spare VC bot and lists current assignments.
@@ -2659,8 +2657,8 @@ Speech event example:
   "start_time": "2026-05-11T20:12:00Z",
   "end_time": "2026-05-11T20:47:00Z",
   "participants": ["user_1", "user_2"],
-  "title": "OpenClaw agent design for Clanky voice memory",
-  "topic_labels": ["Clanky", "OpenClaw", "voice transcript", "agent routing"],
+  "title": "Codex agent design for Clanky voice memory",
+  "topic_labels": ["Clanky", "Codex", "voice transcript", "agent routing"],
   "summary_draft": "Discussion about using a cheap router agent, minimizing cron token burn, supporting multiple Clawcord voice bots, and making refined transcripts authoritative for materialized spans.",
   "state": "ephemeral",
   "transcript_quality": "mixed"
@@ -2741,7 +2739,7 @@ Use SQLite as the primary store.
 Suggested first layout:
 
 ```text
-runtime/openclaw-home/clawcord/voice/
+runtime/codex-home/clawcord/voice/
   voice.sqlite3
   voice.sqlite3-wal
   voice.sqlite3-shm
@@ -2838,7 +2836,7 @@ Required indexes:
 
 Use an FTS5 table for transcript search. Keep it content-linked to `transcript_events` if practical, so text search can return event ids and then the normal timeline query can gather surrounding context.
 
-SQLite should run in WAL mode. Clawcord should own writes; OpenClaw agents should query through Clawcord commands/APIs rather than opening the database directly.
+SQLite should run in WAL mode. Clawcord should own writes; Codex agents should query through Clawcord commands/APIs rather than opening the database directly.
 
 ## 22. Conversation Segmentation
 
@@ -2894,7 +2892,7 @@ Output:
   "decision": "merge",
   "confidence": 0.78,
   "title": "Clanky voice memory architecture",
-  "topic_labels": ["Clanky", "OpenClaw", "voice memory"],
+  "topic_labels": ["Clanky", "Codex", "voice memory"],
   "reason": "Same speakers resumed the same architecture discussion after a short pause."
 }
 ```
@@ -2913,7 +2911,7 @@ Clanky Voice Bot Pool
 clanky-vc1
 State: locally buffering
 Room: Code Lounge
-Current conversation: OpenClaw agent design
+Current conversation: Codex agent design
 Since: 2:12pm
 
 clanky-vc2
@@ -2936,7 +2934,7 @@ Room: Code Lounge
 Voice bot: clanky-vc1
 Mode: locally buffering
 Retention: 7d transcript / 7d audio
-Current conversation: OpenClaw agent design for Clanky voice memory
+Current conversation: Codex agent design for Clanky voice memory
 Participants seen: Will, Vince
 Live transcript: inactive
 Refinement jobs: none
@@ -3002,7 +3000,7 @@ When context resolution is fuzzy:
 ```text
 I found the likely conversation:
 
-"OpenClaw agent design for Clanky voice memory"
+"Codex agent design for Clanky voice memory"
 Code Lounge · 2:12pm-2:47pm · Will, Vince · 35m
 
 Actions:
@@ -3271,7 +3269,7 @@ The right architecture is not "one huge omniscient Clanky agent."
 
 It is:
 
-- `Clanky` as OpenClaw-native text/agent surface
+- `Clanky` as Codex-native text/agent surface
 - `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` as Clawcord-owned voice capture bots
 - Clawcord voice bot pool management
 - channel-keyed SQLite timeline substrate
@@ -3281,7 +3279,7 @@ It is:
 - job-scoped strong worker
 - background ElevenLabs refinement worker
 - Clawcord as the stable Discord/voice/transcript API
-- OpenClaw as the agent/job/tool orchestration layer
+- Codex as the agent/job/tool orchestration layer
 
 This keeps the magic while avoiding the three failure modes:
 

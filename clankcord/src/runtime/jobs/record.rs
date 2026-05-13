@@ -7,7 +7,7 @@ use crate::Result;
 use crate::errors::discord_tool_error;
 
 use super::util::{
-    first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string, string_field,
+    first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
 };
 use super::{
     AudioSegmentPayload, BinaryPayload, ConfirmationContext, ConfirmationRequiredPayload, JobKind,
@@ -86,16 +86,6 @@ pub(crate) struct WorkerAgentMetadata {
 }
 
 impl WorkerAgentMetadata {
-    pub(crate) fn from_json(value: Option<&Value>) -> Result<Self> {
-        let value = value.unwrap_or(&Value::Null);
-        Ok(Self {
-            session_id: string_field(value, "sessionId"),
-            provider: string_field(value, "provider"),
-            model: string_field(value, "model"),
-            usage: BinaryPayload::from_json(value.get("usage").unwrap_or(&Value::Null))?,
-        })
-    }
-
     pub(crate) fn to_json(&self) -> Value {
         let mut object = Map::new();
         insert_non_empty(&mut object, "session_id", &self.session_id);

@@ -1,22 +1,9 @@
-use std::fmt;
+mod error;
+mod registry;
+mod worker;
 
-#[derive(Debug)]
-pub(crate) struct AgentInfrastructureError {
-    detail: String,
-}
+pub use registry::{AgentRuntime, AgentSession, AgentSessionStatus};
+pub use worker::build_worker_agent_message;
 
-impl AgentInfrastructureError {
-    pub(crate) fn new(detail: impl Into<String>) -> Self {
-        Self {
-            detail: detail.into(),
-        }
-    }
-}
-
-impl fmt::Display for AgentInfrastructureError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.detail)
-    }
-}
-
-impl std::error::Error for AgentInfrastructureError {}
+pub(crate) use error::AgentInfrastructureError;
+pub(crate) use worker::WorkerAgentRequest;

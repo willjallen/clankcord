@@ -38,6 +38,7 @@
 - Effect adapters receive typed request objects and return typed result objects. Do not pass `&mut Runtime` into an adapter.
 - Adapters must not own job routing, retries, job state transitions, timeline authority, confirmation flow, or follow-up job creation.
 - Adapters are not process hosts. They are attached to the runtime service and can be replaced without changing runtime lifetime rules.
+- Codex process integration lives under `src/adapters/codex/`. It is a small CLI/process boundary: build command arguments, pass prompts, capture stdout/stderr/final text, enforce timeouts, and return typed process results. It must not know Clawcord jobs, Discord, timeline writes, retries, or routing.
 - Discord voice implementation lives under `src/adapters/discord/voice/`. Songbird wiring, voice-state tracking, packet capture, per-user buffering, silence handling, WAV artifact creation, and Discord voice connection mechanics belong there.
 - Audio segment jobs must reference fully processed per-speaker audio artifacts. They must not carry raw PCM. By the time Discord voice submits an `audio_segment` job, the WAV file exists, has a checksum, and is ready for STT.
 - STT is an adapter under `src/adapters/`, because it talks to an external model/provider. Runtime domain code may call the STT adapter while fulfilling an audio-segment job.
@@ -57,6 +58,7 @@
 
 - Runtime domain modules own job fulfillment: routing, state transitions, retries, cancellation, confirmations, timeline writes, audio segment transcription, transcript refinement, command interpretation, worker dispatch, and follow-up job creation.
 - A domain executor may call an adapter to perform an external effect, but the adapter is not the executor.
+- `src/runtime/agents/` is the runtime agent harness over the Codex adapter. It owns session allocation, session reuse, context packet construction, preflight, active invocation tracking, and conversion between typed runtime requests and Codex adapter calls.
 - Automations decide by reading runtime state and writing jobs. Domain executors do work. Adapters perform effects only when called by runtime code. Results return through jobs and timeline events.
 - Speech workflows are flexible job graphs, not fixed linear pipelines. Speech capture, transcription, detection, command interpretation, execution, and response are common concerns, but they are not hard-coded phases.
 - A domain executor may call a provider or agent, but it advances the workflow by completing its job and emitting the next canonical job or jobs. One job can produce any other job.

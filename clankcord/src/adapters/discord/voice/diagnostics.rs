@@ -31,12 +31,12 @@ pub struct DiagnosticsConfig {
 
 impl DiagnosticsConfig {
     pub fn from_env() -> Self {
-        let enabled = env_bool("VOICE_POOL_DIAGNOSTICS", false);
+        let enabled = env_bool("CLAWCORD_VOICE_DIAGNOSTICS", false);
         Self {
             enabled,
-            audio_stats: env_bool("VOICE_POOL_AUDIO_DIAGNOSTICS", enabled),
-            receiver: env_bool("VOICE_POOL_RECEIVER_DIAGNOSTICS", enabled),
-            event_paths: env_bool("VOICE_POOL_EVENT_PATH_DIAGNOSTICS", enabled),
+            audio_stats: env_bool("CLAWCORD_VOICE_AUDIO_DIAGNOSTICS", enabled),
+            receiver: env_bool("CLAWCORD_VOICE_RECEIVER_DIAGNOSTICS", enabled),
+            event_paths: env_bool("CLAWCORD_VOICE_EVENT_PATH_DIAGNOSTICS", enabled),
         }
     }
 }

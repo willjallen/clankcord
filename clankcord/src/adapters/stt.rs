@@ -15,13 +15,13 @@ pub struct TranscriptionResult {
 }
 
 pub fn stt_transcriptions_url() -> Result<String> {
-    let base_url = env::var("OPENCLAW_STT_BASE_URL")
+    let base_url = env::var("CLAWCORD_STT_BASE_URL")
         .unwrap_or_default()
         .trim()
         .trim_end_matches('/')
         .to_string();
     if base_url.is_empty() {
-        anyhow::bail!("OPENCLAW_STT_BASE_URL is not set");
+        anyhow::bail!("CLAWCORD_STT_BASE_URL is not set");
     }
     if base_url.ends_with("/audio/transcriptions") {
         Ok(base_url)
@@ -31,7 +31,7 @@ pub fn stt_transcriptions_url() -> Result<String> {
 }
 
 pub fn stt_model() -> String {
-    env::var("OPENCLAW_STT_MODEL")
+    env::var("CLAWCORD_STT_MODEL")
         .unwrap_or_else(|_| "large-v3".to_string())
         .trim()
         .to_string()
@@ -41,14 +41,14 @@ pub fn stt_model() -> String {
 }
 
 pub fn stt_language() -> String {
-    env::var("OPENCLAW_STT_LANGUAGE")
+    env::var("CLAWCORD_STT_LANGUAGE")
         .unwrap_or_else(|_| "en".to_string())
         .trim()
         .to_string()
 }
 
 pub fn stt_response_format() -> String {
-    env::var("OPENCLAW_STT_RESPONSE_FORMAT")
+    env::var("CLAWCORD_STT_RESPONSE_FORMAT")
         .unwrap_or_else(|_| "json".to_string())
         .trim()
         .to_string()
@@ -57,7 +57,7 @@ pub fn stt_response_format() -> String {
 
 pub fn stt_include_logprobs() -> bool {
     matches!(
-        env::var("OPENCLAW_STT_INCLUDE_LOGPROBS")
+        env::var("CLAWCORD_STT_INCLUDE_LOGPROBS")
             .unwrap_or_else(|_| "1".to_string())
             .trim()
             .to_lowercase()
@@ -67,35 +67,35 @@ pub fn stt_include_logprobs() -> bool {
 }
 
 pub fn stt_max_token_logprobs() -> usize {
-    env::var("OPENCLAW_STT_MAX_TOKEN_LOGPROBS")
+    env::var("CLAWCORD_STT_MAX_TOKEN_LOGPROBS")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(64)
 }
 
 pub fn stt_timeout_seconds() -> u64 {
-    env::var("OPENCLAW_STT_TIMEOUT_SECONDS")
+    env::var("CLAWCORD_STT_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(120)
 }
 
 pub fn stt_drop_no_speech_threshold() -> f64 {
-    env::var("OPENCLAW_STT_DROP_NO_SPEECH_PROB")
+    env::var("CLAWCORD_STT_DROP_NO_SPEECH_PROB")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(0.7)
 }
 
 pub fn stt_drop_avg_token_logprob_threshold() -> f64 {
-    env::var("OPENCLAW_STT_DROP_AVG_TOKEN_LOGPROB")
+    env::var("CLAWCORD_STT_DROP_AVG_TOKEN_LOGPROB")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(-0.8)
 }
 
 pub fn stt_api_key() -> String {
-    env::var("OPENCLAW_STT_API_KEY")
+    env::var("CLAWCORD_STT_API_KEY")
         .unwrap_or_default()
         .trim()
         .to_string()
