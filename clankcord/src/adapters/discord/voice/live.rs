@@ -250,46 +250,6 @@ impl LiveVoiceAdapter {
 
         let guild_id = parse_discord_id("guild_id", &room.guild_id)?;
         let channel_id = parse_discord_id("channel_id", &room.channel_id)?;
-        match voice
-            .join(GuildId::new(guild_id), ChannelId::new(channel_id))
-            .await
-        {
-            Ok(call) => {
-                let mut call = call.lock().await;
-                call.remove_all_global_events();
-                call.add_global_event(
-                    Event::Core(CoreEvent::SpeakingStateUpdate),
-                    LiveVoiceEventHandler {
-                        adapter: Arc::downgrade(self),
-                        session_id: session_id.clone(),
-                    },
-                );
-                call.add_global_event(
-                    Event::Core(CoreEvent::VoiceTick),
-                    LiveVoiceEventHandler {
-                        adapter: Arc::downgrade(self),
-                        session_id: session_id.clone(),
-                    },
-                );
-                call.add_global_event(
-                    Event::Core(CoreEvent::ClientDisconnect),
-                    LiveVoiceEventHandler {
-                        adapter: Arc::downgrade(self),
-                        session_id: session_id.clone(),
-                    },
-                );
-            }
-            Err(error) => {
-                let error_text = error_chain(&error);
-                let status = self.mark_join_failed(&request.bot_id, &error_text).await;
-                return Err(discord_tool_error(format!(
-                    "failed to join {} with {}: {error_text}",
-                    room.channel_name, request.bot_id
-                ))
-                .context(format!("bot status after failure: {status:?}")));
-            }
-        }
-
         fs::create_dir_all(request.session_dir.join("minutes"))?;
         let session = VoiceSession {
             session_id: session_id.clone(),
@@ -299,7 +259,7 @@ impl LiveVoiceAdapter {
             thread_id: String::new(),
             thread_name: String::new(),
             started_at: request.started_at,
-            session_dir: request.session_dir,
+            session_dir: request.session_dir.clone(),
             minute_message_ids: BTreeMap::new(),
             participants: BTreeMap::new(),
             buffers: BTreeMap::new(),
@@ -329,7 +289,7 @@ impl LiveVoiceAdapter {
                 "songbird".to_string(),
             )]),
             capture_run_id: session_id.clone(),
-            assignment_id: request.assignment_id,
+            assignment_id: request.assignment_id.clone(),
             mode: "local_buffering".to_string(),
         };
         let session_metadata = session.metadata(local_tz());
@@ -343,6 +303,52 @@ impl LiveVoiceAdapter {
                 ssrc_users: BTreeMap::new(),
             })),
         );
+
+        let call = voice.get_or_insert(GuildId::new(guild_id));
+        let join = {
+            let mut call = call.lock().await;
+            call.remove_all_global_events();
+            call.add_global_event(
+                Event::Core(CoreEvent::SpeakingStateUpdate),
+                LiveVoiceEventHandler {
+                    adapter: Arc::downgrade(self),
+                    session_id: session_id.clone(),
+                },
+            );
+            call.add_global_event(
+                Event::Core(CoreEvent::VoiceTick),
+                LiveVoiceEventHandler {
+                    adapter: Arc::downgrade(self),
+                    session_id: session_id.clone(),
+                },
+            );
+            call.add_global_event(
+                Event::Core(CoreEvent::ClientDisconnect),
+                LiveVoiceEventHandler {
+                    adapter: Arc::downgrade(self),
+                    session_id: session_id.clone(),
+                },
+            );
+            call.join(ChannelId::new(channel_id)).await
+        };
+        let join_result = match join {
+            Ok(join) => join.await,
+            Err(error) => Err(error),
+        };
+        if let Err(error) = join_result {
+            self.sessions.lock().await.remove(&session_id);
+            {
+                let mut call = call.lock().await;
+                call.remove_all_global_events();
+            }
+            let error_text = error_chain(&error);
+            let status = self.mark_join_failed(&request.bot_id, &error_text).await;
+            return Err(discord_tool_error(format!(
+                "failed to join {} with {}: {error_text}",
+                room.channel_name, request.bot_id
+            ))
+            .context(format!("bot status after failure: {status:?}")));
+        }
 
         let bot_status = {
             let mut bots = self.bots.lock().await;
