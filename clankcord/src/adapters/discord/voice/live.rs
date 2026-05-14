@@ -26,7 +26,7 @@ use tokio::task::JoinHandle;
 use crate::Result;
 use crate::adapters::discord::voice::artifacts::duration_ms_for_pcm;
 use crate::adapters::discord::voice::capture::{
-    CaptureUser, VoiceCaptureHandler, VoiceCaptureSink, VoiceData,
+    CaptureUser, VoiceCaptureHandler, VoiceCaptureSink, VoiceData, user_label,
 };
 use crate::adapters::discord::voice::session::{
     AudioPipelineOutcome, SessionAudioPipeline, monotonic_seconds,
@@ -668,7 +668,10 @@ impl LiveVoiceAdapter {
             global_name: String::new(),
             name: user_id.to_string(),
         };
-        live_session.ssrc_users.insert(ssrc, user.clone());
+        let previous_user = live_session.ssrc_users.insert(ssrc, user.clone());
+        if let Some(previous_user) = previous_user {
+            live_session.replace_synthetic_speaker(&previous_user.id, &user);
+        }
         let mut handler = SessionCaptureHandler {
             pipeline,
             session: &mut live_session.session,
@@ -843,6 +846,51 @@ impl LiveVoiceSession {
         };
         sink.write(&mut handler, data);
         self.capture_sink = sink;
+    }
+
+    fn replace_synthetic_speaker(&mut self, previous_user_id: &str, user: &CaptureUser) {
+        if previous_user_id == user.id || !previous_user_id.starts_with("ssrc:") {
+            return;
+        }
+        let label = user_label(user);
+        if let Some(mut synthetic) = self.session.buffers.remove(previous_user_id) {
+            synthetic.user_id = user.id.clone();
+            synthetic.label = label.clone();
+            synthetic.username = user.name.clone();
+            if let Some(real) = self.session.buffers.get_mut(&user.id) {
+                let synthetic_started_first = synthetic
+                    .started_at
+                    .as_ref()
+                    .zip(real.started_at.as_ref())
+                    .is_some_and(|(synthetic_started, real_started)| {
+                        synthetic_started < real_started
+                    });
+                if synthetic_started_first {
+                    let mut pcm = synthetic.pcm;
+                    pcm.extend_from_slice(&real.pcm);
+                    real.pcm = pcm;
+                    real.started_at = synthetic.started_at;
+                } else if !synthetic.pcm.is_empty() {
+                    real.pcm.extend_from_slice(&synthetic.pcm);
+                    if real.started_at.is_none() {
+                        real.started_at = synthetic.started_at;
+                    }
+                }
+                real.active = real.active || synthetic.active;
+                real.last_packet_monotonic = real
+                    .last_packet_monotonic
+                    .max(synthetic.last_packet_monotonic);
+            } else {
+                self.session.buffers.insert(user.id.clone(), synthetic);
+            }
+        }
+        if let Some(mut participant) = self.session.participants.remove(previous_user_id) {
+            participant.insert("label".to_string(), label);
+            participant.insert("username".to_string(), user.name.clone());
+            self.session
+                .participants
+                .insert(user.id.clone(), participant);
+        }
     }
 }
 
