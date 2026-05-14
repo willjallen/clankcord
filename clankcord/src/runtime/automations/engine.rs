@@ -117,8 +117,11 @@ impl AutomationRunner {
 
         let mut active_jobs = runtime
             .timeline_store
-            .list_jobs(None, None)
-            .context("loading jobs for automation evaluation")?;
+            .list_jobs_by_states(
+                None,
+                &[JobState::Queued, JobState::Running, JobState::Waiting],
+            )
+            .context("loading active jobs for automation evaluation")?;
         let mut created = Vec::new();
         for automation in &self.automations {
             let automation_name = automation.name();
@@ -151,6 +154,8 @@ impl AutomationRunner {
 
 impl Runtime {
     pub fn run_automations(&mut self) -> Result<AutomationRun> {
+        self.load_room_controls();
+        self.load_automation_registry()?;
         AutomationRunner::runtime_default().run(self)
     }
 }
@@ -180,7 +185,7 @@ fn run_stored_automations(
             runtime.automations.remove(&automation_id);
             continue;
         }
-        let outcome = evaluate_stored_automation(runtime, &record, active_jobs)?;
+        let outcome = evaluate_stored_automation(runtime, &record)?;
         let mut updated = record.clone();
         if outcome.evaluated {
             if outcome.jobs.is_empty() {
@@ -227,13 +232,12 @@ struct StoredAutomationOutcome {
 fn evaluate_stored_automation(
     runtime: &Runtime,
     record: &AutomationRecord,
-    active_jobs: &[Job],
 ) -> Result<StoredAutomationOutcome> {
     if record.state != AutomationState::Active {
         return Ok(StoredAutomationOutcome::default());
     }
 
-    let contexts = trigger_contexts(runtime, record, active_jobs)?;
+    let contexts = trigger_contexts(runtime, record)?;
     if contexts.is_empty() {
         return Ok(StoredAutomationOutcome::default());
     }
@@ -269,11 +273,7 @@ fn evaluate_stored_automation(
     })
 }
 
-fn trigger_contexts(
-    runtime: &Runtime,
-    record: &AutomationRecord,
-    active_jobs: &[Job],
-) -> Result<Vec<Value>> {
+fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Value>> {
     match &record.spec.trigger {
         AutomationTrigger::Tick { interval_seconds } => {
             if !tick_due(record, *interval_seconds) {
@@ -282,13 +282,9 @@ fn trigger_contexts(
             Ok(vec![base_context(runtime, record, None, None)])
         }
         AutomationTrigger::Event { event_kinds } => event_contexts(runtime, record, event_kinds),
-        AutomationTrigger::Job { job_kinds, states } => Ok(job_contexts(
-            runtime,
-            record,
-            active_jobs,
-            job_kinds,
-            states,
-        )),
+        AutomationTrigger::Job { job_kinds, states } => {
+            job_contexts(runtime, record, job_kinds, states)
+        }
         AutomationTrigger::RoomStateChanged => event_contexts(
             runtime,
             record,
@@ -337,13 +333,20 @@ fn event_contexts(
 fn job_contexts(
     runtime: &Runtime,
     record: &AutomationRecord,
-    active_jobs: &[Job],
     job_kinds: &[JobKind],
     states: &[JobState],
-) -> Vec<Value> {
+) -> Result<Vec<Value>> {
     let cursor = parse_instant(&record.cursor_at());
-    active_jobs
-        .iter()
+    Ok(runtime
+        .timeline_store
+        .list_jobs_for_trigger(
+            &record.spec.scope.guild_id,
+            &record.spec.scope.voice_channel_id,
+            job_kinds,
+            states,
+            cursor,
+        )?
+        .into_iter()
         .filter(|job| job.guild_id == record.spec.scope.guild_id)
         .filter(|job| job.voice_channel_id == record.spec.scope.voice_channel_id)
         .filter(|job| job_kinds.contains(&job.kind) && states.contains(&job.state))
@@ -355,7 +358,7 @@ fn job_contexts(
             }
         })
         .map(|job| base_context(runtime, record, None, Some(job.to_value())))
-        .collect()
+        .collect())
 }
 
 fn base_context(

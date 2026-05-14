@@ -20,7 +20,7 @@ type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
-    runtime: Arc<Mutex<Runtime>>,
+    runtime_cache_lock: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
     timeline_store: TimelineStore,
     executor: ServiceRuntimeExecutor,
@@ -29,8 +29,8 @@ pub struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub(crate) fn runtime(&self) -> Arc<Mutex<Runtime>> {
-        self.runtime.clone()
+    pub(crate) fn runtime_cache_lock(&self) -> Arc<Mutex<Runtime>> {
+        self.runtime_cache_lock.clone()
     }
 
     pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
@@ -99,7 +99,7 @@ impl RuntimeHandle {
 
     pub async fn run_maintenance_once(&self) -> Result<Value> {
         run_maintainer_cycle(
-            self.runtime.clone(),
+            self.runtime_cache_lock.clone(),
             self.live_voice.clone(),
             self.executor.clone(),
         )
@@ -159,17 +159,20 @@ impl RuntimeService {
         let mut runtime = Runtime::new()?;
         runtime.start().await?;
         let timeline_store = runtime.timeline_store.clone();
-        let runtime = Arc::new(Mutex::new(runtime));
+        let runtime_cache_lock = Arc::new(Mutex::new(runtime));
         let (intake, intake_receiver) = mpsc::channel(DEFAULT_INTAKE_QUEUE_DEPTH);
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),
         };
         let live_voice = Arc::new(LiveVoiceAdapter::new(job_sink.clone()));
-        let executor =
-            RuntimeExecutor::new(runtime.clone(), live_voice.clone(), timeline_store.clone());
+        let executor = RuntimeExecutor::new(
+            runtime_cache_lock.clone(),
+            live_voice.clone(),
+            timeline_store.clone(),
+        );
         Ok(Self {
             handle: RuntimeHandle {
-                runtime,
+                runtime_cache_lock,
                 live_voice,
                 timeline_store,
                 executor,
@@ -187,6 +190,7 @@ impl RuntimeService {
     pub fn spawn(self) {
         spawn_intake_loop(self.handle.clone(), self.intake);
         spawn_live_voice_loop(self.handle.live_voice.clone());
+        spawn_dispatch_loop(self.handle.clone());
         spawn_maintainer_loop(self.handle.clone());
     }
 }
@@ -228,8 +232,8 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
             match submission {
                 RuntimeSubmission::Command { command, reply } => {
                     let result = {
-                        let runtime = handle.runtime.lock().await;
-                        runtime.create_command_job_sync(command, None)
+                        let runtime_cache = handle.runtime_cache_lock.lock().await;
+                        runtime_cache.create_command_job_sync(command, None)
                     };
                     if result.is_ok() {
                         handle.executor.wake();
@@ -237,10 +241,12 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
                     let _ = reply.send(result);
                 }
                 RuntimeSubmission::Job { job, reply } => {
-                    let result = handle
-                        .timeline_store
-                        .create_job(job)
-                        .map(job_created_payload);
+                    let result = if job.kind == crate::runtime::JobKind::WakeProbe {
+                        handle.timeline_store.create_wake_probe_job(job)
+                    } else {
+                        handle.timeline_store.create_job(job)
+                    }
+                    .map(job_created_payload);
                     if result.is_ok() {
                         handle.executor.wake();
                     }
@@ -295,24 +301,26 @@ fn spawn_live_voice_loop(live_voice: Arc<LiveVoiceAdapter>) {
 fn spawn_maintainer_loop(handle: RuntimeHandle) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(maintainer_interval());
-        let notify = handle.executor.notify_handle();
         loop {
-            tokio::select! {
-                biased;
-                _ = notify.notified() => {
-                    if let Err(error) = handle.drain_ready_jobs().await {
-                        log(&format!(
-                            "runtime dispatch drain failed: {}",
-                            error_chain(&error)
-                        ));
-                    }
-                    continue;
-                }
-                _ = interval.tick() => {}
-            }
+            interval.tick().await;
             if let Err(error) = handle.run_maintenance_once().await {
                 log(&format!(
                     "runtime maintainer cycle failed: {}",
+                    error_chain(&error)
+                ));
+            }
+        }
+    });
+}
+
+fn spawn_dispatch_loop(handle: RuntimeHandle) {
+    tokio::spawn(async move {
+        let notify = handle.executor.notify_handle();
+        loop {
+            notify.notified().await;
+            if let Err(error) = handle.drain_ready_jobs().await {
+                log(&format!(
+                    "runtime dispatch drain failed: {}",
                     error_chain(&error)
                 ));
             }
@@ -333,56 +341,44 @@ fn job_created_payload(job: Job) -> Value {
 }
 
 async fn run_maintainer_cycle(
-    runtime: Arc<Mutex<Runtime>>,
+    runtime_cache_lock: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
     executor: ServiceRuntimeExecutor,
 ) -> Result<Value> {
-    let dispatch_before_sync = executor
-        .drain_ready_jobs()
-        .await
-        .context("draining ready jobs before sync")?;
-    sync_voice_adapter_state(runtime.clone(), live_voice)
+    sync_voice_adapter_state(runtime_cache_lock.clone(), live_voice)
         .await
         .context("syncing voice adapter state")?;
     let automation = {
-        let mut runtime = runtime.lock().await;
-        runtime
+        let mut runtime_snapshot = {
+            let runtime_cache = runtime_cache_lock.lock().await;
+            runtime_cache.clone()
+        };
+        runtime_snapshot
             .run_automations()
             .context("running runtime automations")?
             .to_json()
     };
-    let dispatch_after_automation = executor
-        .drain_ready_jobs()
-        .await
-        .context("draining ready jobs after automations")?;
     let maintenance = executor
         .run_maintenance()
         .await
         .context("running runtime maintenance")?;
-    let dispatch_after_maintenance = executor
-        .drain_ready_jobs()
-        .await
-        .context("draining ready jobs after maintenance")?;
+    executor.wake();
     Ok(json!({
         "ok": true,
         "automation": automation,
-        "dispatch": {
-            "beforeSync": dispatch_before_sync,
-            "afterAutomation": dispatch_after_automation,
-            "afterMaintenance": dispatch_after_maintenance,
-        },
         "maintenance": maintenance,
+        "dispatchNotified": true,
     }))
 }
 
 async fn sync_voice_adapter_state(
-    runtime: Arc<Mutex<Runtime>>,
+    runtime_cache_lock: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
 ) -> Result<()> {
     let bots = live_voice.bot_statuses().await;
     let sessions = live_voice.session_statuses().await;
-    let mut runtime = runtime.lock().await;
-    runtime.sync_voice_adapter_status(bots, sessions)
+    let mut runtime_cache = runtime_cache_lock.lock().await;
+    runtime_cache.sync_voice_adapter_status(bots, sessions)
 }
 
 fn maintainer_interval() -> Duration {

@@ -573,6 +573,35 @@ pub struct AudioSegmentPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WakeProbePayload {
+    pub guild_id: String,
+    pub guild_slug: String,
+    pub voice_channel_id: String,
+    pub voice_channel_name: String,
+    pub voice_channel_slug: String,
+    pub capture_run_id: String,
+    pub voice_bot_id: String,
+    pub voice_bot_discord_user_id: String,
+    pub speaker_user_id: String,
+    pub speaker_label: String,
+    pub speaker_username: String,
+    pub probe_start_time: DateTime<Utc>,
+    pub probe_end_time: DateTime<Utc>,
+    pub probe_index: i64,
+    pub duration_ms: i64,
+    pub source_audio_path: PathBuf,
+    pub audio_checksum: String,
+    pub audio_bytes: u64,
+    pub audio_format: String,
+    pub sample_rate_hz: u32,
+    pub channels: u16,
+    pub sample_width_bits: u16,
+    pub post_processing: String,
+    pub stream_id: String,
+    pub reset_stream: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WakeActivationPayload {
     pub activation_id: String,
     pub guild_id: String,
@@ -984,6 +1013,7 @@ pub enum JobPayload {
     DiscordVoiceMute(DiscordVoiceMutePayload),
     DiscordVoicePlayAudio(DiscordVoicePlayAudioPayload),
     RuntimeControl(RuntimeControlPayload),
+    WakeProbe(WakeProbePayload),
 }
 
 impl JobPayload {
@@ -1003,12 +1033,14 @@ impl JobPayload {
             Self::DiscordVoiceMute(_) => JobKind::DiscordVoiceMute,
             Self::DiscordVoicePlayAudio(_) => JobKind::DiscordVoicePlayAudio,
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
+            Self::WakeProbe(_) => JobKind::WakeProbe,
         }
     }
 
     pub fn command(&self) -> Option<&CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
+            Self::WakeProbe(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::Response(_) => None,
@@ -1028,6 +1060,7 @@ impl JobPayload {
     pub fn command_mut(&mut self) -> Option<&mut CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
+            Self::WakeProbe(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::Response(_) => None,
@@ -1163,6 +1196,33 @@ impl JobPayload {
                 "action": payload.action.as_str(),
                 "target_job_id": payload.target_job_id,
                 "actor_user_id": payload.actor_user_id,
+            }),
+            Self::WakeProbe(payload) => json!({
+                "guild_id": payload.guild_id,
+                "guild_slug": payload.guild_slug,
+                "voice_channel_id": payload.voice_channel_id,
+                "voice_channel_name": payload.voice_channel_name,
+                "voice_channel_slug": payload.voice_channel_slug,
+                "capture_run_id": payload.capture_run_id,
+                "voice_bot_id": payload.voice_bot_id,
+                "voice_bot_discord_user_id": payload.voice_bot_discord_user_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "speaker_username": payload.speaker_username,
+                "probe_start_time": payload.probe_start_time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "probe_end_time": payload.probe_end_time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "probe_index": payload.probe_index,
+                "duration_ms": payload.duration_ms,
+                "source_audio_path": payload.source_audio_path.display().to_string(),
+                "audio_checksum": payload.audio_checksum,
+                "audio_bytes": payload.audio_bytes,
+                "audio_format": payload.audio_format,
+                "sample_rate_hz": payload.sample_rate_hz,
+                "channels": payload.channels,
+                "sample_width_bits": payload.sample_width_bits,
+                "post_processing": payload.post_processing,
+                "stream_id": payload.stream_id,
+                "reset_stream": payload.reset_stream,
             }),
         }
     }

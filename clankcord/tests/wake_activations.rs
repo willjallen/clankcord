@@ -90,6 +90,59 @@ fn wake_activation_builds_labeled_bundle_before_dispatch() {
 }
 
 #[test]
+fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let mut runtime = test_runtime(store);
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = runtime
+        .timeline_store
+        .append_event(
+            "guild",
+            "code",
+            json!({
+                "event_kind": "wake_detected",
+                "kind": "wake_detected",
+                "capture_run_id": "cap_test",
+                "speaker_user_id": "user-a",
+                "speakerId": "user-a",
+                "speaker_label": "Will",
+                "speakerLabel": "Will",
+                "startedAt": (start + chrono::Duration::seconds(1)).to_rfc3339_opts(SecondsFormat::Millis, true),
+                "endedAt": (start + chrono::Duration::milliseconds(1300)).to_rfc3339_opts(SecondsFormat::Millis, true),
+                "wake": {"wake": true, "score": 0.91},
+                "wake_detected": true,
+            }),
+        )
+        .unwrap();
+    append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(3),
+        "Will",
+        "user-a",
+        "hey clanky summarize the floating point discussion",
+        json!({}),
+        1,
+    );
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime.timeline_store.get_job(&activation_job_id).unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload).unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    let command_job_id = string_field(&result["created"]["job"], "job_id");
+    let command = runtime.timeline_store.get_job(&command_job_id).unwrap();
+    let command_value = command.command_value().unwrap();
+    assert_eq!(
+        command_value["arguments"]["request"],
+        json!("summarize the floating point discussion")
+    );
+}
+
+#[test]
 fn wake_followup_before_execution_amends_existing_activation() {
     let raw = tempfile::tempdir().unwrap();
     let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();

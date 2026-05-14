@@ -9,14 +9,14 @@ use crate::runtime::timeline::isoformat_z;
 
 #[derive(Debug, Clone)]
 pub struct AgentRuntime {
-    registry: Arc<Mutex<AgentRegistry>>,
+    agent_registry_lock: Arc<Mutex<AgentRegistry>>,
     codex: CodexAdapter,
 }
 
 impl Default for AgentRuntime {
     fn default() -> Self {
         Self {
-            registry: Arc::new(Mutex::new(AgentRegistry::default())),
+            agent_registry_lock: Arc::new(Mutex::new(AgentRegistry::default())),
             codex: CodexAdapter::default(),
         }
     }
@@ -70,7 +70,7 @@ impl AgentRuntime {
 
     fn with_registry<T>(&self, f: impl FnOnce(&mut AgentRegistry) -> T) -> T {
         let mut registry = self
-            .registry
+            .agent_registry_lock
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         f(&mut registry)

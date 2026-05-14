@@ -26,6 +26,12 @@ pub struct SpeakerBuffer {
     pub active: bool,
     #[serde(default)]
     pub flush_in_flight: bool,
+    #[serde(default)]
+    pub wake_probe_counter: i64,
+    #[serde(default)]
+    pub last_wake_probe_monotonic: f64,
+    #[serde(default)]
+    pub last_wake_probe_pcm_len: usize,
 }
 
 impl SpeakerBuffer {
@@ -43,6 +49,9 @@ impl SpeakerBuffer {
             last_packet_monotonic: 0.0,
             active: false,
             flush_in_flight: false,
+            wake_probe_counter: 0,
+            last_wake_probe_monotonic: 0.0,
+            last_wake_probe_pcm_len: 0,
         }
     }
 }

@@ -23,6 +23,7 @@ use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
     load_client_token_specs, parse_discord_id, play_voice_file, set_voice_mute,
 };
+use crate::adapters::discord::voice::session::WakeProbeConfig;
 use crate::adapters::discord::voice::types::VoiceSession;
 use crate::config::{local_tz, read_json};
 use crate::errors::discord_tool_error;
@@ -37,18 +38,24 @@ use crate::runtime::{
 const DEFAULT_FLUSH_INTERVAL_SECONDS: f64 = 0.5;
 const DEFAULT_SILENCE_MS: i64 = 1_000;
 const DEFAULT_MAX_SEGMENT_MS: i64 = 8_000;
+const DEFAULT_WAKE_PROBE_MINIMUM_MS: i64 = 500;
+const DEFAULT_WAKE_PROBE_WINDOW_MS: i64 = 2_500;
+const DEFAULT_WAKE_PROBE_INTERVAL_MS: i64 = 500;
 const DEFAULT_SOUND_ASSET_DIR: &str = "/workspace/clankcord/res/audio";
 const DEFAULT_PLAYBACK_TIMEOUT_MS: u64 = 10_000;
 
+type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
+
 pub struct LiveVoiceAdapter {
     job_sink: RuntimeJobSink,
-    clients: Mutex<BTreeMap<String, DiscordVoiceClient>>,
-    sessions: Mutex<BTreeMap<String, Arc<Mutex<LiveCaptureSession>>>>,
-    speaker_profiles: Mutex<BTreeMap<String, CaptureUser>>,
+    voice_clients_lock: Mutex<BTreeMap<String, DiscordVoiceClient>>,
+    capture_sessions_lock: Mutex<BTreeMap<String, LiveCaptureSessionLock>>,
+    speaker_profiles_lock: Mutex<BTreeMap<String, CaptureUser>>,
     flush_interval: Duration,
     silence_ms: i64,
     max_segment_ms: i64,
     minimum_utterance_ms: i64,
+    wake_probe: WakeProbeConfig,
     no_token_warning_logged: AtomicBool,
 }
 
@@ -60,6 +67,7 @@ impl fmt::Debug for LiveVoiceAdapter {
             .field("silence_ms", &self.silence_ms)
             .field("max_segment_ms", &self.max_segment_ms)
             .field("minimum_utterance_ms", &self.minimum_utterance_ms)
+            .field("wake_probe", &self.wake_probe)
             .finish_non_exhaustive()
     }
 }
@@ -117,15 +125,38 @@ impl LiveVoiceAdapter {
             .get("minimumUtteranceMs")
             .and_then(Value::as_i64)
             .unwrap_or(350);
+        let wake = payload
+            .get("wake")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let wake_probe = WakeProbeConfig {
+            minimum_ms: wake
+                .get("probeMinimumMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(DEFAULT_WAKE_PROBE_MINIMUM_MS)
+                .max(0),
+            window_ms: wake
+                .get("probeWindowMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(DEFAULT_WAKE_PROBE_WINDOW_MS)
+                .max(0),
+            interval_ms: wake
+                .get("probeIntervalMs")
+                .and_then(Value::as_i64)
+                .unwrap_or(DEFAULT_WAKE_PROBE_INTERVAL_MS)
+                .max(0),
+        };
         Self {
             job_sink,
-            clients: Mutex::new(BTreeMap::new()),
-            sessions: Mutex::new(BTreeMap::new()),
-            speaker_profiles: Mutex::new(BTreeMap::new()),
+            voice_clients_lock: Mutex::new(BTreeMap::new()),
+            capture_sessions_lock: Mutex::new(BTreeMap::new()),
+            speaker_profiles_lock: Mutex::new(BTreeMap::new()),
             flush_interval: Duration::from_millis((DEFAULT_FLUSH_INTERVAL_SECONDS * 1000.0) as u64),
             silence_ms: silence_ms.max(0),
             max_segment_ms: max_segment_ms.max(250),
             minimum_utterance_ms: minimum_utterance_ms.max(0),
+            wake_probe,
             no_token_warning_logged: AtomicBool::new(false),
         }
     }
@@ -137,7 +168,7 @@ impl LiveVoiceAdapter {
     pub async fn start_missing_clients(self: &Arc<Self>) -> Result<()> {
         let specs = load_client_token_specs()?;
         if specs.is_empty() {
-            let clients = self.clients.lock().await;
+            let clients = self.voice_clients_lock.lock().await;
             if clients.is_empty() && !self.no_token_warning_logged.swap(true, Ordering::Relaxed) {
                 log("no dedicated voice bot tokens configured; discord voice bots are disabled");
             }
@@ -146,7 +177,12 @@ impl LiveVoiceAdapter {
         self.no_token_warning_logged.store(false, Ordering::Relaxed);
 
         for (client_id, token) in specs {
-            if self.clients.lock().await.contains_key(&client_id) {
+            if self
+                .voice_clients_lock
+                .lock()
+                .await
+                .contains_key(&client_id)
+            {
                 continue;
             }
             self.start_client(client_id, token).await?;
@@ -156,13 +192,16 @@ impl LiveVoiceAdapter {
 
     async fn start_client(self: &Arc<Self>, client_id: String, token: String) -> Result<()> {
         let client = DiscordVoiceClient::start(self, client_id.clone(), token).await?;
-        self.clients.lock().await.insert(client_id.clone(), client);
+        self.voice_clients_lock
+            .lock()
+            .await
+            .insert(client_id.clone(), client);
         log(&format!("starting Discord voice client {client_id}"));
         Ok(())
     }
 
     pub async fn shutdown(&self) {
-        let clients = self.clients.lock().await;
+        let clients = self.voice_clients_lock.lock().await;
         for client in clients.values() {
             client.shutdown().await;
         }
@@ -175,7 +214,7 @@ impl LiveVoiceAdapter {
         let room = request.room.clone();
         let session_id = request.capture_run_id.clone();
         let (voice, bot_user_id) = {
-            let mut clients = self.clients.lock().await;
+            let mut clients = self.voice_clients_lock.lock().await;
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
@@ -229,17 +268,18 @@ impl LiveVoiceAdapter {
             mode: "local_buffering".to_string(),
         };
         let session_metadata = session.metadata(local_tz());
-        self.sessions.lock().await.insert(
+        self.capture_sessions_lock.lock().await.insert(
             session_id.clone(),
             Arc::new(Mutex::new(LiveCaptureSession::new(
                 session,
                 self.minimum_utterance_ms,
+                self.wake_probe,
             ))),
         );
 
         if let Err(error) = join_voice_channel(self, voice, &session_id, guild_id, channel_id).await
         {
-            self.sessions.lock().await.remove(&session_id);
+            self.capture_sessions_lock.lock().await.remove(&session_id);
             let error_text = describe_error(&error);
             let status = self.mark_join_failed(&request.bot_id, &error_text).await;
             return Err(discord_tool_error(format!(
@@ -250,7 +290,7 @@ impl LiveVoiceAdapter {
         }
 
         let bot_status = {
-            let mut clients = self.clients.lock().await;
+            let mut clients = self.voice_clients_lock.lock().await;
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
@@ -270,7 +310,7 @@ impl LiveVoiceAdapter {
     }
 
     async fn mark_join_failed(&self, bot_id: &str, error: &str) -> Option<RuntimeBotStatus> {
-        let mut clients = self.clients.lock().await;
+        let mut clients = self.voice_clients_lock.lock().await;
         let client = clients.get_mut(bot_id)?;
         client.joining_session_id = None;
         client.last_error = error.to_string();
@@ -282,7 +322,7 @@ impl LiveVoiceAdapter {
         request: DiscordVoiceLeavePayload,
     ) -> Result<DiscordVoiceLeaveOutput> {
         let session_id = request.session_id;
-        let live_session = self.sessions.lock().await.remove(&session_id);
+        let live_session = self.capture_sessions_lock.lock().await.remove(&session_id);
         let Some(live_session) = live_session else {
             return Ok(DiscordVoiceLeaveOutput {
                 session_id,
@@ -302,7 +342,7 @@ impl LiveVoiceAdapter {
         };
 
         let voice = {
-            let mut clients = self.clients.lock().await;
+            let mut clients = self.voice_clients_lock.lock().await;
             let client = clients.get_mut(&finished.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", finished.bot_id))
             })?;
@@ -315,7 +355,7 @@ impl LiveVoiceAdapter {
         let guild_id = parse_discord_id("guild_id", &finished.guild_id)?;
         leave_voice_channel(voice, guild_id).await;
         let bot_status = {
-            let clients = self.clients.lock().await;
+            let clients = self.voice_clients_lock.lock().await;
             clients
                 .get(&finished.bot_id)
                 .map(DiscordVoiceClient::status)
@@ -352,7 +392,7 @@ impl LiveVoiceAdapter {
             live_session.metadata(local_tz())
         };
         let voice = {
-            let clients = self.clients.lock().await;
+            let clients = self.voice_clients_lock.lock().await;
             let client = clients.get(&session.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", session.bot_id))
             })?;
@@ -392,7 +432,7 @@ impl LiveVoiceAdapter {
             live_session.metadata(local_tz())
         };
         let voice = {
-            let clients = self.clients.lock().await;
+            let clients = self.voice_clients_lock.lock().await;
             let client = clients.get(&session.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", session.bot_id))
             })?;
@@ -422,7 +462,7 @@ impl LiveVoiceAdapter {
 
     pub async fn flush_ready_buffers(&self) -> Result<()> {
         let sessions = {
-            let sessions = self.sessions.lock().await;
+            let sessions = self.capture_sessions_lock.lock().await;
             sessions
                 .iter()
                 .map(|(id, session)| (id.clone(), session.clone()))
@@ -441,13 +481,13 @@ impl LiveVoiceAdapter {
     }
 
     pub async fn bot_statuses(&self) -> Vec<RuntimeBotStatus> {
-        let clients = self.clients.lock().await;
+        let clients = self.voice_clients_lock.lock().await;
         clients.values().map(DiscordVoiceClient::status).collect()
     }
 
     pub async fn session_statuses(&self) -> Vec<crate::runtime::RuntimeSessionStatus> {
         let sessions = {
-            let sessions = self.sessions.lock().await;
+            let sessions = self.capture_sessions_lock.lock().await;
             sessions.values().cloned().collect::<Vec<_>>()
         };
         let mut statuses = Vec::new();
@@ -459,7 +499,7 @@ impl LiveVoiceAdapter {
 
     pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
         {
-            let mut clients = self.clients.lock().await;
+            let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
                 client.ready = true;
                 client.user_id = ready.user.id.get().to_string();
@@ -476,7 +516,7 @@ impl LiveVoiceAdapter {
                 .await;
         }
 
-        let mut clients = self.clients.lock().await;
+        let mut clients = self.voice_clients_lock.lock().await;
         let Some(client) = clients.get_mut(bot_id) else {
             return;
         };
@@ -495,7 +535,7 @@ impl LiveVoiceAdapter {
 
     pub(super) async fn note_client_error(&self, bot_id: &str, error: &str) {
         {
-            let mut clients = self.clients.lock().await;
+            let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
                 client.ready = false;
                 client.last_error = error.to_string();
@@ -580,7 +620,7 @@ impl LiveVoiceAdapter {
             return;
         };
         let mut live_session = session.lock().await;
-        if let Some(job) = live_session.note_client_disconnect(user_id) {
+        for job in live_session.note_client_disconnect(user_id) {
             self.job_sink.submit_detached(job);
         }
     }
@@ -596,11 +636,19 @@ impl LiveVoiceAdapter {
             return;
         };
         let mut live_session = session.lock().await;
-        live_session.write_voice_tick(speaking, silent);
+        let jobs = live_session.write_voice_tick(speaking, silent);
+        drop(live_session);
+        for job in jobs {
+            self.job_sink.submit_detached(job);
+        }
     }
 
-    async fn session(&self, session_id: &str) -> Option<Arc<Mutex<LiveCaptureSession>>> {
-        self.sessions.lock().await.get(session_id).cloned()
+    async fn session(&self, session_id: &str) -> Option<LiveCaptureSessionLock> {
+        self.capture_sessions_lock
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
     }
 
     async fn resolve_speaker_profile(
@@ -618,7 +666,7 @@ impl LiveVoiceAdapter {
             live_session.discord_lookup_context()
         };
         let http = {
-            let clients = self.clients.lock().await;
+            let clients = self.voice_clients_lock.lock().await;
             clients.get(&client_id).map(DiscordVoiceClient::http)
         }?;
         let guild_id = match parse_discord_id("guild_id", &guild_id) {
@@ -655,11 +703,15 @@ impl LiveVoiceAdapter {
     }
 
     async fn cached_speaker_profile(&self, user_id: &str) -> Option<CaptureUser> {
-        self.speaker_profiles.lock().await.get(user_id).cloned()
+        self.speaker_profiles_lock
+            .lock()
+            .await
+            .get(user_id)
+            .cloned()
     }
 
     async fn cache_speaker_profile(&self, profile: CaptureUser) {
-        self.speaker_profiles
+        self.speaker_profiles_lock
             .lock()
             .await
             .insert(profile.id.clone(), profile);

@@ -9,9 +9,13 @@ use super::routes;
 
 impl Runtime {
     pub(crate) fn run_blocking_maintenance(&self) -> Result<Value> {
+        let stale_wake_probes = self
+            .timeline_store
+            .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())?;
         let timed_out = self.fail_stale_running_jobs()?;
         let resolved_waiting = self.resolve_waiting_jobs()?;
         Ok(json!({
+            "staleWakeProbes": stale_wake_probes,
             "timedOutJobs": timed_out,
             "resolvedWaitingJobs": resolved_waiting,
         }))
@@ -28,6 +32,10 @@ impl Runtime {
     pub(crate) fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match running.kind {
+            JobKind::WakeProbe => match routes::execute_wake_probe(self, &running) {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            },
             JobKind::AudioSegment => match routes::execute_audio_segment(self, &running) {
                 Ok(result) => self.complete_dispatched_job(&job_id, running, result),
                 Err(error) => self.fail_dispatched_job(&job_id, running, error),
@@ -153,41 +161,14 @@ impl Runtime {
     }
 
     pub(crate) fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
-        let mut resolved = Vec::new();
-        for mut parent in self
-            .timeline_store
-            .list_jobs(None, Some(JobState::Waiting))?
-        {
-            let children = self.timeline_store.list_child_jobs(&parent.id)?;
-            if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
-                continue;
-            }
-            if matches!(
-                parent.kind,
-                JobKind::RoomAgentPlacement | JobKind::DiscordVoicePlayback
-            ) {
-                parent.set_state(JobState::Queued);
-                parent.next_run_at = None;
-            } else if children.iter().all(|job| job.state == JobState::Complete) {
-                parent.mark_complete();
-            } else if children.iter().any(|job| job.state == JobState::Cancelled) {
-                parent.mark_cancelled();
-            } else {
-                parent.set_state(if parent.kind == JobKind::ConfirmationRequired {
-                    JobState::ApprovalFailed
-                } else {
-                    JobState::Failed
-                });
-                parent.metadata.error = children
-                    .iter()
-                    .filter(|job| job.state != JobState::Complete)
-                    .map(|job| format!("{} {}", job.id, job.state))
-                    .collect::<Vec<_>>()
-                    .join("; ");
-            }
-            self.timeline_store.update_job(&parent)?;
-            resolved.push(parent.to_value());
-        }
-        Ok(resolved)
+        self.timeline_store.resolve_waiting_jobs()
     }
+}
+
+fn wake_probe_max_queue_age_seconds() -> i64 {
+    std::env::var("CLANKCORD_WAKE_PROBE_MAX_QUEUE_AGE_SECONDS")
+        .ok()
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(5)
+        .clamp(1, 60)
 }

@@ -40,19 +40,48 @@ impl Runtime {
             .unwrap_or_else(|| now - chrono::Duration::hours(1));
         let limit = request.limit.clamp(10, 250);
         let status = self.status_payload(None);
-        let all_jobs = self.timeline_store.list_jobs(None, None)?;
-        let active_jobs = all_jobs
+        let active_job_records = self.timeline_store.list_jobs_by_states(
+            None,
+            &[
+                JobState::Queued,
+                JobState::Running,
+                JobState::Waiting,
+                JobState::CancelRequested,
+                JobState::ConfirmationPending,
+            ],
+        )?;
+        let failed_job_records = self.timeline_store.list_jobs_by_states(
+            None,
+            &[
+                JobState::ApprovalFailed,
+                JobState::Failed,
+                JobState::FailedTimeout,
+                JobState::AgentDispatchFailed,
+                JobState::FailedDraftRetained,
+            ],
+        )?;
+        let recent_job_records = self.timeline_store.list_recent_jobs(None, limit)?;
+        let agent_job_records = self
+            .timeline_store
+            .list_jobs_by_kind(JobKind::AgentTask, 256)?;
+        let summary_jobs = merge_jobs(
+            active_job_records
+                .iter()
+                .chain(failed_job_records.iter())
+                .chain(recent_job_records.iter())
+                .chain(agent_job_records.iter()),
+        );
+        let active_jobs = active_job_records
             .iter()
-            .filter(|job| !job.state.is_terminal())
-            .map(Job::to_value)
+            .map(Runtime::public_job_view)
             .collect::<Vec<_>>();
-        let recent_jobs = all_jobs
+        let recent_jobs = recent_job_records
             .iter()
-            .take(limit)
-            .map(Job::to_value)
+            .map(Runtime::public_job_view)
             .collect::<Vec<_>>();
-        let command_jobs = all_jobs
+        let command_jobs = recent_job_records
             .iter()
+            .chain(agent_job_records.iter())
             .filter(|job| {
                 job.command().is_some()
                     || matches!(
@@ -64,15 +93,15 @@ impl Runtime {
                     )
             })
             .take(limit)
-            .map(Job::to_value)
+            .map(Runtime::public_interaction_job_context)
             .collect::<Vec<_>>();
         let recent_events = self
             .recent_events(since, limit)
             .context("loading recent timeline events for debug overview")?;
         let event_kind_counts = event_kind_counts(&recent_events);
-        let summary = job_summary(&all_jobs);
+        let summary = job_summary(&summary_jobs);
         let database = database_diagnostics(self);
-        let health = runtime_health(self, &all_jobs, &database);
+        let health = runtime_health(self, &summary_jobs, &database);
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "process": {
@@ -82,8 +111,8 @@ impl Runtime {
             },
             "health": health,
             "database": database,
-            "load": load_payload(&all_jobs, now),
-            "agents": agent_dashboard_payload(self, &all_jobs, limit),
+            "load": load_payload(&active_job_records, now),
+            "agents": agent_dashboard_payload(self, &agent_job_records, limit),
             "status": status,
             "jobs": {
                 "summary": summary,
@@ -125,6 +154,31 @@ impl Runtime {
         events.truncate(limit);
         Ok(events)
     }
+
+    pub fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
+        let job = self.timeline_store.get_job(job_id)?;
+        if job.kind != JobKind::AgentTask {
+            anyhow::bail!("job {job_id} is not an agent task");
+        }
+        Ok(agent_job_payload(&job))
+    }
+}
+
+fn merge_jobs<'a>(jobs: impl Iterator<Item = &'a Job>) -> Vec<Job> {
+    let mut merged = BTreeMap::new();
+    for job in jobs {
+        merged.entry(job.id.clone()).or_insert_with(|| job.clone());
+    }
+    let mut jobs = merged.into_values().collect::<Vec<_>>();
+    jobs.sort_by(|left, right| {
+        first_non_empty([right.updated_at.clone(), right.created_at.clone()])
+            .cmp(&first_non_empty([
+                left.updated_at.clone(),
+                left.created_at.clone(),
+            ]))
+            .then_with(|| right.id.cmp(&left.id))
+    });
+    jobs
 }
 
 #[derive(Debug, Default)]
@@ -320,7 +374,7 @@ fn agent_dashboard_payload(runtime: &Runtime, jobs: &[Job], limit: usize) -> Val
         .iter()
         .filter(|job| job.kind == JobKind::AgentTask)
         .take(limit)
-        .map(agent_job_payload)
+        .map(compact_agent_job_payload)
         .collect::<Vec<_>>();
     let sessions = runtime
         .agents
@@ -437,28 +491,12 @@ fn codex_usage_for_job(job: &Job) -> Value {
     if !metadata.agent.usage.is_empty() {
         return usage_payload_info(&metadata.agent.usage.to_json());
     }
-    if metadata.raw_result_path.trim().is_empty() {
-        return json!({});
-    }
-    let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
-    parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""))
-        .get("tokenUsage")
-        .cloned()
-        .unwrap_or_else(|| json!({}))
+    json!({})
 }
 
 fn codex_rate_limits_for_job(job: &Job) -> Value {
-    let Some(metadata) = job.metadata.agent_task() else {
-        return Value::Null;
-    };
-    if metadata.raw_result_path.trim().is_empty() {
-        return Value::Null;
-    }
-    let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
-    parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""))
-        .get("rateLimits")
-        .cloned()
-        .unwrap_or(Value::Null)
+    let _ = job;
+    Value::Null
 }
 
 fn rate_limits_is_present(value: &Value) -> bool {
@@ -642,6 +680,77 @@ fn agent_job_payload(job: &Job) -> Value {
         "raw": raw,
         "codex": codex,
     })
+}
+
+fn compact_agent_job_payload(job: &Job) -> Value {
+    let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
+    let usage = if metadata.agent.usage.is_empty() {
+        json!({})
+    } else {
+        usage_payload_info(&metadata.agent.usage.to_json())
+    };
+    let mut job_value = Runtime::public_interaction_job_context(job);
+    if let Value::Object(object) = &mut job_value {
+        let metadata = job.metadata.to_json();
+        if metadata
+            .as_object()
+            .is_some_and(|object| !object.is_empty())
+        {
+            object.insert("metadata".to_string(), metadata);
+        }
+    }
+    json!({
+        "job": job_value,
+        "paths": {
+            "packet": metadata.packet_path,
+            "prompt": metadata.prompt_path,
+            "result": metadata.result_path,
+            "raw": metadata.raw_result_path,
+        },
+        "packet": artifact_stub(&metadata.packet_path),
+        "prompt": artifact_stub(&metadata.prompt_path),
+        "result": artifact_stub(&metadata.result_path),
+        "raw": artifact_stub(&metadata.raw_result_path),
+        "codex": {
+            "sessionId": metadata.agent.session_id,
+            "model": metadata.agent.model,
+            "tokenUsage": usage,
+            "contextUsedTokens": token_usage_input_tokens(&usage),
+            "modelContextWindow": context_window_from_usage(&usage).unwrap_or(0),
+            "contextUsedPercent": context_used_percent(&usage),
+            "eventCount": 0,
+            "timeline": [],
+            "messages": [],
+            "toolCalls": [],
+        },
+        "detailUrl": format!("/v1/voice/debug/agents/{}", job.id),
+    })
+}
+
+fn context_used_percent(usage: &Value) -> f64 {
+    let input = token_usage_input_tokens(usage);
+    let window = context_window_from_usage(usage).unwrap_or(0);
+    if input > 0 && window > 0 {
+        (input as f64 / window as f64) * 100.0
+    } else {
+        0.0
+    }
+}
+
+fn artifact_stub(path: &str) -> Value {
+    let path = path.trim();
+    if path.is_empty() {
+        return json!({"path": "", "exists": false, "bytes": 0, "truncated": false});
+    }
+    match fs::metadata(path) {
+        Ok(metadata) => json!({
+            "path": path,
+            "exists": true,
+            "bytes": metadata.len(),
+            "truncated": false,
+        }),
+        Err(_) => json!({"path": path, "exists": false, "bytes": 0, "truncated": false}),
+    }
 }
 
 fn read_text_artifact(path: &str, max_bytes: usize) -> Value {

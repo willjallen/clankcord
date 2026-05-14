@@ -4,3 +4,4 @@ pub mod interactions;
 mod publication;
 pub(crate) mod responses;
 pub mod wake_activations;
+pub(crate) mod wake_probes;

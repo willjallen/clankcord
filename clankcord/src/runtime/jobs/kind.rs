@@ -21,6 +21,7 @@ pub enum JobKind {
     DiscordVoiceMute,
     DiscordVoicePlayAudio,
     RuntimeControl,
+    WakeProbe,
 }
 
 impl JobKind {
@@ -40,6 +41,7 @@ impl JobKind {
             Self::DiscordVoiceMute => "discord_voice_mute",
             Self::DiscordVoicePlayAudio => "discord_voice_play_audio",
             Self::RuntimeControl => "runtime_control",
+            Self::WakeProbe => "wake_probe",
         }
     }
 
@@ -73,6 +75,7 @@ impl FromStr for JobKind {
             "discord_voice_mute" => Ok(Self::DiscordVoiceMute),
             "discord_voice_play_audio" => Ok(Self::DiscordVoicePlayAudio),
             "runtime_control" => Ok(Self::RuntimeControl),
+            "wake_probe" => Ok(Self::WakeProbe),
             value => anyhow::bail!("unknown job kind: {value}"),
         }
     }

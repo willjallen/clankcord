@@ -6,8 +6,8 @@ use crate::runtime::domain::interactions::{
     evaluate_voice_command, validate_voice_command_result, voice_command_action,
 };
 use crate::runtime::timeline::{
-    event_end, event_speaker, event_start, first_value_string, isoformat_z, new_id, parse_instant,
-    utc_now,
+    event_end, event_speaker, event_start, event_text, first_value_string, isoformat_z, new_id,
+    parse_instant, utc_now,
 };
 use crate::runtime::{
     DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
@@ -220,6 +220,19 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
                 .ok()
         })
         .unwrap_or_else(|| json!({}));
+    if !has_post_wake_speech(payload, &events, latest_wake_at) && now < hard_cap {
+        let next_run_at = std::cmp::min(now + chrono::Duration::milliseconds(500), hard_cap);
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
+        runtime.timeline_store.update_job(&deferred)?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "deferred",
+            "reason": "waiting_for_post_wake_speech",
+            "next_run_at": deferred.next_run_at,
+        }));
+    }
     let due_at = activation_due_at(payload, &events, latest_wake_at);
     if now < due_at && now < hard_cap {
         let mut deferred = job.clone();
@@ -309,13 +322,9 @@ fn activation_followup_target(
 ) -> Result<Option<Job>> {
     Ok(runtime
         .timeline_store
-        .list_jobs(Some(guild_id), None)?
+        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)?
         .into_iter()
-        .filter(|job| {
-            job.kind == JobKind::WakeActivation
-                && job.voice_channel_id == voice_channel_id
-                && !job.state.is_terminal()
-        })
+        .filter(|job| !job.state.is_terminal())
         .filter_map(|job| {
             let payload = job.wake_activation_payload()?;
             let latest_wake_at = payload.latest_wake_at.clone();
@@ -352,11 +361,8 @@ fn activation_for_wake_event(
 ) -> Result<Option<Job>> {
     Ok(runtime
         .timeline_store
-        .list_jobs(Some(guild_id), None)?
+        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)?
         .into_iter()
-        .filter(|job| {
-            job.kind == JobKind::WakeActivation && job.voice_channel_id == voice_channel_id
-        })
         .find(|job| {
             let Some(payload) = job.wake_activation_payload() else {
                 return false;
@@ -515,7 +521,7 @@ fn activation_due_at(
     let latest_speaker_end = events
         .iter()
         .filter(|event| same_speaker(event, &payload.speaker_user_id))
-        .filter(|event| event_start(event).is_some_and(|started| started >= latest_wake_at))
+        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
         .filter_map(event_end)
         .max()
         .unwrap_or(latest_wake_at);
@@ -524,22 +530,43 @@ fn activation_due_at(
     std::cmp::max(min_post_at, idle_at) + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
 }
 
+fn has_post_wake_speech(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    latest_wake_at: DateTime<Utc>,
+) -> bool {
+    events.iter().any(|event| {
+        same_speaker(event, &payload.speaker_user_id)
+            && event_overlaps_or_follows(event, latest_wake_at)
+            && !event_text(event).is_empty()
+    })
+}
+
 fn candidate_event(
     payload: &WakeActivationPayload,
     events: &[Value],
     latest_wake_event: &Value,
 ) -> Value {
-    events
+    let matching = events
         .iter()
         .filter(|event| same_speaker(event, &payload.speaker_user_id))
         .filter(|event| {
-            event_start(event).is_some_and(|started| {
-                parse_instant(&payload.latest_wake_at)
-                    .map(|wake_at| started >= wake_at)
-                    .unwrap_or(true)
-            })
+            parse_instant(&payload.latest_wake_at)
+                .map(|wake_at| event_overlaps_or_follows(event, wake_at))
+                .unwrap_or(true)
         })
-        .max_by_key(|event| event_start(event).unwrap_or_else(utc_now))
+        .collect::<Vec<_>>();
+    matching
+        .iter()
+        .copied()
+        .filter(|event| !event_text(event).is_empty())
+        .max_by_key(|event| event_end(event).unwrap_or_else(utc_now))
+        .or_else(|| {
+            matching
+                .iter()
+                .copied()
+                .max_by_key(|event| event_start(event).unwrap_or_else(utc_now))
+        })
         .cloned()
         .filter(|event| !event.as_object().is_none_or(|object| object.is_empty()))
         .unwrap_or_else(|| latest_wake_event.clone())
@@ -555,12 +582,12 @@ fn attach_activation_bundle(
     let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
     let prior = events
         .iter()
-        .filter(|event| event_start(event).is_some_and(|started| started < original_wake_at))
+        .filter(|event| event_end(event).is_some_and(|ended| ended <= original_wake_at))
         .cloned()
         .collect::<Vec<_>>();
     let post = events
         .iter()
-        .filter(|event| event_start(event).is_some_and(|started| started >= latest_wake_at))
+        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
         .cloned()
         .collect::<Vec<_>>();
     let bundle = json!({
@@ -609,6 +636,12 @@ fn ready_at_string(
 
 fn same_speaker(event: &Value, speaker_user_id: &str) -> bool {
     first_value_string(event, &["speaker_user_id", "speakerId", "user_id"]) == speaker_user_id
+}
+
+fn event_overlaps_or_follows(event: &Value, instant: DateTime<Utc>) -> bool {
+    event_end(event)
+        .or_else(|| event_start(event))
+        .is_some_and(|ended| ended >= instant)
 }
 
 fn env_i64(key: &str, fallback: i64) -> i64 {

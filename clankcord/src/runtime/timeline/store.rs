@@ -324,6 +324,14 @@ impl TimelineStore {
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_jobs_state_next
               ON transcript_jobs(state, next_run_at_ms, updated_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_jobs_state_kind_next
+              ON transcript_jobs(state, kind, next_run_at_ms, created_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_jobs_scope_state_kind_updated
+              ON transcript_jobs(guild_id, voice_channel_id, state, kind, updated_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_jobs_scope_kind_updated
+              ON transcript_jobs(guild_id, voice_channel_id, kind, updated_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_jobs_kind_updated
+              ON transcript_jobs(kind, updated_at_ms);
             CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
               ON job_dependencies(child_job_id, parent_job_id);
             CREATE INDEX IF NOT EXISTS idx_automations_scope_state

@@ -5,11 +5,25 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::discord::voice::artifacts::{
-    PCM_20MS_SILENCE, duration_ms_for_pcm, write_segment_wav,
+    PCM_20MS_SILENCE, PCM_CHANNELS, PCM_SAMPLE_RATE, PCM_SAMPLE_WIDTH, duration_ms_for_pcm,
+    write_segment_wav, write_wake_probe_wav,
 };
 use crate::adapters::discord::voice::diagnostics::{DiagnosticsConfig, analyze_pcm_bytes};
 use crate::adapters::discord::voice::types::{SessionAudioSegment, SpeakerBuffer, VoiceSession};
-use crate::runtime::AudioSegmentPayload;
+use crate::runtime::{AudioSegmentPayload, WakeProbePayload};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WakeProbeConfig {
+    pub minimum_ms: i64,
+    pub window_ms: i64,
+    pub interval_ms: i64,
+}
+
+impl WakeProbeConfig {
+    pub fn enabled(self) -> bool {
+        self.minimum_ms > 0 && self.window_ms > 0 && self.interval_ms > 0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SessionAudioPipeline {
@@ -66,6 +80,7 @@ impl SessionAudioPipeline {
             .or_insert_with(|| SpeakerBuffer::new(user_id, label, username));
         if speaker.pcm.is_empty() {
             speaker.started_at = Some(now);
+            reset_wake_stream_state(speaker);
         }
         if !label.trim().is_empty() {
             speaker.label = label.to_string();
@@ -218,6 +233,7 @@ impl SessionAudioPipeline {
         speaker.started_at = None;
         speaker.active = false;
         speaker.flush_in_flight = false;
+        reset_wake_stream_state(speaker);
         let duration_ms = duration_ms_for_pcm(&pcm);
         if duration_ms < self.minimum_utterance_ms {
             return Ok(AudioPipelineOutcome::SegmentTooShort { duration_ms });
@@ -322,6 +338,119 @@ impl SessionAudioPipeline {
         };
         Ok(AudioPipelineOutcome::SegmentReady { payload, segment })
     }
+
+    pub fn capture_wake_probe(
+        &self,
+        session: &mut VoiceSession,
+        user_id: &str,
+        config: WakeProbeConfig,
+        now_monotonic: f64,
+        force: bool,
+    ) -> Result<Option<WakeProbePayload>> {
+        if !config.enabled() {
+            return Ok(None);
+        }
+        let Some(speaker) = session.buffers.get(user_id) else {
+            return Ok(None);
+        };
+        if speaker.pcm.is_empty() || speaker.flush_in_flight {
+            return Ok(None);
+        }
+        let buffered_duration_ms = duration_ms_for_pcm(&speaker.pcm);
+        if buffered_duration_ms < config.minimum_ms {
+            return Ok(None);
+        }
+        if !force
+            && speaker.last_wake_probe_monotonic > 0.0
+            && now_monotonic - speaker.last_wake_probe_monotonic
+                < config.interval_ms as f64 / 1000.0
+        {
+            return Ok(None);
+        }
+
+        let current_pcm_len = align_pcm_len(speaker.pcm.len());
+        let probe_start_byte = wake_probe_start_byte(speaker, current_pcm_len, config);
+        if probe_start_byte >= current_pcm_len {
+            return Ok(None);
+        }
+        let probe_pcm = speaker.pcm[probe_start_byte..current_pcm_len].to_vec();
+        let duration_ms = duration_ms_for_pcm(&probe_pcm);
+        let minimum_ms = wake_probe_minimum_duration_ms(speaker, config);
+        if duration_ms < minimum_ms {
+            return Ok(None);
+        }
+        let buffer_started_at = speaker.started_at.unwrap_or_else(Utc::now);
+        let probe_start_time = buffer_started_at
+            + chrono::Duration::milliseconds(duration_ms_for_pcm(&speaker.pcm[..probe_start_byte]));
+        let probe_end_time = probe_start_time + chrono::Duration::milliseconds(duration_ms);
+        let probe_index = speaker.wake_probe_counter;
+        let reset_stream = speaker.wake_probe_counter == 0;
+        let label = speaker.label.clone();
+        let username = speaker.username.clone();
+        let speaker_id = speaker.user_id.clone();
+
+        let artifact = write_wake_probe_wav(
+            &session.session_dir,
+            &speaker_id,
+            &label,
+            probe_index,
+            probe_start_time,
+            &probe_pcm,
+        )?;
+        if let Some(speaker) = session.buffers.get_mut(user_id) {
+            speaker.wake_probe_counter += 1;
+            speaker.last_wake_probe_monotonic = now_monotonic;
+            speaker.last_wake_probe_pcm_len = current_pcm_len;
+        }
+        let stream_id = format!(
+            "{}:{}:{}:{}",
+            session.room.guild_id, session.room.channel_id, session.capture_run_id, speaker_id
+        );
+        note_session_log(
+            session,
+            "captured-wake-probe",
+            json!({
+                "probeIndex": probe_index,
+                "speakerId": speaker_id,
+                "speakerLabel": label,
+                "durationMs": duration_ms,
+                "pcmBytes": probe_pcm.len(),
+                "sourceAudioPath": artifact.path.display().to_string(),
+                "audioChecksum": artifact.checksum.clone(),
+                "audioBytes": artifact.bytes,
+                "streamId": stream_id,
+                "resetStream": reset_stream,
+                "forced": force,
+            }),
+        );
+        Ok(Some(WakeProbePayload {
+            guild_id: session.room.guild_id.clone(),
+            guild_slug: session.room.guild_slug.clone(),
+            voice_channel_id: session.room.channel_id.clone(),
+            voice_channel_name: session.room.channel_name.clone(),
+            voice_channel_slug: session.room.channel_slug.clone(),
+            capture_run_id: non_empty(&session.capture_run_id, &session.session_id),
+            voice_bot_id: session.bot_id.clone(),
+            voice_bot_discord_user_id: session.bot_user_id.clone(),
+            speaker_user_id: speaker_id,
+            speaker_label: label,
+            speaker_username: username,
+            probe_start_time,
+            probe_end_time,
+            probe_index,
+            duration_ms,
+            source_audio_path: artifact.path,
+            audio_checksum: artifact.checksum,
+            audio_bytes: artifact.bytes,
+            audio_format: artifact.format,
+            sample_rate_hz: artifact.sample_rate_hz,
+            channels: artifact.channels,
+            sample_width_bits: artifact.sample_width_bits,
+            post_processing: artifact.post_processing,
+            stream_id,
+            reset_stream,
+        }))
+    }
 }
 
 fn merge_object(target: &mut Value, extra: Value) {
@@ -345,6 +474,47 @@ fn next_segment_index(session: &mut VoiceSession) -> i64 {
     let segment_index = session.segment_counter;
     session.segment_counter += 1;
     segment_index
+}
+
+fn wake_probe_start_byte(
+    speaker: &SpeakerBuffer,
+    current_pcm_len: usize,
+    config: WakeProbeConfig,
+) -> usize {
+    if speaker.wake_probe_counter == 0 {
+        let window_bytes = pcm_bytes_for_duration_ms(config.window_ms);
+        return align_pcm_len(current_pcm_len.saturating_sub(window_bytes));
+    }
+    speaker.last_wake_probe_pcm_len.min(current_pcm_len)
+}
+
+fn wake_probe_minimum_duration_ms(speaker: &SpeakerBuffer, config: WakeProbeConfig) -> i64 {
+    if speaker.wake_probe_counter == 0 {
+        return config.minimum_ms;
+    }
+    config.interval_ms.min(config.minimum_ms).max(80)
+}
+
+fn reset_wake_stream_state(speaker: &mut SpeakerBuffer) {
+    speaker.wake_probe_counter = 0;
+    speaker.last_wake_probe_monotonic = 0.0;
+    speaker.last_wake_probe_pcm_len = 0;
+}
+
+fn pcm_frame_bytes() -> usize {
+    PCM_CHANNELS as usize * PCM_SAMPLE_WIDTH as usize
+}
+
+fn align_pcm_len(len: usize) -> usize {
+    len - (len % pcm_frame_bytes())
+}
+
+fn pcm_bytes_for_duration_ms(duration_ms: i64) -> usize {
+    let bytes_per_second =
+        PCM_SAMPLE_RATE as usize * PCM_CHANNELS as usize * PCM_SAMPLE_WIDTH as usize;
+    let bytes = ((bytes_per_second as i64 * duration_ms.max(1)) / 1000)
+        .max(pcm_frame_bytes() as i64) as usize;
+    bytes - (bytes % pcm_frame_bytes())
 }
 
 fn note_session_log(session: &mut VoiceSession, action: &str, fields: Value) {

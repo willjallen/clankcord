@@ -6,7 +6,7 @@ use crate::Result;
 use crate::config::{format_timestamp_local, local_tz, read_json, state_dir, write_json};
 
 use crate::runtime::util::first_non_empty;
-use crate::runtime::{RoomConfig, Runtime, RuntimeBotStatus, RuntimeSessionStatus};
+use crate::runtime::{JobState, RoomConfig, Runtime, RuntimeBotStatus, RuntimeSessionStatus};
 
 impl Runtime {
     pub fn status_for_room(&self, room: &RoomConfig) -> Value {
@@ -25,7 +25,7 @@ impl Runtime {
             "control": self.room_control_status(room),
             "occupancy": self.timeline_store.get_occupancy(&room.guild_id, &room.channel_id).unwrap_or_else(|_| json!({})),
             "livePublications": self.timeline_store.list_publications(Some(&room.guild_id), Some(&room.channel_id), Some("live_draft_published")).unwrap_or_default(),
-            "activeJobs": self.timeline_store.list_jobs(Some(&room.guild_id), None).unwrap_or_default().into_iter().filter(|job| {
+            "activeJobs": self.timeline_store.list_jobs_by_states(Some(&room.guild_id), &[JobState::Queued, JobState::Running, JobState::Waiting, JobState::CancelRequested, JobState::ConfirmationPending]).unwrap_or_default().into_iter().filter(|job| {
                 job.voice_channel_id == room.channel_id && !job.state.is_terminal()
             }).map(|job| Self::public_job_view(&job)).collect::<Vec<_>>(),
             "session": session.map(|value| value.to_json()),

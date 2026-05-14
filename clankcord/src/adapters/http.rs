@@ -31,8 +31,12 @@ struct ConfirmationBody {
 }
 
 impl AppState {
-    async fn runtime(&self) -> tokio::sync::OwnedMutexGuard<Runtime> {
-        self.handle.runtime().lock_owned().await
+    async fn runtime_cache_guard(&self) -> tokio::sync::OwnedMutexGuard<Runtime> {
+        self.handle.runtime_cache_lock().lock_owned().await
+    }
+
+    async fn runtime_snapshot(&self) -> Runtime {
+        self.handle.runtime_cache_lock().lock().await.clone()
     }
 }
 
@@ -76,6 +80,7 @@ pub fn router(handle: RuntimeHandle) -> Router {
             post(confirmation_cancel),
         )
         .route("/v1/voice/debug/overview", get(debug_overview))
+        .route("/v1/voice/debug/agents/{job_id}", get(debug_agent_job))
         .route("/debug", get(debug_dashboard))
         .route("/debug/dashboard.css", get(debug_dashboard_css))
         .route("/debug/dashboard.js", get(debug_dashboard_js))
@@ -90,7 +95,7 @@ pub async fn serve(handle: RuntimeHandle, addr: std::net::SocketAddr) -> Result<
 }
 
 async fn healthz(State(state): State<AppState>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     ok(json!({
         "ok": true,
         "botsConfigured": runtime.bots.len(),
@@ -100,7 +105,7 @@ async fn healthz(State(state): State<AppState>) -> Response {
 }
 
 async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     ok(runtime.status_payload(
         query
             .get("room")
@@ -110,12 +115,12 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
 }
 
 async fn pool_status(State(state): State<AppState>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     ok(runtime.status_payload(None))
 }
 
 async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     let guild = query_str(&query, &["guild"]);
     let channel = query_str(&query, &["channel"]);
     if !guild.is_empty() && !channel.is_empty() {
@@ -138,7 +143,7 @@ async fn command_submit(State(state): State<AppState>, Json(payload): Json<Value
 
 async fn response_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
     let job = {
-        let runtime = state.runtime().await;
+        let runtime = state.runtime_snapshot().await;
         match runtime.response_job_from_value(&payload) {
             Ok(job) => job,
             Err(error) => return err(error),
@@ -151,12 +156,12 @@ async fn automation_validate(
     State(state): State<AppState>,
     Json(payload): Json<Value>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.validate_automation_from_value(&payload))
 }
 
 async fn automation_create(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
-    let mut runtime = state.runtime().await;
+    let mut runtime = state.runtime_cache_guard().await;
     result(runtime.create_automation_from_value(&payload))
 }
 
@@ -164,7 +169,7 @@ async fn automations_list(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     let state_filter = match query
         .get("state")
         .map(|value| value.parse::<AutomationState>())
@@ -190,7 +195,7 @@ async fn automation_get(
     State(state): State<AppState>,
     Path(automation_id): Path<String>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.get_automation_record(&automation_id))
 }
 
@@ -198,12 +203,12 @@ async fn automation_cancel(
     State(state): State<AppState>,
     Path(automation_id): Path<String>,
 ) -> Response {
-    let mut runtime = state.runtime().await;
+    let mut runtime = state.runtime_cache_guard().await;
     result(runtime.cancel_automation_record(&automation_id))
 }
 
 async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.timeline_tail(TimelineTailRequest {
         guild_id: query_str(&query, &["guild", "guildId", "guild_id"]),
         channel_id: query_str(&query, &["channel", "channelId", "voice_channel_id"]),
@@ -215,7 +220,7 @@ async fn timeline_range(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.timeline_range(TimelineRangeRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         channel_id: query_str(&query, &["channel", "channelId"]),
@@ -229,7 +234,7 @@ async fn transcript_render(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.render_transcript(RenderTranscriptRequest {
         window_id: query_str(&query, &["window", "windowId"]),
         guild_id: query_str(&query, &["guild", "guildId"]),
@@ -246,7 +251,7 @@ async fn transcript_search(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.search_transcripts(SearchTranscriptsRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         channel_id: query_str(&query, &["channel", "channelId"]),
@@ -262,7 +267,7 @@ async fn conversations_list(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.list_conversations(ListConversationsRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         channel_id: query_str(&query, &["channel", "channelId"]),
@@ -275,7 +280,7 @@ async fn context_resolve(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.context_resolve(ContextResolveRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         channel_id: query_str(&query, &["channel", "channelId"]),
@@ -287,7 +292,7 @@ async fn participant_trace(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.participant_trace(ParticipantTraceRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         user_id: query_str(&query, &["user", "userId", "user_id"]),
@@ -302,7 +307,7 @@ async fn participant_trace(
 }
 
 async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.jobs(JobsRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         state: query_str(&query, &["state"]),
@@ -310,11 +315,11 @@ async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery
 }
 
 async fn jobs_run_due(State(state): State<AppState>) -> Response {
-    result(state.handle.run_maintenance_once().await)
+    result(state.handle.drain_ready_jobs().await)
 }
 
 async fn jobs_get(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.get_job_payload(&job_id))
 }
 
@@ -352,11 +357,16 @@ async fn debug_overview(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
-    let runtime = state.runtime().await;
+    let runtime = state.runtime_snapshot().await;
     result(runtime.debug_overview(DebugOverviewRequest {
         since: query_str(&query, &["since"]),
         limit: query_usize(&query, &["limit"], 80),
     }))
+}
+
+async fn debug_agent_job(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {
+    let runtime = state.runtime_snapshot().await;
+    result(runtime.debug_agent_job(&job_id))
 }
 
 async fn debug_dashboard() -> Html<&'static str> {

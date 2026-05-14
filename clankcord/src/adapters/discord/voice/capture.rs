@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::Utc;
 use chrono_tz::Tz;
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use crate::adapters::discord::voice::session::{
-    AudioPipelineOutcome, SessionAudioPipeline, monotonic_seconds,
+    AudioPipelineOutcome, SessionAudioPipeline, WakeProbeConfig, monotonic_seconds,
 };
 use crate::adapters::discord::voice::types::VoiceSession;
 use crate::runtime::{Job, RuntimeSessionStatus, log};
@@ -230,16 +230,22 @@ impl VoiceCaptureSink {
 pub(super) struct LiveCaptureSession {
     session: VoiceSession,
     pipeline: SessionAudioPipeline,
+    wake_probe: WakeProbeConfig,
     sink: VoiceCaptureSink,
     ssrc_users: BTreeMap<u32, CaptureUser>,
 }
 
 impl LiveCaptureSession {
-    pub(super) fn new(session: VoiceSession, minimum_utterance_ms: i64) -> Self {
+    pub(super) fn new(
+        session: VoiceSession,
+        minimum_utterance_ms: i64,
+        wake_probe: WakeProbeConfig,
+    ) -> Self {
         let session_id = session.session_id.clone();
         Self {
             session,
             pipeline: SessionAudioPipeline::new().with_minimum_utterance_ms(minimum_utterance_ms),
+            wake_probe,
             sink: VoiceCaptureSink::new(session_id),
             ssrc_users: BTreeMap::new(),
         }
@@ -273,7 +279,7 @@ impl LiveCaptureSession {
         );
     }
 
-    pub(super) fn note_client_disconnect(&mut self, user_id: &str) -> Option<Job> {
+    pub(super) fn note_client_disconnect(&mut self, user_id: &str) -> Vec<Job> {
         self.ssrc_users.retain(|_, user| user.id != user_id);
         let session_id = self.session.session_id.clone();
         let pipeline = self.pipeline.clone();
@@ -284,24 +290,39 @@ impl LiveCaptureSession {
             };
             handler.handle_speaking_state(&session_id, user_id, "", "", false);
         }
+        let mut jobs = self.capture_wake_probes(vec![user_id.to_string()], true);
         match pipeline.flush_speaker(&mut self.session, user_id) {
-            Ok(outcome) => audio_job_from_outcome(outcome),
+            Ok(outcome) => collect_audio_job(outcome, &mut jobs),
             Err(error) => {
                 log(&format!("voice disconnect flush failed: {error}"));
-                None
             }
         }
+        jobs
     }
 
-    pub(super) fn write_voice_tick(&mut self, speaking: Vec<(u32, VoiceData)>, silent: Vec<u32>) {
+    pub(super) fn write_voice_tick(
+        &mut self,
+        speaking: Vec<(u32, VoiceData)>,
+        silent: Vec<u32>,
+    ) -> Vec<Job> {
+        let mut touched_user_ids = BTreeSet::new();
         for (ssrc, data) in speaking {
             let user = self.ssrc_users.get(&ssrc).cloned();
+            if let Some(user_id) = data
+                .user
+                .as_ref()
+                .map(|user| user.id.clone())
+                .or_else(|| user.as_ref().map(|user| user.id.clone()))
+            {
+                touched_user_ids.insert(user_id);
+            }
             self.write_voice_data(user, data);
         }
         for ssrc in silent {
             let Some(user) = self.ssrc_users.get(&ssrc).cloned() else {
                 continue;
             };
+            touched_user_ids.insert(user.id.clone());
             self.write_voice_data(
                 Some(user),
                 VoiceData {
@@ -312,6 +333,7 @@ impl LiveCaptureSession {
                 },
             );
         }
+        self.capture_wake_probes(touched_user_ids.into_iter().collect(), false)
     }
 
     pub(super) fn flush_ready_buffers(&mut self, max_segment_ms: i64, silence_ms: i64) -> Vec<Job> {
@@ -329,22 +351,25 @@ impl LiveCaptureSession {
                 }
                 let buffered_duration_ms =
                     crate::adapters::discord::voice::artifacts::duration_ms_for_pcm(&speaker.pcm);
-                if buffered_duration_ms >= max_segment_ms
-                    || now - speaker.last_packet_monotonic >= silence_ms as f64 / 1000.0
-                {
+                let should_flush = buffered_duration_ms >= max_segment_ms
+                    || now - speaker.last_packet_monotonic >= silence_ms as f64 / 1000.0;
+                if should_flush {
                     Some(user_id.clone())
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
-        self.flush_speakers(user_ids)
+        let mut jobs = self.capture_wake_probes(user_ids.clone(), true);
+        jobs.extend(self.flush_speakers(user_ids));
+        jobs
     }
 
     pub(super) fn finish(&mut self, reason: String, tz: Tz) -> FinishedCaptureSession {
         self.session.finalizing = true;
         let user_ids = self.session.buffers.keys().cloned().collect::<Vec<_>>();
-        let audio_jobs = self.flush_speakers(user_ids);
+        let mut audio_jobs = self.capture_wake_probes(user_ids.clone(), true);
+        audio_jobs.extend(self.flush_speakers(user_ids));
         self.session.ended_at = Some(Utc::now());
         self.session.finalizing = false;
         self.session
@@ -368,6 +393,26 @@ impl LiveCaptureSession {
             match pipeline.flush_speaker(&mut self.session, &user_id) {
                 Ok(outcome) => collect_audio_job(outcome, &mut jobs),
                 Err(error) => log(&format!("voice buffer flush failed: {error}")),
+            }
+        }
+        jobs
+    }
+
+    fn capture_wake_probes(&mut self, user_ids: Vec<String>, force: bool) -> Vec<Job> {
+        let pipeline = self.pipeline.clone();
+        let now = monotonic_seconds();
+        let mut jobs = Vec::new();
+        for user_id in user_ids {
+            match pipeline.capture_wake_probe(
+                &mut self.session,
+                &user_id,
+                self.wake_probe,
+                now,
+                force,
+            ) {
+                Ok(Some(payload)) => jobs.push(Job::wake_probe(payload)),
+                Ok(None) => {}
+                Err(error) => log(&format!("wake probe capture failed: {error}")),
             }
         }
         jobs

@@ -39,6 +39,38 @@ dependent jobs.
   - expiry.
   - cancellation propagation.
 
+## Runtime Cache And Locks
+
+SQLite is the canonical store for domain facts: jobs, dependencies, timeline events,
+automation records, transcripts, and durable job outputs. Runtime memory is only a
+process-local cache or a holder for live capabilities that cannot live in SQLite, such as
+Discord gateway clients, active capture sessions, Codex session handles, and dispatch lane
+bookkeeping.
+
+Locks must be named for the resource they protect:
+
+```text
+runtime_cache_lock          protects the process-local Runtime cache
+voice_clients_lock          protects live Discord voice clients
+capture_sessions_lock       protects live audio capture sessions
+speaker_profiles_lock       protects cached Discord speaker labels
+agent_registry_lock         protects live Codex session registry metadata
+active_ordering_keys_lock   protects scheduler in-flight ordering keys
+```
+
+Runtime handlers have two execution modes:
+
+```text
+runtime snapshot    clone runtime_cache_lock briefly, release it, then use SQLite/native types
+runtime exclusive   hold runtime_cache_lock only for handlers that mutate live runtime cache
+```
+
+Snapshot handlers are the default for SQLite-owned orchestration. They can create child
+jobs, update timeline jobs, append events, and read a short-lived view of live room/bot
+status without blocking on unrelated cache mutations. Exclusive handlers are for the
+remaining live-cache transitions, such as command mutations that update room controls or
+room placement resume logic that commits adapter session state.
+
 ## Current Problem
 
 The room join flow currently looks like this:
@@ -389,3 +421,118 @@ only fulfills adapter-shaped jobs routed to it.
 ```text
 Automation -> Job -> Dispatcher -> Handler -> Child Job -> Adapter -> Child Complete -> Parent Resume
 ```
+
+## Scheduler Latency And Wake Streaming
+
+The wake cue path exposed a second problem: the dispatcher was sharing one loop with
+periodic maintenance. A newly queued urgent job could wait behind adapter state sync,
+automation evaluation, stale-job cleanup, or broad dispatch passes. That is wrong for the
+runtime model. Job creation should wake a hot dispatcher immediately; maintenance should
+only create or update jobs and then notify the dispatcher.
+
+Target runtime loops:
+
+```text
+intake loop
+  -> writes submitted jobs to SQLite
+  -> notifies dispatcher
+
+dispatch loop
+  -> waits on job notification
+  -> resolves waiting jobs
+  -> claims ready jobs by centralized execution policy
+  -> spawns handlers
+  -> repeats until idle
+
+maintenance loop
+  -> periodically syncs adapter status
+  -> runs automations
+  -> runs stale-job cleanup
+  -> notifies dispatcher
+
+live voice loop
+  -> starts missing Discord clients
+  -> flushes completed audio segments
+  -> submits produced jobs
+  -> notifies dispatcher through normal job intake
+```
+
+Job scheduling policy must be centralized. The scheduler should know, for each job kind:
+
+```text
+job kind              executor            lane            ordering
+RuntimeControl        runtime exclusive   general async   none
+DiscordVoiceMute      adapter async       voice control   voice session
+DiscordVoicePlayAudio adapter async       voice control   voice session
+DiscordVoicePlayback  runtime snapshot    voice control   voice session
+WakeProbe             blocking snapshot   wake            wake stream
+WakeActivation        runtime snapshot    general async   none
+RoomAgentPlacement    runtime exclusive   general async   none
+DiscordVoiceJoin      adapter async       voice control   voice session
+DiscordVoiceLeave     adapter async       voice control   voice session
+Command               runtime exclusive   general async   none
+Response              blocking snapshot   response        none
+RefineTranscript      blocking snapshot   refinement      none
+AgentTask             blocking snapshot   agent           agent session
+AudioSegment          blocking snapshot   audio           none
+```
+
+This keeps every unit of work as a `Job`, but gives the dispatcher enough information to
+avoid self-inflicted latency:
+
+- Wake and voice playback jobs are claimed before bulk audio/STT jobs.
+- Wake probe jobs are stateless and can run concurrently.
+- Voice playback control jobs are ordered per voice session.
+- Agent jobs are ordered per long-lived agent session.
+- Different keys still run concurrently.
+
+Wake detection should be a bounded job stream, not a hidden adapter callback and not an
+unbounded timeline buffer. The Discord voice adapter remains responsible only for
+capturing per-speaker PCM and emitting typed jobs. The runtime intake keeps a small
+chronological queued backlog per speaker stream and updates only the newest queued probe
+when the backlog is full:
+
+```text
+speaker PCM tick
+  -> WakeProbe job with rolling speaker WAV
+  -> preserve the earliest queued candidates
+  -> newest WakeProbe replaces newest queued probe only when the backlog is full
+  -> stale queued/running wake probes are cancelled by maintenance
+```
+
+Each `WakeProbe` carries:
+
+```text
+stream_id = guild:channel:capture_run:speaker
+probe_index
+reset_stream = true
+probe_start_time
+probe_end_time
+source_audio_path
+```
+
+The wake endpoint is an HTTP multipart boundary, not a persistent streaming transport. For
+that reason wake probes are stateless rolling windows and always reset the external wake
+state. The wake executor uses a per-probe external wake `stream_id` when reset mode is
+enabled, so parallel wake calls cannot share or reset the same server-side state. This
+keeps replacement/coalescing correct: dropping an older queued probe does not corrupt a
+required stream sequence, and the dispatcher does not serialize a speaker behind older
+negative probes. The wake executor calls the external wake endpoint. If the result is
+positive, it submits ordinary follow-up jobs for wake activation, cue playback, command
+window closure, agent work, and response publication. No side channel is introduced.
+
+Updated wake cue chain:
+
+```text
+Discord PCM tick
+  -> WakeProbe Job
+    -> wake adapter call
+    -> wake_detected timeline event
+    -> WakeActivation Job
+    -> DiscordVoicePlayback(wake) Job
+      -> DiscordVoiceMute(false) child Job
+      -> DiscordVoicePlayAudio(wake.wav) child Job
+```
+
+The dispatcher should make this chain fast; the architecture should not collapse separate
+jobs into one adapter operation to hide scheduler overhead.

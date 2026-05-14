@@ -3,7 +3,7 @@ use regex::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::runtime::timeline::{event_start, event_text, utc_now};
+use crate::runtime::timeline::{event_end, event_start, event_text, utc_now};
 
 pub const VOICE_ACTIVATION_LOOKBACK_SECONDS: i64 = 30;
 
@@ -112,7 +112,16 @@ pub fn activation_context_events(candidate_event: &Value, recent_events: &[Value
     let Some(wake_index) = ordered.iter().rposition(wake_detected) else {
         return Vec::new();
     };
-    ordered.into_iter().skip(wake_index).collect()
+    let wake_start = event_start(&ordered[wake_index]).unwrap_or(candidate_start);
+    let mut context = ordered.into_iter().skip(wake_index).collect::<Vec<_>>();
+    if !source_id.is_empty()
+        && !context.iter().any(|event| event_id(event) == source_id)
+        && event_end(candidate_event).is_some_and(|ended| ended >= wake_start)
+        && (!event_text(candidate_event).is_empty() || wake_detected(candidate_event))
+    {
+        context.push(candidate_event.clone());
+    }
+    context
 }
 
 pub fn evaluate_voice_command(

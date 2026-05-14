@@ -4,14 +4,12 @@ use crate::Result;
 use crate::adapters::stt::{
     should_drop_low_confidence_transcription, stt_drop_decision, transcribe_file_result_sync,
 };
-use crate::adapters::wakeword::detect_wake_file_sync;
-use crate::runtime::domain::wake_activations::{event_has_wake, schedule_from_wake_event};
 use crate::runtime::timeline::{SpeechEventInput, sha256_file};
-use crate::runtime::{AudioSegmentPayload, Job, Runtime};
+use crate::runtime::{AudioSegmentPayload, Runtime};
 
 pub(crate) fn execute_segment_job(
     runtime: &Runtime,
-    job: &Job,
+    _job: &crate::runtime::Job,
     payload: &AudioSegmentPayload,
 ) -> Result<Value> {
     if let Some(event) = runtime.timeline_store.speech_event_for_segment(
@@ -21,12 +19,10 @@ pub(crate) fn execute_segment_job(
         &payload.speaker_user_id,
         payload.segment_index,
     )? {
-        let route = route_voice_command(runtime, job, &event)?;
         return Ok(json!({
             "kind": "audio_segment",
             "status": "already_transcribed",
             "event": event,
-            "route": route,
         }));
     }
 
@@ -61,11 +57,6 @@ pub(crate) fn execute_segment_job(
         "sample_width_bits": payload.sample_width_bits,
         "post_processing": payload.post_processing,
     });
-
-    let stream_id = wake_stream_id(payload);
-    let wake = detect_wake_file_sync(&wav_path, &stream_id, false)?;
-    let wake_metadata = wake.to_json();
-    merge_object(&mut capture, json!({"wake": wake_metadata.clone()}));
 
     let transcription = transcribe_file_result_sync(&wav_path)?;
     let text = transcription.text.trim().to_string();
@@ -112,7 +103,6 @@ pub(crate) fn execute_segment_job(
             segment_index: payload.segment_index,
             duration_ms: payload.duration_ms,
             stt_metadata,
-            wake_metadata,
             ..Default::default()
         })?;
     let _ = runtime.timeline_store.set_occupancy(json!({
@@ -125,26 +115,7 @@ pub(crate) fn execute_segment_job(
         &mut capture,
         json!({"status": "transcribed", "event": event}),
     );
-    let route = route_voice_command(runtime, job, &event)?;
-    if !route.is_null() {
-        merge_object(&mut capture, json!({"route": route}));
-    }
     Ok(capture)
-}
-
-fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Result<Value> {
-    let _ = parent_job;
-    if !event_has_wake(event) {
-        return Ok(Value::Null);
-    }
-    schedule_from_wake_event(runtime, event)
-}
-
-fn wake_stream_id(payload: &AudioSegmentPayload) -> String {
-    format!(
-        "{}:{}:{}",
-        payload.guild_id, payload.voice_channel_id, payload.speaker_user_id
-    )
 }
 
 fn merge_object(target: &mut Value, source: Value) {

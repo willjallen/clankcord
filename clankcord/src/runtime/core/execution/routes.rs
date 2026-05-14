@@ -5,6 +5,7 @@ use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::audio_segments;
 use crate::runtime::domain::responses;
 use crate::runtime::domain::wake_activations;
+use crate::runtime::domain::wake_probes;
 use crate::runtime::refinement::run_refinement_job;
 use crate::runtime::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
@@ -56,6 +57,18 @@ pub(crate) fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<JobO
         )?),
         payload => anyhow::bail!(
             "job payload {} is not handled by audio executor",
+            payload.kind()
+        ),
+    }
+}
+
+pub(crate) fn execute_wake_probe(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
+    match &job.payload {
+        JobPayload::WakeProbe(payload) => Ok(JobOutput::from_boundary_json(
+            &wake_probes::execute_probe_job(runtime, job, payload)?,
+        )?),
+        payload => anyhow::bail!(
+            "job payload {} is not handled by wake probe executor",
             payload.kind()
         ),
     }

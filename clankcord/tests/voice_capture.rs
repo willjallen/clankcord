@@ -4,7 +4,9 @@ use clankcord::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use clankcord::adapters::discord::voice::capture::{
     CaptureAction, CaptureUser, VoiceCaptureSink, VoiceData,
 };
-use clankcord::adapters::discord::voice::session::{AudioPipelineOutcome, SessionAudioPipeline};
+use clankcord::adapters::discord::voice::session::{
+    AudioPipelineOutcome, SessionAudioPipeline, WakeProbeConfig,
+};
 
 use common::test_voice_session;
 
@@ -115,4 +117,68 @@ fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
     assert_eq!(segment.wav_path, payload.source_audio_path);
     assert_eq!(segment.audio_checksum, payload.audio_checksum);
     assert!(payload.audio_checksum.starts_with("sha256:"));
+}
+
+#[test]
+fn voice_segmenter_emits_ordered_streaming_wake_probe_chunks_without_closing_segment() {
+    let raw = tempfile::tempdir().unwrap();
+    let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
+    let mut session = test_voice_session(raw.path());
+    let pcm = vec![0_u8; PCM_20MS_SILENCE.len() * 50];
+    let outcome = pipeline.handle_pcm_packet(Some(&mut session), "user-a", "Will", "will", &pcm);
+    assert_eq!(outcome, AudioPipelineOutcome::Buffered);
+
+    let payload = pipeline
+        .capture_wake_probe(
+            &mut session,
+            "user-a",
+            WakeProbeConfig {
+                minimum_ms: 200,
+                window_ms: 500,
+                interval_ms: 1,
+            },
+            1.0,
+            false,
+        )
+        .unwrap()
+        .expect("wake probe payload");
+
+    assert_eq!(payload.guild_id, "guild");
+    assert_eq!(payload.voice_channel_id, "code");
+    assert_eq!(payload.capture_run_id, "cap_test");
+    assert_eq!(payload.speaker_user_id, "user-a");
+    assert_eq!(payload.duration_ms, 500);
+    assert_eq!(payload.stream_id, "guild:code:cap_test:user-a");
+    assert!(payload.reset_stream);
+    assert_eq!(payload.sample_rate_hz, 16_000);
+    assert_eq!(payload.channels, 1);
+    assert!(payload.audio_bytes < 20_000);
+    assert!(payload.source_audio_path.is_file());
+    assert!(payload.audio_checksum.starts_with("sha256:"));
+    assert!(!session.buffers["user-a"].pcm.is_empty());
+    assert_eq!(session.buffers["user-a"].wake_probe_counter, 1);
+
+    let next_pcm = vec![0_u8; PCM_20MS_SILENCE.len() * 25];
+    let outcome =
+        pipeline.handle_pcm_packet(Some(&mut session), "user-a", "Will", "will", &next_pcm);
+    assert_eq!(outcome, AudioPipelineOutcome::Buffered);
+
+    let second = pipeline
+        .capture_wake_probe(
+            &mut session,
+            "user-a",
+            WakeProbeConfig {
+                minimum_ms: 200,
+                window_ms: 500,
+                interval_ms: 1,
+            },
+            2.0,
+            false,
+        )
+        .unwrap()
+        .expect("second wake probe payload");
+    assert_eq!(second.probe_index, 1);
+    assert!(!second.reset_stream);
+    assert_eq!(second.duration_ms, 500);
+    assert!(second.probe_start_time > payload.probe_start_time);
 }

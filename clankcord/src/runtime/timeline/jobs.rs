@@ -31,6 +31,74 @@ impl TimelineStore {
         Ok(job)
     }
 
+    pub fn create_wake_probe_job(&self, job: Job) -> Result<Job> {
+        self.create_job(job)
+    }
+
+    fn queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
+        let mut matches = self
+            .list_jobs_by_kind_state(
+                crate::runtime::JobKind::WakeProbe,
+                crate::runtime::JobState::Queued,
+            )?
+            .into_iter()
+            .filter(|job| {
+                job.kind == crate::runtime::JobKind::WakeProbe
+                    && wake_probe_stream_id(job) == Some(stream_id)
+            })
+            .collect::<Vec<_>>();
+        sort_jobs_by_created_at(&mut matches);
+        Ok(matches)
+    }
+
+    pub fn cancel_queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
+        let mut cancelled = Vec::new();
+        let queued = self.queued_wake_probes_for_stream(stream_id)?;
+        for mut job in queued.into_iter().skip(1) {
+            if job.kind != crate::runtime::JobKind::WakeProbe {
+                continue;
+            }
+            job.mark_cancelled();
+            job.metadata.error =
+                "duplicate queued wake probe for the same speaker stream".to_string();
+            self.update_job(&job)?;
+            cancelled.push(job);
+        }
+        Ok(cancelled)
+    }
+
+    pub fn cancel_stale_wake_probe_jobs(&self, max_age_seconds: i64) -> Result<Vec<Value>> {
+        let max_age = chrono::Duration::seconds(max_age_seconds.max(1));
+        let now = utc_now();
+        let mut cancelled = Vec::new();
+        for state in [
+            crate::runtime::JobState::Queued,
+            crate::runtime::JobState::Running,
+        ] {
+            for mut job in
+                self.list_jobs_by_kind_state(crate::runtime::JobKind::WakeProbe, state)?
+            {
+                let updated_at = parse_instant(&job.updated_at)
+                    .or_else(|| parse_instant(&job.created_at))
+                    .unwrap_or(now);
+                if now - updated_at < max_age {
+                    continue;
+                }
+                if state == crate::runtime::JobState::Running {
+                    job.set_state(crate::runtime::JobState::FailedTimeout);
+                    job.metadata.error = "stale wake probe exceeded queue age limit".to_string();
+                    job.metadata.timed_out_at = isoformat_z(Some(now));
+                } else {
+                    job.mark_cancelled();
+                    job.metadata.error = "stale queued wake probe was dropped".to_string();
+                }
+                self.update_job(&job)?;
+                cancelled.push(job.to_value());
+            }
+        }
+        Ok(cancelled)
+    }
+
     pub fn create_child_job(&self, parent: &Job, mut child: Job) -> Result<Job> {
         child.attach_to_parent(parent)?;
         self.ensure_dependency_is_acyclic(&parent.id, &child.id)?;
@@ -141,17 +209,33 @@ impl TimelineStore {
             return Ok(Vec::new());
         }
         let now = utc_now();
-        let mut candidates = self
-            .list_jobs(None, Some(crate::runtime::JobState::Queued))?
+        let now_ms = instant_ms_dt(now);
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT payload_blob
+            FROM transcript_jobs
+            WHERE state = ?1
+              AND kind = ?2
+              AND (next_run_at_ms IS NULL OR next_run_at_ms <= ?3)
+            ORDER BY COALESCE(next_run_at_ms, created_at_ms, updated_at_ms), created_at_ms, job_id
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![
+                crate::runtime::JobState::Queued.as_str(),
+                kind.as_str(),
+                now_ms,
+            ],
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        let mut candidates = rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
             .into_iter()
-            .filter(|job| job.kind == kind && !job.id.trim().is_empty())
-            .filter(|job| {
-                job.next_run_at
-                    .as_deref()
-                    .and_then(parse_instant)
-                    .is_none_or(|next_run_at| next_run_at <= now)
-            })
-            .filter(|job| !skip(job))
+            .map(|payload| Job::decode(&payload))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|job| !job.id.trim().is_empty())
             .collect::<Vec<_>>();
         candidates.sort_by(|left, right| {
             let left_due = left
@@ -169,7 +253,13 @@ impl TimelineStore {
                 .then_with(|| left.created_at.cmp(&right.created_at))
                 .then_with(|| left.id.cmp(&right.id))
         });
+        candidates.retain(|job| !skip(job));
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
 
+        drop(statement);
+        drop(db);
         let mut db = self.connect()?;
         let transaction = db.transaction()?;
         let mut claimed = Vec::new();
@@ -210,6 +300,75 @@ impl TimelineStore {
         Ok(claimed)
     }
 
+    pub fn due_job_kinds(&self) -> Result<BTreeSet<crate::runtime::JobKind>> {
+        let now_ms = instant_ms_dt(utc_now());
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT DISTINCT kind
+            FROM transcript_jobs
+            WHERE state = ?1
+              AND (next_run_at_ms IS NULL OR next_run_at_ms <= ?2)
+            "#,
+        )?;
+        let rows = statement.query_map(
+            params![crate::runtime::JobState::Queued.as_str(), now_ms],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut kinds = BTreeSet::new();
+        for raw in rows.collect::<rusqlite::Result<Vec<_>>>()? {
+            if let Ok(kind) = raw.parse::<crate::runtime::JobKind>() {
+                kinds.insert(kind);
+            }
+        }
+        Ok(kinds)
+    }
+
+    pub fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
+        let mut resolved = Vec::new();
+        for mut parent in self.list_jobs(None, Some(crate::runtime::JobState::Waiting))? {
+            let children = self.list_child_jobs(&parent.id)?;
+            if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
+                continue;
+            }
+            if matches!(
+                parent.kind,
+                crate::runtime::JobKind::RoomAgentPlacement
+                    | crate::runtime::JobKind::DiscordVoicePlayback
+            ) {
+                parent.set_state(crate::runtime::JobState::Queued);
+                parent.next_run_at = None;
+            } else if children
+                .iter()
+                .all(|job| job.state == crate::runtime::JobState::Complete)
+            {
+                parent.mark_complete();
+            } else if children
+                .iter()
+                .any(|job| job.state == crate::runtime::JobState::Cancelled)
+            {
+                parent.mark_cancelled();
+            } else {
+                parent.set_state(
+                    if parent.kind == crate::runtime::JobKind::ConfirmationRequired {
+                        crate::runtime::JobState::ApprovalFailed
+                    } else {
+                        crate::runtime::JobState::Failed
+                    },
+                );
+                parent.metadata.error = children
+                    .iter()
+                    .filter(|job| job.state != crate::runtime::JobState::Complete)
+                    .map(|job| format!("{} {}", job.id, job.state))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+            }
+            self.update_job(&parent)?;
+            resolved.push(parent.to_value());
+        }
+        Ok(resolved)
+    }
+
     pub fn list_jobs(
         &self,
         guild_id: Option<&str>,
@@ -245,22 +404,204 @@ impl TimelineStore {
             .collect()
     }
 
+    pub fn list_jobs_by_scope_kind(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        kind: crate::runtime::JobKind,
+    ) -> Result<Vec<Job>> {
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT payload_blob
+            FROM transcript_jobs
+            WHERE guild_id = ?1
+              AND voice_channel_id = ?2
+              AND kind = ?3
+            ORDER BY COALESCE(updated_at_ms, created_at_ms) DESC, job_id
+            "#,
+        )?;
+        let rows = statement
+            .query_map(params![guild_id, voice_channel_id, kind.as_str()], |row| {
+                row.get::<_, Vec<u8>>(0)
+            })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
+    pub fn list_jobs_by_states(
+        &self,
+        guild_id: Option<&str>,
+        states: &[crate::runtime::JobState],
+    ) -> Result<Vec<Job>> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conditions = Vec::new();
+        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
+            conditions.push("guild_id = ?".to_string());
+            params_values.push(Box::new(guild_id.to_string()));
+        }
+        conditions.push(format!("state IN ({})", placeholders(states.len())));
+        for state in states {
+            params_values.push(Box::new(state.as_str().to_string()));
+        }
+        let sql = format!(
+            "SELECT payload_blob FROM transcript_jobs WHERE {} ORDER BY COALESCE(updated_at_ms, created_at_ms) DESC",
+            conditions.join(" AND ")
+        );
+        let db = self.connect()?;
+        let mut statement = db.prepare(&sql)?;
+        let rows = statement.query_map(
+            params_from_iter(params_values.iter().map(|value| &**value)),
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
+    pub fn list_recent_jobs(&self, guild_id: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        let limit = limit.clamp(1, 500);
+        let mut conditions = Vec::new();
+        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
+        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
+            conditions.push("guild_id = ?".to_string());
+            params_values.push(Box::new(guild_id.to_string()));
+        }
+        params_values.push(Box::new(limit as i64));
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        let sql = format!(
+            "SELECT payload_blob FROM transcript_jobs{where_clause} ORDER BY COALESCE(updated_at_ms, created_at_ms) DESC, job_id DESC LIMIT ?"
+        );
+        let db = self.connect()?;
+        let mut statement = db.prepare(&sql)?;
+        let rows = statement.query_map(
+            params_from_iter(params_values.iter().map(|value| &**value)),
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
+    pub fn list_jobs_by_kind(
+        &self,
+        kind: crate::runtime::JobKind,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        let limit = limit.clamp(1, 500);
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT payload_blob
+            FROM transcript_jobs
+            WHERE kind = ?1
+            ORDER BY COALESCE(updated_at_ms, created_at_ms) DESC, job_id DESC
+            LIMIT ?2
+            "#,
+        )?;
+        let rows = statement.query_map(params![kind.as_str(), limit as i64], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
+    fn list_jobs_by_kind_state(
+        &self,
+        kind: crate::runtime::JobKind,
+        state: crate::runtime::JobState,
+    ) -> Result<Vec<Job>> {
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT payload_blob
+            FROM transcript_jobs
+            WHERE kind = ?1
+              AND state = ?2
+            ORDER BY COALESCE(updated_at_ms, created_at_ms) DESC, job_id DESC
+            "#,
+        )?;
+        let rows = statement.query_map(params![kind.as_str(), state.as_str()], |row| {
+            row.get::<_, Vec<u8>>(0)
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
+    pub fn list_jobs_for_trigger(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        kinds: &[crate::runtime::JobKind],
+        states: &[crate::runtime::JobState],
+        updated_after: Option<DateTime<Utc>>,
+    ) -> Result<Vec<Job>> {
+        if guild_id.trim().is_empty()
+            || voice_channel_id.trim().is_empty()
+            || kinds.is_empty()
+            || states.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+        let mut conditions = vec![
+            "guild_id = ?".to_string(),
+            "voice_channel_id = ?".to_string(),
+            format!("kind IN ({})", placeholders(kinds.len())),
+            format!("state IN ({})", placeholders(states.len())),
+        ];
+        let mut params_values: Vec<Box<dyn ToSql>> = vec![
+            Box::new(guild_id.to_string()),
+            Box::new(voice_channel_id.to_string()),
+        ];
+        for kind in kinds {
+            params_values.push(Box::new(kind.as_str().to_string()));
+        }
+        for state in states {
+            params_values.push(Box::new(state.as_str().to_string()));
+        }
+        if let Some(updated_after) = updated_after {
+            conditions.push("updated_at_ms > ?".to_string());
+            params_values.push(Box::new(instant_ms_dt(updated_after)));
+        }
+        let sql = format!(
+            "SELECT payload_blob FROM transcript_jobs WHERE {} ORDER BY updated_at_ms, created_at_ms, job_id",
+            conditions.join(" AND ")
+        );
+        let db = self.connect()?;
+        let mut statement = db.prepare(&sql)?;
+        let rows = statement.query_map(
+            params_from_iter(params_values.iter().map(|value| &**value)),
+            |row| row.get::<_, Vec<u8>>(0),
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|payload| Job::decode(&payload))
+            .collect()
+    }
+
     pub fn list_child_jobs(&self, parent_job_id: &str) -> Result<Vec<Job>> {
         let child_ids = self.list_child_job_ids(parent_job_id)?;
-        let mut children = if child_ids.is_empty() {
-            self.list_jobs(None, None)?
-                .into_iter()
-                .filter(|job| job.parent_job_id.as_deref() == Some(parent_job_id))
-                .collect::<Vec<_>>()
-        } else {
-            let mut children = Vec::new();
-            for child_id in child_ids {
-                if let Ok(child) = self.get_job(&child_id) {
-                    children.push(child);
-                }
+        let mut children = Vec::new();
+        for child_id in child_ids {
+            if let Ok(child) = self.get_job(&child_id) {
+                children.push(child);
             }
-            children
-        };
+        }
         children.sort_by(|left, right| left.created_at.cmp(&right.created_at));
         Ok(children)
     }
@@ -272,5 +613,31 @@ impl TimelineStore {
         )?;
         let rows = statement.query_map(params![parent_job_id], |row| row.get::<_, String>(0))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+fn wake_probe_stream_id(job: &Job) -> Option<&str> {
+    match &job.payload {
+        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
+        _ => None,
+    }
+}
+
+fn placeholders(count: usize) -> String {
+    (0..count).map(|_| "?").collect::<Vec<_>>().join(", ")
+}
+
+fn sort_jobs_by_created_at(jobs: &mut [Job]) {
+    jobs.sort_by(|left, right| {
+        job_order_time(left)
+            .cmp(&job_order_time(right))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
+    match &job.payload {
+        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
+        _ => parse_instant(&job.created_at),
     }
 }

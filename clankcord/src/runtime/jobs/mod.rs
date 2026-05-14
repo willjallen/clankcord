@@ -17,7 +17,7 @@ pub use payload::{
     DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload, JobPayload,
     OpaqueValue, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSink,
     ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, WakeActivationPayload,
+    RuntimeControlPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

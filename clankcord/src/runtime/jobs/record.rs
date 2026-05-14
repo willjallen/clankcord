@@ -12,7 +12,7 @@ use super::{
     DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
     ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, WakeActivationPayload,
+    RuntimeControlPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -433,6 +433,16 @@ impl Job {
         )
     }
 
+    pub fn wake_probe(payload: WakeProbePayload) -> Self {
+        Self::new(
+            payload.guild_id.clone(),
+            payload.voice_channel_id.clone(),
+            "discord_voice_adapter",
+            JobState::Queued,
+            JobPayload::WakeProbe(payload),
+        )
+    }
+
     pub fn confirmation_required(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
@@ -699,6 +709,13 @@ impl Job {
     pub fn audio_segment_payload(&self) -> Option<&AudioSegmentPayload> {
         match &self.payload {
             JobPayload::AudioSegment(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn wake_probe_payload(&self) -> Option<&WakeProbePayload> {
+        match &self.payload {
+            JobPayload::WakeProbe(payload) => Some(payload),
             _ => None,
         }
     }

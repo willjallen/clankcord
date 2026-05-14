@@ -12,6 +12,7 @@ const state = {
   timer: null,
   selectedJobId: '',
   selectedAgentJobId: '',
+  agentDetails: {},
   activeView: storedView,
 };
 const $ = (id) => document.getElementById(id);
@@ -413,7 +414,7 @@ function renderAgents(data) {
     return `<tr class="selectable${selected}" data-agent-job-id="${esc(job.job_id)}">
       ${td(code(job.job_id))}
       ${td(pill(job.state))}
-      ${td(text(job.payload?.command?.arguments?.request || job.payload?.command?.arguments?.instruction_text || ''))}
+      ${td(text(job.request || job.payload?.command?.arguments?.request || job.payload?.command?.arguments?.instruction_text || ''))}
       ${td(code(metadata.agent?.session_id || codex.sessionId || '', 18))}
       ${td(text(codex.model || metadata.agent?.model || ''))}
       ${td(text(contextUsageLabel(usage)))}
@@ -502,6 +503,10 @@ function renderSelectedAgentJob(entry) {
     $('selectedAgentJob').innerHTML = '<div class="empty">No agent job selected.</div>';
     return;
   }
+  const compactJobId = entry.job?.job_id || '';
+  if (compactJobId && state.agentDetails[compactJobId]) {
+    entry = state.agentDetails[compactJobId];
+  }
   const job = entry.job || {};
   const metadata = agentMetadata(job);
   const codex = entry.codex || {};
@@ -532,6 +537,7 @@ function renderSelectedAgentJob(entry) {
       <div class="kv"><div class="k">Last Output</div><div class="v">${esc(lastUsage.output_tokens ?? '')}</div></div>
     </div>
     ${artifactSummary(entry)}
+    ${entry.detailUrl && !state.agentDetails[job.job_id] ? '<div class="empty">Loading full Codex trace...</div>' : ''}
     <div class="embedded-panel">
       <h2>Codex Trace <span>${esc((codex.timeline || []).length)} events</span></h2>
       <div class="agent-trace">${renderCodexTrace(codex)}</div>
@@ -660,8 +666,21 @@ function bindAgentRows(data) {
     row.addEventListener('click', () => {
       state.selectedAgentJobId = row.getAttribute('data-agent-job-id') || '';
       renderAgents(data);
+      loadAgentDetail(state.selectedAgentJobId);
     });
   });
+}
+
+async function loadAgentDetail(jobId) {
+  if (!jobId || state.agentDetails[jobId]) return;
+  try {
+    const response = await fetch(`${rootPrefix}/v1/voice/debug/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+    state.agentDetails[jobId] = await response.json();
+    if (state.selectedAgentJobId === jobId && state.data) renderAgents(state.data);
+  } catch (error) {
+    showError(`Agent detail load failed: ${error.message}`);
+  }
 }
 
 function renderHealth(data) {

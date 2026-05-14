@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
@@ -8,7 +10,7 @@ use clankcord::runtime::{
     DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
     DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload,
     JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind, RoomConfig,
-    WakeActivationPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 
 #[test]
@@ -77,6 +79,52 @@ fn audio_segment_payload_references_ready_audio_artifact() {
     );
     assert_eq!(payload["audio_bytes"], json!(44));
     assert!(payload.get("pcm").is_none());
+}
+
+#[test]
+fn wake_probe_payload_references_ready_audio_artifact() {
+    let start = chrono::Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap();
+    let source_audio_path = std::path::PathBuf::from("/tmp/clankcord/wake-probe.wav");
+    let job = Job::wake_probe(WakeProbePayload {
+        guild_id: "guild".to_string(),
+        guild_slug: "guild".to_string(),
+        voice_channel_id: "channel".to_string(),
+        voice_channel_name: "Channel".to_string(),
+        voice_channel_slug: "channel".to_string(),
+        capture_run_id: "cap".to_string(),
+        voice_bot_id: "bot".to_string(),
+        voice_bot_discord_user_id: "bot-user".to_string(),
+        speaker_user_id: "speaker".to_string(),
+        speaker_label: "Speaker".to_string(),
+        speaker_username: "speaker_name".to_string(),
+        probe_start_time: start,
+        probe_end_time: start + chrono::Duration::milliseconds(500),
+        probe_index: 2,
+        duration_ms: 500,
+        source_audio_path: source_audio_path.clone(),
+        audio_checksum: "sha256:test".to_string(),
+        audio_bytes: 44,
+        audio_format: "wav".to_string(),
+        sample_rate_hz: 48_000,
+        channels: 2,
+        sample_width_bits: 16,
+        post_processing: "pcm_s16le_to_wav".to_string(),
+        stream_id: "guild:channel:speaker".to_string(),
+        reset_stream: false,
+    });
+
+    assert_eq!(job.kind, JobKind::WakeProbe);
+    assert_eq!(
+        job.wake_probe_payload().unwrap().source_audio_path,
+        source_audio_path
+    );
+    let payload = job.payload_value();
+    assert_eq!(
+        payload["source_audio_path"],
+        json!("/tmp/clankcord/wake-probe.wav")
+    );
+    assert_eq!(payload["stream_id"], json!("guild:channel:speaker"));
+    assert_eq!(payload["reset_stream"], json!(false));
 }
 
 #[test]
@@ -239,6 +287,112 @@ fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, job_id);
     assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Running);
+}
+
+#[test]
+fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let command = CommandRequest::from_json(&json!({
+        "command_kind": "agent_task",
+        "guild_id": "guild",
+        "voice_channel_id": "code",
+        "requested_by_user_id": "user-a",
+        "arguments": {"question": "summarize this"}
+    }))
+    .unwrap();
+    let mut first = Job::agent_task("guild", "code", "user-a", command.clone());
+    first.created_at = Utc
+        .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
+        .unwrap()
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    first.updated_at = first.created_at.clone();
+    let first_id = first.id.clone();
+    let mut second = Job::agent_task("guild", "code", "user-a", command);
+    second.created_at = Utc
+        .with_ymd_and_hms(2026, 5, 12, 16, 0, 1)
+        .unwrap()
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    second.updated_at = second.created_at.clone();
+    let second_id = second.id.clone();
+    store.create_job(first).unwrap();
+    store.create_job(second).unwrap();
+
+    let mut seen_channels = BTreeSet::new();
+    let claimed = store
+        .claim_due_jobs(JobKind::AgentTask, 4, |job| {
+            !seen_channels.insert(job.voice_channel_id.clone())
+        })
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, first_id);
+    assert_eq!(store.get_job(&first_id).unwrap().state, JobState::Running);
+    assert_eq!(store.get_job(&second_id).unwrap().state, JobState::Queued);
+}
+
+#[test]
+fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let first = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 0));
+    let first_id = first.id.clone();
+    let second = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 1));
+    let second_id = second.id.clone();
+    let third = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 2));
+    let third_id = third.id.clone();
+    let fourth = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 3));
+    let fourth_id = fourth.id.clone();
+
+    store.create_wake_probe_job(first).unwrap();
+    store.create_wake_probe_job(second).unwrap();
+    store.create_wake_probe_job(third).unwrap();
+    store.create_wake_probe_job(fourth).unwrap();
+
+    assert_eq!(
+        store
+            .get_job(&first_id)
+            .unwrap()
+            .wake_probe_payload()
+            .unwrap()
+            .probe_index,
+        0
+    );
+    assert_eq!(
+        store
+            .get_job(&second_id)
+            .unwrap()
+            .wake_probe_payload()
+            .unwrap()
+            .probe_index,
+        1
+    );
+    let stored_third = store.get_job(&third_id).unwrap();
+    assert_eq!(stored_third.state, JobState::Queued);
+    assert_eq!(stored_third.wake_probe_payload().unwrap().probe_index, 2);
+    let stored_fourth = store.get_job(&fourth_id).unwrap();
+    assert_eq!(stored_fourth.state, JobState::Queued);
+    assert_eq!(stored_fourth.wake_probe_payload().unwrap().probe_index, 3);
+}
+
+#[test]
+fn timeline_cancels_stale_wake_probe_backlog() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let old_at = Utc
+        .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
+        .unwrap()
+        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut old = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 0));
+    old.created_at = old_at.clone();
+    old.updated_at = old_at;
+    let old_id = old.id.clone();
+    store.create_job(old).unwrap();
+
+    let cancelled = store.cancel_stale_wake_probe_jobs(1).unwrap();
+
+    assert_eq!(cancelled.len(), 1);
+    assert_eq!(store.get_job(&old_id).unwrap().state, JobState::Cancelled);
 }
 
 #[test]
@@ -434,4 +588,36 @@ fn response_payload(content: &str) -> ResponsePayload {
 
 fn raw_path(path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(path)
+}
+
+fn wake_probe_payload(stream_id: &str, probe_index: i64) -> WakeProbePayload {
+    let start = Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap()
+        + chrono::Duration::milliseconds(probe_index * 500);
+    WakeProbePayload {
+        guild_id: "guild".to_string(),
+        guild_slug: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        voice_channel_name: "Code".to_string(),
+        voice_channel_slug: "code".to_string(),
+        capture_run_id: "cap".to_string(),
+        voice_bot_id: "bot".to_string(),
+        voice_bot_discord_user_id: "bot-user".to_string(),
+        speaker_user_id: "user-a".to_string(),
+        speaker_label: "Will".to_string(),
+        speaker_username: "will".to_string(),
+        probe_start_time: start,
+        probe_end_time: start + chrono::Duration::milliseconds(500),
+        probe_index,
+        duration_ms: 500,
+        source_audio_path: raw_path("/tmp/clankcord/wake-probe.wav"),
+        audio_checksum: "sha256:test".to_string(),
+        audio_bytes: 44,
+        audio_format: "wav".to_string(),
+        sample_rate_hz: 48_000,
+        channels: 2,
+        sample_width_bits: 16,
+        post_processing: "pcm_s16le_to_wav".to_string(),
+        stream_id: stream_id.to_string(),
+        reset_stream: true,
+    }
 }
