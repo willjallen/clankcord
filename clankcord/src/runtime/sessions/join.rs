@@ -170,7 +170,6 @@ impl Runtime {
         let request = JoinRoomEffectRequest {
             room: room.clone(),
             bot_id: bot.bot_id.clone(),
-            bot_user_id: bot.user_id.clone(),
             capture_run_id: capture_run_id.clone(),
             assignment_id,
             started_at,

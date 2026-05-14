@@ -1,0 +1,374 @@
+use std::collections::BTreeSet;
+use std::env;
+use std::fs;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+
+use anyhow::{Context as AnyhowContext, anyhow};
+use serenity::async_trait;
+use serenity::client::{Client, Context, EventHandler};
+use serenity::gateway::ShardManager;
+use serenity::http::Http;
+use serenity::model::application::Interaction;
+use serenity::model::gateway::{GatewayIntents, Ready};
+use serenity::model::id::{ChannelId, GuildId};
+use serenity::model::voice::VoiceState;
+use songbird::driver::{DecodeConfig, DecodeMode};
+use songbird::events::{CoreEvent, Event, EventContext, EventHandler as VoiceEventHandler};
+use songbird::serenity::SerenityInit;
+use songbird::{Config as SongbirdConfig, Songbird};
+use tokio::task::JoinHandle;
+
+use crate::Result;
+use crate::adapters::discord::voice::capture::VoiceData;
+use crate::adapters::discord::voice::live::LiveVoiceAdapter;
+use crate::config::tokens_path;
+use crate::runtime::RuntimeBotStatus;
+
+pub(super) struct DiscordVoiceClient {
+    pub(super) bot_id: String,
+    pub(super) ready: bool,
+    pub(super) joining_session_id: Option<String>,
+    pub(super) assigned_session_id: Option<String>,
+    pub(super) current_guild_id: String,
+    pub(super) current_channel_id: String,
+    pub(super) last_error: String,
+    pub(super) user_id: String,
+    pub(super) username: String,
+    http: Arc<Http>,
+    voice: Arc<Songbird>,
+    shard_manager: Arc<ShardManager>,
+    client_task: Option<JoinHandle<()>>,
+}
+
+impl DiscordVoiceClient {
+    pub(super) async fn start(
+        adapter: &Arc<LiveVoiceAdapter>,
+        bot_id: String,
+        token: String,
+    ) -> Result<Self> {
+        let voice = Songbird::serenity_from_config(
+            SongbirdConfig::default().decode_mode(DecodeMode::Decode(DecodeConfig::default())),
+        );
+        let handler = DiscordGatewayHandler {
+            adapter: Arc::downgrade(adapter),
+            bot_id: bot_id.clone(),
+        };
+        let intents = GatewayIntents::GUILDS
+            | GatewayIntents::GUILD_VOICE_STATES
+            | GatewayIntents::DIRECT_MESSAGES;
+        let client = Client::builder(&token, intents)
+            .event_handler(handler)
+            .register_songbird_with(voice.clone())
+            .await
+            .with_context(|| format!("failed to build Discord voice client for {bot_id}"))?;
+        let http = client.http.clone();
+        let shard_manager = client.shard_manager.clone();
+        let client_task = spawn_gateway_task(Arc::downgrade(adapter), bot_id.clone(), client);
+
+        Ok(Self {
+            bot_id,
+            ready: false,
+            joining_session_id: None,
+            assigned_session_id: None,
+            current_guild_id: String::new(),
+            current_channel_id: String::new(),
+            last_error: String::new(),
+            user_id: String::new(),
+            username: String::new(),
+            http,
+            voice,
+            shard_manager,
+            client_task: Some(client_task),
+        })
+    }
+
+    pub(super) fn discord_user_id(&self) -> Result<String> {
+        if self.user_id.trim().is_empty() {
+            anyhow::bail!("voice client {} is not ready", self.bot_id);
+        }
+        Ok(self.user_id.clone())
+    }
+
+    pub(super) fn voice(&self) -> Arc<Songbird> {
+        self.voice.clone()
+    }
+
+    pub(super) fn http(&self) -> Arc<Http> {
+        self.http.clone()
+    }
+
+    pub(super) async fn shutdown(&self) {
+        self.shard_manager.shutdown_all().await;
+    }
+
+    pub(super) fn status(&self) -> RuntimeBotStatus {
+        RuntimeBotStatus {
+            bot_id: self.bot_id.clone(),
+            ready: self.ready,
+            joining_session_id: self.joining_session_id.clone().unwrap_or_default(),
+            assigned_session_id: self.assigned_session_id.clone().unwrap_or_default(),
+            current_guild_id: self.current_guild_id.clone(),
+            current_channel_id: self.current_channel_id.clone(),
+            last_error: self.last_error.clone(),
+            pending_disconnect_events: 0,
+            pending_disconnect_until: 0,
+            user_id: self.user_id.clone(),
+            username: self.username.clone(),
+            gateway_running: self
+                .client_task
+                .as_ref()
+                .is_some_and(|task| !task.is_finished()),
+            receive_backend: "songbird".to_string(),
+        }
+    }
+}
+
+pub(super) async fn join_voice_channel(
+    adapter: &Arc<LiveVoiceAdapter>,
+    voice: Arc<Songbird>,
+    session_id: &str,
+    guild_id: u64,
+    channel_id: u64,
+) -> Result<()> {
+    let call = voice.get_or_insert(GuildId::new(guild_id));
+    let join = {
+        let mut call = call.lock().await;
+        call.remove_all_global_events();
+        call.add_global_event(
+            Event::Core(CoreEvent::SpeakingStateUpdate),
+            VoiceReceiveHandler {
+                adapter: Arc::downgrade(adapter),
+                session_id: session_id.to_string(),
+            },
+        );
+        call.add_global_event(
+            Event::Core(CoreEvent::VoiceTick),
+            VoiceReceiveHandler {
+                adapter: Arc::downgrade(adapter),
+                session_id: session_id.to_string(),
+            },
+        );
+        call.add_global_event(
+            Event::Core(CoreEvent::ClientDisconnect),
+            VoiceReceiveHandler {
+                adapter: Arc::downgrade(adapter),
+                session_id: session_id.to_string(),
+            },
+        );
+        call.join(ChannelId::new(channel_id)).await
+    };
+    let join_result = match join {
+        Ok(join) => join.await,
+        Err(error) => Err(error),
+    };
+    if let Err(error) = join_result {
+        {
+            let mut call = call.lock().await;
+            call.remove_all_global_events();
+        }
+        return Err(anyhow::Error::new(error).context("failed to join voice channel"));
+    }
+    Ok(())
+}
+
+pub(super) async fn leave_voice_channel(voice: Arc<Songbird>, guild_id: u64) {
+    let _ = voice.remove(GuildId::new(guild_id)).await;
+}
+
+pub(super) fn load_client_token_specs() -> Result<Vec<(String, String)>> {
+    parse_client_token_specs(raw_client_token_lines()?)
+}
+
+pub(super) fn parse_discord_id(label: &str, value: &str) -> Result<u64> {
+    value
+        .trim()
+        .parse::<u64>()
+        .map_err(|_| anyhow!("invalid Discord {label}: {value:?}"))
+}
+
+pub(super) fn describe_error(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .map(ToString::to_string)
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(": ")
+}
+
+fn spawn_gateway_task(
+    adapter: Weak<LiveVoiceAdapter>,
+    bot_id: String,
+    mut client: Client,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match client.start().await {
+                Ok(()) => {
+                    if let Some(adapter) = adapter.upgrade() {
+                        adapter
+                            .note_client_error(&bot_id, "gateway client stopped")
+                            .await;
+                    }
+                    break;
+                }
+                Err(error) => {
+                    if let Some(adapter) = adapter.upgrade() {
+                        adapter.note_client_error(&bot_id, &error.to_string()).await;
+                    } else {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+            }
+        }
+    })
+}
+
+fn raw_client_token_lines() -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+    if let Ok(value) = env::var("CLAWCORD_BOT_TOKENS") {
+        lines.extend(value.lines().map(str::to_string));
+    }
+    let path = tokens_path();
+    if path.is_file() {
+        lines.extend(
+            fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?
+                .lines()
+                .map(str::to_string),
+        );
+    }
+    Ok(lines)
+}
+
+fn parse_client_token_specs(lines: Vec<String>) -> Result<Vec<(String, String)>> {
+    let mut specs = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut auto_index = 1;
+    for raw_line in lines {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (mut bot_id, token) = if let Some((left, right)) = line.split_once('=') {
+            (left.trim().to_string(), right.trim().to_string())
+        } else if !line.starts_with("mfa.") {
+            if let Some((left, right)) = line.split_once(':') {
+                (left.trim().to_string(), right.trim().to_string())
+            } else {
+                (String::new(), line.to_string())
+            }
+        } else {
+            (String::new(), line.to_string())
+        };
+        if token.is_empty() {
+            continue;
+        }
+        if bot_id.is_empty() {
+            bot_id = format!("voice-{auto_index}");
+            auto_index += 1;
+        }
+        if seen.insert(bot_id.clone()) {
+            specs.push((bot_id, token));
+        }
+    }
+    Ok(specs)
+}
+
+struct DiscordGatewayHandler {
+    adapter: Weak<LiveVoiceAdapter>,
+    bot_id: String,
+}
+
+#[async_trait]
+impl EventHandler for DiscordGatewayHandler {
+    async fn ready(&self, _ctx: Context, ready: Ready) {
+        if let Some(adapter) = self.adapter.upgrade() {
+            adapter.mark_client_ready(&self.bot_id, ready).await;
+        }
+    }
+
+    async fn voice_state_update(&self, _ctx: Context, _old: Option<VoiceState>, new: VoiceState) {
+        if let Some(adapter) = self.adapter.upgrade() {
+            adapter.note_voice_state(&self.bot_id, new).await;
+        }
+    }
+
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        let Interaction::Component(component) = interaction else {
+            return;
+        };
+        if let Some(adapter) = self.adapter.upgrade() {
+            adapter.handle_component_interaction(ctx, component).await;
+        }
+    }
+}
+
+struct VoiceReceiveHandler {
+    adapter: Weak<LiveVoiceAdapter>,
+    session_id: String,
+}
+
+#[async_trait]
+impl VoiceEventHandler for VoiceReceiveHandler {
+    async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
+        let Some(adapter) = self.adapter.upgrade() else {
+            return None;
+        };
+        match ctx {
+            EventContext::SpeakingStateUpdate(speaking) => {
+                if let Some(user_id) = speaking.user_id {
+                    adapter
+                        .handle_speaking_state(
+                            &self.session_id,
+                            speaking.ssrc,
+                            &user_id.0.to_string(),
+                            speaking.speaking.microphone() || speaking.speaking.soundshare(),
+                        )
+                        .await;
+                }
+            }
+            EventContext::VoiceTick(tick) => {
+                let speaking = tick
+                    .speaking
+                    .iter()
+                    .map(|(ssrc, data)| {
+                        (
+                            *ssrc,
+                            VoiceData {
+                                user: None,
+                                pcm: data
+                                    .decoded_voice
+                                    .as_ref()
+                                    .map(|samples| pcm_i16_to_le_bytes(samples))
+                                    .unwrap_or_default(),
+                                has_packet: data.packet.is_some(),
+                                is_silence: false,
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let silent = tick.silent.iter().copied().collect::<Vec<_>>();
+                adapter
+                    .handle_voice_tick(&self.session_id, speaking, silent)
+                    .await;
+            }
+            EventContext::ClientDisconnect(disconnect) => {
+                adapter
+                    .handle_client_disconnect(&self.session_id, &disconnect.user_id.0.to_string())
+                    .await;
+            }
+            _ => {}
+        }
+        None
+    }
+}
+
+fn pcm_i16_to_le_bytes(samples: &[i16]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        bytes.extend_from_slice(&sample.to_le_bytes());
+    }
+    bytes
+}

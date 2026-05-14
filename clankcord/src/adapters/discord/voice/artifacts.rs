@@ -98,9 +98,9 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn non_empty(value: &str, fallback: &str) -> String {
+fn non_empty(value: &str, default: &str) -> String {
     if value.trim().is_empty() {
-        fallback.to_string()
+        default.to_string()
     } else {
         value.trim().to_string()
     }

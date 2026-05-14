@@ -16,7 +16,6 @@ pub(crate) type LeaveRoomEffectFuture<'a> =
 pub(crate) struct JoinRoomEffectRequest {
     pub room: RoomConfig,
     pub bot_id: String,
-    pub bot_user_id: String,
     pub capture_run_id: String,
     pub assignment_id: String,
     pub started_at: DateTime<Utc>,

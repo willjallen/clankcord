@@ -17,17 +17,6 @@ fn capture_sink_translates_voice_packets_to_pipeline_actions() {
         name: "will".to_string(),
     };
     let mut sink = VoiceCaptureSink::new("session-1");
-    assert!(!sink.wants_opus());
-    assert_eq!(
-        sink.on_voice_member_speaking_start(&user),
-        CaptureAction::SpeakingState {
-            session_id: "session-1".to_string(),
-            user_id: "user-a".to_string(),
-            label: "Will".to_string(),
-            username: "will".to_string(),
-            active: true
-        }
-    );
 
     let actions = sink.write_actions(VoiceData {
         user: Some(user.clone()),

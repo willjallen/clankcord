@@ -240,8 +240,8 @@ fn spawn_live_voice_loop(live_voice: Arc<LiveVoiceAdapter>) {
         let mut interval = tokio::time::interval(live_voice.flush_interval());
         loop {
             interval.tick().await;
-            if let Err(error) = live_voice.start_missing_bots().await {
-                log(&format!("voice bot startup failed: {error}"));
+            if let Err(error) = live_voice.start_missing_clients().await {
+                log(&format!("voice client startup failed: {error}"));
             }
             if let Err(error) = live_voice.flush_ready_buffers().await {
                 log(&format!("voice flush failed: {error}"));

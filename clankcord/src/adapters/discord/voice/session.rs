@@ -177,11 +177,11 @@ impl SessionAudioPipeline {
             return AudioPipelineOutcome::Paused;
         }
         let Some(speaker) = session.buffers.get_mut(user_id) else {
-            if active {
+            if active && !label.trim().is_empty() {
                 session.participants.insert(
                     user_id.to_string(),
                     BTreeMap::from([
-                        ("label".to_string(), non_empty(label, user_id)),
+                        ("label".to_string(), label.to_string()),
                         ("username".to_string(), username.to_string()),
                     ]),
                 );
@@ -213,7 +213,7 @@ impl SessionAudioPipeline {
         let pcm = std::mem::take(&mut speaker.pcm);
         let started_at = speaker.started_at.unwrap_or_else(Utc::now);
         let ended_at = Utc::now();
-        let label = non_empty(&speaker.label, user_id);
+        let label = speaker.label.clone();
         let username = speaker.username.clone();
         speaker.started_at = None;
         speaker.active = false;
@@ -354,9 +354,9 @@ fn note_session_log(session: &mut VoiceSession, action: &str, fields: Value) {
     );
 }
 
-fn non_empty(value: &str, fallback: &str) -> String {
+fn non_empty(value: &str, default: &str) -> String {
     if value.trim().is_empty() {
-        fallback.to_string()
+        default.to_string()
     } else {
         value.trim().to_string()
     }

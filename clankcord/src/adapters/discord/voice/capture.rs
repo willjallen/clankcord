@@ -1,6 +1,15 @@
+use std::collections::BTreeMap;
+
+use chrono::Utc;
+use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
+use crate::adapters::discord::voice::session::{
+    AudioPipelineOutcome, SessionAudioPipeline, monotonic_seconds,
+};
+use crate::adapters::discord::voice::types::VoiceSession;
+use crate::runtime::{Job, RuntimeSessionStatus, log};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaptureUser {
@@ -122,30 +131,6 @@ impl VoiceCaptureSink {
         }
     }
 
-    pub fn wants_opus(&self) -> bool {
-        false
-    }
-
-    pub fn on_voice_member_speaking_start(&self, member: &CaptureUser) -> CaptureAction {
-        CaptureAction::SpeakingState {
-            session_id: self.session_id.clone(),
-            user_id: member.id.clone(),
-            label: user_label(member),
-            username: member.name.clone(),
-            active: true,
-        }
-    }
-
-    pub fn on_voice_member_speaking_stop(&self, member: &CaptureUser) -> CaptureAction {
-        CaptureAction::SpeakingState {
-            session_id: self.session_id.clone(),
-            user_id: member.id.clone(),
-            label: user_label(member),
-            username: member.name.clone(),
-            active: false,
-        }
-    }
-
     pub fn write_actions(&mut self, data: VoiceData) -> Vec<CaptureAction> {
         let mut actions = vec![CaptureAction::PacketDebug {
             session_id: self.session_id.clone(),
@@ -240,8 +225,179 @@ impl VoiceCaptureSink {
             apply_action(handler, action);
         }
     }
+}
 
-    pub fn cleanup(&self) {}
+pub(super) struct LiveCaptureSession {
+    session: VoiceSession,
+    pipeline: SessionAudioPipeline,
+    sink: VoiceCaptureSink,
+    ssrc_users: BTreeMap<u32, CaptureUser>,
+}
+
+impl LiveCaptureSession {
+    pub(super) fn new(session: VoiceSession, minimum_utterance_ms: i64) -> Self {
+        let session_id = session.session_id.clone();
+        Self {
+            session,
+            pipeline: SessionAudioPipeline::new().with_minimum_utterance_ms(minimum_utterance_ms),
+            sink: VoiceCaptureSink::new(session_id),
+            ssrc_users: BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn metadata(&self, tz: Tz) -> RuntimeSessionStatus {
+        self.session.metadata(tz)
+    }
+
+    pub(super) fn discord_lookup_context(&self) -> (String, String) {
+        (
+            self.session.bot_id.clone(),
+            self.session.room.guild_id.clone(),
+        )
+    }
+
+    pub(super) fn note_speaking_state(&mut self, ssrc: u32, user: CaptureUser, active: bool) {
+        self.ssrc_users.insert(ssrc, user.clone());
+        let pipeline = self.pipeline.clone();
+        let session_id = self.session.session_id.clone();
+        let mut handler = SessionCaptureHandler {
+            pipeline,
+            session: &mut self.session,
+        };
+        handler.handle_speaking_state(
+            &session_id,
+            &user.id,
+            &user.display_name,
+            &user.name,
+            active,
+        );
+    }
+
+    pub(super) fn note_client_disconnect(&mut self, user_id: &str) -> Option<Job> {
+        self.ssrc_users.retain(|_, user| user.id != user_id);
+        let session_id = self.session.session_id.clone();
+        let pipeline = self.pipeline.clone();
+        {
+            let mut handler = SessionCaptureHandler {
+                pipeline: pipeline.clone(),
+                session: &mut self.session,
+            };
+            handler.handle_speaking_state(&session_id, user_id, "", "", false);
+        }
+        match pipeline.flush_speaker(&mut self.session, user_id) {
+            Ok(outcome) => audio_job_from_outcome(outcome),
+            Err(error) => {
+                log(&format!("voice disconnect flush failed: {error}"));
+                None
+            }
+        }
+    }
+
+    pub(super) fn write_voice_tick(&mut self, speaking: Vec<(u32, VoiceData)>, silent: Vec<u32>) {
+        for (ssrc, data) in speaking {
+            let user = self.ssrc_users.get(&ssrc).cloned();
+            self.write_voice_data(user, data);
+        }
+        for ssrc in silent {
+            let Some(user) = self.ssrc_users.get(&ssrc).cloned() else {
+                continue;
+            };
+            self.write_voice_data(
+                Some(user),
+                VoiceData {
+                    user: None,
+                    pcm: Vec::new(),
+                    has_packet: true,
+                    is_silence: true,
+                },
+            );
+        }
+    }
+
+    pub(super) fn flush_ready_buffers(&mut self, max_segment_ms: i64, silence_ms: i64) -> Vec<Job> {
+        if self.session.ended_at.is_some() || self.session.finalizing {
+            return Vec::new();
+        }
+        let now = monotonic_seconds();
+        let user_ids = self
+            .session
+            .buffers
+            .iter()
+            .filter_map(|(user_id, speaker)| {
+                if speaker.pcm.is_empty() || speaker.flush_in_flight {
+                    return None;
+                }
+                let buffered_duration_ms =
+                    crate::adapters::discord::voice::artifacts::duration_ms_for_pcm(&speaker.pcm);
+                if buffered_duration_ms >= max_segment_ms
+                    || now - speaker.last_packet_monotonic >= silence_ms as f64 / 1000.0
+                {
+                    Some(user_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        self.flush_speakers(user_ids)
+    }
+
+    pub(super) fn finish(&mut self, reason: String, tz: Tz) -> FinishedCaptureSession {
+        self.session.finalizing = true;
+        let user_ids = self.session.buffers.keys().cloned().collect::<Vec<_>>();
+        let audio_jobs = self.flush_speakers(user_ids);
+        self.session.ended_at = Some(Utc::now());
+        self.session.finalizing = false;
+        self.session
+            .debug_notes
+            .insert("leaveReason".to_string(), reason);
+        FinishedCaptureSession {
+            session_id: self.session.session_id.clone(),
+            metadata: self.session.metadata(tz),
+            bot_id: self.session.bot_id.clone(),
+            guild_id: self.session.room.guild_id.clone(),
+            voice_channel_id: self.session.room.channel_id.clone(),
+            capture_run_id: self.session.capture_run_id.clone(),
+            audio_jobs,
+        }
+    }
+
+    fn flush_speakers(&mut self, user_ids: Vec<String>) -> Vec<Job> {
+        let pipeline = self.pipeline.clone();
+        let mut jobs = Vec::new();
+        for user_id in user_ids {
+            match pipeline.flush_speaker(&mut self.session, &user_id) {
+                Ok(outcome) => collect_audio_job(outcome, &mut jobs),
+                Err(error) => log(&format!("voice buffer flush failed: {error}")),
+            }
+        }
+        jobs
+    }
+
+    fn write_voice_data(&mut self, user: Option<CaptureUser>, mut data: VoiceData) {
+        if data.user.is_none() {
+            data.user = user;
+        }
+        let mut sink = std::mem::replace(
+            &mut self.sink,
+            VoiceCaptureSink::new(&self.session.session_id),
+        );
+        let mut handler = SessionCaptureHandler {
+            pipeline: self.pipeline.clone(),
+            session: &mut self.session,
+        };
+        sink.write(&mut handler, data);
+        self.sink = sink;
+    }
+}
+
+pub(super) struct FinishedCaptureSession {
+    pub(super) session_id: String,
+    pub(super) metadata: RuntimeSessionStatus,
+    pub(super) bot_id: String,
+    pub(super) guild_id: String,
+    pub(super) voice_channel_id: String,
+    pub(super) capture_run_id: String,
+    pub(super) audio_jobs: Vec<Job>,
 }
 
 pub fn user_label(user: &CaptureUser) -> String {
@@ -251,10 +407,6 @@ pub fn user_label(user: &CaptureUser) -> String {
         }
     }
     String::new()
-}
-
-pub fn log(message: &str) {
-    println!("[discord-voice] {message}");
 }
 
 pub fn apply_action<H: VoiceCaptureHandler>(handler: &mut H, action: CaptureAction) {
@@ -299,4 +451,109 @@ pub fn apply_action<H: VoiceCaptureHandler>(handler: &mut H, action: CaptureActi
 
 fn default_has_packet() -> bool {
     true
+}
+
+struct SessionCaptureHandler<'a> {
+    pipeline: SessionAudioPipeline,
+    session: &'a mut VoiceSession,
+}
+
+impl VoiceCaptureHandler for SessionCaptureHandler<'_> {
+    fn note_packet_debug(&mut self, _session_id: &str, key: &str) {
+        *self
+            .session
+            .packet_debug
+            .entry(key.to_string())
+            .or_insert(0) += 1;
+    }
+
+    fn note_synthetic_packet(&mut self, _session_id: &str, has_pcm: bool) {
+        self.note_packet_debug("", "syntheticPackets");
+        if has_pcm {
+            self.note_packet_debug("", "syntheticPcmPackets");
+        }
+    }
+
+    fn handle_speaking_state(
+        &mut self,
+        _session_id: &str,
+        user_id: &str,
+        label: &str,
+        username: &str,
+        active: bool,
+    ) {
+        let _ = self.pipeline.handle_speaking_state(
+            Some(&mut *self.session),
+            user_id,
+            label,
+            username,
+            active,
+        );
+    }
+
+    fn handle_pcm_packet(
+        &mut self,
+        _session_id: &str,
+        user_id: &str,
+        label: &str,
+        username: &str,
+        pcm: &[u8],
+    ) {
+        let _ = self.pipeline.handle_pcm_packet(
+            Some(&mut *self.session),
+            user_id,
+            label,
+            username,
+            pcm,
+        );
+    }
+
+    fn handle_silence_packet(
+        &mut self,
+        _session_id: &str,
+        user_id: &str,
+        label: &str,
+        username: &str,
+        pcm: &[u8],
+    ) {
+        let _ = self.pipeline.handle_silence_packet(
+            Some(&mut *self.session),
+            user_id,
+            label,
+            username,
+            pcm,
+        );
+    }
+
+    fn handle_empty_pcm_packet(
+        &mut self,
+        _session_id: &str,
+        user_id: &str,
+        label: &str,
+        username: &str,
+    ) {
+        let _ = self.pipeline.handle_empty_pcm_packet(
+            Some(&mut *self.session),
+            user_id,
+            label,
+            username,
+        );
+    }
+
+    fn log(&mut self, message: &str) {
+        log(message);
+    }
+}
+
+fn collect_audio_job(outcome: AudioPipelineOutcome, jobs: &mut Vec<Job>) {
+    if let Some(job) = audio_job_from_outcome(outcome) {
+        jobs.push(job);
+    }
+}
+
+fn audio_job_from_outcome(outcome: AudioPipelineOutcome) -> Option<Job> {
+    match outcome {
+        AudioPipelineOutcome::SegmentReady { payload, .. } => Some(Job::audio_segment(payload)),
+        _ => None,
+    }
 }
