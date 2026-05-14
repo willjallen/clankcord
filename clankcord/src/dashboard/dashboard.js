@@ -1,5 +1,9 @@
 const rootPrefix = location.pathname.startsWith('/__clawcord/') ? '/__clawcord' : '';
-const state = { data: null, timer: null, selectedJobId: '' };
+const state = {
+  data: null,
+  timer: null,
+  selectedJobId: '',
+};
 const $ = (id) => document.getElementById(id);
 
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({
@@ -61,6 +65,103 @@ const jobTime = (job) => job.updated_at || job.created_at || job.started_at || '
 const jobs = (data) => data.jobs || {};
 const jobList = (data) => jobs(data).recent || [];
 const activeJobs = (data) => jobs(data).active || [];
+const timelineEvents = (data) => data.timeline?.recentEvents || [];
+
+const eventKind = (event) => event.kind || event.event_kind || 'event';
+const eventChannelId = (event) => event.channelId || event.voice_channel_id || event.voiceChannelId || '';
+const eventChannelName = (event) => event.channelName || event.voice_channel_name || event.channelSlug || eventChannelId(event);
+const eventSpeaker = (event) => event.speakerLabel || event.speaker_label || event.speakerId || event.speaker_user_id || '';
+const eventWhen = (event) => event.startedAt || event.started_at || event.created_at || event.timestamp || '';
+const eventId = (event) => event.job_id || event.eventId || event.event_id || '';
+const eventDetail = (event) => {
+  const result = event.router_result || event.router_response || event.result || {};
+  return event.text || event.reason || result.reason || result.action || event.state || '';
+};
+const transcriptText = (event) => event.text || event.text_draft || event.transcript || '';
+
+function channelOptions(data) {
+  const channels = new Map();
+  (data.status?.rooms || []).forEach((room) => {
+    if (!room.channelId) return;
+    channels.set(room.channelId, {
+      id: room.channelId,
+      label: room.channelName || room.channelSlug || room.channelId,
+    });
+  });
+  timelineEvents(data).forEach((event) => {
+    const id = eventChannelId(event);
+    if (!id || channels.has(id)) return;
+    channels.set(id, { id, label: eventChannelName(event) || id });
+  });
+  return [...channels.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function setSelectOptions(select, options, allLabel) {
+  const current = select.value;
+  select.innerHTML = [`<option value="">${esc(allLabel)}</option>`]
+    .concat(options.map((option) => `<option value="${esc(option.value)}">${esc(option.label)}</option>`))
+    .join('');
+  if (options.some((option) => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function renderFilterOptions(data) {
+  const kinds = new Set(timelineEvents(data).map(eventKind).filter(Boolean));
+  setSelectOptions(
+    $('timelineKind'),
+    [...kinds].sort().map((kind) => ({ value: kind, label: kind })),
+    'All',
+  );
+  const channels = channelOptions(data).map((channel) => ({ value: channel.id, label: channel.label }));
+  setSelectOptions($('timelineChannel'), channels, 'All');
+  setSelectOptions($('transcriptChannel'), channels, 'All');
+}
+
+function eventMatchesSearch(event, query) {
+  if (!query) return true;
+  const haystack = [
+    eventKind(event),
+    eventChannelName(event),
+    eventChannelId(event),
+    eventSpeaker(event),
+    eventDetail(event),
+    eventId(event),
+  ].join(' ').toLowerCase();
+  return haystack.includes(query.toLowerCase());
+}
+
+function filteredTimelineEvents(data) {
+  const kind = $('timelineKind').value;
+  const channel = $('timelineChannel').value;
+  const query = $('timelineSearch').value.trim();
+  return timelineEvents(data).filter((event) => {
+    if (kind && eventKind(event) !== kind) return false;
+    if (channel && eventChannelId(event) !== channel) return false;
+    return eventMatchesSearch(event, query);
+  });
+}
+
+function transcriptEvents(data) {
+  const channel = $('transcriptChannel').value;
+  const query = $('transcriptSearch').value.trim().toLowerCase();
+  return timelineEvents(data)
+    .filter((event) => {
+      const kind = eventKind(event);
+      const body = transcriptText(event);
+      if (!body) return false;
+      if (!['speech_segment', 'transcript'].includes(kind)) return false;
+      if (channel && eventChannelId(event) !== channel) return false;
+      if (!query) return true;
+      return [
+        body,
+        eventSpeaker(event),
+        eventChannelName(event),
+        eventChannelId(event),
+      ].join(' ').toLowerCase().includes(query);
+    })
+    .sort((left, right) => eventWhen(left).localeCompare(eventWhen(right)));
+}
 
 function jobDetailText(job) {
   const command = jobCommand(job);
@@ -124,7 +225,6 @@ function render(data) {
   selectDefaultJob(data);
   const summary = jobs(data).summary || {};
   const status = data.status || {};
-  const timeline = data.timeline || {};
   const failed = Number(summary.failed || 0);
   $('subtitle').textContent = `Generated ${ago(data.generatedAt)} · uptime ${data.process?.uptimeSeconds ?? 0}s · ${summary.total || 0} jobs tracked`;
   $('metrics').innerHTML = [
@@ -140,10 +240,11 @@ function render(data) {
   renderJobs(data);
   renderRooms(data);
   renderRouter(data);
+  renderFilterOptions(data);
   renderTimeline(data);
+  renderTranscript(data);
   $('raw').textContent = JSON.stringify(data, null, 2);
   $('jsonLink').href = `${rootPrefix}/v1/voice/debug/overview?since=${encodeURIComponent($('since').value)}&limit=${encodeURIComponent($('limit').value)}`;
-  if (failed) showError(`${failed} job(s) are currently failed or failed recently.`, false);
 }
 
 function renderOverview(data) {
@@ -292,8 +393,8 @@ function renderRouter(data) {
   $('routerJobsCount').textContent = `${rows.length}`;
   $('routerJobs').innerHTML = table(['Job', 'Kind', 'State', 'Action', 'Command', 'Target', 'Updated', 'Request/Result'], rows, 'No router-origin jobs');
 
-  const routerEvents = (data.timeline?.recentEvents || []).filter((event) => {
-    const kind = String(event.kind || event.event_kind || '');
+  const routerEvents = timelineEvents(data).filter((event) => {
+    const kind = String(eventKind(event));
     return kind.includes('router') || kind.includes('agent_task') || kind.includes('job_');
   });
   $('routerEventsCount').textContent = `${routerEvents.length}`;
@@ -302,15 +403,16 @@ function renderRouter(data) {
 
 function renderTimeline(data) {
   const timeline = data.timeline || {};
-  const eventRows = (timeline.recentEvents || []).map((event) => `<tr>
-    ${td(text(ago(event.startedAt || event.started_at || event.created_at || event.timestamp)))}
-    ${td(pill(event.kind || event.event_kind))}
-    ${td(text(event.channelName || event.voice_channel_name || event.channelId || event.voice_channel_id))}
-    ${td(text(event.speakerLabel || event.speaker_label || event.speakerId || event.speaker_user_id))}
-    ${td(text(short(event.text || event.reason || event.state || '', 160)), 'text-cell')}
-    ${td(code(event.job_id || event.eventId || event.event_id || '', 18))}
+  const filtered = filteredTimelineEvents(data);
+  const eventRows = filtered.map((event) => `<tr>
+    ${td(text(ago(eventWhen(event))))}
+    ${td(pill(eventKind(event)))}
+    ${td(text(eventChannelName(event)))}
+    ${td(text(eventSpeaker(event)))}
+    ${td(text(short(eventDetail(event), 160)), 'text-cell')}
+    ${td(code(eventId(event), 18))}
   </tr>`);
-  $('eventsCount').textContent = `${eventRows.length}`;
+  $('eventsCount').textContent = `${eventRows.length}/${timelineEvents(data).length}`;
   $('events').innerHTML = table(['When', 'Kind', 'Room', 'Speaker', 'Text/Detail', 'Id'], eventRows, 'No timeline events');
 
   const kindRows = (timeline.eventKindCounts || []).map((row) => `<tr>
@@ -331,6 +433,40 @@ function renderTimeline(data) {
   $('publications').innerHTML = table(['Publication', 'State', 'Window', 'Thread', 'Created'], pubRows, 'No publications');
 }
 
+function renderTranscript(data) {
+  const events = transcriptEvents(data);
+  $('transcriptCount').textContent = `${events.length}`;
+  if (!events.length) {
+    $('transcript').innerHTML = '<div class="empty">No transcript events match the current window and filters.</div>';
+    return;
+  }
+  const groups = new Map();
+  events.forEach((event) => {
+    const channelId = eventChannelId(event) || 'unknown';
+    const channelName = eventChannelName(event) || channelId;
+    if (!groups.has(channelId)) {
+      groups.set(channelId, { channelId, channelName, events: [] });
+    }
+    groups.get(channelId).events.push(event);
+  });
+  $('transcript').innerHTML = [...groups.values()].map((group) => [
+    `<div class="transcript-channel">${esc(group.channelName)} <span class="muted">${esc(group.channelId)}</span></div>`,
+    group.events.map(renderTranscriptLine).join(''),
+  ].join('')).join('');
+}
+
+function renderTranscriptLine(event) {
+  const when = eventWhen(event);
+  const time = when && Number.isFinite(Date.parse(when))
+    ? new Date(when).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    : when;
+  return `<div class="transcript-line">
+    <div class="transcript-time">${esc(time)}</div>
+    <div class="transcript-speaker">${esc(eventSpeaker(event) || 'unknown')}</div>
+    <div class="transcript-text">${esc(transcriptText(event))}</div>
+  </div>`;
+}
+
 function renderTimelineCard(event) {
   const result = event.router_result || event.router_response || event.result || {};
   return `<article class="timeline-card">
@@ -339,12 +475,12 @@ function renderTimelineCard(event) {
         ${pill(event.kind || event.event_kind)}
         ${result.action ? pill(result.action) : ''}
         ${event.state ? pill(event.state) : ''}
-        <span class="muted">${esc(ago(event.startedAt || event.started_at || event.created_at || event.timestamp))}</span>
+        <span class="muted">${esc(ago(eventWhen(event)))}</span>
       </div>
-      ${code(event.job_id || event.eventId || event.event_id || '', 20)}
+      ${code(eventId(event), 20)}
     </div>
     <div class="timeline-body">
-      <div>${esc(event.reason || result.reason || event.text || 'No detail recorded.')}</div>
+      <div>${esc(eventDetail(event) || 'No detail recorded.')}</div>
       <details><summary>Event</summary><pre>${esc(JSON.stringify(event, null, 2))}</pre></details>
     </div>
   </article>`;
@@ -381,6 +517,21 @@ document.querySelectorAll('[data-view]').forEach((button) => {
 $('refresh').addEventListener('click', refresh);
 $('since').addEventListener('change', refresh);
 $('limit').addEventListener('change', refresh);
+$('timelineKind').addEventListener('change', () => {
+  if (state.data) renderTimeline(state.data);
+});
+$('timelineChannel').addEventListener('change', () => {
+  if (state.data) renderTimeline(state.data);
+});
+$('timelineSearch').addEventListener('input', () => {
+  if (state.data) renderTimeline(state.data);
+});
+$('transcriptChannel').addEventListener('change', () => {
+  if (state.data) renderTranscript(state.data);
+});
+$('transcriptSearch').addEventListener('input', () => {
+  if (state.data) renderTranscript(state.data);
+});
 $('auto').addEventListener('change', () => {
   clearInterval(state.timer);
   if ($('auto').checked) state.timer = setInterval(refresh, 3000);

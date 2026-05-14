@@ -42,6 +42,7 @@
       <button type="button" data-view="rooms">Rooms</button>
       <button type="button" data-view="router">Router</button>
       <button type="button" data-view="timeline">Timeline</button>
+      <button type="button" data-view="transcript">Transcript</button>
       <button type="button" data-view="raw">Raw</button>
     </nav>
   </header>
@@ -133,6 +134,21 @@
       <div class="layout">
         <section>
           <h2>Recent Events <span id="eventsCount"></span></h2>
+          <div class="filterbar">
+            <label>Kind
+              <select id="timelineKind">
+                <option value="">All</option>
+              </select>
+            </label>
+            <label>Channel
+              <select id="timelineChannel">
+                <option value="">All</option>
+              </select>
+            </label>
+            <label>Search
+              <input id="timelineSearch" type="search" autocomplete="off">
+            </label>
+          </div>
           <div class="table-wrap tall" id="events"></div>
         </section>
         <div class="stack">
@@ -146,6 +162,23 @@
           </section>
         </div>
       </div>
+    </div>
+
+    <div class="view" id="view-transcript">
+      <section>
+        <h2>Channel Transcript <span id="transcriptCount"></span></h2>
+        <div class="filterbar">
+          <label>Channel
+            <select id="transcriptChannel">
+              <option value="">All</option>
+            </select>
+          </label>
+          <label>Search
+            <input id="transcriptSearch" type="search" autocomplete="off">
+          </label>
+        </div>
+        <div class="transcript-view" id="transcript"></div>
+      </section>
     </div>
 
     <div class="view" id="view-raw">

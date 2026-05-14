@@ -73,6 +73,10 @@ input {
   font: inherit;
 }
 
+input[type="search"] {
+  min-width: 220px;
+}
+
 button {
   cursor: pointer;
   min-height: 34px;
@@ -320,6 +324,16 @@ details summary {
   gap: 0;
 }
 
+.filterbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--panel-3);
+}
+
 .dense-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -409,6 +423,48 @@ details summary {
   border-radius: 6px;
 }
 
+.transcript-view {
+  display: grid;
+  gap: 0;
+  max-height: 680px;
+  overflow: auto;
+}
+
+.transcript-channel {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--focus);
+  font-weight: 700;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.transcript-line {
+  display: grid;
+  grid-template-columns: 96px 160px minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.transcript-time,
+.transcript-speaker {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.transcript-speaker {
+  color: var(--cyan);
+  overflow-wrap: anywhere;
+}
+
+.transcript-text {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1180px) {
   .metrics {
     grid-template-columns: repeat(3, minmax(130px, 1fr));
@@ -432,5 +488,13 @@ details summary {
 
   .kv-grid {
     grid-template-columns: 1fr;
+  }
+
+  .transcript-line {
+    grid-template-columns: 82px minmax(0, 1fr);
+  }
+
+  .transcript-text {
+    grid-column: 1 / -1;
   }
 }
