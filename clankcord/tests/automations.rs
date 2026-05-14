@@ -208,7 +208,10 @@ fn invalid_automation_specs_return_actionable_errors() {
                     "value": {"kind": "decimal", "value": 0.9}
                 }
             })),
-            vec!["$.condition.value.kind `decimal`", "string, number, or bool"],
+            vec![
+                "$.condition.value.kind `decimal`",
+                "string, number, or bool",
+            ],
         ),
         (
             "actions not array",

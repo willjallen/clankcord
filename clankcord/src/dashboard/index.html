@@ -39,6 +39,8 @@
     <nav class="tabs">
       <button class="active" type="button" data-view="overview">Overview</button>
       <button type="button" data-view="jobs">Jobs</button>
+      <button type="button" data-view="agents">Agent Jobs</button>
+      <button type="button" data-view="health">Health</button>
       <button type="button" data-view="rooms">Rooms</button>
       <button type="button" data-view="commands">Commands</button>
       <button type="button" data-view="timeline">Timeline</button>
@@ -90,6 +92,62 @@
         <h2>Recent Jobs <span id="recentJobsCount"></span></h2>
         <div class="table-wrap tall" id="recentJobs"></div>
       </section>
+    </div>
+
+    <div class="view" id="view-agents">
+      <div class="agents-layout">
+        <div class="stack">
+          <section>
+            <h2>Agent Jobs <span id="agentJobsCount"></span></h2>
+            <div class="table-wrap tall" id="agentJobs"></div>
+          </section>
+          <section>
+            <h2>Agent Sessions <span id="agentSessionsCount"></span></h2>
+            <div class="table-wrap" id="agentSessions"></div>
+          </section>
+          <section>
+            <h2>Codex Usage</h2>
+            <div id="codexUsage"></div>
+          </section>
+          <section>
+            <h2>Codex Account</h2>
+            <div class="dense-list" id="codexAccount"></div>
+          </section>
+        </div>
+        <section>
+          <h2>Selected Agent Job <span id="selectedAgentJobTitle"></span></h2>
+          <div id="selectedAgentJob"></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="view" id="view-health">
+      <div class="layout">
+        <div class="stack">
+          <section>
+            <h2>Service Health</h2>
+            <div class="dense-list" id="serviceHealth"></div>
+          </section>
+          <section>
+            <h2>Load</h2>
+            <div class="dense-list" id="loadHealth"></div>
+          </section>
+          <section>
+            <h2>Capacity</h2>
+            <div class="dense-list" id="healthCapacity"></div>
+          </section>
+        </div>
+        <div class="stack">
+          <section>
+            <h2>SQLite Files</h2>
+            <div class="table-wrap" id="sqliteFiles"></div>
+          </section>
+          <section>
+            <h2>SQLite Tables</h2>
+            <div class="table-wrap tall" id="sqliteTables"></div>
+          </section>
+        </div>
+      </div>
     </div>
 
     <div class="view" id="view-rooms">

@@ -73,6 +73,7 @@ impl AgentRuntime {
             timeout: request.timeout,
             env: request.env,
             output_last_message_path: request.result_path,
+            stdout_path: Some(request.raw_result_path),
         }) {
             Ok(result) => result,
             Err(error) => {
@@ -86,10 +87,6 @@ impl AgentRuntime {
                 .into());
             }
         };
-        fs::write(
-            &request.raw_result_path,
-            format!("{}\n", codex_result.stdout.trim()),
-        )?;
         let completed_session =
             complete_session(self, started_session, &codex_result, request.role.as_str());
         Ok(AgentInvocationResult {

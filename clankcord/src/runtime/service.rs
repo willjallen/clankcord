@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -256,38 +257,62 @@ fn spawn_maintainer_loop(handle: RuntimeHandle) {
         loop {
             interval.tick().await;
             if let Err(error) = handle.run_maintenance_once().await {
-                log(&format!("runtime maintainer cycle failed: {error}"));
+                log(&format!(
+                    "runtime maintainer cycle failed: {}",
+                    error_chain(&error)
+                ));
             }
         }
     });
+}
+
+fn error_chain(error: &anyhow::Error) -> String {
+    error
+        .chain()
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>()
+        .join(": ")
 }
 
 async fn run_maintainer_cycle(
     runtime: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
 ) -> Result<Value> {
-    sync_voice_adapter_state(runtime.clone(), live_voice.clone()).await?;
+    sync_voice_adapter_state(runtime.clone(), live_voice.clone())
+        .await
+        .context("syncing voice adapter state")?;
     let automation = {
         let mut runtime = runtime.lock().await;
-        runtime.run_automations()?.to_json()
+        runtime
+            .run_automations()
+            .context("running runtime automations")?
+            .to_json()
     };
     let async_jobs = {
         let mut runtime = runtime.lock().await;
-        runtime.dispatch_due_jobs(Some(&live_voice)).await?
+        runtime
+            .dispatch_due_jobs(Some(&live_voice))
+            .await
+            .context("dispatching due async jobs")?
     };
     let snapshot = {
         let runtime = runtime.lock().await;
         runtime.clone()
     };
     let blocking = tokio::task::spawn_blocking(move || {
-        let jobs = snapshot.dispatch_due_blocking_jobs()?;
-        let maintenance = snapshot.run_blocking_maintenance()?;
+        let jobs = snapshot
+            .dispatch_due_blocking_jobs()
+            .context("dispatching due blocking jobs")?;
+        let maintenance = snapshot
+            .run_blocking_maintenance()
+            .context("running blocking maintenance")?;
         Ok::<Value, anyhow::Error>(json!({
             "jobs": jobs,
             "maintenance": maintenance,
         }))
     })
-    .await??;
+    .await
+    .context("joining blocking maintainer task")??;
     let mut payload = Map::new();
     payload.insert("ok".to_string(), Value::Bool(true));
     payload.insert("automation".to_string(), automation);

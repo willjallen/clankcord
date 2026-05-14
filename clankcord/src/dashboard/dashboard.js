@@ -1,8 +1,18 @@
 const rootPrefix = location.pathname.startsWith('/__clankcord/') ? '/__clankcord' : '';
+const viewStorageKey = 'clankcord.dashboard.view';
+const storedView = (() => {
+  try {
+    return localStorage.getItem(viewStorageKey) || 'overview';
+  } catch {
+    return 'overview';
+  }
+})();
 const state = {
   data: null,
   timer: null,
   selectedJobId: '',
+  selectedAgentJobId: '',
+  activeView: storedView,
 };
 const $ = (id) => document.getElementById(id);
 
@@ -34,17 +44,31 @@ const ago = (iso) => {
 
 const statusClass = (value) => {
   const text = String(value ?? '').toLowerCase();
-  if (['queued', 'running', 'waiting', 'active', 'approved', 'capturing'].some((part) => text.includes(part))) return 'ok';
-  if (['failed', 'error', 'timeout'].some((part) => text.includes(part))) return 'bad';
-  if (['cancel', 'pending', 'released', 'absent', 'paused'].some((part) => text.includes(part))) return 'warn';
+  if (['ok', 'ready', 'present', 'complete', 'queued', 'running', 'waiting', 'active', 'approved', 'capturing'].some((part) => text.includes(part))) return 'ok';
+  if (['failed', 'error', 'timeout', 'missing', 'degraded'].some((part) => text.includes(part))) return 'bad';
+  if (['cancel', 'pending', 'released', 'absent', 'paused', 'truncated'].some((part) => text.includes(part))) return 'warn';
   return 'info';
 };
 
 const pill = (value) => `<span class="pill ${statusClass(value)}">${esc(value || 'none')}</span>`;
 const code = (value, n = 18) => `<code title="${esc(value)}">${esc(short(value, n))}</code>`;
-const text = (value) => esc(value || '');
+const text = (value) => esc(value ?? '');
 const td = (value, cls = '') => `<td class="${cls}">${value}</td>`;
 const metric = (label, value, cls = '') => `<div class="metric"><div class="label">${esc(label)}</div><div class="value ${cls}">${esc(value)}</div></div>`;
+const bytes = (value) => {
+  const size = Number(value || 0);
+  if (!Number.isFinite(size) || size <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let current = size;
+  let unit = 0;
+  while (current >= 1024 && unit < units.length - 1) {
+    current /= 1024;
+    unit += 1;
+  }
+  return `${current.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+};
+const pct = (value) => `${Number(value || 0).toFixed(1)}%`;
+const int = (value) => Number(value || 0).toLocaleString();
 
 const table = (headers, rows, empty = 'No rows') => {
   if (!rows.length) return `<div class="empty">${esc(empty)}</div>`;
@@ -56,6 +80,47 @@ const denseRows = (rows) => {
   return rows.map(([label, value]) => `<div class="dense-row"><span>${esc(label)}</span><strong>${value}</strong></div>`).join('');
 };
 
+const scrollSelectors = [
+  '#activeJobs',
+  '#recentJobs',
+  '#selectedJob .detail',
+  '#agentJobs',
+  '#agentSessions',
+  '#selectedAgentJob .agent-detail',
+  '#selectedAgentJob .agent-trace',
+  '#events',
+  '#commandEvents',
+  '#transcript',
+  '#rooms',
+  '#sessions',
+  '#bots',
+];
+
+function captureScrollState() {
+  return {
+    windowX: window.scrollX,
+    windowY: window.scrollY,
+    targets: scrollSelectors.map((selector) => {
+      const element = document.querySelector(selector);
+      return element ? [selector, element.scrollLeft, element.scrollTop] : [selector, 0, 0];
+    }),
+  };
+}
+
+function restoreScrollState(snapshot) {
+  if (!snapshot) return;
+  requestAnimationFrame(() => {
+    window.scrollTo(snapshot.windowX, snapshot.windowY);
+    snapshot.targets.forEach(([selector, left, top]) => {
+      const element = document.querySelector(selector);
+      if (element) {
+        element.scrollLeft = left;
+        element.scrollTop = top;
+      }
+    });
+  });
+}
+
 const jobCommand = (job) => job.payload?.command || {};
 const jobArgs = (job) => jobCommand(job).arguments || {};
 const jobMetadata = (job) => job.metadata || {};
@@ -65,6 +130,10 @@ const jobTime = (job) => job.updated_at || job.created_at || job.started_at || '
 const jobs = (data) => data.jobs || {};
 const jobList = (data) => jobs(data).recent || [];
 const activeJobs = (data) => jobs(data).active || [];
+const agents = (data) => data.agents || {};
+const agentJobs = (data) => agents(data).jobs || [];
+const agentSessions = (data) => agents(data).sessions || [];
+const agentCodex = (data) => agents(data).codex || {};
 const timelineEvents = (data) => data.timeline?.recentEvents || [];
 
 const eventKind = (event) => event.kind || event.event_kind || 'event';
@@ -220,9 +289,17 @@ function selectDefaultJob(data) {
   }
 }
 
+function selectDefaultAgentJob(data) {
+  const all = agentJobs(data);
+  if (!state.selectedAgentJobId || !all.some((entry) => entry.job?.job_id === state.selectedAgentJobId)) {
+    state.selectedAgentJobId = all[0]?.job?.job_id || '';
+  }
+}
+
 function render(data) {
   state.data = data;
   selectDefaultJob(data);
+  selectDefaultAgentJob(data);
   const summary = jobs(data).summary || {};
   const status = data.status || {};
   const failed = Number(summary.failed || 0);
@@ -238,6 +315,8 @@ function render(data) {
 
   renderOverview(data);
   renderJobs(data);
+  renderAgents(data);
+  renderHealth(data);
   renderRooms(data);
   renderCommands(data);
   renderFilterOptions(data);
@@ -322,6 +401,309 @@ function renderSelectedJob(job) {
     ${Object.keys(metadata).length ? `<details><summary>Metadata</summary><pre>${esc(JSON.stringify(metadata, null, 2))}</pre></details>` : ''}
     ${Object.keys(args).length ? `<details><summary>Command Arguments</summary><pre>${esc(JSON.stringify(args, null, 2))}</pre></details>` : ''}
   </div>`;
+}
+
+function renderAgents(data) {
+  const rows = agentJobs(data).map((entry) => {
+    const job = entry.job || {};
+    const metadata = agentMetadata(job);
+    const codex = entry.codex || {};
+    const usage = codexUsageStats(codex, metadata);
+    const selected = job.job_id === state.selectedAgentJobId ? ' selected' : '';
+    return `<tr class="selectable${selected}" data-agent-job-id="${esc(job.job_id)}">
+      ${td(code(job.job_id))}
+      ${td(pill(job.state))}
+      ${td(text(job.payload?.command?.arguments?.request || job.payload?.command?.arguments?.instruction_text || ''))}
+      ${td(code(metadata.agent?.session_id || codex.sessionId || '', 18))}
+      ${td(text(codex.model || metadata.agent?.model || ''))}
+      ${td(text(contextUsageLabel(usage)))}
+      ${td(text(ago(jobTime(job))))}
+      ${td(text(short(jobDetailText(job), 140)), 'text-cell')}
+    </tr>`;
+  });
+  $('agentJobsCount').textContent = `${rows.length}`;
+  $('agentJobs').innerHTML = table(['Job', 'State', 'Request', 'Session', 'Model', 'Context', 'Updated', 'Detail'], rows, 'No agent jobs');
+
+  const sessionRows = agentSessions(data).map((session) => `<tr>
+    ${td(code(session.key, 28))}
+    ${td(pill(session.status))}
+    ${td(text(session.role || ''))}
+    ${td(code(session.session_id || '', 18))}
+    ${td(code(session.active_job_id || '', 18))}
+    ${td(text(session.invocation_count ?? 0))}
+    ${td(text(ago(session.last_used_at)))}
+    ${td(text(short(session.last_error || '', 100)), 'text-cell')}
+  </tr>`);
+  $('agentSessionsCount').textContent = `${sessionRows.length}`;
+  $('agentSessions').innerHTML = table(['Key', 'Status', 'Role', 'Codex Session', 'Active Job', 'Runs', 'Last Used', 'Error'], sessionRows, 'No agent sessions');
+
+  renderCodexDashboard(agentCodex(data));
+  renderSelectedAgentJob(agentJobs(data).find((entry) => entry.job?.job_id === state.selectedAgentJobId));
+  bindAgentRows(data);
+}
+
+function renderCodexDashboard(codex) {
+  const usage = codex.usage || {};
+  const windows = usage.windows || [];
+  $('codexUsage').innerHTML = windows.length
+    ? `<div class="usage-window-grid">${windows.map(renderCodexUsageWindow).join('')}</div>${renderCodexRateLimits(usage)}`
+    : '<div class="empty">No Codex usage captured yet.</div>';
+
+  const auth = codex.auth || {};
+  const account = auth.account || {};
+  const access = auth.accessToken || {};
+  const idToken = auth.idToken || {};
+  $('codexAccount').innerHTML = denseRows([
+    ['Login', auth.authPresent ? pill(auth.loginType || 'present') : pill('missing')],
+    ['Account', account.email ? text(account.email) : code(account.accountId || account.subject || '', 30)],
+    ['Name', text(account.name || '')],
+    ['Last refresh', text(auth.lastRefresh || '')],
+    ['Access token expiry', renderExpiry(access)],
+    ['ID token expiry', renderExpiry(idToken)],
+    ['Codex version', text(auth.version?.latest || '')],
+    ['Version checked', text(auth.version?.lastCheckedAt || '')],
+  ].filter(([, value]) => String(value).trim() !== '' && value !== '<code title=""></code>'));
+}
+
+function renderCodexUsageWindow(window) {
+  return `<div class="usage-window">
+    <div class="usage-window-head">
+      <strong>${esc(window.label || '')}</strong>
+      <span class="muted">${esc(window.latestAt ? `latest ${ago(window.latestAt)}` : 'no runs')}</span>
+    </div>
+    ${denseRows([
+      ['Agent jobs', text(`${int(window.jobs)} total / ${int(window.jobsWithUsage)} with usage`)],
+      ['Input tokens', text(int(window.inputTokens))],
+      ['Cached input', text(int(window.cachedInputTokens))],
+      ['Output tokens', text(int(window.outputTokens))],
+      ['Reasoning output', text(int(window.reasoningOutputTokens))],
+      ['Since', text(window.since || '')],
+    ])}
+  </div>`;
+}
+
+function renderCodexRateLimits(usage) {
+  if (usage.globalLimitsKnown) {
+    return `<details class="codex-rate-limits"><summary>Codex Rate Limits</summary><pre>${esc(JSON.stringify(usage.rateLimits || {}, null, 2))}</pre></details>`;
+  }
+  return '<div class="dense-row"><span>Global limits</span><strong class="muted">Not reported by current Codex CLI trace</strong></div>';
+}
+
+function renderExpiry(expiry) {
+  if (!expiry?.expiresAt) return '<span class="muted">unknown</span>';
+  const seconds = Number(expiry.expiresInSeconds || 0);
+  const className = expiry.expired ? 'bad' : seconds < 900 ? 'warn' : 'ok';
+  return `<span class="${className}">${esc(expiry.expiresAt)}</span><span class="muted"> ${esc(expiry.expired ? 'expired' : `${Math.floor(seconds / 60)}m`)}</span>`;
+}
+
+function renderSelectedAgentJob(entry) {
+  if (!entry) {
+    $('selectedAgentJobTitle').textContent = '';
+    $('selectedAgentJob').innerHTML = '<div class="empty">No agent job selected.</div>';
+    return;
+  }
+  const job = entry.job || {};
+  const metadata = agentMetadata(job);
+  const codex = entry.codex || {};
+  const usageStats = codexUsageStats(codex, metadata);
+  const usage = usageStats.usage;
+  const totalUsage = usage.total_token_usage || {};
+  const lastUsage = usage.last_token_usage || {};
+  $('selectedAgentJobTitle').textContent = job.job_id || '';
+  $('selectedAgentJob').innerHTML = `<div class="detail agent-detail">
+    <div class="detail-head">
+      ${pill(job.kind)}
+      ${pill(job.state)}
+      ${metadata.agent?.provider ? pill(metadata.agent.provider) : ''}
+      ${codex.sessionId || metadata.agent?.session_id ? `<span>${code(codex.sessionId || metadata.agent?.session_id, 36)}</span>` : ''}
+    </div>
+    <div class="kv-grid">
+      <div class="kv"><div class="k">Job</div><div class="v">${code(job.job_id, 42)}</div></div>
+      <div class="kv"><div class="k">Channel</div><div class="v">${code(job.voice_channel_id || '', 42)}</div></div>
+      <div class="kv"><div class="k">Requester</div><div class="v">${code(job.requested_by_user_id || '', 42)}</div></div>
+      <div class="kv"><div class="k">Model</div><div class="v">${esc(codex.model || metadata.agent?.model || '')}</div></div>
+      <div class="kv"><div class="k">Context Used</div><div class="v">${renderUsageBar(usageStats)}</div></div>
+      <div class="kv"><div class="k">Events</div><div class="v">${esc(codex.eventCount || 0)}</div></div>
+      <div class="kv"><div class="k">Total Input</div><div class="v">${esc(totalUsage.input_tokens ?? '')}</div></div>
+      <div class="kv"><div class="k">Cached Input</div><div class="v">${esc(totalUsage.cached_input_tokens ?? '')}</div></div>
+      <div class="kv"><div class="k">Total Output</div><div class="v">${esc(totalUsage.output_tokens ?? '')}</div></div>
+      <div class="kv"><div class="k">Reasoning Output</div><div class="v">${esc(totalUsage.reasoning_output_tokens ?? '')}</div></div>
+      <div class="kv"><div class="k">Last Input</div><div class="v">${esc(lastUsage.input_tokens ?? '')}</div></div>
+      <div class="kv"><div class="k">Last Output</div><div class="v">${esc(lastUsage.output_tokens ?? '')}</div></div>
+    </div>
+    ${artifactSummary(entry)}
+    <div class="embedded-panel">
+      <h2>Codex Trace <span>${esc((codex.timeline || []).length)} events</span></h2>
+      <div class="agent-trace">${renderCodexTrace(codex)}</div>
+    </div>
+    <details open><summary>Exact Prompt Sent To Codex</summary><pre>${esc(entry.prompt?.content || '')}</pre></details>
+    <details><summary>Job Packet JSON</summary><pre>${esc(JSON.stringify(entry.packet?.value || {}, null, 2))}</pre></details>
+    <details><summary>Agent Result</summary><pre>${esc(entry.result?.content || '')}</pre></details>
+    <details><summary>Raw Codex JSONL</summary><pre>${esc(entry.raw?.content || '')}</pre></details>
+    <details><summary>Job Record</summary><pre>${esc(JSON.stringify(job, null, 2))}</pre></details>
+  </div>`;
+}
+
+function codexUsageStats(codex, metadata) {
+  const rawUsage = codex.tokenUsage || metadata.agent?.usage || {};
+  const usage = rawUsage.info || rawUsage;
+  const total = usage.total_token_usage || {};
+  const last = usage.last_token_usage || {};
+  const inputTokens = Number(codex.contextUsedTokens || total.input_tokens || last.input_tokens || 0);
+  const contextWindow = Number(codex.modelContextWindow || usage.model_context_window || usage.modelContextWindow || 0);
+  const percent = Number(codex.contextUsedPercent || (contextWindow > 0 && inputTokens > 0 ? (inputTokens / contextWindow) * 100 : 0));
+  return { usage, inputTokens, contextWindow, percent };
+}
+
+function contextUsageLabel(stats) {
+  if (stats.percent > 0) return pct(stats.percent);
+  if (stats.inputTokens > 0) return `${stats.inputTokens.toLocaleString()} tok`;
+  return '';
+}
+
+function renderUsageBar(stats) {
+  if (stats.contextWindow <= 0) {
+    return stats.inputTokens > 0
+      ? `<span>${esc(stats.inputTokens.toLocaleString())}</span><span class="muted"> input tokens, window unknown</span>`
+      : '<span class="muted">No usage captured</span>';
+  }
+  const clamped = Math.max(0, Math.min(100, Number(stats.percent || 0)));
+  return `<div class="usage-bar"><div style="width:${clamped}%"></div></div><span class="muted">${esc(pct(clamped))} of ${esc(stats.contextWindow.toLocaleString())}</span>`;
+}
+
+function artifactSummary(entry) {
+  const items = [
+    ['Prompt', entry.prompt],
+    ['Packet', entry.packet],
+    ['Result', entry.result],
+    ['Raw JSONL', entry.raw],
+  ];
+  return `<div class="artifact-grid">${items.map(([label, artifact]) => `<div class="kv">
+    <div class="k">${esc(label)}</div>
+    <div class="v">${artifact?.exists ? pill(bytes(artifact.bytes)) : pill('missing')} ${artifact?.truncated ? pill('truncated') : ''}</div>
+    <div class="artifact-path">${esc(artifact?.path || '')}</div>
+  </div>`).join('')}</div>`;
+}
+
+function renderCodexMessages(messages) {
+  if (!messages.length) return '<div class="empty">No Codex messages captured yet.</div>';
+  return messages.map((message) => `<article class="agent-message">
+    <div class="agent-message-head">
+      ${pill(message.role || 'message')}
+      ${message.phase ? pill(message.phase) : ''}
+      <span class="muted">${esc(ago(message.timestamp))}</span>
+    </div>
+    <div class="agent-message-body">${esc(message.text || '')}</div>
+  </article>`).join('');
+}
+
+function renderCodexTrace(codex) {
+  const events = codex.timeline?.length ? codex.timeline : mergedCodexEvents(codex);
+  if (!events.length) return '<div class="empty">No Codex trace captured yet.</div>';
+  return events.map((event) => event.kind === 'tool_call'
+    ? renderToolCallEvent(event)
+    : renderMessageEvent(event)
+  ).join('');
+}
+
+function mergedCodexEvents(codex) {
+  return [
+    ...(codex.messages || []).map((event) => ({ ...event, kind: 'message' })),
+    ...(codex.toolCalls || []).map((event) => ({ ...event, kind: 'tool_call' })),
+  ];
+}
+
+function renderMessageEvent(message) {
+  return `<article class="agent-message">
+    <div class="agent-message-head">
+      ${pill(message.role || 'message')}
+      ${message.phase ? pill(message.phase) : ''}
+      <span class="muted">${esc(ago(message.timestamp))}</span>
+    </div>
+    <div class="agent-message-body">${esc(message.text || '')}</div>
+  </article>`;
+}
+
+function renderToolCallEvent(call) {
+  const body = toolCallBody(call);
+  return `<article class="timeline-card">
+    <div class="timeline-head">
+      <div class="detail-tags">${call.name ? pill(call.name) : pill('output')}${call.status ? pill(call.status) : ''}${call.exitCode !== undefined && call.exitCode !== null ? pill(`exit ${call.exitCode}`) : ''}<span class="muted">${esc(ago(call.timestamp))}</span></div>
+      ${code(call.callId || '', 18)}
+    </div>
+    <div class="timeline-body">
+      <pre>${esc(body)}</pre>
+    </div>
+  </article>`;
+}
+
+function renderToolCalls(calls) {
+  if (!calls.length) return '<div class="empty">No tool calls captured yet.</div>';
+  return calls.map((call) => {
+    return renderToolCallEvent(call);
+  }).join('');
+}
+
+function toolCallBody(call) {
+  const parts = [];
+  if (call.arguments !== undefined && call.arguments !== '') {
+    parts.push(typeof call.arguments === 'string' ? call.arguments : JSON.stringify(call.arguments ?? '', null, 2));
+  }
+  if (call.output !== undefined && call.output !== '') {
+    parts.push(typeof call.output === 'string' ? call.output : JSON.stringify(call.output ?? '', null, 2));
+  }
+  return parts.join('\n\n');
+}
+
+function bindAgentRows(data) {
+  document.querySelectorAll('[data-agent-job-id]').forEach((row) => {
+    row.addEventListener('click', () => {
+      state.selectedAgentJobId = row.getAttribute('data-agent-job-id') || '';
+      renderAgents(data);
+    });
+  });
+}
+
+function renderHealth(data) {
+  const health = data.health || {};
+  const database = data.database || {};
+  const load = data.load || {};
+  const pool = data.status?.pool || {};
+  $('serviceHealth').innerHTML = denseRows([
+    ['Runtime', health.ok ? pill('ok') : pill('degraded')],
+    ['SQLite', health.sqlite ? pill('ok') : pill('error')],
+    ['Ready bots', text(`${health.readyBots ?? 0}/${health.configuredBots ?? 0}`)],
+    ['Active sessions', text(health.activeSessions ?? 0)],
+    ['Active agent jobs', text(health.activeAgentJobs ?? 0)],
+    ['Loaded automations', text(health.automationsLoaded ?? 0)],
+    ['Failed jobs', health.failedJobs ? `<span class="bad">${esc(health.failedJobs)}</span>` : text(0)],
+  ]);
+  $('loadHealth').innerHTML = denseRows([
+    ['Due queued jobs', text(load.dueQueuedJobs ?? 0)],
+    ['Oldest queued age', text(`${load.oldestQueuedAgeSeconds ?? 0}s`)],
+    ['Running jobs', text((data.jobs?.summary?.running) ?? 0)],
+    ['Waiting jobs', text((data.jobs?.summary?.waiting) ?? 0)],
+    ['Cancellable jobs', text((data.jobs?.summary?.cancellable) ?? 0)],
+  ]);
+  $('healthCapacity').innerHTML = denseRows([
+    ['Configured bots', text(pool.configuredBots ?? 0)],
+    ['Active assignments', text(pool.activeAssignments ?? 0)],
+    ['Available bots', text(pool.availableBots ?? 0)],
+    ['Configured rooms', text(health.configuredRooms ?? 0)],
+  ]);
+
+  const fileRows = (database.files || []).map((file) => `<tr>
+    ${td(text(file.path))}
+    ${td(file.exists ? pill('present') : pill('missing'))}
+    ${td(text(bytes(file.bytes)))}
+  </tr>`);
+  $('sqliteFiles').innerHTML = table(['Path', 'State', 'Size'], fileRows, 'No SQLite file information');
+
+  const tableRows = (database.tables || []).map((row) => `<tr>
+    ${td(text(row.table))}
+    ${td(text(row.rows))}
+  </tr>`);
+  $('sqliteTables').innerHTML = table(['Table', 'Rows'], tableRows, 'No SQLite table information');
 }
 
 function renderRooms(data) {
@@ -500,18 +882,29 @@ async function refresh() {
   try {
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+    const data = await response.json();
+    const scrollState = captureScrollState();
     $('error').style.display = 'none';
-    render(await response.json());
+    render(data);
+    restoreScrollState(scrollState);
   } catch (error) {
     showError(`Dashboard refresh failed: ${error.message}`);
   }
 }
 
+function activateView(view) {
+  const safeView = [...document.querySelectorAll('[data-view]')].some((node) => node.dataset.view === view) ? view : 'overview';
+  view = safeView;
+  state.activeView = view;
+  try {
+    localStorage.setItem(viewStorageKey, view);
+  } catch {}
+  document.querySelectorAll('[data-view]').forEach((node) => node.classList.toggle('active', node.dataset.view === view));
+  document.querySelectorAll('.view').forEach((node) => node.classList.toggle('active', node.id === `view-${view}`));
+}
+
 document.querySelectorAll('[data-view]').forEach((button) => {
-  button.addEventListener('click', () => {
-    document.querySelectorAll('[data-view]').forEach((node) => node.classList.toggle('active', node === button));
-    document.querySelectorAll('.view').forEach((node) => node.classList.toggle('active', node.id === `view-${button.dataset.view}`));
-  });
+  button.addEventListener('click', () => activateView(button.dataset.view));
 });
 
 $('refresh').addEventListener('click', refresh);
@@ -538,4 +931,5 @@ $('auto').addEventListener('change', () => {
 });
 
 state.timer = setInterval(refresh, 3000);
+activateView(state.activeView);
 refresh();

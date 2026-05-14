@@ -338,9 +338,10 @@ impl Runtime {
                 && session.ended_at.trim().is_empty()
                 && active_session_ids.contains(&session.session_id)
         });
-        for status in bots {
-            self.bots.insert(status.bot_id.clone(), status);
-        }
+        self.bots = bots
+            .into_iter()
+            .map(|status| (status.bot_id.clone(), status))
+            .collect();
         for session in sessions {
             if session.active {
                 self.sessions.insert(session.session_id.clone(), session);

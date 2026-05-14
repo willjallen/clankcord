@@ -2,6 +2,9 @@ use super::*;
 
 use serde::{Deserialize, Serialize};
 
+const BINARY_RECORD_SCHEMA_KEY: &str = "binary_record_schema";
+const BINARY_RECORD_SCHEMA_VERSION: &str = "native-bincode-2026-05-14";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedTranscript {
     pub window: Value,
@@ -286,6 +289,12 @@ impl TimelineStore {
               payload_blob BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS runtime_metadata (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_timeline_room_time
               ON timeline_events(guild_id, voice_channel_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_room_kind_time
@@ -314,6 +323,7 @@ impl TimelineStore {
               ON publications(guild_id, voice_channel_id, state, created_at_ms);
             "#,
         )?;
+        self.apply_binary_record_hard_cut(&db)?;
         self.fts_enabled = db
             .execute_batch(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS transcript_events_fts \
@@ -321,6 +331,56 @@ impl TimelineStore {
             )
             .is_ok();
         Ok(())
+    }
+
+    fn apply_binary_record_hard_cut(&self, db: &Connection) -> Result<()> {
+        let current = db
+            .query_row(
+                "SELECT value FROM runtime_metadata WHERE key = ?1",
+                params![BINARY_RECORD_SCHEMA_KEY],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if current.as_deref() == Some(BINARY_RECORD_SCHEMA_VERSION)
+            && self.job_payloads_decode(db)?
+        {
+            return Ok(());
+        }
+
+        let deleted_jobs = db.execute("DELETE FROM transcript_jobs", [])?;
+        let deleted_automations = db.execute("DELETE FROM automations", [])?;
+        db.execute(
+            r#"
+            INSERT INTO runtime_metadata(key, value, updated_at_ms)
+            VALUES (?1, ?2, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at_ms = excluded.updated_at_ms
+            "#,
+            params![
+                BINARY_RECORD_SCHEMA_KEY,
+                BINARY_RECORD_SCHEMA_VERSION,
+                instant_ms_dt(utc_now())
+            ],
+        )?;
+        if deleted_jobs > 0 || deleted_automations > 0 {
+            crate::runtime::log(&format!(
+                "runtime binary record schema hard cut applied: deleted {deleted_jobs} job rows and {deleted_automations} automation rows"
+            ));
+        }
+        Ok(())
+    }
+
+    fn job_payloads_decode(&self, db: &Connection) -> Result<bool> {
+        let mut statement = db.prepare("SELECT payload_blob FROM transcript_jobs")?;
+        let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+        for payload in rows {
+            let payload = payload?;
+            if Job::decode(&payload).is_err() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 }
 

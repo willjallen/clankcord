@@ -77,6 +77,27 @@ pub(crate) fn extract_codex_model(stdout: &str) -> String {
     )
 }
 
+pub(crate) fn extract_codex_usage(stdout: &str) -> Value {
+    let latest = json_values_from_stdout(stdout)
+        .into_iter()
+        .filter_map(codex_usage_payload)
+        .last()
+        .unwrap_or_else(|| json!({}));
+    if latest.is_object() {
+        latest
+    } else {
+        json!({})
+    }
+}
+
+pub(crate) fn parse_codex_jsonl(stdout: &str) -> Vec<Value> {
+    json_values_from_stdout(stdout)
+}
+
+pub(crate) fn codex_usage_payload(value: Value) -> Option<Value> {
+    legacy_token_count_payload(&value).or_else(|| turn_completed_usage_payload(&value))
+}
+
 fn json_values_from_stdout(stdout: &str) -> Vec<Value> {
     let raw = stdout.trim();
     if raw.is_empty() {
@@ -88,6 +109,32 @@ fn json_values_from_stdout(stdout: &str) -> Vec<Value> {
     raw.lines()
         .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
         .collect()
+}
+
+fn legacy_token_count_payload(value: &Value) -> Option<Value> {
+    let object = value.as_object()?;
+    if object.get("type").and_then(Value::as_str) != Some("event_msg") {
+        return None;
+    }
+    let payload = object.get("payload")?.as_object()?;
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return None;
+    }
+    Some(Value::Object(payload.clone()))
+}
+
+fn turn_completed_usage_payload(value: &Value) -> Option<Value> {
+    let object = value.as_object()?;
+    if object.get("type").and_then(Value::as_str) != Some("turn.completed") {
+        return None;
+    }
+    let usage = object.get("usage")?.as_object()?;
+    let usage = Value::Object(usage.clone());
+    Some(json!({
+        "last_token_usage": usage,
+        "total_token_usage": usage,
+        "raw_usage": usage,
+    }))
 }
 
 fn find_string_field(values: &[Value], keys: &[&str]) -> String {
@@ -115,5 +162,51 @@ fn find_string_field_in_value(value: &Value, keys: &[&str]) -> Option<String> {
             .iter()
             .find_map(|child| find_string_field_in_value(child, keys)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extracts_usage_from_current_codex_turn_completed_event() {
+        let stdout = r#"
+{"type":"thread.started","thread_id":"thread-1"}
+{"type":"turn.completed","usage":{"input_tokens":60770,"cached_input_tokens":36096,"output_tokens":2492,"reasoning_output_tokens":1876}}
+"#;
+
+        let usage = extract_codex_usage(stdout);
+        assert_eq!(
+            usage
+                .get("total_token_usage")
+                .and_then(|value| value.get("input_tokens"))
+                .and_then(Value::as_i64),
+            Some(60770)
+        );
+        assert_eq!(
+            usage
+                .get("last_token_usage")
+                .and_then(|value| value.get("cached_input_tokens"))
+                .and_then(Value::as_i64),
+            Some(36096)
+        );
+    }
+
+    #[test]
+    fn keeps_extracting_legacy_token_count_payloads() {
+        let stdout = r#"
+{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10},"model_context_window":100}}}
+"#;
+
+        let usage = extract_codex_usage(stdout);
+        assert_eq!(
+            usage
+                .get("info")
+                .and_then(|value| value.get("total_token_usage"))
+                .and_then(|value| value.get("input_tokens"))
+                .and_then(Value::as_i64),
+            Some(10)
+        );
     }
 }

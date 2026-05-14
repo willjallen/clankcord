@@ -36,6 +36,7 @@ pub(crate) struct CodexRunRequest {
     pub timeout: Duration,
     pub env: BTreeMap<String, String>,
     pub output_last_message_path: PathBuf,
+    pub stdout_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -60,14 +61,19 @@ impl CodexAdapter {
 
         let args = codex_args(&request);
         let command_display = display_command(&self.executable, &args);
-        let stdout_file = tempfile::NamedTempFile::new()?;
+        let stdout_file = if request.stdout_path.is_none() {
+            Some(tempfile::NamedTempFile::new()?)
+        } else {
+            None
+        };
         let stderr_file = tempfile::NamedTempFile::new()?;
         let mut command = Command::new(&self.executable);
+        let stdout = stdout_stdio(&request, stdout_file.as_ref())?;
         command
             .args(&args)
             .envs(&request.env)
             .stdin(Stdio::piped())
-            .stdout(Stdio::from(stdout_file.reopen()?))
+            .stdout(stdout)
             .stderr(Stdio::from(stderr_file.reopen()?));
 
         let mut child = command.spawn()?;
@@ -89,7 +95,7 @@ impl CodexAdapter {
             thread::sleep(Duration::from_millis(100));
         };
 
-        let stdout = fs::read_to_string(stdout_file.path()).unwrap_or_default();
+        let stdout = read_stdout(&request, stdout_file.as_ref());
         let mut stderr = fs::read_to_string(stderr_file.path()).unwrap_or_default();
         if timed_out {
             if !stderr.trim().is_empty() {
@@ -123,6 +129,34 @@ impl CodexAdapter {
             command_display,
         })
     }
+}
+
+fn stdout_stdio(
+    request: &CodexRunRequest,
+    stdout_file: Option<&tempfile::NamedTempFile>,
+) -> Result<Stdio> {
+    if let Some(path) = &request.stdout_path {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        return Ok(Stdio::from(fs::File::create(path)?));
+    }
+    Ok(Stdio::from(
+        stdout_file
+            .expect("stdout temp file exists when stdout_path is unset")
+            .reopen()?,
+    ))
+}
+
+fn read_stdout(request: &CodexRunRequest, stdout_file: Option<&tempfile::NamedTempFile>) -> String {
+    if let Some(path) = &request.stdout_path {
+        return fs::read(path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).to_string())
+            .unwrap_or_default();
+    }
+    stdout_file
+        .and_then(|file| fs::read_to_string(file.path()).ok())
+        .unwrap_or_default()
 }
 
 fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {

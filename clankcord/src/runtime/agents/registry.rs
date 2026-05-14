@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
+use serde_json::{Value, json};
+
 use crate::adapters::codex::CodexAdapter;
 use crate::runtime::agents::AgentRole;
 use crate::runtime::timeline::isoformat_z;
@@ -52,6 +54,10 @@ impl AgentRuntime {
 
     pub fn session_snapshot(&self, key: &str) -> Option<AgentSession> {
         self.with_registry(|registry| registry.sessions.get(key).cloned())
+    }
+
+    pub fn sessions_snapshot(&self) -> Vec<AgentSession> {
+        self.with_registry(|registry| registry.sessions.values().cloned().collect())
     }
 
     pub fn task_session_key(guild_id: &str, voice_channel_id: &str) -> String {
@@ -148,12 +154,40 @@ pub struct AgentSession {
     pub last_error: String,
 }
 
+impl AgentSession {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "key": self.key,
+            "role": self.role,
+            "guild_id": self.guild_id,
+            "voice_channel_id": self.voice_channel_id,
+            "session_id": self.session_id,
+            "active_job_id": self.active_job_id,
+            "status": self.status.as_str(),
+            "invocation_count": self.invocation_count,
+            "created_at": self.created_at,
+            "last_used_at": self.last_used_at,
+            "last_error": self.last_error,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AgentSessionStatus {
     #[default]
     Idle,
     Running,
     Failed,
+}
+
+impl AgentSessionStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 fn normalize_key_part(value: &str) -> String {

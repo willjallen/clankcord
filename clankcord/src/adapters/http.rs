@@ -394,9 +394,14 @@ fn result(payload: Result<Value>) -> Response {
 }
 
 fn err(error: anyhow::Error) -> Response {
+    let causes = error
+        .chain()
+        .skip(1)
+        .map(|cause| cause.to_string())
+        .collect::<Vec<_>>();
     (
         StatusCode::BAD_REQUEST,
-        Json(json!({"ok": false, "error": error.to_string()})),
+        Json(json!({"ok": false, "error": error.to_string(), "causes": causes})),
     )
         .into_response()
 }

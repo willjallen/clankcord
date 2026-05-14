@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde_json::{Map, Value, json};
 
 use crate::Result;
-use crate::adapters::codex::codex_response_text;
+use crate::adapters::codex::{codex_response_text, extract_codex_usage};
 use crate::config::{durable_dir, non_empty, write_json};
 use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
@@ -134,6 +134,7 @@ impl Runtime {
         let packet_value = packet.to_json();
         write_json(&packet_path, &packet_value)?;
 
+        let prompt_path = job_dir.join(format!("{}.agent-prompt.txt", latest.id));
         let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
         let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
         let session_key = crate::runtime::AgentRuntime::task_session_key(
@@ -144,23 +145,35 @@ impl Runtime {
             .agents
             .session_snapshot(&session_key)
             .is_none_or(|session| session.session_id.trim().is_empty());
+        let prompt = build_agent_task_message_for_session(
+            &packet_path,
+            &packet_value,
+            include_master_prompt,
+        );
+        fs::write(&prompt_path, &prompt)?;
+        let mut prepared = latest.clone();
+        prepared.metadata.set_agent_task(AgentTaskMetadata {
+            packet_path: packet_path.display().to_string(),
+            prompt_path: prompt_path.display().to_string(),
+            result_path: result_path.display().to_string(),
+            raw_result_path: raw_result_path.display().to_string(),
+            preflight: Some(preflight.clone()),
+            ..AgentTaskMetadata::default()
+        });
+        self.timeline_store.update_job(&prepared)?;
         let invocation = self.agents.invoke(AgentInvocationRequest {
             role: AgentRole::Task,
             session_key,
             job_id: latest.id.clone(),
             guild_id: latest.guild_id.clone(),
             voice_channel_id: latest.voice_channel_id.clone(),
-            prompt: build_agent_task_message_for_session(
-                &packet_path,
-                &packet_value,
-                include_master_prompt,
-            ),
+            prompt,
             cwd: agent_task_cwd(),
             model: agent_task_model(),
             timeout: Duration::from_secs(agent_task_timeout_seconds()),
             env: agent_env,
             result_path: result_path.clone(),
-            raw_result_path,
+            raw_result_path: raw_result_path.clone(),
         })?;
 
         if !invocation.success {
@@ -186,7 +199,9 @@ impl Runtime {
         let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
         Ok(AgentTaskMetadata {
             packet_path: packet_path.display().to_string(),
+            prompt_path: prompt_path.display().to_string(),
             result_path: result_path.display().to_string(),
+            raw_result_path: raw_result_path.display().to_string(),
             dispatch_stdout_preview: preview(&response_text, 1000),
             dispatch_stderr: preview(&invocation.stderr, 1000),
             agent: AgentInvocationMetadata {
@@ -200,7 +215,8 @@ impl Runtime {
                 ),
                 provider: "codex".to_string(),
                 model: invocation.model,
-                usage: BinaryPayload::empty(),
+                usage: BinaryPayload::from_json(&extract_codex_usage(&invocation.stdout))
+                    .unwrap_or_else(|_| BinaryPayload::empty()),
             },
             preflight: Some(preflight),
             response_text,

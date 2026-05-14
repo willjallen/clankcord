@@ -142,7 +142,8 @@ main {
 }
 
 .layout,
-.jobs-layout {
+.jobs-layout,
+.agents-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
   gap: 16px;
@@ -151,6 +152,10 @@ main {
 
 .jobs-layout {
   grid-template-columns: minmax(0, 1fr) minmax(420px, 0.72fr);
+}
+
+.agents-layout {
+  grid-template-columns: minmax(0, 0.95fr) minmax(520px, 1.05fr);
 }
 
 .stack {
@@ -368,6 +373,12 @@ details summary {
   gap: 8px;
 }
 
+.artifact-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .kv {
   border: 1px solid var(--line-soft);
   border-radius: 6px;
@@ -387,6 +398,113 @@ details summary {
 .kv .v {
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.artifact-path {
+  color: var(--subtle);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.usage-bar {
+  height: 7px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-3);
+  overflow: hidden;
+  margin-bottom: 5px;
+}
+
+.usage-bar > div {
+  height: 100%;
+  background: var(--blue);
+}
+
+.usage-window-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+}
+
+.usage-window {
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.usage-window-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.codex-rate-limits {
+  border-top: 1px solid var(--line-soft);
+}
+
+.embedded-panel {
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+
+.embedded-panel h2 {
+  margin: 0;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.agent-detail {
+  max-height: calc(100vh - 190px);
+  overflow: auto;
+}
+
+.agent-conversation,
+.agent-trace {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  max-height: 360px;
+  overflow: auto;
+}
+
+.agent-trace {
+  max-height: 620px;
+}
+
+.agent-message {
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--panel-3);
+}
+
+.agent-message-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 8px 9px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.agent-message-body {
+  padding: 9px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.timeline-list.compact {
+  max-height: 320px;
 }
 
 .timeline-list {
@@ -471,7 +589,8 @@ details summary {
   }
 
   .layout,
-  .jobs-layout {
+  .jobs-layout,
+  .agents-layout {
     grid-template-columns: 1fr;
   }
 }
@@ -487,6 +606,14 @@ details summary {
   }
 
   .kv-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .artifact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-window-grid {
     grid-template-columns: 1fr;
   }
 

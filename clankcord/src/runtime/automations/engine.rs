@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use anyhow::Context;
 use serde_json::{Value, json};
 
 use crate::Result;
@@ -114,23 +115,34 @@ impl AutomationRunner {
     fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
         runtime.prune_expired_room_controls(true);
 
-        let mut active_jobs = runtime.timeline_store.list_jobs(None, None)?;
+        let mut active_jobs = runtime
+            .timeline_store
+            .list_jobs(None, None)
+            .context("loading jobs for automation evaluation")?;
         let mut created = Vec::new();
         for automation in &self.automations {
+            let automation_name = automation.name();
             let jobs = {
                 let context = AutomationContext::new(runtime, &active_jobs);
-                automation.evaluate(&context)?.into_jobs()
+                automation
+                    .evaluate(&context)
+                    .with_context(|| format!("evaluating automation {automation_name}"))?
+                    .into_jobs()
             };
             for job in jobs {
-                let job = runtime.timeline_store.create_job(job)?;
+                let job = runtime.timeline_store.create_job(job).with_context(|| {
+                    format!("creating job emitted by automation {automation_name}")
+                })?;
                 active_jobs.push(job.clone());
                 created.push(AutomationJob {
-                    automation: automation.name().to_string(),
+                    automation: automation_name.to_string(),
                     job,
                 });
             }
         }
-        for job in run_stored_automations(runtime, &mut active_jobs)? {
+        for job in run_stored_automations(runtime, &mut active_jobs)
+            .context("running stored automations")?
+        {
             created.push(job);
         }
         Ok(AutomationRun { created })
