@@ -14,6 +14,7 @@ impl Runtime {
         let mut results = Map::new();
         for kind in [
             JobKind::RuntimeControl,
+            JobKind::WakeActivation,
             JobKind::Command,
             JobKind::RoomAgentPlacement,
         ] {
@@ -31,11 +32,13 @@ impl Runtime {
             JobKind::AudioSegment,
             JobKind::RefineTranscript,
             JobKind::AgentTask,
+            JobKind::Response,
         ] {
             let result = match kind {
                 JobKind::AudioSegment => self.dispatch_audio_segment_jobs()?,
                 JobKind::RefineTranscript => self.dispatch_next_refine_transcript_job()?,
                 JobKind::AgentTask => self.dispatch_next_due_agent_task_job()?,
+                JobKind::Response => self.dispatch_next_due_response_job()?,
                 _ => unreachable!("blocking dispatcher kind list is fixed"),
             };
             results.insert(kind.as_str().to_string(), result);
@@ -76,6 +79,20 @@ impl Runtime {
             return Ok(json!({"dispatched": false, "reason": "no queued refinement jobs"}));
         };
         routes::execute_refine_transcript(self, &job)
+    }
+
+    pub(crate) fn dispatch_next_due_response_job(&self) -> Result<Value> {
+        let Some(job) = self.next_queued_job(JobKind::Response)? else {
+            return Ok(json!({"dispatched": false, "reason": "no queued response jobs"}));
+        };
+        let job_id = job.id.clone();
+        let mut running = job.clone();
+        running.mark_running();
+        self.timeline_store.update_job(&running)?;
+        match routes::execute_response(self, &running) {
+            Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+            Err(error) => self.fail_dispatched_job(&job_id, running, error),
+        }
     }
 
     fn dispatch_next_audio_segment_job(&self) -> Result<Value> {
@@ -126,11 +143,34 @@ impl Runtime {
     }
 
     pub(crate) fn next_queued_job(&self, kind: JobKind) -> Result<Option<Job>> {
+        let now = utc_now();
         Ok(self
             .timeline_store
             .list_jobs(None, Some(JobState::Queued))?
             .into_iter()
-            .find(|job| job.kind == kind && !job.id.trim().is_empty()))
+            .filter(|job| job.kind == kind && !job.id.trim().is_empty())
+            .filter(|job| {
+                job.next_run_at
+                    .as_deref()
+                    .and_then(parse_instant)
+                    .is_none_or(|next_run_at| next_run_at <= now)
+            })
+            .min_by(|left, right| {
+                let left_due = left
+                    .next_run_at
+                    .as_deref()
+                    .and_then(parse_instant)
+                    .or_else(|| parse_instant(&left.created_at));
+                let right_due = right
+                    .next_run_at
+                    .as_deref()
+                    .and_then(parse_instant)
+                    .or_else(|| parse_instant(&right.created_at));
+                left_due
+                    .cmp(&right_due)
+                    .then_with(|| left.created_at.cmp(&right.created_at))
+                    .then_with(|| left.id.cmp(&right.id))
+            }))
     }
 
     fn complete_dispatched_job(
@@ -144,7 +184,7 @@ impl Runtime {
             .get_job(job_id)
             .unwrap_or_else(|_| fallback_job.clone());
         latest.metadata.result = BinaryPayload::from_json(&result)?;
-        if latest.state != JobState::Waiting {
+        if latest.state != JobState::Waiting && latest.state != JobState::Queued {
             latest.mark_complete();
         }
         self.timeline_store.update_job(&latest)?;
@@ -227,7 +267,7 @@ impl Runtime {
 }
 
 fn audio_segment_dispatch_limit() -> usize {
-    std::env::var("CLAWCORD_AUDIO_SEGMENT_DISPATCH_LIMIT")
+    std::env::var("CLANKCORD_AUDIO_SEGMENT_DISPATCH_LIMIT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(8)

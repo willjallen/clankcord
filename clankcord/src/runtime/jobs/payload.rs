@@ -332,6 +332,69 @@ pub struct CommandRequest {
 }
 
 impl CommandRequest {
+    pub fn agent_task(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        request: impl Into<String>,
+    ) -> Self {
+        Self::new_internal(
+            CommandKind::AgentTask,
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            CommandArguments {
+                request: request.into(),
+                ..CommandArguments::default()
+            },
+        )
+    }
+
+    pub fn start_live_transcript(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        title: impl Into<String>,
+    ) -> Self {
+        Self::new_internal(
+            CommandKind::StartLiveTranscript,
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            CommandArguments {
+                request: title.into(),
+                publish: "discord".to_string(),
+                ..CommandArguments::default()
+            },
+        )
+    }
+
+    fn new_internal(
+        command_kind: CommandKind,
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        arguments: CommandArguments,
+    ) -> Self {
+        Self {
+            action: CommandAction::DispatchNow,
+            command_kind,
+            guild_id: guild_id.into(),
+            voice_channel_id: voice_channel_id.into(),
+            requested_by_user_id: requested_by_user_id.into(),
+            requested_by_speaker_label: String::new(),
+            target_room_id: String::new(),
+            target_voice_channel_id: String::new(),
+            acknowledgement_text: String::new(),
+            requires_confirmation: false,
+            approved_by_user_id: String::new(),
+            target_job_id: String::new(),
+            target_job_ids: Vec::new(),
+            arguments,
+            opaque: BinaryPayload::empty(),
+        }
+    }
+
     pub fn from_json(value: &Value) -> Result<Self> {
         if !value.is_object() {
             anyhow::bail!("command must be a JSON object at the boundary");
@@ -493,6 +556,237 @@ pub struct AudioSegmentPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WakeActivationPayload {
+    pub activation_id: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub voice_channel_name: String,
+    pub speaker_user_id: String,
+    pub speaker_label: String,
+    pub wake_event_id: String,
+    pub wake_started_at: String,
+    pub wake_ended_at: String,
+    pub latest_wake_event_id: String,
+    pub latest_wake_at: String,
+    pub lookback_seconds: i64,
+    pub min_post_seconds: i64,
+    pub speaker_idle_seconds: i64,
+    pub stt_flush_grace_seconds: i64,
+    pub max_window_seconds: i64,
+    pub additive_preempt_seconds: i64,
+    pub independent_after_seconds: i64,
+    pub amended_wake_event_ids: Vec<String>,
+    pub replacement_of_job_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseKind {
+    Message,
+    Question,
+}
+
+impl ResponseKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Message => "message",
+            Self::Question => "question",
+        }
+    }
+}
+
+impl FromStr for ResponseKind {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "" | "message" | "submit" => Ok(Self::Message),
+            "question" | "ask" => Ok(Self::Question),
+            value => anyhow::bail!("unknown response kind: {value}"),
+        }
+    }
+}
+
+impl Default for ResponseKind {
+    fn default() -> Self {
+        Self::Message
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ResponseSinkKind {
+    AgentChat,
+    Channel,
+    Dm,
+    Stdout,
+}
+
+impl ResponseSinkKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AgentChat => "agent_chat",
+            Self::Channel => "channel",
+            Self::Dm => "dm",
+            Self::Stdout => "stdout",
+        }
+    }
+}
+
+impl FromStr for ResponseSinkKind {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "" | "agent_chat" | "agent-chat" => Ok(Self::AgentChat),
+            "channel" => Ok(Self::Channel),
+            "dm" => Ok(Self::Dm),
+            "stdout" => Ok(Self::Stdout),
+            value if value.starts_with("dm:") => Ok(Self::Dm),
+            value if value.starts_with("channel:") => Ok(Self::Channel),
+            value => anyhow::bail!("unknown response sink: {value}"),
+        }
+    }
+}
+
+impl Default for ResponseSinkKind {
+    fn default() -> Self {
+        Self::AgentChat
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ResponseSink {
+    pub kind: ResponseSinkKind,
+    pub channel_id: String,
+    pub user_id: String,
+}
+
+impl ResponseSink {
+    pub fn from_json(value: Option<&Value>) -> Result<Self> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+        if let Some(raw) = value.as_str() {
+            return Self::from_string(raw);
+        }
+        let raw_kind = string_field(value, "kind");
+        let mut sink = Self {
+            kind: ResponseSinkKind::from_str(&raw_kind)?,
+            channel_id: string_field(value, "channel_id"),
+            user_id: string_field(value, "user_id"),
+        };
+        if sink.channel_id.is_empty() {
+            sink.channel_id = string_field(value, "channelId");
+        }
+        if sink.user_id.is_empty() {
+            sink.user_id = string_field(value, "userId");
+        }
+        Ok(sink)
+    }
+
+    pub fn from_string(raw: &str) -> Result<Self> {
+        let raw = raw.trim();
+        let mut sink = Self {
+            kind: ResponseSinkKind::from_str(raw)?,
+            ..Self::default()
+        };
+        if let Some(channel_id) = raw.strip_prefix("channel:") {
+            sink.channel_id = channel_id.trim().to_string();
+        } else if let Some(user_id) = raw.strip_prefix("dm:") {
+            sink.user_id = user_id.trim().to_string();
+        }
+        Ok(sink)
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = Map::new();
+        map.insert(
+            "kind".to_string(),
+            Value::String(self.kind.as_str().to_string()),
+        );
+        insert_non_empty(&mut map, "channel_id", &self.channel_id);
+        insert_non_empty(&mut map, "user_id", &self.user_id);
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponsePayload {
+    pub response_kind: ResponseKind,
+    pub sink: ResponseSink,
+    pub content: String,
+    pub source_job_id: String,
+    pub requested_by_user_id: String,
+    pub expects_reply: bool,
+    opaque: BinaryPayload,
+}
+
+impl ResponsePayload {
+    pub fn new(
+        response_kind: ResponseKind,
+        sink: ResponseSink,
+        content: impl Into<String>,
+        source_job_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        expects_reply: bool,
+    ) -> Self {
+        Self {
+            response_kind,
+            sink,
+            content: content.into(),
+            source_job_id: source_job_id.into(),
+            requested_by_user_id: requested_by_user_id.into(),
+            expects_reply,
+            opaque: BinaryPayload::empty(),
+        }
+    }
+
+    pub fn from_json(value: &Value) -> Result<Self> {
+        if !value.is_object() {
+            anyhow::bail!("response must be a JSON object at the boundary");
+        }
+        let response_kind = ResponseKind::from_str(&first_non_empty([
+            string_field(value, "response_kind"),
+            string_field(value, "kind"),
+        ]))?;
+        Ok(Self {
+            response_kind,
+            sink: ResponseSink::from_json(value.get("sink"))?,
+            content: string_field(value, "content"),
+            source_job_id: first_non_empty([
+                string_field(value, "source_job_id"),
+                string_field(value, "job_id"),
+                string_field(value, "job"),
+            ]),
+            requested_by_user_id: first_non_empty([
+                string_field(value, "requested_by_user_id"),
+                string_field(value, "user_id"),
+            ]),
+            expects_reply: truthy(
+                value.get("expects_reply"),
+                response_kind == ResponseKind::Question,
+            ),
+            opaque: BinaryPayload::from_json(value)?,
+        })
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = object_from_payload(&self.opaque);
+        map.insert(
+            "response_kind".to_string(),
+            Value::String(self.response_kind.as_str().to_string()),
+        );
+        map.insert("sink".to_string(), self.sink.to_json());
+        insert_non_empty(&mut map, "content", &self.content);
+        insert_non_empty(&mut map, "source_job_id", &self.source_job_id);
+        insert_non_empty(&mut map, "requested_by_user_id", &self.requested_by_user_id);
+        if self.expects_reply {
+            map.insert("expects_reply".to_string(), Value::Bool(true));
+        }
+        Value::Object(map)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
     pub command: CommandRequest,
 }
@@ -565,7 +859,9 @@ pub struct RuntimeControlPayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
+    WakeActivation(WakeActivationPayload),
     AgentTask(AgentTaskPayload),
+    Response(ResponsePayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
     Command(CommandPayload),
@@ -577,7 +873,9 @@ impl JobPayload {
     pub fn kind(&self) -> JobKind {
         match self {
             Self::AudioSegment(_) => JobKind::AudioSegment,
+            Self::WakeActivation(_) => JobKind::WakeActivation,
             Self::AgentTask(_) => JobKind::AgentTask,
+            Self::Response(_) => JobKind::Response,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
             Self::Command(_) => JobKind::Command,
@@ -589,7 +887,9 @@ impl JobPayload {
     pub fn command(&self) -> Option<&CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
+            Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
+            Self::Response(_) => None,
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::Command(payload) => Some(&payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -601,7 +901,9 @@ impl JobPayload {
     pub fn command_mut(&mut self) -> Option<&mut CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
+            Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
+            Self::Response(_) => None,
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::Command(payload) => Some(&mut payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -643,7 +945,30 @@ impl JobPayload {
                 "sample_width_bits": payload.sample_width_bits,
                 "post_processing": payload.post_processing,
             }),
+            Self::WakeActivation(payload) => json!({
+                "activation_id": payload.activation_id,
+                "guild_id": payload.guild_id,
+                "voice_channel_id": payload.voice_channel_id,
+                "voice_channel_name": payload.voice_channel_name,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "wake_event_id": payload.wake_event_id,
+                "wake_started_at": payload.wake_started_at,
+                "wake_ended_at": payload.wake_ended_at,
+                "latest_wake_event_id": payload.latest_wake_event_id,
+                "latest_wake_at": payload.latest_wake_at,
+                "lookback_seconds": payload.lookback_seconds,
+                "min_post_seconds": payload.min_post_seconds,
+                "speaker_idle_seconds": payload.speaker_idle_seconds,
+                "stt_flush_grace_seconds": payload.stt_flush_grace_seconds,
+                "max_window_seconds": payload.max_window_seconds,
+                "additive_preempt_seconds": payload.additive_preempt_seconds,
+                "independent_after_seconds": payload.independent_after_seconds,
+                "amended_wake_event_ids": payload.amended_wake_event_ids,
+                "replacement_of_job_ids": payload.replacement_of_job_ids,
+            }),
             Self::AgentTask(payload) => json!({"command": payload.command.to_json()}),
+            Self::Response(payload) => payload.to_json(),
             Self::RefineTranscript(payload) => json!({
                 "window_id": payload.window_id,
                 "publication_id": payload.publication_id,

@@ -1,4 +1,4 @@
-const rootPrefix = location.pathname.startsWith('/__clawcord/') ? '/__clawcord' : '';
+const rootPrefix = location.pathname.startsWith('/__clankcord/') ? '/__clankcord' : '';
 const state = {
   data: null,
   timer: null,

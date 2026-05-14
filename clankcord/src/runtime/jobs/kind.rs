@@ -8,7 +8,9 @@ use crate::Result;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum JobKind {
     AudioSegment,
+    WakeActivation,
     AgentTask,
+    Response,
     RefineTranscript,
     ConfirmationRequired,
     Command,
@@ -20,7 +22,9 @@ impl JobKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AudioSegment => "audio_segment",
+            Self::WakeActivation => "wake_activation",
             Self::AgentTask => "agent_task",
+            Self::Response => "response",
             Self::RefineTranscript => "refine_transcript",
             Self::ConfirmationRequired => "confirmation_required",
             Self::Command => "command",
@@ -46,7 +50,9 @@ impl FromStr for JobKind {
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
             "audio_segment" => Ok(Self::AudioSegment),
+            "wake_activation" => Ok(Self::WakeActivation),
             "agent_task" => Ok(Self::AgentTask),
+            "response" => Ok(Self::Response),
             "refine_transcript" => Ok(Self::RefineTranscript),
             "confirmation_required" => Ok(Self::ConfirmationRequired),
             "command" => Ok(Self::Command),

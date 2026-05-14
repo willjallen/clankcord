@@ -52,7 +52,7 @@ impl WakeDetectionResult {
 }
 
 pub fn wake_url() -> Result<String> {
-    let base_url = env::var("CLAWCORD_WAKE_BASE_URL")
+    let base_url = env::var("CLANKCORD_WAKE_BASE_URL")
         .ok()
         .map(|value| value.trim().trim_end_matches('/').to_string())
         .filter(|value| !value.is_empty())
@@ -65,7 +65,7 @@ pub fn wake_url() -> Result<String> {
 }
 
 pub fn wake_timeout_seconds() -> u64 {
-    env::var("CLAWCORD_WAKE_TIMEOUT_SECONDS")
+    env::var("CLANKCORD_WAKE_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(30)
@@ -73,7 +73,7 @@ pub fn wake_timeout_seconds() -> u64 {
 }
 
 pub fn wake_api_key() -> String {
-    env::var("CLAWCORD_WAKE_API_KEY")
+    env::var("CLANKCORD_WAKE_API_KEY")
         .unwrap_or_default()
         .trim()
         .to_string()

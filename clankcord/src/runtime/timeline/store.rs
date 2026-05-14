@@ -107,18 +107,18 @@ pub struct TimelineStore {
 
 impl TimelineStore {
     pub fn new(root: Option<PathBuf>) -> Result<Self> {
-        let configured = std::env::var("CLAWCORD_VOICE_MEMORY_ROOT")
+        let configured = std::env::var("CLANKCORD_VOICE_MEMORY_ROOT")
             .or_else(|_| std::env::var("VOICE_MEMORY_ROOT"))
             .unwrap_or_default();
         let root = root.unwrap_or_else(|| {
             if !configured.trim().is_empty() {
                 PathBuf::from(configured)
             } else {
-                durable_dir().join("clawcord").join("voice")
+                durable_dir().join("clankcord").join("voice")
             }
         });
         fs::create_dir_all(&root)?;
-        let db_path = std::env::var("CLAWCORD_VOICE_SQLITE_PATH")
+        let db_path = std::env::var("CLANKCORD_VOICE_SQLITE_PATH")
             .or_else(|_| std::env::var("VOICE_MEMORY_SQLITE_PATH"))
             .ok()
             .filter(|value| !value.trim().is_empty())
@@ -272,6 +272,20 @@ impl TimelineStore {
               payload_blob BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS automations (
+              automation_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT '',
+              idempotency_key TEXT NOT NULL DEFAULT '',
+              created_at_ms INTEGER,
+              updated_at_ms INTEGER NOT NULL,
+              expires_at_ms INTEGER,
+              fire_count INTEGER NOT NULL DEFAULT 0,
+              max_fires INTEGER,
+              payload_blob BLOB NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_timeline_room_time
               ON timeline_events(guild_id, voice_channel_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_room_kind_time
@@ -292,6 +306,10 @@ impl TimelineStore {
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_jobs_state_next
               ON transcript_jobs(state, next_run_at_ms, updated_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_automations_scope_state
+              ON automations(guild_id, voice_channel_id, state, expires_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_automations_idempotency
+              ON automations(guild_id, voice_channel_id, idempotency_key, state);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
               ON publications(guild_id, voice_channel_id, state, created_at_ms);
             "#,

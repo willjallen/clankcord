@@ -22,6 +22,7 @@ impl Runtime {
             sessions: BTreeMap::new(),
             bots: BTreeMap::new(),
             agents: AgentRuntime::default(),
+            automations: BTreeMap::new(),
             timeline_store: TimelineStore::new(None)?,
             auto_join_enabled: true,
             manual_leave_cooldown_seconds: 20 * 60,
@@ -144,6 +145,7 @@ impl Runtime {
         self.control_config = ControlConfig::from_json(load_control_config());
         self.load_room_controls();
         self.load_status_snapshot();
+        self.load_automation_registry()?;
         Ok(())
     }
 }

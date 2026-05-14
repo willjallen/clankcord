@@ -21,14 +21,15 @@
 - `src/runtime/views/` owns rendered read APIs for HTTP/CLI/agent tools. Views can read runtime/timeline state, but they are not canonical state.
 - `src/runtime/rooms/`, `src/runtime/sessions/`, `src/runtime/bots/`, and `src/runtime/runtime_config.rs` own their domain data and helpers.
 - `src/runtime/agents/` owns generic Codex invocation infrastructure. Interaction routing and agent-task execution may call it, but core must not know Codex exists.
-- CLI code has one parser surface at the root `clawcord` command. It is an agent tool surface organized by capability: `messages`, `transcripts`, `timeline`, `context`, `participants`, `jobs`, and `rooms`.
-- State-changing CLI commands lower to typed `router_command` jobs; read commands query rendered timeline/runtime views. Commands that need terminal output should use a dependent stdout sink job instead of doing runtime work inside command modules.
-- `clawcord start` starts the persistent runtime process: HTTP API, Discord listener, room management, job manager, maintainer loop, and live capture loops.
+- CLI code has one parser surface at the root `clankcord` command. It is an agent tool surface organized by capability: `messages`, `transcripts`, `timeline`, `context`, `participants`, `jobs`, and `rooms`.
+- State-changing CLI commands lower to typed command jobs; read commands query rendered timeline/runtime views. Commands that need terminal output should use a dependent stdout sink job instead of doing runtime work inside command modules.
+- `clankcord start` starts the persistent runtime process: HTTP API, Discord listener, room management, job manager, maintainer loop, and live capture loops.
 - The persistent process is a runtime service. It owns runtime construction, adapter construction, the async job intake queue, live capture cycles, and maintainer cycles.
 - HTTP is a bound adapter over a `RuntimeHandle`. It may parse wire JSON, render HTTP responses, submit jobs, and serve read views. It must not construct the runtime, spawn core lifetime loops, or expose duplicate mutation endpoints that bypass runtime intake.
 - Runtime automations are first-class runtime components with a shared typed context and typed output. They are closed over runtime-owned state: timeline, jobs, config, and runtime indexes derived from those sources. Their only mutation is emitting canonical `Job` objects.
 - Runtime automations live under `src/runtime/automations/`; do not add one-off automation files directly under `src/runtime/`.
 - If automation needs external information, it emits a job to fetch it. The handler may call an adapter, and the result returns through ordinary job state and timeline events before a later automation pass can use it.
+- Detailed agent and programmable automation planning lives in `docs/agent_plan.md`.
 
 ## Adapters
 
@@ -38,7 +39,7 @@
 - Effect adapters receive typed request objects and return typed result objects. Do not pass `&mut Runtime` into an adapter.
 - Adapters must not own job routing, retries, job state transitions, timeline authority, confirmation flow, or follow-up job creation.
 - Adapters are not process hosts. They are attached to the runtime service and can be replaced without changing runtime lifetime rules.
-- Codex process integration lives under `src/adapters/codex/`. It is a small CLI/process boundary: build command arguments, pass prompts, capture stdout/stderr/final text, enforce timeouts, and return typed process results. It must not know Clawcord jobs, Discord, timeline writes, retries, or routing.
+- Codex process integration lives under `src/adapters/codex/`. It is a small CLI/process boundary: build command arguments, pass prompts, capture stdout/stderr/final text, enforce timeouts, and return typed process results. It must not know Clankcord jobs, Discord, timeline writes, retries, or routing.
 - Discord voice implementation lives under `src/adapters/discord/voice/`. Songbird wiring, voice-state tracking, packet capture, per-user buffering, silence handling, WAV artifact creation, and Discord voice connection mechanics belong there.
 - Audio segment jobs must reference fully processed per-speaker audio artifacts. They must not carry raw PCM. By the time Discord voice submits an `audio_segment` job, the WAV file exists, has a checksum, and is ready for STT.
 - STT is an adapter under `src/adapters/`, because it talks to an external model/provider. Runtime domain code may call the STT adapter while fulfilling an audio-segment job.
@@ -71,11 +72,11 @@
 - Do not add new job runners under adapters, command modules, or feature folders. Add a job kind, a typed payload, and a `runtime/domain` executor.
 - Examples:
   - Voice audio arrives through `src/adapters/discord/voice` as a typed `audio_segment` job that references a ready WAV artifact.
-  - An audio segment job may write transcript events and emit router-command jobs, agent-task jobs, response jobs, or nothing.
+  - An audio segment job may write transcript events and emit command jobs, agent-task jobs, response jobs, or nothing.
   - A later detection job may be introduced if routing grows enough to need a separate job boundary, but do not add it before it removes real complexity.
-  - A router command job may complete a built-in control directly or create an agent-task/refinement child job.
+  - A command job may complete a built-in control directly or create an agent-task/refinement child job.
   - Room agent placement automation may create a room-agent placement job; that handler calls the voice adapter to join or leave.
-  - A confirmation job creates a router command child after approval.
+  - A confirmation job creates a command child after approval.
   - An agent-task job may call the Codex agent subsystem and then the Discord adapter to publish its result.
 
 ## Timeline

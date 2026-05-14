@@ -200,6 +200,25 @@ impl TimelineStore {
             .map_err(Into::into)
     }
 
+    pub fn get_event(&self, event_id: &str) -> Result<Value> {
+        let db = self.connect()?;
+        let payload = db.query_row(
+            r#"
+            SELECT e.*,
+                   r.guild_slug AS room_guild_slug,
+                   r.voice_channel_name AS room_voice_channel_name,
+                   r.voice_channel_slug AS room_voice_channel_slug
+            FROM timeline_events e
+            LEFT JOIN voice_rooms r
+              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
+            WHERE e.event_id = ?1
+            "#,
+            params![event_id],
+            timeline_event_payload,
+        )?;
+        Ok(payload)
+    }
+
     pub fn speech_event_for_segment(
         &self,
         guild_id: &str,

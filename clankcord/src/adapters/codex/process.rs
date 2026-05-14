@@ -20,7 +20,7 @@ pub(crate) struct CodexAdapter {
 impl Default for CodexAdapter {
     fn default() -> Self {
         Self {
-            executable: env::var("CLAWCORD_CODEX_BIN")
+            executable: env::var("CLANKCORD_CODEX_BIN")
                 .or_else(|_| env::var("CODEX_BIN"))
                 .unwrap_or_else(|_| "codex".to_string()),
         }
@@ -139,16 +139,16 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
         args.push(OsString::from("-m"));
         args.push(OsString::from(model));
     }
-    if let Some(sandbox) = env_value("CLAWCORD_CODEX_SANDBOX") {
+    if let Some(sandbox) = env_value("CLANKCORD_CODEX_SANDBOX") {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
     }
-    if truthy_env("CLAWCORD_CODEX_BYPASS_SANDBOX") {
+    if truthy_env("CLANKCORD_CODEX_BYPASS_SANDBOX") {
         args.push(OsString::from("--dangerously-bypass-approvals-and-sandbox"));
     } else {
         args.push(OsString::from("-a"));
         args.push(OsString::from(
-            env_value("CLAWCORD_CODEX_APPROVAL_POLICY").unwrap_or_else(|| "never".to_string()),
+            env_value("CLANKCORD_CODEX_APPROVAL_POLICY").unwrap_or_else(|| "never".to_string()),
         ));
     }
 

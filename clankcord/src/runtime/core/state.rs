@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 
+use crate::runtime::automations::AutomationRecord;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{
     AgentRuntime, ControlConfig, GuildConfig, RoomConfig, RoomControl, RuntimeBotStatus,
@@ -18,6 +19,7 @@ pub struct Runtime {
     pub sessions: BTreeMap<String, RuntimeSessionStatus>,
     pub bots: BTreeMap<String, RuntimeBotStatus>,
     pub agents: AgentRuntime,
+    pub automations: BTreeMap<String, AutomationRecord>,
     pub timeline_store: TimelineStore,
     pub auto_join_enabled: bool,
     pub manual_leave_cooldown_seconds: i64,

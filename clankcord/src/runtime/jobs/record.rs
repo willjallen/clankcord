@@ -12,8 +12,8 @@ use super::util::{
 use super::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
     ConfirmationContext, ConfirmationRequiredPayload, JobKind, JobPayload, JobState,
-    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload,
+    RefineTranscriptPayload, ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, WakeActivationPayload,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -399,6 +399,31 @@ impl Job {
         )
     }
 
+    pub fn wake_activation(payload: WakeActivationPayload) -> Self {
+        Self::new(
+            payload.guild_id.clone(),
+            payload.voice_channel_id.clone(),
+            payload.speaker_user_id.clone(),
+            JobState::Queued,
+            JobPayload::WakeActivation(payload),
+        )
+    }
+
+    pub fn response(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: ResponsePayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::Response(payload),
+        )
+    }
+
     pub fn audio_segment(payload: AudioSegmentPayload) -> Self {
         Self::new(
             payload.guild_id.clone(),
@@ -605,6 +630,27 @@ impl Job {
     pub fn audio_segment_payload(&self) -> Option<&AudioSegmentPayload> {
         match &self.payload {
             JobPayload::AudioSegment(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn wake_activation_payload(&self) -> Option<&WakeActivationPayload> {
+        match &self.payload {
+            JobPayload::WakeActivation(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn wake_activation_payload_mut(&mut self) -> Option<&mut WakeActivationPayload> {
+        match &mut self.payload {
+            JobPayload::WakeActivation(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn response_payload(&self) -> Option<&ResponsePayload> {
+        match &self.payload {
+            JobPayload::Response(payload) => Some(payload),
             _ => None,
         }
     }

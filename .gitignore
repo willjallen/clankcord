@@ -6,6 +6,7 @@ target/
 .env.*
 !.env.example
 *.local
+tokens/
 
 # Runtime state and generated data
 *.db

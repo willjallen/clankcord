@@ -9,7 +9,7 @@ use crate::runtime::Job;
 use crate::runtime::timeline::parse_duration;
 
 pub fn log(message: &str) {
-    eprintln!("[clawcord-voice] {message}");
+    eprintln!("[clankcord-voice] {message}");
 }
 
 pub fn parse_duration_seconds(value: Option<&Value>, fallback: i64) -> i64 {
@@ -52,7 +52,7 @@ pub fn duration_to_seconds(raw: &str) -> i64 {
 }
 
 pub fn agent_task_timeout_seconds() -> u64 {
-    env::var("CLAWCORD_AGENT_TASK_TIMEOUT_SECONDS")
+    env::var("CLANKCORD_AGENT_TASK_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(240)

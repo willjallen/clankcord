@@ -227,7 +227,7 @@ fn spawn_gateway_task(
 
 fn raw_client_token_lines() -> Result<Vec<String>> {
     let mut lines = Vec::new();
-    if let Ok(value) = env::var("CLAWCORD_BOT_TOKENS") {
+    if let Ok(value) = env::var("CLANKCORD_BOT_TOKENS") {
         lines.extend(value.lines().map(str::to_string));
     }
     let path = tokens_path();

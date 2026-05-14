@@ -1,5 +1,5 @@
 pub mod agents;
-pub(crate) mod automations;
+pub mod automations;
 pub mod bots;
 pub(crate) mod core;
 pub mod domain;
@@ -19,8 +19,9 @@ pub use core::Runtime;
 pub use jobs::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    Job, JobKind, JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
+    Job, JobKind, JobPayload, JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload,
+    ResponseSink, ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, WakeActivationPayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use runtime_config::{ControlConfig, GuildConfig};

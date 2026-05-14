@@ -7,8 +7,9 @@ pub use kind::{JobKind, JobState};
 pub use payload::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    JobPayload, OpaqueValue, RefineTranscriptPayload, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
+    JobPayload, OpaqueValue, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSink,
+    ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlPayload, WakeActivationPayload,
 };
 pub use record::{Job, JobMetadata};
 

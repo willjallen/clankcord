@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
@@ -9,8 +10,8 @@ use crate::errors::discord_tool_error;
 use crate::runtime::duration_to_seconds;
 
 #[derive(Debug, Parser)]
-#[command(name = "clawcord")]
-#[command(about = "Agent CLI surface for Clawcord memory, jobs, and Discord operations.")]
+#[command(name = "clankcord")]
+#[command(about = "Agent CLI surface for Clankcord memory, jobs, and Discord operations.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -51,6 +52,14 @@ enum Command {
     Jobs {
         #[command(subcommand)]
         command: Option<JobsCommand>,
+    },
+    Responses {
+        #[command(subcommand)]
+        command: ResponsesCommand,
+    },
+    Automations {
+        #[command(subcommand)]
+        command: AutomationsCommand,
     },
     Confirmations {
         #[command(subcommand)]
@@ -109,6 +118,22 @@ enum JobsCommand {
     Get(JobIdArg),
     Retry(JobIdArg),
     RunDue,
+}
+
+#[derive(Debug, Subcommand)]
+enum ResponsesCommand {
+    Submit(ResponseSubmitArgs),
+    Ask(ResponseSubmitArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AutomationsCommand {
+    Create(AutomationSpecArgs),
+    Validate(AutomationSpecArgs),
+    DryRun(AutomationSpecArgs),
+    List(AutomationListArgs),
+    Get(AutomationIdArg),
+    Cancel(AutomationIdArg),
 }
 
 #[derive(Debug, Subcommand)]
@@ -292,6 +317,47 @@ struct JobIdArg {
     job_id: String,
 }
 
+#[derive(Debug, ClapArgs, Default)]
+struct ResponseSubmitArgs {
+    #[arg(long)]
+    job: String,
+    #[arg(long, default_value = "agent-chat")]
+    sink: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    requested_by_user_id: Option<String>,
+    #[arg(long)]
+    content: Option<String>,
+    #[arg(long)]
+    stdin: bool,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct AutomationSpecArgs {
+    #[arg(long)]
+    content: Option<String>,
+    #[arg(long)]
+    stdin: bool,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct AutomationListArgs {
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    state: Option<String>,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AutomationIdArg {
+    automation_id: String,
+}
+
 #[derive(Debug, ClapArgs)]
 struct ConfirmationApproveArgs {
     job_id: String,
@@ -346,7 +412,7 @@ pub fn main(argv: Vec<String>) -> i32 {
 }
 
 pub fn run(argv: Vec<String>) -> Result<i32> {
-    match Cli::try_parse_from(std::iter::once("clawcord".to_string()).chain(argv)) {
+    match Cli::try_parse_from(std::iter::once("clankcord".to_string()).chain(argv)) {
         Ok(cli) => run_cli(cli),
         Err(error) => {
             let _ = error.print();
@@ -413,6 +479,32 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 JobsCommand::RunDue => api_emit("POST", "/v1/voice/jobs/run-due", None, None),
             }
         }
+        Command::Responses { command } => match command {
+            ResponsesCommand::Submit(args) => response_submit(args, "message"),
+            ResponsesCommand::Ask(args) => response_submit(args, "question"),
+        },
+        Command::Automations { command } => match command {
+            AutomationsCommand::Create(args) => automation_spec(args, "/v1/voice/automations"),
+            AutomationsCommand::Validate(args) => {
+                automation_spec(args, "/v1/voice/automations/validate")
+            }
+            AutomationsCommand::DryRun(args) => {
+                automation_spec(args, "/v1/voice/automations/dry-run")
+            }
+            AutomationsCommand::List(args) => automations_list(args),
+            AutomationsCommand::Get(args) => api_emit(
+                "GET",
+                &format!("/v1/voice/automations/{}", args.automation_id),
+                None,
+                None,
+            ),
+            AutomationsCommand::Cancel(args) => api_emit(
+                "POST",
+                &format!("/v1/voice/automations/{}/cancel", args.automation_id),
+                None,
+                None,
+            ),
+        },
         Command::Confirmations { command } => match command {
             ConfirmationsCommand::Approve(args) => confirmation_approve(args),
             ConfirmationsCommand::Cancel(args) => confirmation_cancel(args),
@@ -593,6 +685,62 @@ fn jobs_list(args: JobsListArgs) -> Result<i32> {
     )
 }
 
+fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32> {
+    let content = if args.stdin {
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input)?;
+        input
+    } else {
+        args.content.unwrap_or_default()
+    };
+    api_emit(
+        "POST",
+        "/v1/voice/responses",
+        Some(json!({
+            "response_kind": response_kind,
+            "source_job_id": args.job,
+            "sink": args.sink,
+            "guild_id": args.guild.unwrap_or_default(),
+            "voice_channel_id": args.channel.unwrap_or_default(),
+            "requested_by_user_id": args.requested_by_user_id.unwrap_or_default(),
+            "content": content,
+            "expects_reply": response_kind == "question",
+        })),
+        None,
+    )
+}
+
+fn automation_spec(args: AutomationSpecArgs, path: &str) -> Result<i32> {
+    let content = read_cli_payload(args.stdin, args.content)?;
+    let spec = serde_json::from_str::<Value>(&content)?;
+    api_emit("POST", path, Some(spec), None)
+}
+
+fn automations_list(args: AutomationListArgs) -> Result<i32> {
+    api_emit(
+        "GET",
+        "/v1/voice/automations",
+        None,
+        Some(json!({
+            "guild": args.guild,
+            "channel": args.channel,
+            "state": args.state,
+        })),
+    )
+}
+
+fn read_cli_payload(stdin: bool, content: Option<String>) -> Result<String> {
+    if stdin {
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input)?;
+        return Ok(input);
+    }
+    let Some(content) = content else {
+        anyhow::bail!("provide --stdin or --content");
+    };
+    Ok(content)
+}
+
 fn confirmation_approve(args: ConfirmationApproveArgs) -> Result<i32> {
     api_emit(
         "POST",
@@ -679,14 +827,14 @@ fn submit_command(
 }
 
 fn api_base_url() -> String {
-    std::env::var("CLAWCORD_API_BASE_URL")
+    std::env::var("CLANKCORD_API_BASE_URL")
         .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string())
         .trim_end_matches('/')
         .to_string()
 }
 
 fn api_timeout_seconds() -> u64 {
-    std::env::var("CLAWCORD_API_TIMEOUT_SECONDS")
+    std::env::var("CLANKCORD_API_TIMEOUT_SECONDS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(60)
@@ -721,7 +869,7 @@ fn api_request(
     if !status.is_success() {
         let detail = text.split_whitespace().collect::<Vec<_>>().join(" ");
         return Err(discord_tool_error(format!(
-            "clawcord runtime API {method} {path} failed ({}): {}",
+            "clankcord runtime API {method} {path} failed ({}): {}",
             status.as_u16(),
             detail.chars().take(500).collect::<String>()
         )));

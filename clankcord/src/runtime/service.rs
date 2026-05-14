@@ -307,7 +307,7 @@ async fn sync_voice_adapter_state(
 }
 
 fn maintainer_interval() -> Duration {
-    let seconds = std::env::var("CLAWCORD_MAINTAINER_INTERVAL_SECONDS")
+    let seconds = std::env::var("CLANKCORD_MAINTAINER_INTERVAL_SECONDS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
         .unwrap_or(DEFAULT_MAINTAINER_INTERVAL_SECONDS)
@@ -349,11 +349,11 @@ fn http_addr() -> Result<SocketAddr> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let host = std::env::var("CLAWCORD_API_HOST")
+    let host = std::env::var("CLANKCORD_API_HOST")
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| string_from_map(&api_config, "host", "0.0.0.0"));
-    let port = std::env::var("CLAWCORD_API_PORT")
+    let port = std::env::var("CLANKCORD_API_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or_else(|| {

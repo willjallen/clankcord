@@ -21,18 +21,19 @@ pub const MESSAGE_CHUNK_LIMIT: usize = 1800;
 
 pub fn durable_dir() -> PathBuf {
     PathBuf::from(
-        env::var("CLAWCORD_DURABLE_DIR").unwrap_or_else(|_| "/clawcord/durable".to_string()),
+        env::var("CLANKCORD_DURABLE_DIR").unwrap_or_else(|_| "/clankcord/durable".to_string()),
     )
 }
 
 pub fn state_dir() -> PathBuf {
     PathBuf::from(
-        env::var("CLAWCORD_STATE_DIR").unwrap_or_else(|_| "/clawcord/state/voice-pool".to_string()),
+        env::var("CLANKCORD_STATE_DIR")
+            .unwrap_or_else(|_| "/clankcord/state/voice-pool".to_string()),
     )
 }
 
 pub fn config_path() -> PathBuf {
-    PathBuf::from(env::var("CLAWCORD_CONFIG_PATH").unwrap_or_else(|_| {
+    PathBuf::from(env::var("CLANKCORD_CONFIG_PATH").unwrap_or_else(|_| {
         durable_dir()
             .join("config")
             .join("voice-pool.json")
@@ -68,21 +69,21 @@ pub fn summary_root() -> PathBuf {
 
 pub fn publish_state_path() -> PathBuf {
     PathBuf::from(
-        env::var("CLAWCORD_DISCORD_PUBLISH_STATE_PATH")
-            .unwrap_or_else(|_| "/clawcord/state/discord-sync/state.json".to_string()),
+        env::var("CLANKCORD_DISCORD_PUBLISH_STATE_PATH")
+            .unwrap_or_else(|_| "/clankcord/state/discord-sync/state.json".to_string()),
     )
 }
 
 pub fn tokens_path() -> PathBuf {
     PathBuf::from(
-        env::var("CLAWCORD_BOT_TOKENS_PATH")
+        env::var("CLANKCORD_BOT_TOKENS_PATH")
             .unwrap_or_else(|_| state_dir().join("bot_tokens.txt").display().to_string()),
     )
 }
 
 pub fn room_controls_path() -> PathBuf {
     PathBuf::from(
-        env::var("CLAWCORD_ROOM_CONTROLS_PATH")
+        env::var("CLANKCORD_ROOM_CONTROLS_PATH")
             .unwrap_or_else(|_| state_dir().join("room-controls.json").display().to_string()),
     )
 }
@@ -124,7 +125,7 @@ pub fn slugify(value: &str) -> String {
 }
 
 pub fn local_tz() -> Tz {
-    env::var("CLAWCORD_TZ")
+    env::var("CLANKCORD_TZ")
         .unwrap_or_else(|_| "UTC".to_string())
         .parse::<Tz>()
         .unwrap_or(chrono_tz::UTC)
@@ -394,16 +395,16 @@ pub fn derive_stt_base_url(ollama_base_url: &str) -> String {
 }
 
 pub fn load_stt_base_url() -> Result<String> {
-    let explicit = env::var("CLAWCORD_STT_BASE_URL").unwrap_or_default();
+    let explicit = env::var("CLANKCORD_STT_BASE_URL").unwrap_or_default();
     let explicit = explicit.trim().trim_end_matches('/').to_string();
     if !explicit.is_empty() {
         return Ok(explicit);
     }
-    let derived = derive_stt_base_url(&env::var("CLAWCORD_OLLAMA_BASE_URL").unwrap_or_default());
+    let derived = derive_stt_base_url(&env::var("CLANKCORD_OLLAMA_BASE_URL").unwrap_or_default());
     if !derived.is_empty() {
         return Ok(derived);
     }
-    Err(discord_tool_error("CLAWCORD_STT_BASE_URL is not set"))
+    Err(discord_tool_error("CLANKCORD_STT_BASE_URL is not set"))
 }
 
 pub fn has_stt_configuration() -> bool {

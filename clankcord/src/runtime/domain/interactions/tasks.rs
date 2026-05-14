@@ -9,14 +9,11 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::adapters::codex::codex_response_text;
-use crate::adapters::discord::api::send_message;
-use crate::config::{
-    MESSAGE_CHUNK_LIMIT, durable_dir, non_empty, split_message_chunks, string_field, write_json,
-};
+use crate::config::{durable_dir, non_empty, write_json};
 use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
-    BinaryPayload, DiscordPostMetadata, DiscordPostedMessageMetadata,
+    BinaryPayload,
 };
 use crate::runtime::timeline::isoformat_z;
 use crate::runtime::util::{
@@ -70,6 +67,8 @@ struct AgentTaskTools {
     participant_trace: String,
     search_messages: String,
     read_messages: String,
+    submit_response: String,
+    create_automation: String,
 }
 
 impl Runtime {
@@ -98,13 +97,12 @@ impl Runtime {
 
         match self.dispatch_agent_task(&running) {
             Ok(dispatch_result) => {
-                match self.complete_agent_task_job(job_id.clone(), running.clone(), dispatch_result)
-                {
+                match self.complete_agent_task_job(job_id.clone(), dispatch_result) {
                     Ok(value) => Ok(value),
-                    Err(error) => self.fail_agent_task_job(job_id, running, attempts, error),
+                    Err(error) => self.fail_agent_task_job(job_id, attempts, error),
                 }
             }
-            Err(error) => self.fail_agent_task_job(job_id, running, attempts, error),
+            Err(error) => self.fail_agent_task_job(job_id, attempts, error),
         }
     }
 
@@ -138,16 +136,25 @@ impl Runtime {
 
         let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
         let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
+        let session_key = crate::runtime::AgentRuntime::task_session_key(
+            &latest.guild_id,
+            &latest.voice_channel_id,
+        );
+        let include_master_prompt = self
+            .agents
+            .session_snapshot(&session_key)
+            .is_none_or(|session| session.session_id.trim().is_empty());
         let invocation = self.agents.invoke(AgentInvocationRequest {
             role: AgentRole::Task,
-            session_key: crate::runtime::AgentRuntime::task_session_key(
-                &latest.guild_id,
-                &latest.voice_channel_id,
-            ),
+            session_key,
             job_id: latest.id.clone(),
             guild_id: latest.guild_id.clone(),
             voice_channel_id: latest.voice_channel_id.clone(),
-            prompt: build_agent_task_message(&packet_path, &packet_value),
+            prompt: build_agent_task_message_for_session(
+                &packet_path,
+                &packet_value,
+                include_master_prompt,
+            ),
             cwd: agent_task_cwd(),
             model: agent_task_model(),
             timeout: Duration::from_secs(agent_task_timeout_seconds()),
@@ -205,13 +212,9 @@ impl Runtime {
     fn complete_agent_task_job(
         &self,
         job_id: String,
-        fallback_job: Job,
         dispatch_result: AgentTaskMetadata,
     ) -> Result<Value> {
-        let mut latest = self
-            .timeline_store
-            .get_job(&job_id)
-            .unwrap_or_else(|_| fallback_job.clone());
+        let mut latest = self.timeline_store.get_job(&job_id)?;
         latest.metadata.set_agent_task(dispatch_result);
         if job_cancel_requested(&latest) {
             let cancelled_at = non_empty(
@@ -236,34 +239,58 @@ impl Runtime {
             )?;
             return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
         }
+        let submitted_responses = self.response_jobs_for_source(&latest.id)?;
+        if !submitted_responses.is_empty() {
+            latest.mark_complete();
+            self.timeline_store.update_job(&latest)?;
+            return Ok(json!({
+                "dispatched": true,
+                "job": latest.to_value(),
+                "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+            }));
+        }
         let response_text = latest
             .metadata
             .agent_task()
             .map(|task| task.response_text.clone())
             .unwrap_or_default();
-        if !response_text.trim().is_empty() {
-            let post_result = self.post_agent_task_result(&latest, &response_text)?;
-            latest.metadata.agent_task_mut().discord_post = Some(post_result);
+        let response_text = response_text.trim();
+        if response_text == "RESPONSE_SUBMITTED" {
+            anyhow::bail!(
+                "agent task reported RESPONSE_SUBMITTED but no response job exists for source job {job_id}"
+            );
         }
-        latest.mark_complete();
-        self.timeline_store.update_job(&latest)?;
-        Ok(json!({"dispatched": true, "job": latest.to_value()}))
+        if response_text.is_empty() {
+            anyhow::bail!("agent task completed without submitting a response job");
+        }
+        anyhow::bail!(
+            "agent task returned final text instead of submitting a response job through `clankcord responses submit`"
+        )
+    }
+
+    fn response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
+        Ok(self
+            .timeline_store
+            .list_jobs(None, None)?
+            .into_iter()
+            .filter(|job| job.kind == JobKind::Response)
+            .filter(|job| {
+                job.response_payload()
+                    .is_some_and(|payload| payload.source_job_id == source_job_id)
+            })
+            .collect())
     }
 
     fn fail_agent_task_job(
         &self,
         job_id: String,
-        fallback_job: Job,
         attempts: i64,
         error: anyhow::Error,
     ) -> Result<Value> {
         let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
         let is_infrastructure_error = infrastructure_error.is_some();
         let error_text = error.to_string();
-        let mut latest = self
-            .timeline_store
-            .get_job(&job_id)
-            .unwrap_or_else(|_| fallback_job.clone());
+        let mut latest = self.timeline_store.get_job(&job_id)?;
         if job_cancel_requested(&latest) {
             let cancelled_at = non_empty(
                 latest.cancelled_at.clone().unwrap_or_default(),
@@ -297,52 +324,32 @@ impl Runtime {
         ));
         Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
     }
-
-    pub(crate) fn post_agent_task_result(
-        &self,
-        job: &Job,
-        response_text: &str,
-    ) -> Result<DiscordPostMetadata> {
-        let channel_id = self.control_config.bots_channel_id.clone();
-        if channel_id.is_empty() {
-            anyhow::bail!("botsChannelId is not configured");
-        }
-        let requested_by = job.requested_by_user_id.clone();
-        let content = if requested_by.is_empty() {
-            response_text.trim().to_string()
-        } else {
-            format!("<@{requested_by}> {}", response_text.trim())
-        };
-        let mut posted = Vec::new();
-        for chunk in split_message_chunks(&content, MESSAGE_CHUNK_LIMIT) {
-            let payload = send_message(&channel_id, &chunk)?;
-            posted.push(DiscordPostedMessageMetadata {
-                channel_id: channel_id.clone(),
-                message_id: string_field(&payload, "id"),
-            });
-        }
-        Ok(DiscordPostMetadata {
-            channel_id,
-            messages: posted,
-        })
-    }
 }
 
 pub fn build_agent_task_message(packet_path: &Path, packet: &Value) -> String {
+    build_agent_task_message_for_session(packet_path, packet, true)
+}
+
+pub fn build_agent_task_message_for_session(
+    packet_path: &Path,
+    packet: &Value,
+    include_master_prompt: bool,
+) -> String {
     let compact_packet = serde_json::to_string_pretty(packet).unwrap_or_else(|_| "{}".to_string());
-    [
-        "You are handling a Clawcord agent task.",
-        "",
+    let mut sections = Vec::new();
+    if include_master_prompt {
+        sections.push(agent_master_prompt());
+    }
+    sections.push([
+        "JOB_CONTEXT:",
+        "This is a Clankcord agent-task job for the active Discord channel session.",
         &format!("Job packet path: {}", packet_path.display()),
-        "",
         "The full job packet is included below. Use it as the source of truth.",
-        "Do not post to Discord yourself; Clawcord will post your final visible answer.",
-        "Return only the message that should be posted to agent-chat. Do not wrap it in JSON.",
-        "",
+        "Do not post to Discord yourself. Submit visible answers through `clankcord responses submit --job <job-id> --sink agent-chat --stdin`.",
+        "You must use that response submission path for visible answers. After a successful submission, return only RESPONSE_SUBMITTED as your final message. Do not use final text as a publication channel.",
         "Preserve the job lane abstraction and only perform side effects authorized by this job.",
-        "",
         "Use the job payload as request evidence: requester, room, source events, wake activation context, and raw activated speech.",
-        "Choose the relevant Clawcord tools yourself for timeline, transcript, search, conversation, participant, job, and control queries.",
+        "Choose the relevant Clankcord tools yourself for timeline, transcript, search, conversation, participant, job, and control queries.",
         "Resolve named rooms, date phrases, and time ranges with tools and available context instead of assuming the current channel is always correct.",
         "If the listed tools are insufficient, you may inspect the local SQLite-backed voice memory directly and explain why.",
         "Shell exec may use /bin/sh; wrap commands in bash -lc only when using bash-specific syntax. jq is installed and useful for inspecting JSON.",
@@ -350,6 +357,40 @@ pub fn build_agent_task_message(packet_path: &Path, packet: &Value) -> String {
         "",
         "JOB_PACKET_JSON:",
         &compact_packet,
+    ]
+    .join("\n"));
+    sections.join("\n\n")
+}
+
+pub fn agent_master_prompt() -> String {
+    [
+        "SESSION_INSTRUCTIONS:",
+        "You are Clanky, a helpful and rigorous Discord server assistant for the people using this server, especially participants in voice rooms.",
+        "Your job is to help them understand, remember, research, coordinate, and act on conversations.",
+        "You can answer questions, inspect prior discussion, fact-check claims, research outside information, set reminders, create automations, ask clarifying questions, and report useful results back to Discord through Clankcord.",
+        "",
+        "Clankcord is the local system that connects you to Discord. It captures voice, turns speech into transcript events, stores those events in a SQLite-backed timeline, manages runtime jobs and automations, stores transcript artifacts, and publishes responses.",
+        "The timeline is the authoritative memory of what happened in the server: who spoke, what was said, what jobs ran, what automations fired, and what was published.",
+        "Use Clankcord tools to inspect that memory instead of guessing from the user's latest sentence alone.",
+        "Clankcord voice bots such as clanky-vc1 and clanky-vc2 capture audio; they are not you.",
+        "",
+        "Use the `clankcord` CLI commands to inspect timeline history, render transcript windows, resolve participants, inspect room state, register automations, ask clarifying questions, and submit user-visible responses.",
+        "The CLI is the supported way to ask Clankcord to do work. Do not post to Discord directly. Do not mutate Clankcord state by editing files or databases directly.",
+        "",
+        "When a user asks for immediate information, gather enough context to answer well. Use timeline, transcript, participant, room, message, and external research tools as needed.",
+        "Submit visible answers through `clankcord responses submit --job <job-id> --sink agent-chat --stdin`. After a successful submission, return only RESPONSE_SUBMITTED as your final message. Final text is not a publication path.",
+        "",
+        "You may search the web and should use web research when it would materially improve the answer, especially for current facts, unfamiliar topics, fact-checking, product or technical details, or anything where the transcript alone is not enough.",
+        "Do not invent facts when research is possible.",
+        "",
+        "When a user asks for runtime work such as transcript creation, room control, sound playback, reminders, or publication, use the corresponding `clankcord` command.",
+        "When a user asks for future, conditional, or recurring behavior, register an automation with `clankcord automations create --stdin`. Automations default to one shot unless the user clearly asks for recurring behavior. Give automations reasonable expiries. Resolve named people to Discord user IDs before storing durable conditions whenever possible.",
+        "When the request is underspecified, ask a focused clarifying question through Clankcord. Keep the ongoing channel context in mind after the user answers.",
+        "",
+        "Be useful, complete, and intellectually honest. Do not choose a weak answer merely because it is shorter.",
+        "Do not be sycophantic. If a user asks for your view on something said in a transcript, do not just repeat the transcript back to them.",
+        "Analyze it, check the assumptions, identify what matters, and say something genuinely useful.",
+        "If your first answer would be obvious, shallow, or uninteresting, work harder: inspect more context, research where helpful, compare alternatives, and produce the strongest answer you can within the job's authority boundaries.",
     ]
     .join("\n")
 }
@@ -366,21 +407,21 @@ fn validate_agent_task_job(job: &Job) -> Result<()> {
 
 fn agent_task_env() -> BTreeMap<String, String> {
     let mut vars = env::vars().collect::<BTreeMap<_, _>>();
-    vars.entry("CLAWCORD_API_BASE_URL".to_string())
+    vars.entry("CLANKCORD_API_BASE_URL".to_string())
         .or_insert_with(|| "http://127.0.0.1:8091".to_string());
     vars
 }
 
 fn agent_task_cwd() -> Option<PathBuf> {
-    env::var("CLAWCORD_CODEX_WORKDIR")
+    env::var("CLANKCORD_CODEX_WORKDIR")
         .ok()
         .map(PathBuf::from)
         .or_else(|| env::current_dir().ok())
 }
 
 fn agent_task_model() -> Option<String> {
-    env::var("CLAWCORD_AGENT_TASK_MODEL")
-        .or_else(|_| env::var("CLAWCORD_CODEX_MODEL"))
+    env::var("CLANKCORD_AGENT_TASK_MODEL")
+        .or_else(|_| env::var("CLANKCORD_CODEX_MODEL"))
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -388,7 +429,7 @@ fn agent_task_model() -> Option<String> {
 
 fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPreflightMetadata {
     let agent_env = envs.cloned().unwrap_or_else(agent_task_env);
-    let codex_bin = env::var("CLAWCORD_CODEX_BIN")
+    let codex_bin = env::var("CLANKCORD_CODEX_BIN")
         .or_else(|_| env::var("CODEX_BIN"))
         .unwrap_or_else(|_| "codex".to_string());
     let checks: Vec<Vec<String>> = vec![
@@ -396,45 +437,57 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         vec!["jq".to_string(), "--version".to_string()],
         vec!["sqlite3".to_string(), "--version".to_string()],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "transcripts".to_string(),
             "render".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "transcripts".to_string(),
             "search".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "timeline".to_string(),
             "range".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "conversations".to_string(),
             "list".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "context".to_string(),
             "resolve".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "participants".to_string(),
             "trace".to_string(),
             "--help".to_string(),
         ],
         vec![
-            "clawcord".to_string(),
+            "clankcord".to_string(),
             "jobs".to_string(),
             "get".to_string(),
+            "--help".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "responses".to_string(),
+            "submit".to_string(),
+            "--help".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "automations".to_string(),
+            "create".to_string(),
             "--help".to_string(),
         ],
     ];
@@ -479,11 +532,11 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
 
 impl AgentTaskPacket {
     fn from_job(job: Job, preflight: AgentPreflightMetadata) -> Self {
-        let voice_memory_root = env::var("CLAWCORD_VOICE_MEMORY_ROOT")
+        let voice_memory_root = env::var("CLANKCORD_VOICE_MEMORY_ROOT")
             .or_else(|_| env::var("VOICE_MEMORY_ROOT"))
             .unwrap_or_else(|_| {
                 durable_dir()
-                    .join("clawcord")
+                    .join("clankcord")
                     .join("voice")
                     .display()
                     .to_string()
@@ -501,7 +554,7 @@ impl AgentTaskPacket {
                 sqlite_path: format!("{voice_memory_root}/voice.sqlite3"),
             },
             manuals: AgentTaskManuals {
-                tools_manual: env::var("CLAWCORD_AGENT_TASK_TOOLS_MANUAL").unwrap_or_default(),
+                tools_manual: env::var("CLANKCORD_AGENT_TASK_TOOLS_MANUAL").unwrap_or_default(),
             },
             policy: AgentTaskPolicy {
                 may_create_linear_without_confirmation: false,
@@ -560,32 +613,35 @@ impl AgentTaskPolicy {
 impl AgentTaskTools {
     fn for_job(job_id: &str) -> Self {
         Self {
-            get_job: format!("clawcord jobs get {job_id}"),
-            status: "clawcord status --guild <guild-id> --channel <room-or-channel>".to_string(),
+            get_job: format!("clankcord jobs get {job_id}"),
+            status: "clankcord status --guild <guild-id> --channel <room-or-channel>".to_string(),
             timeline_tail:
-                "clawcord timeline tail --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
+                "clankcord timeline tail --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
                     .to_string(),
             timeline_range:
-                "clawcord timeline range --guild <guild-id> --channel <room-or-channel> --from <time> --to <time>"
+                "clankcord timeline range --guild <guild-id> --channel <room-or-channel> --from <time> --to <time>"
                     .to_string(),
             list_conversations:
-                "clawcord conversations list --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
+                "clankcord conversations list --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
                     .to_string(),
             resolve_context:
-                "clawcord context resolve --guild <guild-id> --channel <room-or-channel> --reference <natural-language-reference>"
+                "clankcord context resolve --guild <guild-id> --channel <room-or-channel> --reference <natural-language-reference>"
                     .to_string(),
             render_transcript_range:
-                "clawcord transcripts render --guild <guild-id> --channel <room-or-channel> --from <time> --to <time> --format markdown"
+                "clankcord transcripts render --guild <guild-id> --channel <room-or-channel> --from <time> --to <time> --format markdown"
                     .to_string(),
             search_transcripts:
-                "clawcord transcripts search --guild <guild-id> --channel <room-or-channel> --query <query> --since -7d"
+                "clankcord transcripts search --guild <guild-id> --channel <room-or-channel> --query <query> --since -7d"
                     .to_string(),
             participant_trace:
-                "clawcord participants trace --guild <guild-id> --user <user-id> --from <time> --to <time> --include-speech-snippets"
+                "clankcord participants trace --guild <guild-id> --user <user-id> --from <time> --to <time> --include-speech-snippets"
                     .to_string(),
-            search_messages: "clawcord messages search --guild-id <guild-id> --query <query>"
+            search_messages: "clankcord messages search --guild-id <guild-id> --query <query>"
                 .to_string(),
-            read_messages: "clawcord messages read --target <channel-or-thread-id>".to_string(),
+            read_messages: "clankcord messages read --target <channel-or-thread-id>".to_string(),
+            submit_response:
+                "clankcord responses submit --job <job-id> --sink agent-chat --stdin".to_string(),
+            create_automation: "clankcord automations create --stdin".to_string(),
         }
     }
 
@@ -614,6 +670,11 @@ impl AgentTaskTools {
         );
         object.insert("search_messages".to_string(), json!(self.search_messages));
         object.insert("read_messages".to_string(), json!(self.read_messages));
+        object.insert("submit_response".to_string(), json!(self.submit_response));
+        object.insert(
+            "create_automation".to_string(),
+            json!(self.create_automation),
+        );
         Value::Object(object)
     }
 }

@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::runtime::core::execution::RuntimeEffects;
 use crate::runtime::domain::audio_segments;
+use crate::runtime::domain::responses;
+use crate::runtime::domain::wake_activations;
 use crate::runtime::refinement::run_refinement_job;
 use crate::runtime::{
     Job, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
@@ -16,12 +18,23 @@ pub(crate) async fn execute_async(
 ) -> Result<Value> {
     match &job.payload {
         JobPayload::RuntimeControl(payload) => runtime_control::execute(runtime, payload).await,
+        JobPayload::WakeActivation(payload) => wake_activations::execute(runtime, job, payload),
         JobPayload::Command(_) => commands::execute(runtime, job, effects).await,
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::execute(runtime, job, payload, effects).await
         }
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
+            payload.kind()
+        ),
+    }
+}
+
+pub(crate) fn execute_response(runtime: &Runtime, job: &Job) -> Result<Value> {
+    match &job.payload {
+        JobPayload::Response(payload) => responses::execute(runtime, job, payload),
+        payload => anyhow::bail!(
+            "job payload {} is not handled by response executor",
             payload.kind()
         ),
     }

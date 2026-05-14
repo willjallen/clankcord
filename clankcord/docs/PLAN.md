@@ -10,7 +10,7 @@ Clanky is intended to become an always-available Discord voice memory and action
 
 The desired system is not a traditional recorder. It is a trustworthy ambient memory layer:
 
-1. Clawcord-owned voice bots can sit in configured Discord voice rooms.
+1. Clankcord-owned voice bots can sit in configured Discord voice rooms.
 2. They locally capture draft transcript events and source audio into multi-day ephemeral corpora.
 3. Each voice channel has its own contiguous annotated timeline.
 4. Multiple channel timelines can run in parallel.
@@ -18,11 +18,11 @@ The desired system is not a traditional recorder. It is a trustworthy ambient me
 6. Nothing becomes a permanent Discord transcript unless a user asks for it.
 7. When a transcript is made permanent, the rough local STT should be replaced by a high-quality transcription from the corresponding mixed source audio, initially via ElevenLabs.
 8. Codex should provide agent orchestration, model routing, hooks, jobs, and tool access.
-9. Clawcord should remain the source of truth for Discord voice capture, Discord publishing, voice bot assignment, transcript storage, and Discord-specific control.
+9. Clankcord should remain the source of truth for Discord voice capture, Discord publishing, voice bot assignment, transcript storage, and Discord-specific control.
 
 The most important architectural rule is:
 
-> Build the boring multi-channel timeline substrate first. Then make Codex agents elegant dispatchers over stable Clawcord primitives.
+> Build the boring multi-channel timeline substrate first. Then make Codex agents elegant dispatchers over stable Clankcord primitives.
 
 The most important Codex rule is:
 
@@ -30,7 +30,7 @@ The most important Codex rule is:
 
 The most important Discord topology rule is:
 
-> The Codex-native `Clanky` bot and the Clawcord-owned voice bots `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` bots are different actors with different responsibilities. Do not blur them.
+> The Codex-native `Clanky` bot and the Clankcord-owned voice bots `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` bots are different actors with different responsibilities. Do not blur them.
 
 ## 1. Discord Bot Topology
 
@@ -44,15 +44,15 @@ There are currently three Discord bot identities:
     - Handles agent-chat replies, confirmations, agent-task results, summaries, issue proposals, status replies, and general Codex-native Discord behavior.
     - Lives in the Discord text interface, especially the dedicated `agent-chat` channel.
     - Should not be treated as the voice capture bot.
-    - Should not be moved between voice channels as part of Clawcord's capture pool.
+    - Should not be moved between voice channels as part of Clankcord's capture pool.
 
 2. **`clanky-vc1`**
-    - Clawcord-owned voice capture bot.
+    - Clankcord-owned voice capture bot.
     - Joins Discord voice channels.
     - Receives voice packets.
-    - Feeds per-speaker audio into Clawcord.
+    - Feeds per-speaker audio into Clankcord.
     - Emits local STT transcript events into the voice timeline.
-    - May participate in live transcript publication through Clawcord-controlled Discord operations.
+    - May participate in live transcript publication through Clankcord-controlled Discord operations.
     - Is not an Codex agent.
 
 3. **`clanky-vc2`**
@@ -66,13 +66,13 @@ Future scaling should use the same pattern:
 - `clanky-vc4`
 - etc.
 
-The voice capture design should treat these as a pool of N Clawcord-controlled capture identities.
+The voice capture design should treat these as a pool of N Clankcord-controlled capture identities.
 
 ## 2. Why the Three-Bot Split Matters
 
 Discord voice has a hard constraint: one bot identity cannot be in multiple voice channels at the same time. If the team uses multiple voice channels in parallel, one voice bot cannot cover them all.
 
-Therefore the voice capture layer must be modeled as a **Clawcord voice bot pool**, not as a single global Clanky session.
+Therefore the voice capture layer must be modeled as a **Clankcord voice bot pool**, not as a single global Clanky session.
 
 This creates several requirements:
 
@@ -81,9 +81,9 @@ This creates several requirements:
 - A voice bot can move between channels over time.
 - A channel timeline may have multiple capture runs captured by different bot identities across days.
 - Codex should not directly manage `clanky-vc1`/`clanky-vc2` as agents.
-- Clawcord owns voice bot assignment, presence, audio capture, and low-level Discord behavior.
-- Codex receives events and creates jobs through Clawcord APIs.
-- Results from Codex should generally be posted by `Clanky` in `agent-chat` or by Clawcord in transcript publication surfaces, depending on the interaction.
+- Clankcord owns voice bot assignment, presence, audio capture, and low-level Discord behavior.
+- Codex receives events and creates jobs through Clankcord APIs.
+- Results from Codex should generally be posted by `Clanky` in `agent-chat` or by Clankcord in transcript publication surfaces, depending on the interaction.
 
 The conceptual split:
 
@@ -98,14 +98,14 @@ Discord voice capture pool:
   clanky-vc1
   clanky-vc2
   clanky-vc3...
-    owned by Clawcord
+    owned by Clankcord
     join voice channels
     capture audio
     create transcript events
     publish live transcripts when asked
 ```
 
-Do not describe `clanky-vc1` or `clanky-vc2` as Codex agents. They are Discord bot identities controlled by Clawcord.
+Do not describe `clanky-vc1` or `clanky-vc2` as Codex agents. They are Discord bot identities controlled by Clankcord.
 
 ## 3. Product Thesis
 
@@ -132,7 +132,7 @@ The product should not require users to know whether they need a transcript, a s
 
 ### 4.1 What Clanky Does Today
 
-Clanky is a Discord-integrated bot/agent system. It can participate in text channels, interact with prior transcripts, and use Codex-style agent infrastructure. There is also Clawcord, which is the custom Discord integration layer. Clawcord exists because generic Discord harnesses are not good enough for the Discord-specific behavior needed here.
+Clanky is a Discord-integrated bot/agent system. It can participate in text channels, interact with prior transcripts, and use Codex-style agent infrastructure. There is also Clankcord, which is the custom Discord integration layer. Clankcord exists because generic Discord harnesses are not good enough for the Discord-specific behavior needed here.
 
 The current voice transcription direction already has useful pieces:
 
@@ -142,7 +142,7 @@ The current voice transcription direction already has useful pieces:
 - There is a manager pipeline that can publish transcript-like artifacts.
 - There is agent infrastructure available through Codex.
 - Discord is already the team-facing place where transcripts and agent messages should appear.
-- There are two Clawcord-owned voice capture bot accounts, `clanky-vc1` and `clanky-vc2`, to support parallel voice channels.
+- There are two Clankcord-owned voice capture bot accounts, `clanky-vc1` and `clanky-vc2`, to support parallel voice channels.
 
 The problem is that the old mental model is too close to:
 
@@ -152,7 +152,7 @@ That is not the product we want.
 
 The new model should be:
 
-> Clawcord assigns an available voice bot to a room → capture local ephemeral channel timeline → later materialize selected windows → publish/refine only when requested → let Codex agents act on selected context
+> Clankcord assigns an available voice bot to a room → capture local ephemeral channel timeline → later materialize selected windows → publish/refine only when requested → let Codex agents act on selected context
 
 ### 4.2 Why Inviting Clanky Late Fails
 
@@ -210,7 +210,7 @@ This section closes the earlier open questions. These are the defaults unless la
 
 ### 5.1 Voice Bot Auto-Join Policy
 
-Clawcord voice bots should eagerly auto-join only these configured lounges:
+Clankcord voice bots should eagerly auto-join only these configured lounges:
 
 - `Art Lounge`
 - `Code Lounge`
@@ -219,7 +219,7 @@ Clawcord voice bots should eagerly auto-join only these configured lounges:
 A configured lounge becomes eligible for auto-capture when:
 
 - effective human count is at least 2, and
-- a Clawcord voice bot is available, and
+- a Clankcord voice bot is available, and
 - the channel is not in cooldown or explicitly disabled.
 
 Effective human count means:
@@ -242,7 +242,7 @@ Examples:
 - "Clanky, start listening in Art Lounge."
 - "Clanky, bring clanky-vc here."
 
-If a VC bot is available, Clawcord assigns it. If no VC bot is available, `Clanky` replies in `agent-chat` with capacity status.
+If a VC bot is available, Clankcord assigns it. If no VC bot is available, `Clanky` replies in `agent-chat` with capacity status.
 
 ### 5.3 Capacity Policy
 
@@ -264,7 +264,7 @@ clanky-vc1: Code Lounge · locally buffering
 clanky-vc2: Art Lounge · live transcript active
 
 An admin can force-move one with:
-clawcord voice pool move --bot clanky-vc1 --to <channel>
+clankcord voice pool move --bot clanky-vc1 --to <channel>
 ```
 
 ### 5.4 Release and Anti-Flapping Policy
@@ -295,7 +295,7 @@ Force move should:
 4. start a new capture run in the new channel
 5. post a status message in `agent-chat`
 
-Admin force-move should be a Clawcord operation exposed to Codex as a tool/command.
+Admin force-move should be a Clankcord operation exposed to Codex as a tool/command.
 
 ### 5.6 Retention Policy
 
@@ -489,7 +489,7 @@ The timeline is truth. Conversation ids are convenience handles.
 
 ### 7.1 Voice Bot Pool
 
-Clawcord should own a `VoiceBotPool` containing available voice bot identities.
+Clankcord should own a `VoiceBotPool` containing available voice bot identities.
 
 Initial pool:
 
@@ -523,7 +523,7 @@ Each bot can be assigned to at most one voice channel at a time.
 
 ### 7.2 Voice Channel Assignment
 
-When a channel should be captured, Clawcord creates or updates an assignment:
+When a channel should be captured, Clankcord creates or updates an assignment:
 
 ```json
 {
@@ -586,7 +586,7 @@ This matters for debugging:
 
 ### 7.5 Effective Occupancy
 
-Clawcord should continuously compute an effective occupancy snapshot per voice channel:
+Clankcord should continuously compute an effective occupancy snapshot per voice channel:
 
 ```json
 {
@@ -626,17 +626,17 @@ This is preferable to surprising users by moving a voice bot away from an active
 
 The Codex-native Discord bot. Text and agent surface.
 
-### Clawcord Voice Bot
+### Clankcord Voice Bot
 
-A Discord bot identity controlled by Clawcord for voice capture, currently `clanky-vc1` and `clanky-vc2`.
+A Discord bot identity controlled by Clankcord for voice capture, currently `clanky-vc1` and `clanky-vc2`.
 
 ### VoiceBotPool
 
-The Clawcord-managed pool of voice capture bot identities.
+The Clankcord-managed pool of voice capture bot identities.
 
 ### VoiceChannelAssignment
 
-The current binding between one Clawcord voice bot and one Discord voice channel.
+The current binding between one Clankcord voice bot and one Discord voice channel.
 
 ### Channel Timeline
 
@@ -644,7 +644,7 @@ The contiguous annotated timeline for a guild/voice-channel pair.
 
 ### Capture Run
 
-A continuous period where one Clawcord voice bot is assigned to one Discord voice channel and capable of receiving audio.
+A continuous period where one Clankcord voice bot is assigned to one Discord voice channel and capable of receiving audio.
 
 A capture run may produce:
 
@@ -725,17 +725,17 @@ This section makes a concrete decision instead of leaving "hooks vs cron" ambigu
 Use an Codex plugin-style integration named:
 
 ```text
-clawcord_voice
+clankcord_voice
 ```
 
 This plugin exposes:
 
-1. an event bridge from Clawcord to Codex
-2. a small set of Codex tools backed by Clawcord CLI/API
+1. an event bridge from Clankcord to Codex
+2. a small set of Codex tools backed by Clankcord CLI/API
 3. a job queue bridge for strong agent task invocations
 4. a model-call helper for cheap router classification
 
-Codex should not run free-form autonomous cron agents for voice. Clawcord should run deterministic schedulers for pool/retention/status, and Codex should be invoked only through events/jobs.
+Codex should not run free-form autonomous cron agents for voice. Clankcord should run deterministic schedulers for pool/retention/status, and Codex should be invoked only through events/jobs.
 
 ### 9.2 Config Location
 
@@ -752,7 +752,7 @@ host/linux/codex/config/seeds/agents/clanky-voice-router/AGENTS.md
 host/linux/codex/config/seeds/agents/clanky-agent-task/AGENTS.md
 ```
 
-The maintainer and refinement agent task should be configured as Clawcord/Codex job routines, not normal chat agents.
+The maintainer and refinement agent task should be configured as Clankcord/Codex job routines, not normal chat agents.
 
 If Codex's actual config system requires a different file shape, implement a thin adapter that reads this desired config and registers the equivalent hooks/tools/jobs. Do not change the architecture to fit a bad cron-based default.
 
@@ -779,7 +779,7 @@ The scheduled jobs should not read transcript text unless triggered by a concret
 
 ### 9.4 Job-Scoped Agent task Invocation
 
-Clawcord invokes strong Codex work by creating a voice job and then calling Codex with a compact job packet.
+Clankcord invokes strong Codex work by creating a voice job and then calling Codex with a compact job packet.
 
 Canonical invocation:
 
@@ -790,13 +790,13 @@ codex exec \
   -
 ```
 
-The job packet contains IDs and bounded instructions, not a giant transcript blob. The agent task then uses Clawcord tools to fetch exactly the transcript window it needs.
+The job packet contains IDs and bounded instructions, not a giant transcript blob. The agent task then uses Clankcord tools to fetch exactly the transcript window it needs.
 
-Clawcord owns the session lane and passes the prompt on stdin. The Codex adapter captures stdout/stderr and the final message; the runtime agent harness records the session id for later reuse.
+Clankcord owns the session lane and passes the prompt on stdin. The Codex adapter captures stdout/stderr and the final message; the runtime agent harness records the session id for later reuse.
 
 ### 9.5 Router Invocation
 
-The router should be a cheap model call inside the `clawcord_voice` plugin, not a full autonomous agent session.
+The router should be a cheap model call inside the `clankcord_voice` plugin, not a full autonomous agent session.
 
 Canonical invocation:
 
@@ -807,7 +807,7 @@ codex exec \
   -
 ```
 
-The router returns JSON only. Clawcord validates it and emits a command event. The router is stateless from Clawcord's perspective; agent-task jobs use sticky Codex sessions, but router classification does not.
+The router returns JSON only. Clankcord validates it and emits a command event. The router is stateless from Clankcord's perspective; agent-task jobs use sticky Codex sessions, but router classification does not.
 
 ### 9.6 Tool Permission Model
 
@@ -826,7 +826,7 @@ Agent task:
 
 - can render bounded transcript windows
 - can search transcripts within declared scope
-- can publish through Clawcord publication APIs
+- can publish through Clankcord publication APIs
 - can use Linear/GitHub/web/Notion when job kind allows
 - cannot access raw voice corpus files directly
 - cannot create Linear issues without approval
@@ -863,27 +863,27 @@ Recommended default split:
    Strong, job-scoped. Handles involved user-requested work: materialization planning, summarization, fact-checking, Linear issue proposals, transcript search, research, and tool use.
 
 3. **`clanky-voice-maintainer`**
-   Mostly deterministic Clawcord/Codex routine, not a normal agent. Handles routine timeline/index/job hygiene. Uses cheap model calls sparingly for conversation titles/summaries only when necessary.
+   Mostly deterministic Clankcord/Codex routine, not a normal agent. Handles routine timeline/index/job hygiene. Uses cheap model calls sparingly for conversation titles/summaries only when necessary.
 
 4. **`clanky-refinement-routine`**
    Background job runner, not a general agent. Handles audio export, ElevenLabs calls, transcript alignment, Discord draft replacement, and authoritative span updates.
 
-Everything else should be a hook, job type, command mode, deterministic function, or Clawcord service.
+Everything else should be a hook, job type, command mode, deterministic function, or Clankcord service.
 
 ### 10.2 Voice Bots Are Not Codex Agents
 
-`clanky-vc1` and `clanky-vc2` should not be represented as Codex agents. They are Clawcord-managed Discord bot identities.
+`clanky-vc1` and `clanky-vc2` should not be represented as Codex agents. They are Clankcord-managed Discord bot identities.
 
 Codex should see their output as events:
 
 ```text
 clanky-vc1 captures audio in Code Lounge
-  -> Clawcord emits transcript events
+  -> Clankcord emits transcript events
   -> router may detect command
   -> Codex creates/handles jobs
 
 clanky-vc2 captures audio in Art Lounge
-  -> Clawcord emits transcript events
+  -> Clankcord emits transcript events
   -> router may detect command
   -> Codex creates/handles jobs
 ```
@@ -896,11 +896,11 @@ The split is justified by different cost/risk profiles:
 
 | Component | Runs Ambiently? | Reads Transcript Text? | Model Cost | Tool Access | Reason For Split |
 |---|---:|---:|---:|---|---|
-| Clawcord voice bots | yes | no LLM; capture/STT only | local STT/provider | Discord voice | Discord one-bot-per-VC constraint |
+| Clankcord voice bots | yes | no LLM; capture/STT only | local STT/provider | Discord voice | Discord one-bot-per-VC constraint |
 | Router | yes, but gated | rolling 3 minutes only | very cheap | minimal | must be always available but should not burn tokens |
-| Maintainer | yes, low cadence/event-driven | rarely, deltas only | cheap/none | Clawcord metadata | routine upkeep, indexing, summaries |
+| Maintainer | yes, low cadence/event-driven | rarely, deltas only | cheap/none | Clankcord metadata | routine upkeep, indexing, summaries |
 | Agent task | no | selected job windows | strong | broad | involved reasoning and tool use |
-| Refinement Routine | job queue | selected windows/audio | provider cost, little LLM | STT provider + Clawcord | async transcript quality loop |
+| Refinement Routine | job queue | selected windows/audio | provider cost, little LLM | STT provider + Clankcord | async transcript quality loop |
 
 This prevents the common Codex failure mode:
 
@@ -974,7 +974,7 @@ Only wake phrases start or resume an interaction. Command hints such as "leave",
 
 Once an interaction starts, collect an idle-closed post-wake turn before asking the router model. The turn should remain open while the requester still has active audio or an in-flight STT task, close after a short idle period, and hard-cap at a longer maximum. Other speakers' finalized transcript rows inside the window are still included, but unrelated channel chatter should not indefinitely hold the router open. After logical close, wait a short STT flush grace before querying SQLite so late-arriving segments that ended inside the logical window are included.
 
-Another explicit "Hey Clanky" wake inside the TTL supersedes an in-flight router evaluation or reopens the interaction as a follow-up/correction. Ordinary non-wake speech is collected while the turn is open. If the model returns `wait_for_more`, Clawcord enters a bounded follow-up capture mode where the user's next non-wake answer can continue the same interaction.
+Another explicit "Hey Clanky" wake inside the TTL supersedes an in-flight router evaluation or reopens the interaction as a follow-up/correction. Ordinary non-wake speech is collected while the turn is open. If the model returns `wait_for_more`, Clankcord enters a bounded follow-up capture mode where the user's next non-wake answer can continue the same interaction.
 
 The router sees:
 
@@ -1034,9 +1034,9 @@ The router should have almost no tools.
 
 Allow:
 
-- read current Clawcord voice status
+- read current Clankcord voice status
 - create/emit a structured command event
-- maybe ask for confirmation through Clawcord if deterministic validator marks it needed
+- maybe ask for confirmation through Clankcord if deterministic validator marks it needed
 
 Deny:
 
@@ -1175,7 +1175,7 @@ Recognized actions:
 Resolve only obvious arguments.
 Use relative time windows when spoken.
 For fuzzy references such as "this conversation" or "what Vince just said", emit the phrase as a context_reference rather than trying to solve it.
-When routing, include `acknowledgement_text`, a short status phrase Clawcord can post in agent-chat before dispatch.
+When routing, include `acknowledgement_text`, a short status phrase Clankcord can post in agent-chat before dispatch.
 ```
 
 ### 11.9 Job Cancellation and Replacement
@@ -1186,7 +1186,7 @@ Minimum behavior:
 
 - queued jobs can be marked `cancelled`
 - running jobs can be marked `cancel_requested` and their agent-task process group is killed
-- if a cancelled running job finishes anyway, Clawcord suppresses the Discord result post
+- if a cancelled running job finishes anyway, Clankcord suppresses the Discord result post
 - the job record should preserve the agent-task output for debugging
 - the router packet should expose active and cancellable jobs for the originating channel
 
@@ -1202,26 +1202,26 @@ Replacement behavior:
 
 ### 11.10 Current Implementation Notes
 
-The first implementation pass lives in Clawcord, not in the generic Codex Discord harness.
+The first implementation pass lives in Clankcord, not in the generic Codex Discord harness.
 
 Current defaults:
 
-- `CLAWCORD_ROUTER_LOOKBACK_SECONDS=30`
-- `CLAWCORD_ROUTER_MODEL=` (empty means Codex default)
-- `CLAWCORD_ROUTER_FALLBACK_MODEL=` (empty means no fallback)
-- `CLAWCORD_ROUTER_IDLE_SECONDS=3`
-- `CLAWCORD_ROUTER_MIN_SETTLE_SECONDS=1.5`
-- `CLAWCORD_ROUTER_STT_FLUSH_GRACE_SECONDS=2`
-- `CLAWCORD_ROUTER_TURN_MAX_SECONDS=300`
-- `CLAWCORD_ROUTER_INTERACTION_TTL_SECONDS=600`
-- `CLAWCORD_ROUTER_MAX_FOLLOWUP_SECONDS=300`
+- `CLANKCORD_ROUTER_LOOKBACK_SECONDS=30`
+- `CLANKCORD_ROUTER_MODEL=` (empty means Codex default)
+- `CLANKCORD_ROUTER_FALLBACK_MODEL=` (empty means no fallback)
+- `CLANKCORD_ROUTER_IDLE_SECONDS=3`
+- `CLANKCORD_ROUTER_MIN_SETTLE_SECONDS=1.5`
+- `CLANKCORD_ROUTER_STT_FLUSH_GRACE_SECONDS=2`
+- `CLANKCORD_ROUTER_TURN_MAX_SECONDS=300`
+- `CLANKCORD_ROUTER_INTERACTION_TTL_SECONDS=600`
+- `CLANKCORD_ROUTER_MAX_FOLLOWUP_SECONDS=300`
 
 Runtime behavior:
 
 - interactions are in-memory and keyed by `guild_id:voice_channel_id:voice_bot_id`
 - ordinary non-wake speech is collected while the current turn is open
 - requester active speech or requester STT-in-flight postpones evaluation until the requester goes idle or the turn max is reached
-- after the logical turn closes, Clawcord waits for the STT flush grace before building the router packet
+- after the logical turn closes, Clankcord waits for the STT flush grace before building the router packet
 - a later "Hey Clanky" wake supersedes an in-flight evaluation or starts a correction turn
 - `wait_for_more` opens a bounded follow-up capture where non-wake speech can answer the router's clarification
 - `routerInteractions` in the debug overview shows active/recent interaction state
@@ -1231,7 +1231,7 @@ Runtime behavior:
 - running voice agent-task jobs are marked `cancel_requested` and the tracked Codex agent-task process group is killed
 - cancelled running agent-task results are retained on the job record but suppressed from Discord
 
-This is intentionally enough to make follow-up correction work without introducing a new schema or migration. If Clawcord restarts, active in-memory interactions are forgotten, but durable jobs and router packet/result artifacts remain in SQLite/channel storage.
+This is intentionally enough to make follow-up correction work without introducing a new schema or migration. If Clankcord restarts, active in-memory interactions are forgotten, but durable jobs and router packet/result artifacts remain in SQLite/channel storage.
 
 ## 12. Agent/Routine 2: `clanky-voice-maintainer`
 
@@ -1377,14 +1377,14 @@ This can be relevant to the Channel A conversation.
 Do not try to solve this with a complicated global conversation graph in v1. Instead:
 
 - record participant movement events
-- expose a `participant_trace` Clawcord command
+- expose a `participant_trace` Clankcord command
 - let the agent task follow the trace when a query implies it
 - include excursion snippets only when likely relevant
 
 Example:
 
 ```bash
-clawcord voice participant trace \
+clankcord voice participant trace \
   --guild <guild-id> \
   --user <user-id> \
   --from 2026-05-11T20:00:00Z \
@@ -1413,7 +1413,7 @@ The same agent task can handle:
 
 Allow:
 
-- Clawcord CLI/API for transcript windows, publications, Discord status
+- Clankcord CLI/API for transcript windows, publications, Discord status
 - Linear tools
 - GitHub/code search when relevant
 - Notion/docs when relevant
@@ -1423,7 +1423,7 @@ Allow:
 
 Important restriction:
 
-> Discord/transcript operations must go through Clawcord commands or APIs. The agent task should not directly manipulate Discord state or raw transcript files when a Clawcord primitive exists.
+> Discord/transcript operations must go through Clankcord commands or APIs. The agent task should not directly manipulate Discord state or raw transcript files when a Clankcord primitive exists.
 
 ### 13.6 Agent task Context
 
@@ -1456,13 +1456,13 @@ Example:
 The agent task can then call:
 
 ```bash
-clawcord voice transcript render --window win_01J --prefer-refined --format markdown
+clankcord voice transcript render --window win_01J --prefer-refined --format markdown
 ```
 
 or:
 
 ```bash
-clawcord voice transcript search --guild 456 --query "fixed point" --since -7d
+clankcord voice transcript search --guild 456 --query "fixed point" --since -7d
 ```
 
 ### 13.7 Agent task Budget
@@ -1471,7 +1471,7 @@ Set task budgets by job kind.
 
 | Job Kind | Strong Model? | Initial Transcript Tokens | Tool Budget |
 |---|---:|---:|---|
-| exact materialize transcript | no | 0, deterministic render | Clawcord only |
+| exact materialize transcript | no | 0, deterministic render | Clankcord only |
 | summarize current conversation | yes/medium | 8k-32k selected window | no external unless asked |
 | fact-check recent claim | yes | 1k-4k around claim | web/research capped |
 | propose Linear issues | yes | 8k-24k selected window | Linear lookup optional |
@@ -1655,12 +1655,12 @@ This is the chosen config contract for the plan.
 
 ```yaml
 plugins:
-  clawcord_voice:
+  clankcord_voice:
     enabled: true
     config_path: host/linux/codex/config/clanky_voice.yaml
-    event_source: clawcord.voice.events
-    tool_namespace: clawcord.voice
-    job_queue: clawcord.voice.jobs
+    event_source: clankcord.voice.events
+    tool_namespace: clankcord.voice
+    job_queue: clankcord.voice.jobs
 
 voice_bot_pool:
   bots:
@@ -1698,7 +1698,7 @@ storage:
   primary_event_store: sqlite
   sqlite_enabled: true
   sqlite:
-    path: runtime/codex-home/clawcord/voice/voice.sqlite3
+    path: runtime/codex-home/clankcord/voice/voice.sqlite3
     journal_mode: WAL
     synchronous: NORMAL
     fts5_enabled: true
@@ -1717,7 +1717,7 @@ agents:
       temperature: 0
     triggers:
       transcript_event_candidate:
-        source: clawcord.voice.timeline
+        source: clankcord.voice.timeline
         window: 3m
         prefilter: wake_or_command_candidate
         throttle_per_channel: 5s
@@ -1725,12 +1725,12 @@ agents:
         max_global_calls_per_minute: 4
     tools:
       allow:
-        - clawcord.voice.status.read
-        - clawcord.voice.command.emit
-        - clawcord.voice.confirmation.request
+        - clankcord.voice.status.read
+        - clankcord.voice.command.emit
+        - clankcord.voice.confirmation.request
       deny:
-        - clawcord.voice.transcript.full_read
-        - clawcord.discord.raw_write
+        - clankcord.voice.transcript.full_read
+        - clankcord.discord.raw_write
         - linear.*
         - github.*
         - web.*
@@ -1753,8 +1753,8 @@ agents:
       temperature: 0.2
     tools:
       allow:
-        - clawcord.voice.*
-        - clawcord.discord.publication.*
+        - clankcord.voice.*
+        - clankcord.discord.publication.*
         - linear.*
         - github.search
         - github.fetch
@@ -1763,7 +1763,7 @@ agents:
         - web.open
       deny:
         - filesystem.raw_voice_corpus_access
-        - clawcord.discord.raw_write_without_publication_context
+        - clankcord.discord.raw_write_without_publication_context
     guardrails:
       linear_creation_requires_confirmation: true
       destructive_forget_requires_confirmation: true
@@ -1772,7 +1772,7 @@ agents:
       cross_channel_reads_require_explicit_scope_or_context_reason: true
 
 maintainer:
-  invocation: deterministic_clawcord_routine
+  invocation: deterministic_clankcord_routine
   schedules:
     voice_bot_pool_watchdog:
       interval: 60s
@@ -1818,7 +1818,7 @@ Codex should use hooks to trigger narrow work. Hooks are cheap. Agents are expen
 
 ### 16.1 Hook: `on_voice_bot_assignment_changed`
 
-Runs when Clawcord assigns or releases `clanky-vc1` or `clanky-vc2`.
+Runs when Clankcord assigns or releases `clanky-vc1` or `clanky-vc2`.
 
 Steps:
 
@@ -1869,7 +1869,7 @@ Deterministic steps:
 3. Check dedupe.
 4. Determine whether confirmation is required.
 5. If confirmation required, create confirmation card.
-6. Otherwise create a `TranscriptJob` or direct Clawcord action.
+6. Otherwise create a `TranscriptJob` or direct Clankcord action.
 
 No strong agent task unless the command needs involved reasoning.
 
@@ -2066,14 +2066,14 @@ Bad subagent uses:
 - a subagent that reads the whole transcript just in case
 - router spawning a agent task spawning a router
 
-## 18. Clawcord API/CLI Contract
+## 18. Clankcord API/CLI Contract
 
 The Codex agents need stable primitives. The exact implementation language can change, but the command contract should be stable.
 
 ### 18.1 Voice Bot Pool Status
 
 ```bash
-clawcord voice pool status --guild <guild-id> --json
+clankcord voice pool status --guild <guild-id> --json
 ```
 
 Returns:
@@ -2088,18 +2088,18 @@ Returns:
 ### 18.2 Voice Bot Assignment
 
 ```bash
-clawcord voice pool assign \
+clankcord voice pool assign \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --reason explicit_request \
   --json
 
-clawcord voice pool release \
+clankcord voice pool release \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --json
 
-clawcord voice pool move \
+clankcord voice pool move \
   --guild <guild-id> \
   --bot clanky-vc1 \
   --to <voice-channel-id> \
@@ -2107,12 +2107,12 @@ clawcord voice pool move \
   --json
 ```
 
-This is Clawcord-owned. Codex may request assignment through Clawcord, but Clawcord decides capacity/locks.
+This is Clankcord-owned. Codex may request assignment through Clankcord, but Clankcord decides capacity/locks.
 
 ### 18.3 Channel Status
 
 ```bash
-clawcord voice status \
+clankcord voice status \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --json
@@ -2135,7 +2135,7 @@ Returns:
 ### 18.4 Timeline Tail
 
 ```bash
-clawcord voice timeline tail \
+clankcord voice timeline tail \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --since -1h \
@@ -2150,7 +2150,7 @@ Returns transcript events/spans for a bounded window. `--prefer-refined` means u
 For questions like "what did people say between 1pm and 2pm?":
 
 ```bash
-clawcord voice timeline range \
+clankcord voice timeline range \
   --guild <guild-id> \
   --from 2026-05-11T13:00:00 \
   --to 2026-05-11T14:00:00 \
@@ -2164,7 +2164,7 @@ Returns grouped timeline snippets by channel.
 ### 18.6 Conversation List
 
 ```bash
-clawcord voice conversations list \
+clankcord voice conversations list \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --since -2d \
@@ -2174,7 +2174,7 @@ clawcord voice conversations list \
 Cross-channel:
 
 ```bash
-clawcord voice conversations list \
+clankcord voice conversations list \
   --guild <guild-id> \
   --all-channels \
   --since -2d \
@@ -2184,7 +2184,7 @@ clawcord voice conversations list \
 ### 18.7 Resolve Context
 
 ```bash
-clawcord voice context resolve \
+clankcord voice context resolve \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --reference "what Vince just said" \
@@ -2195,7 +2195,7 @@ clawcord voice context resolve \
 For participant excursions:
 
 ```bash
-clawcord voice context resolve \
+clankcord voice context resolve \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --reference "the question Will went to ask in Art Lounge" \
@@ -2206,7 +2206,7 @@ clawcord voice context resolve \
 ### 18.8 Participant Trace
 
 ```bash
-clawcord voice participant trace \
+clankcord voice participant trace \
   --guild <guild-id> \
   --user <user-id> \
   --from 2026-05-11T20:00:00Z \
@@ -2218,7 +2218,7 @@ clawcord voice participant trace \
 ### 18.9 Materialize
 
 ```bash
-clawcord voice transcript materialize \
+clankcord voice transcript materialize \
   --window <window-id> \
   --publish discord \
   --live \
@@ -2229,7 +2229,7 @@ clawcord voice transcript materialize \
 or:
 
 ```bash
-clawcord voice transcript materialize \
+clankcord voice transcript materialize \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --since -10m \
@@ -2244,7 +2244,7 @@ Creates publication, draft thread/messages, and optional refinement job.
 ### 18.10 Render Transcript
 
 ```bash
-clawcord voice transcript render \
+clankcord voice transcript render \
   --window <window-id> \
   --prefer-refined \
   --format markdown
@@ -2257,7 +2257,7 @@ The agent task uses this instead of raw file access.
 Single-channel search:
 
 ```bash
-clawcord voice transcript search \
+clankcord voice transcript search \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --query "fixed point" \
@@ -2269,7 +2269,7 @@ clawcord voice transcript search \
 Cross-channel search:
 
 ```bash
-clawcord voice transcript search \
+clankcord voice transcript search \
   --guild <guild-id> \
   --all-channels \
   --query "Lumen" \
@@ -2281,26 +2281,26 @@ clawcord voice transcript search \
 ### 18.12 Jobs
 
 ```bash
-clawcord voice jobs list --guild <guild-id> --json
-clawcord voice jobs get <job-id> --json
-clawcord voice jobs retry <job-id> --json
+clankcord voice jobs list --guild <guild-id> --json
+clankcord voice jobs get <job-id> --json
+clankcord voice jobs retry <job-id> --json
 ```
 
 ### 18.13 Privacy Controls
 
 ```bash
-clawcord voice pause \
+clankcord voice pause \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --duration 20m \
   --json
 
-clawcord voice resume \
+clankcord voice resume \
   --guild <guild-id> \
   --channel <voice-channel-id> \
   --json
 
-clawcord voice forget \
+clankcord voice forget \
   --window <window-id> \
   --unpublished-only \
   --json
@@ -2314,12 +2314,12 @@ Two non-deafened humans join Code Lounge.
 
 Flow:
 
-1. Clawcord sees effective human count for Code Lounge become 2.
+1. Clankcord sees effective human count for Code Lounge become 2.
 2. Code Lounge is in the eager auto-buffer allowlist.
 3. `VoiceBotPool` has an available bot.
-4. Clawcord assigns `clanky-vc1`.
+4. Clankcord assigns `clanky-vc1`.
 5. `clanky-vc1` joins Code Lounge.
-6. Clawcord starts a capture run.
+6. Clankcord starts a capture run.
 7. No announcement is posted solely for local buffering.
 8. Timeline starts accumulating local draft transcript/audio.
 
@@ -2332,8 +2332,8 @@ User types in `agent-chat`:
 Flow:
 
 1. Codex-native `Clanky` receives text command.
-2. Agent task or deterministic command handler calls `clawcord voice pool assign`.
-3. If available, Clawcord assigns a VC bot and replies with status.
+2. Agent task or deterministic command handler calls `clankcord voice pool assign`.
+3. If available, Clankcord assigns a VC bot and replies with status.
 4. If no bot is available, `Clanky` says no spare VC bot and lists current assignments.
 
 ### 19.3 Starting a Live Transcript From Ten Minutes Ago
@@ -2345,12 +2345,12 @@ User says in Code Lounge, currently captured by `clanky-vc1`:
 Flow:
 
 1. `clanky-vc1` captures audio in Code Lounge.
-2. Clawcord local STT emits transcript event into Code Lounge timeline.
+2. Clankcord local STT emits transcript event into Code Lounge timeline.
 3. Wake prefilter sees "Clanky" and "live transcript."
 4. Router gets last 3 minutes from Code Lounge only.
 5. Router returns `start_live_transcript`.
 6. Validator sees no confirmation required.
-7. Clawcord creates a window from `now - 10m` to live for Code Lounge.
+7. Clankcord creates a window from `now - 10m` to live for Code Lounge.
 8. Draft transcript thread is created.
 9. Draft events from the last 10 minutes are backfilled.
 10. Live transcript sink begins streaming new events from Code Lounge.
@@ -2410,7 +2410,7 @@ Flow:
 
 1. This is not anchored to a single current voice room.
 2. Context resolver treats it as an absolute-time multi-timeline query.
-3. Clawcord pulls all channel timelines with events in that interval.
+3. Clankcord pulls all channel timelines with events in that interval.
 4. Agent task groups results by channel and conversation.
 5. Agent task summarizes or offers transcripts for each group.
 
@@ -2659,7 +2659,7 @@ Speech event example:
   "participants": ["user_1", "user_2"],
   "title": "Codex agent design for Clanky voice memory",
   "topic_labels": ["Clanky", "Codex", "voice transcript", "agent routing"],
-  "summary_draft": "Discussion about using a cheap router agent, minimizing cron token burn, supporting multiple Clawcord voice bots, and making refined transcripts authoritative for materialized spans.",
+  "summary_draft": "Discussion about using a cheap router agent, minimizing cron token burn, supporting multiple Clankcord voice bots, and making refined transcripts authoritative for materialized spans.",
   "state": "ephemeral",
   "transcript_quality": "mixed"
 }
@@ -2739,7 +2739,7 @@ Use SQLite as the primary store.
 Suggested first layout:
 
 ```text
-runtime/codex-home/clawcord/voice/
+runtime/codex-home/clankcord/voice/
   voice.sqlite3
   voice.sqlite3-wal
   voice.sqlite3-shm
@@ -2765,11 +2765,11 @@ runtime/codex-home/clawcord/voice/
 Requirements:
 
 - gitignored
-- inspectable through `sqlite3` and Clawcord CLI commands
+- inspectable through `sqlite3` and Clankcord CLI commands
 - structured enough for repair without repeating huge JSON metadata on every speech event
 - explicit retention
 - safe for backups if desired
-- agents reach it through Clawcord commands, not by depending on raw paths
+- agents reach it through Clankcord commands, not by depending on raw paths
 
 Existing JSONL files do not need to be backfilled. This system has not been running long enough to preserve them, so the SQLite transition can start clean.
 
@@ -2790,7 +2790,7 @@ given room/channel + time range or conversation id
 Core tables:
 
 - `voice_rooms`: one row per Discord voice channel.
-- `voice_bots`: Clawcord-owned capture identities such as `clanky-vc1`.
+- `voice_bots`: Clankcord-owned capture identities such as `clanky-vc1`.
 - `speakers`: Discord user identity and latest display labels.
 - `capture_runs`: bot presence/capture intervals per room.
 - `audio_segments`: source audio file path, speaker, timing, duration, size, hash, capture run.
@@ -2836,7 +2836,7 @@ Required indexes:
 
 Use an FTS5 table for transcript search. Keep it content-linked to `transcript_events` if practical, so text search can return event ids and then the normal timeline query can gather surrounding context.
 
-SQLite should run in WAL mode. Clawcord should own writes; Codex agents should query through Clawcord commands/APIs rather than opening the database directly.
+SQLite should run in WAL mode. Clankcord should own writes; Codex agents should query through Clankcord commands/APIs rather than opening the database directly.
 
 ## 22. Conversation Segmentation
 
@@ -3018,10 +3018,10 @@ This is often better than dumping a raw transcript immediately.
 
 Clanky states should mean something precise:
 
-- **voice bot absent**: no Clawcord voice capture bot is in that room.
+- **voice bot absent**: no Clankcord voice capture bot is in that room.
 - **deafened**: assigned voice bot is not ingesting audio.
 - **locally buffering**: assigned voice bot is storing unpublished local transcript/audio.
-- **live transcript active**: assigned voice bot/Clawcord is posting draft text to Discord.
+- **live transcript active**: assigned voice bot/Clankcord is posting draft text to Discord.
 - **refining**: a high-quality STT job is running.
 - **paused**: ingestion is temporarily disabled.
 - **permanent/refined**: selected transcript window is now a durable artifact.
@@ -3125,7 +3125,7 @@ Exit criteria:
 
 Exit criteria:
 
-- Clawcord voice bot can be in a room buffering locally with no transcript thread.
+- Clankcord voice bot can be in a room buffering locally with no transcript thread.
 - A user can materialize a selected time window on demand.
 
 ### Phase 3: Authoritative Span Layer
@@ -3181,7 +3181,7 @@ Only now add ambient command detection.
 - JSON command output.
 - Dedupe/throttle per channel and globally.
 - Confirmation rules.
-- Dispatch to Clawcord jobs.
+- Dispatch to Clankcord jobs.
 
 Exit criteria:
 
@@ -3242,10 +3242,10 @@ Build this first:
 7. `TimelineEvent`
 8. source audio segment store
 9. channel-keyed SQLite timeline append/query
-10. `clawcord voice pool status`
-11. `clawcord voice status --channel`
-12. `clawcord voice timeline tail --channel --since`
-13. `clawcord voice transcript render --prefer-refined`
+10. `clankcord voice pool status`
+11. `clankcord voice status --channel`
+12. `clankcord voice timeline tail --channel --since`
+13. `clankcord voice transcript render --prefer-refined`
 14. basic `materialize --channel --since -10m --draft-only`
 15. no automatic Discord thread for local buffering
 
@@ -3270,15 +3270,15 @@ The right architecture is not "one huge omniscient Clanky agent."
 It is:
 
 - `Clanky` as Codex-native text/agent surface
-- `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` as Clawcord-owned voice capture bots
-- Clawcord voice bot pool management
+- `clanky-vc1`, `clanky-vc2`, and future `clanky-vcN` as Clankcord-owned voice capture bots
+- Clankcord voice bot pool management
 - channel-keyed SQLite timeline substrate
 - refined transcript overlays
 - cheap gated router model call
 - low-token deterministic maintainer routines
 - job-scoped strong agent task
 - background ElevenLabs refinement agent task
-- Clawcord as the stable Discord/voice/transcript API
+- Clankcord as the stable Discord/voice/transcript API
 - Codex as the agent/job/tool orchestration layer
 
 This keeps the magic while avoiding the three failure modes:

@@ -5,12 +5,9 @@ use crate::adapters::stt::{
     should_drop_low_confidence_transcription, stt_drop_decision, transcribe_file_result_sync,
 };
 use crate::adapters::wakeword::detect_wake_file_sync;
-use crate::runtime::domain::interactions::{
-    VOICE_ACTIVATION_LOOKBACK_SECONDS, evaluate_voice_command, validate_voice_command_result,
-    voice_command_action,
-};
-use crate::runtime::timeline::{SpeechEventInput, event_start, sha256_file, string_field};
-use crate::runtime::{AudioSegmentPayload, CommandRequest, Job, Runtime};
+use crate::runtime::domain::wake_activations::{event_has_wake, schedule_from_wake_event};
+use crate::runtime::timeline::{SpeechEventInput, sha256_file};
+use crate::runtime::{AudioSegmentPayload, Job, Runtime};
 
 pub(crate) fn execute_segment_job(
     runtime: &Runtime,
@@ -136,79 +133,11 @@ pub(crate) fn execute_segment_job(
 }
 
 fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Result<Value> {
-    let existing = runtime
-        .timeline_store
-        .list_child_jobs(&parent_job.id)?
-        .into_iter()
-        .filter(|job| {
-            matches!(
-                job.kind,
-                crate::runtime::JobKind::Command | crate::runtime::JobKind::ConfirmationRequired
-            )
-        })
-        .map(|job| job.to_value())
-        .collect::<Vec<_>>();
-    if !existing.is_empty() {
-        return Ok(json!({"status": "already_routed", "jobs": existing}));
-    }
-
-    let Some(started_at) = event_start(event) else {
+    let _ = parent_job;
+    if !event_has_wake(event) {
         return Ok(Value::Null);
-    };
-    let recent_events = runtime.timeline_store.load_events(
-        &string_field(event, "guild_id"),
-        &string_field(event, "voice_channel_id"),
-        Some(started_at - chrono::Duration::seconds(VOICE_ACTIVATION_LOOKBACK_SECONDS)),
-        Some(started_at + chrono::Duration::seconds(1)),
-        Some(&std::collections::BTreeSet::from([
-            "speech_segment".to_string()
-        ])),
-        None,
-        false,
-    )?;
-    let room = runtime.room_for_channel_ids(
-        &string_field(event, "guild_id"),
-        &string_field(event, "voice_channel_id"),
-        Some(&string_field(event, "voice_channel_name")),
-    );
-    let room_status = runtime.status_for_room(&room);
-    let result = evaluate_voice_command(event, &recent_events, &room_status);
-    let (valid, reason) = validate_voice_command_result(&result);
-    if !valid || voice_command_action(&result) != "dispatch_now" {
-        return Ok(json!({
-            "status": "not_routed",
-            "valid": valid,
-            "reason": reason,
-            "result": result,
-        }));
     }
-    let duplicate = existing_command_jobs_for_dedupe(runtime, &result)?;
-    if !duplicate.is_empty() {
-        return Ok(json!({"status": "duplicate", "result": result, "jobs": duplicate}));
-    }
-    let command = CommandRequest::from_json(&result)?;
-    let created = runtime.create_command_job_sync(command, Some(parent_job))?;
-    Ok(json!({"status": "routed", "result": result, "created": created}))
-}
-
-fn existing_command_jobs_for_dedupe(runtime: &Runtime, result: &Value) -> Result<Vec<Value>> {
-    let dedupe_hash = string_field(result, "dedupe_hash");
-    if dedupe_hash.is_empty() {
-        return Ok(Vec::new());
-    }
-    let guild_id = string_field(result, "guild_id");
-    let channel_id = string_field(result, "voice_channel_id");
-    Ok(runtime
-        .timeline_store
-        .list_jobs(Some(&guild_id), None)?
-        .into_iter()
-        .filter(|job| job.voice_channel_id == channel_id)
-        .filter(|job| {
-            job.command_value()
-                .is_some_and(|command| string_field(&command, "dedupe_hash") == dedupe_hash)
-        })
-        .map(|job| job.to_value())
-        .collect())
+    schedule_from_wake_event(runtime, event)
 }
 
 fn wake_stream_id(payload: &AudioSegmentPayload) -> String {

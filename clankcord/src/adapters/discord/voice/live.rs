@@ -393,9 +393,9 @@ impl LiveVoiceAdapter {
         component: ComponentInteraction,
     ) {
         let custom_id = component.data.custom_id.trim().to_string();
-        let action = if let Some(job_id) = custom_id.strip_prefix("clawcord_voice_confirm:") {
+        let action = if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_confirm:") {
             ("approve", job_id.trim().to_string())
-        } else if let Some(job_id) = custom_id.strip_prefix("clawcord_voice_cancel:") {
+        } else if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_cancel:") {
             ("cancel", job_id.trim().to_string())
         } else {
             return;

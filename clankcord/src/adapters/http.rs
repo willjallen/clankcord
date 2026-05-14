@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::dashboard::{APP_JS, INDEX_HTML, STYLES_CSS};
+use crate::runtime::automations::AutomationState;
 use crate::runtime::{
     CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
     ListConversationsRequest, ParticipantTraceRequest, RenderTranscriptRequest, Runtime,
@@ -43,6 +44,18 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/voice/pool/status", get(pool_status))
         .route("/v1/voice/status", get(voice_status))
         .route("/v1/voice/commands", post(command_submit))
+        .route("/v1/voice/responses", post(response_submit))
+        .route(
+            "/v1/voice/automations",
+            get(automations_list).post(automation_create),
+        )
+        .route("/v1/voice/automations/validate", post(automation_validate))
+        .route("/v1/voice/automations/dry-run", post(automation_validate))
+        .route("/v1/voice/automations/{automation_id}", get(automation_get))
+        .route(
+            "/v1/voice/automations/{automation_id}/cancel",
+            post(automation_cancel),
+        )
         .route("/v1/voice/timeline/tail", get(timeline_tail))
         .route("/v1/voice/timeline/range", get(timeline_range))
         .route("/v1/voice/transcript/render", get(transcript_render))
@@ -121,6 +134,72 @@ async fn command_submit(State(state): State<AppState>, Json(payload): Json<Value
         Err(error) => return err(error),
     };
     result(state.handle.submit_command(command).await)
+}
+
+async fn response_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
+    let job = {
+        let runtime = state.runtime().await;
+        match runtime.response_job_from_value(&payload) {
+            Ok(job) => job,
+            Err(error) => return err(error),
+        }
+    };
+    result(state.handle.submit_job(job).await)
+}
+
+async fn automation_validate(
+    State(state): State<AppState>,
+    Json(payload): Json<Value>,
+) -> Response {
+    let runtime = state.runtime().await;
+    result(runtime.validate_automation_from_value(&payload))
+}
+
+async fn automation_create(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
+    let mut runtime = state.runtime().await;
+    result(runtime.create_automation_from_value(&payload))
+}
+
+async fn automations_list(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = state.runtime().await;
+    let state_filter = match query
+        .get("state")
+        .map(|value| value.parse::<AutomationState>())
+    {
+        Some(Ok(state)) => Some(state),
+        Some(Err(error)) => return err(error),
+        None => None,
+    };
+    result(
+        runtime.list_automation_records(
+            non_empty_string(query_str(&query, &["guild", "guildId"])).as_deref(),
+            non_empty_string(query_str(
+                &query,
+                &["channel", "channelId", "voice_channel_id"],
+            ))
+            .as_deref(),
+            state_filter,
+        ),
+    )
+}
+
+async fn automation_get(
+    State(state): State<AppState>,
+    Path(automation_id): Path<String>,
+) -> Response {
+    let runtime = state.runtime().await;
+    result(runtime.get_automation_record(&automation_id))
+}
+
+async fn automation_cancel(
+    State(state): State<AppState>,
+    Path(automation_id): Path<String>,
+) -> Response {
+    let mut runtime = state.runtime().await;
+    result(runtime.cancel_automation_record(&automation_id))
 }
 
 async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
