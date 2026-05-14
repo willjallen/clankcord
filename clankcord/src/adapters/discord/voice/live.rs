@@ -24,11 +24,12 @@ use crate::adapters::discord::voice::client_connection::{
 use crate::adapters::discord::voice::types::VoiceSession;
 use crate::config::{local_tz, read_json};
 use crate::errors::discord_tool_error;
-use crate::runtime::core::execution::{
-    JoinRoomEffectFuture, JoinRoomEffectRequest, JoinRoomEffectResult, LeaveRoomEffectFuture,
-    LeaveRoomEffectRequest, LeaveRoomEffectResult, RuntimeEffects,
+use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
+use crate::runtime::{
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+    DiscordVoiceLeavePayload, Job, JobOutput, RuntimeBotStatus, RuntimeControlAction,
+    RuntimeJobSink, log,
 };
-use crate::runtime::{RuntimeBotStatus, RuntimeControlAction, RuntimeJobSink, log};
 
 const DEFAULT_FLUSH_INTERVAL_SECONDS: f64 = 0.5;
 const DEFAULT_SILENCE_MS: i64 = 1_000;
@@ -58,13 +59,26 @@ impl fmt::Debug for LiveVoiceAdapter {
     }
 }
 
-impl RuntimeEffects for Arc<LiveVoiceAdapter> {
-    fn join_room<'a>(&'a self, request: JoinRoomEffectRequest) -> JoinRoomEffectFuture<'a> {
-        Box::pin(async move { LiveVoiceAdapter::join_assigned_room(self, request).await })
-    }
-
-    fn leave_room<'a>(&'a self, request: LeaveRoomEffectRequest) -> LeaveRoomEffectFuture<'a> {
-        Box::pin(async move { LiveVoiceAdapter::finish_session(self, request).await })
+impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
+    fn execute_adapter_job<'a>(&'a self, job: Job) -> AdapterJobFuture<'a> {
+        Box::pin(async move {
+            match job.payload {
+                crate::runtime::JobPayload::DiscordVoiceJoin(payload) => {
+                    Ok(JobOutput::DiscordVoiceJoin(
+                        LiveVoiceAdapter::join_assigned_room(self, payload).await?,
+                    ))
+                }
+                crate::runtime::JobPayload::DiscordVoiceLeave(payload) => {
+                    Ok(JobOutput::DiscordVoiceLeave(
+                        LiveVoiceAdapter::finish_session(self, payload).await?,
+                    ))
+                }
+                payload => anyhow::bail!(
+                    "Discord voice adapter cannot execute {} jobs",
+                    payload.kind()
+                ),
+            }
+        })
     }
 }
 
@@ -141,8 +155,8 @@ impl LiveVoiceAdapter {
 
     async fn join_assigned_room(
         self: &Arc<Self>,
-        request: JoinRoomEffectRequest,
-    ) -> Result<JoinRoomEffectResult> {
+        request: DiscordVoiceJoinPayload,
+    ) -> Result<DiscordVoiceJoinOutput> {
         let room = request.room.clone();
         let session_id = request.capture_run_id.clone();
         let (voice, bot_user_id) = {
@@ -232,7 +246,7 @@ impl LiveVoiceAdapter {
             client.last_error.clear();
             Some(client.status())
         };
-        Ok(JoinRoomEffectResult {
+        Ok(DiscordVoiceJoinOutput {
             status: "assigned".to_string(),
             session: Some(session_metadata),
             bot_status,
@@ -250,12 +264,12 @@ impl LiveVoiceAdapter {
 
     async fn finish_session(
         self: &Arc<Self>,
-        request: LeaveRoomEffectRequest,
-    ) -> Result<LeaveRoomEffectResult> {
+        request: DiscordVoiceLeavePayload,
+    ) -> Result<DiscordVoiceLeaveOutput> {
         let session_id = request.session_id;
         let live_session = self.sessions.lock().await.remove(&session_id);
         let Some(live_session) = live_session else {
-            return Ok(LeaveRoomEffectResult {
+            return Ok(DiscordVoiceLeaveOutput {
                 session_id,
                 status: "missing_session".to_string(),
                 session: None,
@@ -291,7 +305,7 @@ impl LiveVoiceAdapter {
                 .get(&finished.bot_id)
                 .map(DiscordVoiceClient::status)
         };
-        Ok(LeaveRoomEffectResult {
+        Ok(DiscordVoiceLeaveOutput {
             session_id: finished.session_id,
             status: "ended".to_string(),
             session: Some(finished.metadata),

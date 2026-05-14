@@ -1,51 +1,13 @@
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use crate::Result;
+use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{parse_instant, utc_now};
-use crate::runtime::{BinaryPayload, Job, JobKind, JobState, Runtime};
+use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 
-use super::{RuntimeEffects, routes};
+use super::routes;
 
 impl Runtime {
-    pub(crate) async fn dispatch_due_jobs(
-        &mut self,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
-        let mut results = Map::new();
-        for kind in [
-            JobKind::RuntimeControl,
-            JobKind::WakeActivation,
-            JobKind::Command,
-            JobKind::RoomAgentPlacement,
-        ] {
-            results.insert(
-                kind.as_str().to_string(),
-                self.dispatch_next_due_async_job(kind, effects).await?,
-            );
-        }
-        Ok(Value::Object(results))
-    }
-
-    pub(crate) fn dispatch_due_blocking_jobs(&self) -> Result<Value> {
-        let mut results = Map::new();
-        for kind in [
-            JobKind::AudioSegment,
-            JobKind::RefineTranscript,
-            JobKind::AgentTask,
-            JobKind::Response,
-        ] {
-            let result = match kind {
-                JobKind::AudioSegment => self.dispatch_audio_segment_jobs()?,
-                JobKind::RefineTranscript => self.dispatch_next_refine_transcript_job()?,
-                JobKind::AgentTask => self.dispatch_next_due_agent_task_job()?,
-                JobKind::Response => self.dispatch_next_due_response_job()?,
-                _ => unreachable!("blocking dispatcher kind list is fixed"),
-            };
-            results.insert(kind.as_str().to_string(), result);
-        }
-        Ok(Value::Object(results))
-    }
-
     pub(crate) fn run_blocking_maintenance(&self) -> Result<Value> {
         let timed_out = self.fail_stale_running_jobs()?;
         let resolved_waiting = self.resolve_waiting_jobs()?;
@@ -55,143 +17,101 @@ impl Runtime {
         }))
     }
 
-    async fn dispatch_next_due_async_job(
-        &mut self,
-        kind: JobKind,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
-        let Some(job) = self.next_queued_job(kind)? else {
-            return Ok(json!({"dispatched": false, "reason": format!("no queued {kind} jobs")}));
-        };
-        let job_id = job.id.clone();
-        let mut running = job.clone();
-        running.mark_running();
-        self.timeline_store.update_job(&running)?;
-
-        match routes::execute_async(self, &running, effects).await {
-            Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+    pub(crate) fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
+        let job_id = running.id.clone();
+        match routes::execute_runtime_async(self, &running) {
+            Ok(decision) => self.apply_job_decision(&job_id, running, decision),
             Err(error) => self.fail_dispatched_job(&job_id, running, error),
         }
     }
 
-    fn dispatch_next_refine_transcript_job(&self) -> Result<Value> {
-        let Some(job) = self.next_queued_job(JobKind::RefineTranscript)? else {
-            return Ok(json!({"dispatched": false, "reason": "no queued refinement jobs"}));
-        };
-        routes::execute_refine_transcript(self, &job)
-    }
-
-    pub(crate) fn dispatch_next_due_response_job(&self) -> Result<Value> {
-        let Some(job) = self.next_queued_job(JobKind::Response)? else {
-            return Ok(json!({"dispatched": false, "reason": "no queued response jobs"}));
-        };
-        let job_id = job.id.clone();
-        let mut running = job.clone();
-        running.mark_running();
-        self.timeline_store.update_job(&running)?;
-        match routes::execute_response(self, &running) {
-            Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-            Err(error) => self.fail_dispatched_job(&job_id, running, error),
+    pub(crate) fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
+        let job_id = running.id.clone();
+        match running.kind {
+            JobKind::AudioSegment => match routes::execute_audio_segment(self, &running) {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            },
+            JobKind::RefineTranscript => match routes::execute_refine_transcript(self, &running) {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            },
+            JobKind::AgentTask => self.dispatch_claimed_agent_task_job(running),
+            JobKind::Response => match routes::execute_response(self, &running) {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
+                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            },
+            kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
         }
     }
 
-    fn dispatch_next_audio_segment_job(&self) -> Result<Value> {
-        let Some(job) = self.next_queued_audio_segment_job()? else {
-            return Ok(json!({"dispatched": false, "reason": "no queued audio segment jobs"}));
-        };
-        let job_id = job.id.clone();
-        let mut running = job.clone();
-        running.mark_running();
-        self.timeline_store.update_job(&running)?;
-        match routes::execute_audio_segment(self, &running) {
-            Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-            Err(error) => self.fail_dispatched_job(&job_id, running, error),
-        }
-    }
-
-    fn dispatch_audio_segment_jobs(&self) -> Result<Value> {
-        let limit = audio_segment_dispatch_limit();
-        let mut jobs = Vec::new();
-        for _ in 0..limit {
-            let result = self.dispatch_next_audio_segment_job()?;
-            if result.get("dispatched").and_then(Value::as_bool) != Some(true) {
-                if jobs.is_empty() {
-                    return Ok(result);
-                }
-                break;
-            }
-            jobs.push(result);
-        }
-        Ok(json!({
-            "dispatched": !jobs.is_empty(),
-            "count": jobs.len(),
-            "jobs": jobs,
-        }))
-    }
-
-    fn next_queued_audio_segment_job(&self) -> Result<Option<Job>> {
-        Ok(self
-            .timeline_store
-            .list_jobs(None, Some(JobState::Queued))?
-            .into_iter()
-            .filter(|job| job.kind == JobKind::AudioSegment && !job.id.trim().is_empty())
-            .min_by(|left, right| {
-                left.created_at
-                    .cmp(&right.created_at)
-                    .then_with(|| left.id.cmp(&right.id))
-            }))
-    }
-
-    pub(crate) fn next_queued_job(&self, kind: JobKind) -> Result<Option<Job>> {
-        let now = utc_now();
-        Ok(self
-            .timeline_store
-            .list_jobs(None, Some(JobState::Queued))?
-            .into_iter()
-            .filter(|job| job.kind == kind && !job.id.trim().is_empty())
-            .filter(|job| {
-                job.next_run_at
-                    .as_deref()
-                    .and_then(parse_instant)
-                    .is_none_or(|next_run_at| next_run_at <= now)
-            })
-            .min_by(|left, right| {
-                let left_due = left
-                    .next_run_at
-                    .as_deref()
-                    .and_then(parse_instant)
-                    .or_else(|| parse_instant(&left.created_at));
-                let right_due = right
-                    .next_run_at
-                    .as_deref()
-                    .and_then(parse_instant)
-                    .or_else(|| parse_instant(&right.created_at));
-                left_due
-                    .cmp(&right_due)
-                    .then_with(|| left.created_at.cmp(&right.created_at))
-                    .then_with(|| left.id.cmp(&right.id))
-            }))
-    }
-
-    fn complete_dispatched_job(
+    pub(crate) fn apply_job_decision(
         &self,
         job_id: &str,
         fallback_job: Job,
-        result: Value,
+        decision: JobDecision,
+    ) -> Result<Value> {
+        match decision {
+            JobDecision::Complete(output) => {
+                self.complete_dispatched_job(job_id, fallback_job, output)
+            }
+            JobDecision::Fail(failure) => {
+                self.fail_dispatched_job(job_id, fallback_job, anyhow::anyhow!(failure.message))
+            }
+            JobDecision::Wait => self.wait_dispatched_job(job_id, fallback_job, Vec::new()),
+            JobDecision::WaitFor(children) => {
+                self.wait_dispatched_job(job_id, fallback_job, children)
+            }
+        }
+    }
+
+    pub(crate) fn complete_dispatched_job(
+        &self,
+        job_id: &str,
+        fallback_job: Job,
+        output: JobOutput,
     ) -> Result<Value> {
         let mut latest = self
             .timeline_store
             .get_job(job_id)
             .unwrap_or_else(|_| fallback_job.clone());
-        latest.metadata.result = BinaryPayload::from_json(&result)?;
+        latest.metadata.output = Some(output.clone());
         if latest.state != JobState::Waiting && latest.state != JobState::Queued {
             latest.mark_complete();
         }
         self.timeline_store.update_job(&latest)?;
-        Ok(json!({"dispatched": true, "job": latest.to_value(), "result": result}))
+        Ok(json!({"dispatched": true, "job": latest.to_value(), "result": output.to_json()}))
     }
 
-    fn fail_dispatched_job(
+    pub(crate) fn wait_dispatched_job(
+        &self,
+        job_id: &str,
+        fallback_job: Job,
+        children: Vec<Job>,
+    ) -> Result<Value> {
+        let latest = self
+            .timeline_store
+            .get_job(job_id)
+            .unwrap_or_else(|_| fallback_job.clone());
+        let mut child_ids = Vec::new();
+        if children.is_empty() {
+            let mut waiting = latest.clone();
+            if !waiting.state.is_terminal() {
+                waiting.mark_waiting();
+                self.timeline_store.update_job(&waiting)?;
+            }
+        } else {
+            for child in children {
+                let child = self.timeline_store.create_child_job(&latest, child)?;
+                child_ids.push(child.id);
+            }
+        }
+        Ok(
+            json!({"dispatched": true, "waiting": true, "job_id": job_id, "child_job_ids": child_ids}),
+        )
+    }
+
+    pub(crate) fn fail_dispatched_job(
         &self,
         job_id: &str,
         fallback_job: Job,
@@ -242,7 +162,10 @@ impl Runtime {
             if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
                 continue;
             }
-            if children.iter().all(|job| job.state == JobState::Complete) {
+            if parent.kind == JobKind::RoomAgentPlacement {
+                parent.set_state(JobState::Queued);
+                parent.next_run_at = None;
+            } else if children.iter().all(|job| job.state == JobState::Complete) {
                 parent.mark_complete();
             } else if children.iter().any(|job| job.state == JobState::Cancelled) {
                 parent.mark_cancelled();
@@ -264,12 +187,4 @@ impl Runtime {
         }
         Ok(resolved)
     }
-}
-
-fn audio_segment_dispatch_limit() -> usize {
-    std::env::var("CLANKCORD_AUDIO_SEGMENT_DISPATCH_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(8)
-        .clamp(1, 64)
 }

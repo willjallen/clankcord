@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 
 use crate::Result;
+use crate::runtime::rooms::RoomConfig;
 use crate::runtime::timeline::parse_duration;
 
 use super::JobKind;
@@ -832,6 +833,24 @@ pub struct RoomAgentPlacementPayload {
     pub cooldown_seconds: Option<i64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceJoinPayload {
+    pub room: RoomConfig,
+    pub bot_id: String,
+    pub capture_run_id: String,
+    pub assignment_id: String,
+    pub started_at: DateTime<Utc>,
+    pub session_dir: PathBuf,
+    pub requested_by_user_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceLeavePayload {
+    pub session_id: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeControlAction {
     RetryJob,
@@ -866,6 +885,8 @@ pub enum JobPayload {
     ConfirmationRequired(ConfirmationRequiredPayload),
     Command(CommandPayload),
     RoomAgentPlacement(RoomAgentPlacementPayload),
+    DiscordVoiceJoin(DiscordVoiceJoinPayload),
+    DiscordVoiceLeave(DiscordVoiceLeavePayload),
     RuntimeControl(RuntimeControlPayload),
 }
 
@@ -880,6 +901,8 @@ impl JobPayload {
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
             Self::Command(_) => JobKind::Command,
             Self::RoomAgentPlacement(_) => JobKind::RoomAgentPlacement,
+            Self::DiscordVoiceJoin(_) => JobKind::DiscordVoiceJoin,
+            Self::DiscordVoiceLeave(_) => JobKind::DiscordVoiceLeave,
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
         }
     }
@@ -893,6 +916,8 @@ impl JobPayload {
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::Command(payload) => Some(&payload.command),
             Self::RoomAgentPlacement(_) => None,
+            Self::DiscordVoiceJoin(_) => None,
+            Self::DiscordVoiceLeave(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
         }
@@ -907,6 +932,8 @@ impl JobPayload {
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::Command(payload) => Some(&mut payload.command),
             Self::RoomAgentPlacement(_) => None,
+            Self::DiscordVoiceJoin(_) => None,
+            Self::DiscordVoiceLeave(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
         }
@@ -995,6 +1022,20 @@ impl JobPayload {
                 }
                 Value::Object(object)
             }
+            Self::DiscordVoiceJoin(payload) => json!({
+                "room": payload.room.to_json(),
+                "bot_id": payload.bot_id,
+                "capture_run_id": payload.capture_run_id,
+                "assignment_id": payload.assignment_id,
+                "started_at": payload.started_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "session_dir": payload.session_dir.display().to_string(),
+                "requested_by_user_id": payload.requested_by_user_id,
+                "reason": payload.reason,
+            }),
+            Self::DiscordVoiceLeave(payload) => json!({
+                "session_id": payload.session_id,
+                "reason": payload.reason,
+            }),
             Self::RuntimeControl(payload) => json!({
                 "action": payload.action.as_str(),
                 "target_job_id": payload.target_job_id,

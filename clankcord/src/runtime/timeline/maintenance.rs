@@ -382,6 +382,12 @@ impl TimelineStore {
                 .collect::<Vec<_>>()
                 .join(",");
             db.execute(
+                &format!(
+                    "DELETE FROM job_dependencies WHERE parent_job_id IN ({placeholders}) OR child_job_id IN ({placeholders})"
+                ),
+                params_from_iter(old_jobs.iter().chain(old_jobs.iter())),
+            )?;
+            db.execute(
                 &format!("DELETE FROM transcript_jobs WHERE job_id IN ({placeholders})"),
                 params_from_iter(old_jobs.iter()),
             )?;

@@ -70,10 +70,7 @@ struct AgentTaskTools {
 }
 
 impl Runtime {
-    pub fn dispatch_next_due_agent_task_job(&self) -> Result<Value> {
-        let Some(job) = self.next_queued_job(JobKind::AgentTask)? else {
-            return Ok(json!({"dispatched": false, "reason": "no queued agent task jobs"}));
-        };
+    pub(crate) fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
         let job_id = job.id.clone();
         let attempts = job
             .metadata
@@ -89,11 +86,7 @@ impl Runtime {
             );
         }
 
-        let mut running = job.clone();
-        running.mark_running();
-        self.timeline_store.update_job(&running)?;
-
-        match self.dispatch_agent_task(&running) {
+        match self.dispatch_agent_task(&job) {
             Ok(dispatch_result) => {
                 match self.complete_agent_task_job(job_id.clone(), dispatch_result) {
                     Ok(value) => Ok(value),

@@ -2,11 +2,12 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config::string_field;
-use crate::runtime::core::execution::RuntimeEffects;
+use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::{isoformat_z, utc_now};
 use crate::runtime::{
-    CommandKind, CommandRequest, ForgetRequest, Job, JobKind, MaterializeTranscriptRequest,
+    CommandKind, CommandRequest, ForgetRequest, Job, JobKind, JobOutput,
+    MaterializeTranscriptRequest, RoomAgentPlacementAction,
 };
 
 use crate::runtime::Runtime;
@@ -73,11 +74,7 @@ impl Runtime {
         }))
     }
 
-    pub(crate) async fn execute_command_job(
-        &mut self,
-        job: &Job,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
+    pub(crate) fn prepare_command_job(&mut self, job: &Job) -> Result<JobDecision> {
         if job.kind != JobKind::Command {
             anyhow::bail!("job {} is not a command", job.id);
         }
@@ -85,15 +82,14 @@ impl Runtime {
             .command()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("command job {} has no command payload", job.id))?;
-        self.execute_command(command, job, effects).await
+        self.prepare_command(command, job)
     }
 
-    async fn execute_command(
+    fn prepare_command(
         &mut self,
         command: CommandRequest,
         parent_job: &Job,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
+    ) -> Result<JobDecision> {
         let command_kind = command.command_kind;
         let job_kind = command_kind.job_kind();
         let (guild_id, channel_id, target_room_identifier) = self.command_scope(&command)?;
@@ -124,9 +120,9 @@ impl Runtime {
                     parent_job_id: parent_job.id.clone(),
                     ..MaterializeTranscriptRequest::default()
                 })?;
-                Ok(
-                    json!({"kind": "materialize_transcript", "job_ids": [], "materialized": materialized}),
-                )
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "materialize_transcript", "job_ids": [], "materialized": materialized}),
+                )?))
             }
             "make_permanent" => {
                 let end = utc_now();
@@ -142,7 +138,9 @@ impl Runtime {
                     parent_job_id: parent_job.id.clone(),
                     ..MaterializeTranscriptRequest::default()
                 })?;
-                Ok(json!({"kind": "make_permanent", "job_ids": [], "materialized": materialized}))
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "make_permanent", "job_ids": [], "materialized": materialized}),
+                )?))
             }
             "pause_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
@@ -150,15 +148,17 @@ impl Runtime {
                     &room,
                     command.arguments.duration_seconds.unwrap_or(20 * 60),
                     &command.requested_by_user_id,
-                )
-                .await?;
-                Ok(json!({"kind": "pause_listening", "job_ids": []}))
+                )?;
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "pause_listening", "job_ids": []}),
+                )?))
             }
             "resume_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
-                self.resume_room(&room, &command.requested_by_user_id)
-                    .await?;
-                Ok(json!({"kind": "resume_listening", "job_ids": []}))
+                self.resume_room(&room, &command.requested_by_user_id)?;
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "resume_listening", "job_ids": []}),
+                )?))
             }
             "deafen_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
@@ -166,57 +166,49 @@ impl Runtime {
                     &room,
                     self.manual_leave_cooldown_seconds,
                     &command.requested_by_user_id,
-                )
-                .await?;
-                Ok(json!({"kind": "deafen_listening", "job_ids": []}))
+                )?;
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "deafen_listening", "job_ids": []}),
+                )?))
             }
             "leave_room" => {
-                let cooldown_seconds = self.manual_leave_cooldown_seconds;
-                let result = if let Some(effects) = effects {
-                    self.leave_room_with_effect(
-                        Some(&target_room_identifier),
-                        cooldown_seconds,
-                        &command.requested_by_user_id,
-                        Some(parent_job),
-                        effects,
-                    )
-                    .await?
-                } else {
-                    self.leave_room(
-                        Some(&target_room_identifier),
-                        Some(cooldown_seconds),
-                        Some(&command.requested_by_user_id),
-                    )
-                    .await?
-                };
-                Ok(json!({"kind": "leave_room", "job_ids": [], "result": result}))
+                let job = Job::room_agent_placement(
+                    guild_id,
+                    channel_id,
+                    target_room_identifier,
+                    RoomAgentPlacementAction::Leave,
+                    "explicit_request",
+                    format!(
+                        "command:{}:{}:{}",
+                        parent_job.id,
+                        RoomAgentPlacementAction::Leave.as_str(),
+                        parent_job.voice_channel_id
+                    ),
+                    Some(self.manual_leave_cooldown_seconds),
+                );
+                Ok(JobDecision::WaitFor(vec![job]))
             }
             "join_room" => {
-                let result = if let Some(effects) = effects {
-                    let room = if !target_room_identifier.trim().is_empty() {
-                        self.room_for_identifier(Some(&target_room_identifier))?
-                    } else if !guild_id.trim().is_empty() {
-                        self.resolve_room_scope(&guild_id, None)?
-                    } else {
-                        self.room_for_identifier(None)?
-                    };
-                    self.assign_room_with_effect(
-                        room,
-                        &command.requested_by_user_id,
-                        "explicit_request",
-                        effects,
-                    )
-                    .await?
+                let room_id = if !target_room_identifier.trim().is_empty() {
+                    target_room_identifier
                 } else {
-                    self.assign_room(
-                        Some(&target_room_identifier),
-                        Some(&guild_id),
-                        Some(&command.requested_by_user_id),
-                        Some("explicit_request"),
-                    )
-                    .await?
+                    channel_id.clone()
                 };
-                Ok(json!({"kind": "join_room", "job_ids": [], "result": result}))
+                let job = Job::room_agent_placement(
+                    guild_id,
+                    channel_id,
+                    room_id,
+                    RoomAgentPlacementAction::Join,
+                    "explicit_request",
+                    format!(
+                        "command:{}:{}:{}",
+                        parent_job.id,
+                        RoomAgentPlacementAction::Join.as_str(),
+                        parent_job.voice_channel_id
+                    ),
+                    None,
+                );
+                Ok(JobDecision::WaitFor(vec![job]))
             }
             "forget_window" => {
                 let (start, end) = command.window_times(None);
@@ -238,7 +230,9 @@ impl Runtime {
                     unpublished_only: command.arguments.unpublished_only.unwrap_or(true),
                     ..ForgetRequest::default()
                 })?;
-                Ok(json!({"kind": "forget_window", "job_ids": [], "result": result}))
+                Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                    &json!({"kind": "forget_window", "job_ids": [], "result": result}),
+                )?))
             }
             _ => {
                 let job_kind: JobKind = job_kind.parse()?;
@@ -251,12 +245,7 @@ impl Runtime {
                     command.requested_by_user_id.clone(),
                     command,
                 );
-                let job = self.timeline_store.create_child_job(parent_job, job)?;
-                Ok(json!({
-                    "kind": "job_created",
-                    "job_ids": [job.id.clone()],
-                    "job": job.to_value()
-                }))
+                Ok(JobDecision::WaitFor(vec![job]))
             }
         }
     }

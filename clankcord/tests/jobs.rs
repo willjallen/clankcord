@@ -1,9 +1,11 @@
-use chrono::TimeZone;
+use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
+use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    AudioSegmentPayload, BinaryPayload, CommandRequest, Job, JobKind, JobPayload, JobState,
-    RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind,
+    AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordVoiceJoinPayload,
+    DiscordVoiceLeaveOutput, Job, JobKind, JobOutput, JobPayload, JobState,
+    RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind, RoomConfig,
     WakeActivationPayload,
 };
 
@@ -83,7 +85,7 @@ fn opaque_json_lowers_to_binary_payload() {
 }
 
 #[test]
-fn job_lineage_is_bounded_to_grandchildren() {
+fn job_lineage_allows_arbitrary_dag_depth_metadata() {
     let root = Job::new(
         "guild",
         "channel",
@@ -100,6 +102,7 @@ fn job_lineage_is_bounded_to_grandchildren() {
         Job::refine_transcript("guild", "channel", "requester", "grandchild", "pub");
     grandchild.attach_to_parent(&child).unwrap();
     let mut too_deep = Job::refine_transcript("guild", "channel", "requester", "deep", "pub");
+    too_deep.attach_to_parent(&grandchild).unwrap();
 
     assert_eq!(child.parent_job_id.as_deref(), Some(root.id.as_str()));
     assert_eq!(child.root_job_id, root.id);
@@ -107,7 +110,12 @@ fn job_lineage_is_bounded_to_grandchildren() {
     assert_eq!(grandchild.parent_job_id.as_deref(), Some(child.id.as_str()));
     assert_eq!(grandchild.root_job_id, child.root_job_id);
     assert_eq!(grandchild.lineage_depth, 2);
-    assert!(too_deep.attach_to_parent(&grandchild).is_err());
+    assert_eq!(
+        too_deep.parent_job_id.as_deref(),
+        Some(grandchild.id.as_str())
+    );
+    assert_eq!(too_deep.root_job_id, child.root_job_id);
+    assert_eq!(too_deep.lineage_depth, 3);
 }
 
 #[test]
@@ -167,4 +175,158 @@ fn wake_activation_payload_is_a_first_class_binary_job() {
         decoded.wake_activation_payload().unwrap().wake_event_id,
         "evt_wake"
     );
+}
+
+#[test]
+fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let due = Job::response("guild", "code", "user-a", response_payload("due"));
+    let due_id = due.id.clone();
+    let mut future = Job::response("guild", "code", "user-a", response_payload("future"));
+    let future_id = future.id.clone();
+    future.next_run_at =
+        Some((Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true));
+
+    store.create_job(future).unwrap();
+    store.create_job(due).unwrap();
+
+    let claimed = store
+        .claim_due_jobs(JobKind::Response, 8, |_| false)
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, due_id);
+    assert_eq!(claimed[0].state, JobState::Running);
+    assert_eq!(store.get_job(&due_id).unwrap().state, JobState::Running);
+    assert_eq!(store.get_job(&future_id).unwrap().state, JobState::Queued);
+    assert!(
+        store
+            .claim_due_jobs(JobKind::Response, 8, |_| false)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let command = CommandRequest::from_json(&json!({
+        "command_kind": "agent_task",
+        "guild_id": "guild",
+        "voice_channel_id": "code",
+        "requested_by_user_id": "user-a",
+        "arguments": {"question": "summarize this"}
+    }))
+    .unwrap();
+    let job = Job::agent_task("guild", "code", "user-a", command);
+    let job_id = job.id.clone();
+    store.create_job(job).unwrap();
+
+    let skipped = store
+        .claim_due_jobs(JobKind::AgentTask, 4, |job| job.voice_channel_id == "code")
+        .unwrap();
+
+    assert!(skipped.is_empty());
+    assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Queued);
+
+    let claimed = store
+        .claim_due_jobs(JobKind::AgentTask, 4, |_| false)
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, job_id);
+    assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Running);
+}
+
+#[test]
+fn timeline_child_jobs_are_stored_as_dependency_edges() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let parent = store
+        .create_job(Job::response(
+            "guild",
+            "code",
+            "user-a",
+            response_payload("parent"),
+        ))
+        .unwrap();
+    let child = Job::response("guild", "code", "user-a", response_payload("child"));
+    let child_id = child.id.clone();
+
+    store.create_child_job(&parent, child).unwrap();
+
+    let parent = store.get_job(&parent.id).unwrap();
+    assert_eq!(parent.state, JobState::Waiting);
+    let children = store.list_child_jobs(&parent.id).unwrap();
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].id, child_id);
+    assert_eq!(
+        children[0].parent_job_id.as_deref(),
+        Some(parent.id.as_str())
+    );
+}
+
+#[test]
+fn discord_voice_jobs_are_first_class_binary_jobs() {
+    let room = RoomConfig {
+        room_id: "code-lounge".to_string(),
+        guild_id: "guild".to_string(),
+        guild_slug: "guild".to_string(),
+        channel_id: "code".to_string(),
+        channel_slug: "code-lounge".to_string(),
+        channel_name: "Code Lounge".to_string(),
+        auto_join: true,
+    };
+    let payload = DiscordVoiceJoinPayload {
+        room: room.clone(),
+        bot_id: "clanky-vc1".to_string(),
+        capture_run_id: "cap_1".to_string(),
+        assignment_id: "assign_1".to_string(),
+        started_at: Utc::now(),
+        session_dir: raw_path("session"),
+        requested_by_user_id: "user-a".to_string(),
+        reason: "auto_join".to_string(),
+    };
+    let job = Job::discord_voice_join(payload);
+    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+
+    assert_eq!(decoded.kind, JobKind::DiscordVoiceJoin);
+    assert_eq!(
+        decoded.discord_voice_join_payload().unwrap().room.room_id,
+        room.room_id
+    );
+
+    let output = JobOutput::DiscordVoiceLeave(DiscordVoiceLeaveOutput {
+        session_id: "cap_1".to_string(),
+        status: "ended".to_string(),
+        session: None,
+        bot_status: None,
+        guild_id: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        capture_run_id: "cap_1".to_string(),
+        audio_jobs: Vec::new(),
+    });
+    let mut completed = decoded.clone();
+    completed.metadata.output = Some(output);
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordVoiceLeave(_))
+    ));
+}
+
+fn response_payload(content: &str) -> ResponsePayload {
+    ResponsePayload::from_json(&json!({
+        "response_kind": "message",
+        "sink": "stdout",
+        "requested_by_user_id": "user-a",
+        "content": content,
+    }))
+    .unwrap()
+}
+
+fn raw_path(path: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(path)
 }

@@ -3,18 +3,17 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use uuid::Uuid;
 
-use crate::Result;
-use crate::errors::discord_tool_error;
-
 use super::util::{
     first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
 };
 use super::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
-    ConfirmationContext, ConfirmationRequiredPayload, JobKind, JobPayload, JobState,
-    RefineTranscriptPayload, ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload, WakeActivationPayload,
+    ConfirmationContext, ConfirmationRequiredPayload, DiscordVoiceJoinPayload,
+    DiscordVoiceLeavePayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
+    ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlPayload, WakeActivationPayload,
 };
+use crate::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct AgentPreflightCheck {
@@ -99,13 +98,13 @@ impl AgentInvocationMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct DiscordPostedMessageMetadata {
+pub struct DiscordPostedMessageMetadata {
     pub channel_id: String,
     pub message_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub(crate) struct DiscordPostMetadata {
+pub struct DiscordPostMetadata {
     pub channel_id: String,
     pub messages: Vec<DiscordPostedMessageMetadata>,
 }
@@ -223,7 +222,7 @@ pub struct JobMetadata {
     pub timed_out_at: String,
     pub cancel_requested: bool,
     pub cancelled_by_user_id: String,
-    pub result: BinaryPayload,
+    pub output: Option<JobOutput>,
 }
 
 impl JobMetadata {
@@ -303,8 +302,8 @@ impl JobMetadata {
             "cancelled_by_user_id",
             &self.cancelled_by_user_id,
         );
-        if !self.result.is_empty() {
-            object.insert("result".to_string(), self.result.to_json());
+        if let Some(output) = &self.output {
+            object.insert("result".to_string(), output.to_json());
         }
         Value::Object(object)
     }
@@ -373,18 +372,13 @@ impl Job {
     }
 
     pub fn attach_to_parent(&mut self, parent: &Job) -> Result<()> {
-        if parent.lineage_depth >= 2 {
-            return Err(discord_tool_error(
-                "job lineage is capped at parent -> child -> grandchild",
-            ));
-        }
         self.parent_job_id = Some(parent.id.clone());
         self.root_job_id = if parent.root_job_id.trim().is_empty() {
             parent.id.clone()
         } else {
             parent.root_job_id.clone()
         };
-        self.lineage_depth = parent.lineage_depth + 1;
+        self.lineage_depth = parent.lineage_depth.saturating_add(1);
         Ok(())
     }
 
@@ -512,6 +506,31 @@ impl Job {
                 decision_key: decision_key.into(),
                 cooldown_seconds,
             }),
+        )
+    }
+
+    pub fn discord_voice_join(payload: DiscordVoiceJoinPayload) -> Self {
+        Self::new(
+            payload.room.guild_id.clone(),
+            payload.room.channel_id.clone(),
+            payload.requested_by_user_id.clone(),
+            JobState::Queued,
+            JobPayload::DiscordVoiceJoin(payload),
+        )
+    }
+
+    pub fn discord_voice_leave(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordVoiceLeavePayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordVoiceLeave(payload),
         )
     }
 
@@ -662,6 +681,20 @@ impl Job {
     pub fn room_agent_placement_payload(&self) -> Option<&RoomAgentPlacementPayload> {
         match &self.payload {
             JobPayload::RoomAgentPlacement(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_join_payload(&self) -> Option<&DiscordVoiceJoinPayload> {
+        match &self.payload {
+            JobPayload::DiscordVoiceJoin(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_leave_payload(&self) -> Option<&DiscordVoiceLeavePayload> {
+        match &self.payload {
+            JobPayload::DiscordVoiceLeave(payload) => Some(payload),
             _ => None,
         }
     }

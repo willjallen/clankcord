@@ -10,7 +10,7 @@ use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::{RoomConfig, RoomControl, Runtime};
 
 impl Runtime {
-    pub async fn pause_room(
+    pub fn pause_room(
         &mut self,
         room: &RoomConfig,
         duration_seconds: i64,
@@ -35,11 +35,7 @@ impl Runtime {
         Ok(json!({"action": "pause", "status": "paused", "roomId": room.room_id, "event": event}))
     }
 
-    pub async fn resume_room(
-        &mut self,
-        room: &RoomConfig,
-        requested_by_user_id: &str,
-    ) -> Result<Value> {
+    pub fn resume_room(&mut self, room: &RoomConfig, requested_by_user_id: &str) -> Result<Value> {
         self.clear_room_controls(room, &["listening_paused_until"])?;
         let event = self.timeline_store.append_event(
             &room.guild_id,

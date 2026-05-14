@@ -1,28 +1,24 @@
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::Result;
-use crate::runtime::core::execution::RuntimeEffects;
+use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::audio_segments;
 use crate::runtime::domain::responses;
 use crate::runtime::domain::wake_activations;
 use crate::runtime::refinement::run_refinement_job;
 use crate::runtime::{
-    Job, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
+    Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
     RuntimeControlAction, RuntimeControlPayload,
 };
 
-pub(crate) async fn execute_async(
-    runtime: &mut Runtime,
-    job: &Job,
-    effects: Option<&dyn RuntimeEffects>,
-) -> Result<Value> {
+pub(crate) fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> Result<JobDecision> {
     match &job.payload {
-        JobPayload::RuntimeControl(payload) => runtime_control::execute(runtime, payload).await,
-        JobPayload::WakeActivation(payload) => wake_activations::execute(runtime, job, payload),
-        JobPayload::Command(_) => commands::execute(runtime, job, effects).await,
-        JobPayload::RoomAgentPlacement(payload) => {
-            room_agents::execute(runtime, job, payload, effects).await
-        }
+        JobPayload::RuntimeControl(payload) => runtime_control::prepare(runtime, payload),
+        JobPayload::WakeActivation(payload) => Ok(JobDecision::Complete(
+            JobOutput::from_boundary_json(&wake_activations::execute(runtime, job, payload)?)?,
+        )),
+        JobPayload::Command(_) => commands::prepare(runtime, job),
+        JobPayload::RoomAgentPlacement(payload) => room_agents::prepare(runtime, job, payload),
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
             payload.kind()
@@ -30,7 +26,7 @@ pub(crate) async fn execute_async(
     }
 }
 
-pub(crate) fn execute_response(runtime: &Runtime, job: &Job) -> Result<Value> {
+pub(crate) fn execute_response(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
     match &job.payload {
         JobPayload::Response(payload) => responses::execute(runtime, job, payload),
         payload => anyhow::bail!(
@@ -40,7 +36,7 @@ pub(crate) fn execute_response(runtime: &Runtime, job: &Job) -> Result<Value> {
     }
 }
 
-pub(crate) fn execute_refine_transcript(runtime: &Runtime, job: &Job) -> Result<Value> {
+pub(crate) fn execute_refine_transcript(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
     match &job.payload {
         JobPayload::RefineTranscript(_) => refinement::execute(runtime, job),
         payload => anyhow::bail!(
@@ -50,11 +46,11 @@ pub(crate) fn execute_refine_transcript(runtime: &Runtime, job: &Job) -> Result<
     }
 }
 
-pub(crate) fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<Value> {
+pub(crate) fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
     match &job.payload {
-        JobPayload::AudioSegment(payload) => {
-            audio_segments::execute_segment_job(runtime, job, payload)
-        }
+        JobPayload::AudioSegment(payload) => Ok(JobOutput::from_boundary_json(
+            &audio_segments::execute_segment_job(runtime, job, payload)?,
+        )?),
         payload => anyhow::bail!(
             "job payload {} is not handled by audio executor",
             payload.kind()
@@ -65,55 +61,55 @@ pub(crate) fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<Valu
 mod runtime_control {
     use super::*;
 
-    pub(super) async fn execute(
+    pub(super) fn prepare(
         runtime: &mut Runtime,
         payload: &RuntimeControlPayload,
-    ) -> Result<Value> {
-        match payload.action {
+    ) -> Result<JobDecision> {
+        let output = match payload.action {
             RuntimeControlAction::RetryJob => {
                 let target = runtime.retry_job_payload(&payload.target_job_id)?;
-                Ok(json!({"kind": "runtime_control", "action": "retry_job", "target": target}))
+                JobOutput::from_boundary_json(
+                    &json!({"kind": "runtime_control", "action": "retry_job", "target": target}),
+                )?
             }
             RuntimeControlAction::ApproveConfirmation => {
                 let result = runtime
-                    .approve_confirmation(&payload.target_job_id, payload.actor_user_id.clone())
-                    .await?;
-                Ok(
-                    json!({"kind": "runtime_control", "action": "approve_confirmation", "result": result}),
-                )
+                    .approve_confirmation(&payload.target_job_id, payload.actor_user_id.clone())?;
+                JobOutput::from_boundary_json(
+                    &json!({"kind": "runtime_control", "action": "approve_confirmation", "result": result}),
+                )?
             }
             RuntimeControlAction::CancelConfirmation => {
                 let result = runtime
                     .cancel_confirmation(&payload.target_job_id, payload.actor_user_id.clone())?;
-                Ok(
-                    json!({"kind": "runtime_control", "action": "cancel_confirmation", "result": result}),
-                )
+                JobOutput::from_boundary_json(
+                    &json!({"kind": "runtime_control", "action": "cancel_confirmation", "result": result}),
+                )?
             }
-        }
+        };
+        Ok(JobDecision::Complete(output))
     }
 }
 
 mod commands {
     use super::*;
 
-    pub(super) async fn execute(
-        runtime: &mut Runtime,
-        job: &Job,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
-        runtime.execute_command_job(job, effects).await
+    pub(super) fn prepare(runtime: &mut Runtime, job: &Job) -> Result<JobDecision> {
+        runtime.prepare_command_job(job)
     }
 }
 
 mod room_agents {
     use super::*;
 
-    pub(super) async fn execute(
+    pub(super) fn prepare(
         runtime: &mut Runtime,
         job: &Job,
         payload: &RoomAgentPlacementPayload,
-        effects: Option<&dyn RuntimeEffects>,
-    ) -> Result<Value> {
+    ) -> Result<JobDecision> {
+        if !runtime.timeline_store.list_child_jobs(&job.id)?.is_empty() {
+            return runtime.resume_room_agent_placement_job(job, payload);
+        }
         let target_room_identifier = if payload.room_id.trim().is_empty() {
             job.voice_channel_id.as_str()
         } else {
@@ -121,58 +117,24 @@ mod room_agents {
         };
         match payload.action {
             RoomAgentPlacementAction::Join => {
-                let result = if let Some(effects) = effects {
-                    let room = if !target_room_identifier.trim().is_empty() {
-                        runtime.room_for_identifier(Some(target_room_identifier))?
-                    } else if !job.guild_id.trim().is_empty() {
-                        runtime.resolve_room_scope(&job.guild_id, None)?
-                    } else {
-                        runtime.room_for_identifier(None)?
-                    };
-                    runtime
-                        .assign_room_with_effect(
-                            room,
-                            &job.requested_by_user_id,
-                            &payload.reason,
-                            effects,
-                        )
-                        .await?
+                let room = if !target_room_identifier.trim().is_empty() {
+                    runtime.room_for_identifier(Some(target_room_identifier))?
+                } else if !job.guild_id.trim().is_empty() {
+                    runtime.resolve_room_scope(&job.guild_id, None)?
                 } else {
-                    runtime
-                        .assign_room(
-                            Some(target_room_identifier),
-                            Some(&job.guild_id),
-                            Some(&job.requested_by_user_id),
-                            Some(&payload.reason),
-                        )
-                        .await?
+                    runtime.room_for_identifier(None)?
                 };
-                Ok(json!({"kind": "room_agent_placement", "action": "join", "result": result}))
+                runtime.prepare_join_room_jobs(room, &job.requested_by_user_id, &payload.reason)
             }
             RoomAgentPlacementAction::Leave => {
                 let cooldown_seconds = payload
                     .cooldown_seconds
                     .unwrap_or(runtime.manual_leave_cooldown_seconds);
-                let result = if let Some(effects) = effects {
-                    runtime
-                        .leave_room_with_effect(
-                            Some(target_room_identifier),
-                            cooldown_seconds,
-                            &job.requested_by_user_id,
-                            Some(job),
-                            effects,
-                        )
-                        .await?
-                } else {
-                    runtime
-                        .leave_room(
-                            Some(target_room_identifier),
-                            Some(cooldown_seconds),
-                            Some(&job.requested_by_user_id),
-                        )
-                        .await?
-                };
-                Ok(json!({"kind": "room_agent_placement", "action": "leave", "result": result}))
+                runtime.prepare_leave_room_jobs(
+                    Some(target_room_identifier),
+                    cooldown_seconds,
+                    &job.requested_by_user_id,
+                )
             }
         }
     }
@@ -181,12 +143,16 @@ mod room_agents {
 mod refinement {
     use super::*;
 
-    pub(super) fn execute(runtime: &Runtime, job: &Job) -> Result<Value> {
+    pub(super) fn execute(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
         match run_refinement_job(&runtime.timeline_store, &job.id) {
-            Ok(job) => Ok(json!({"dispatched": true, "job": job})),
+            Ok(job) => Ok(JobOutput::from_boundary_json(
+                &json!({"dispatched": true, "job": job}),
+            )?),
             Err(error) => {
                 crate::runtime::log(&format!("refinement job failed {}: {error}", job.id));
-                Ok(json!({"dispatched": false, "jobId": job.id, "error": error.to_string()}))
+                Ok(JobOutput::from_boundary_json(
+                    &json!({"dispatched": false, "jobId": job.id, "error": error.to_string()}),
+                )?)
             }
         }
     }

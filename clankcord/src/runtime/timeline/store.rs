@@ -275,6 +275,15 @@ impl TimelineStore {
               payload_blob BLOB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS job_dependencies (
+              parent_job_id TEXT NOT NULL,
+              child_job_id TEXT NOT NULL,
+              dependency_kind TEXT NOT NULL DEFAULT 'required',
+              created_at_ms INTEGER NOT NULL,
+              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
+              PRIMARY KEY (parent_job_id, child_job_id)
+            );
+
             CREATE TABLE IF NOT EXISTS automations (
               automation_id TEXT PRIMARY KEY,
               guild_id TEXT NOT NULL,
@@ -315,6 +324,8 @@ impl TimelineStore {
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_jobs_state_next
               ON transcript_jobs(state, next_run_at_ms, updated_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
+              ON job_dependencies(child_job_id, parent_job_id);
             CREATE INDEX IF NOT EXISTS idx_automations_scope_state
               ON automations(guild_id, voice_channel_id, state, expires_at_ms);
             CREATE INDEX IF NOT EXISTS idx_automations_idempotency
@@ -347,6 +358,7 @@ impl TimelineStore {
             return Ok(());
         }
 
+        let deleted_dependencies = db.execute("DELETE FROM job_dependencies", [])?;
         let deleted_jobs = db.execute("DELETE FROM transcript_jobs", [])?;
         let deleted_automations = db.execute("DELETE FROM automations", [])?;
         db.execute(
@@ -363,9 +375,9 @@ impl TimelineStore {
                 instant_ms_dt(utc_now())
             ],
         )?;
-        if deleted_jobs > 0 || deleted_automations > 0 {
+        if deleted_jobs > 0 || deleted_automations > 0 || deleted_dependencies > 0 {
             crate::runtime::log(&format!(
-                "runtime binary record schema hard cut applied: deleted {deleted_jobs} job rows and {deleted_automations} automation rows"
+                "runtime binary record schema hard cut applied: deleted {deleted_jobs} job rows, {deleted_dependencies} dependency rows, and {deleted_automations} automation rows"
             ));
         }
         Ok(())

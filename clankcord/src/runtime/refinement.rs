@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::Result;
 use crate::adapters::discord::api::read_secret_value;
 use crate::runtime::timeline::{TimelineStore, isoformat_z, parse_instant, write_json_file};
-use crate::runtime::{BinaryPayload, Job, JobState};
+use crate::runtime::{Job, JobOutput, JobState};
 
 pub const ELEVENLABS_STT_URL: &str = "https://api.elevenlabs.io/v1/speech-to-text";
 
@@ -399,7 +399,7 @@ fn run_refinement_job_inner(
         "refined_artifact_path": refined_path.display().to_string(),
         "speaker_alignment_path": alignment_path.display().to_string()
     });
-    job.metadata.result = BinaryPayload::from_json(&result)?;
+    job.metadata.output = Some(JobOutput::from_boundary_json(&result)?);
     store.update_job(&job)?;
     Ok(job.to_value())
 }

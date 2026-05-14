@@ -15,6 +15,8 @@ pub enum JobKind {
     ConfirmationRequired,
     Command,
     RoomAgentPlacement,
+    DiscordVoiceJoin,
+    DiscordVoiceLeave,
     RuntimeControl,
 }
 
@@ -29,6 +31,8 @@ impl JobKind {
             Self::ConfirmationRequired => "confirmation_required",
             Self::Command => "command",
             Self::RoomAgentPlacement => "room_agent_placement",
+            Self::DiscordVoiceJoin => "discord_voice_join",
+            Self::DiscordVoiceLeave => "discord_voice_leave",
             Self::RuntimeControl => "runtime_control",
         }
     }
@@ -57,6 +61,8 @@ impl FromStr for JobKind {
             "confirmation_required" => Ok(Self::ConfirmationRequired),
             "command" => Ok(Self::Command),
             "room_agent_placement" => Ok(Self::RoomAgentPlacement),
+            "discord_voice_join" => Ok(Self::DiscordVoiceJoin),
+            "discord_voice_leave" => Ok(Self::DiscordVoiceLeave),
             "runtime_control" => Ok(Self::RuntimeControl),
             value => anyhow::bail!("unknown job kind: {value}"),
         }

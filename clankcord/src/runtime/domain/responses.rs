@@ -5,7 +5,9 @@ use crate::adapters::discord::api::{create_dm_channel, send_message};
 use crate::config::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::jobs::{DiscordPostMetadata, DiscordPostedMessageMetadata};
 use crate::runtime::util::first_non_empty;
-use crate::runtime::{Job, ResponseKind, ResponsePayload, ResponseSinkKind, Runtime};
+use crate::runtime::{
+    Job, JobOutput, ResponseKind, ResponseOutput, ResponsePayload, ResponseSinkKind, Runtime,
+};
 
 impl Runtime {
     pub(crate) fn response_job_from_value(&self, value: &Value) -> Result<Job> {
@@ -49,7 +51,11 @@ impl Runtime {
     }
 }
 
-pub(crate) fn execute(runtime: &Runtime, job: &Job, payload: &ResponsePayload) -> Result<Value> {
+pub(crate) fn execute(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &ResponsePayload,
+) -> Result<JobOutput> {
     if payload.content.trim().is_empty() {
         anyhow::bail!("response job {} has empty content", job.id);
     }
@@ -58,12 +64,12 @@ pub(crate) fn execute(runtime: &Runtime, job: &Job, payload: &ResponsePayload) -
         ResponseSinkKind::Channel => post_to_channel(job, payload, &payload.sink.channel_id)?,
         ResponseSinkKind::Dm => post_to_dm(job, payload)?,
         ResponseSinkKind::Stdout => {
-            return Ok(json!({
-                "kind": "response",
-                "response_kind": payload.response_kind.as_str(),
-                "sink": payload.sink.to_json(),
-                "content": payload.content.clone(),
-                "source_job_id": payload.source_job_id.clone(),
+            return Ok(JobOutput::Response(ResponseOutput {
+                response_kind: payload.response_kind.as_str().to_string(),
+                sink: payload.sink.clone(),
+                source_job_id: payload.source_job_id.clone(),
+                content: payload.content.clone(),
+                discord_post: None,
             }));
         }
     };
@@ -80,12 +86,12 @@ pub(crate) fn execute(runtime: &Runtime, job: &Job, payload: &ResponsePayload) -
             "discord_post": post.to_json(),
         }),
     )?;
-    Ok(json!({
-        "kind": "response",
-        "response_kind": payload.response_kind.as_str(),
-        "sink": payload.sink.to_json(),
-        "source_job_id": payload.source_job_id.clone(),
-        "discord_post": post.to_json(),
+    Ok(JobOutput::Response(ResponseOutput {
+        response_kind: payload.response_kind.as_str().to_string(),
+        sink: payload.sink.clone(),
+        source_job_id: payload.source_job_id.clone(),
+        content: String::new(),
+        discord_post: Some(post),
     }))
 }
 

@@ -9,15 +9,21 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::Result;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::{config_path, read_json};
+use crate::runtime::core::execution::RuntimeExecutor;
+use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
 const DEFAULT_INTAKE_QUEUE_DEPTH: usize = 256;
 const DEFAULT_MAINTAINER_INTERVAL_SECONDS: f64 = 0.5;
 
+type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
+
 #[derive(Clone)]
 pub struct RuntimeHandle {
     runtime: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
+    timeline_store: TimelineStore,
+    executor: ServiceRuntimeExecutor,
     intake: mpsc::Sender<RuntimeSubmission>,
     job_sink: RuntimeJobSink,
 }
@@ -80,15 +86,24 @@ impl RuntimeHandle {
         action: RuntimeControlAction,
         actor_user_id: String,
     ) -> Result<Value> {
-        let job = {
-            let runtime = self.runtime.lock().await;
-            runtime.runtime_control_job_for_target(&target_job_id, action, actor_user_id)?
-        };
+        let target = self.timeline_store.get_job(&target_job_id)?;
+        let job = Job::runtime_control(
+            target.guild_id,
+            target.voice_channel_id,
+            actor_user_id,
+            action,
+            target_job_id,
+        );
         self.submit_job(job).await
     }
 
     pub async fn run_maintenance_once(&self) -> Result<Value> {
-        run_maintainer_cycle(self.runtime.clone(), self.live_voice.clone()).await
+        run_maintainer_cycle(
+            self.runtime.clone(),
+            self.live_voice.clone(),
+            self.executor.clone(),
+        )
+        .await
     }
 }
 
@@ -139,16 +154,21 @@ impl RuntimeService {
     pub async fn new() -> Result<Self> {
         let mut runtime = Runtime::new()?;
         runtime.start().await?;
+        let timeline_store = runtime.timeline_store.clone();
         let runtime = Arc::new(Mutex::new(runtime));
         let (intake, intake_receiver) = mpsc::channel(DEFAULT_INTAKE_QUEUE_DEPTH);
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),
         };
         let live_voice = Arc::new(LiveVoiceAdapter::new(job_sink.clone()));
+        let executor =
+            RuntimeExecutor::new(runtime.clone(), live_voice.clone(), timeline_store.clone());
         Ok(Self {
             handle: RuntimeHandle {
                 runtime,
                 live_voice,
+                timeline_store,
+                executor,
                 intake,
                 job_sink,
             },
@@ -204,16 +224,22 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
             match submission {
                 RuntimeSubmission::Command { command, reply } => {
                     let result = {
-                        let mut runtime = handle.runtime.lock().await;
-                        runtime.create_command_job(command, None).await
+                        let runtime = handle.runtime.lock().await;
+                        runtime.create_command_job_sync(command, None)
                     };
+                    if result.is_ok() {
+                        handle.executor.wake();
+                    }
                     let _ = reply.send(result);
                 }
                 RuntimeSubmission::Job { job, reply } => {
-                    let result = {
-                        let runtime = handle.runtime.lock().await;
-                        runtime.intake_job(job)
-                    };
+                    let result = handle
+                        .timeline_store
+                        .create_job(job)
+                        .map(job_created_payload);
+                    if result.is_ok() {
+                        handle.executor.wake();
+                    }
                     let _ = reply.send(result);
                 }
                 RuntimeSubmission::RuntimeControlTarget {
@@ -222,12 +248,23 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
                     actor_user_id,
                     reply,
                 } => {
-                    let result = {
-                        let runtime = handle.runtime.lock().await;
-                        runtime
-                            .runtime_control_job_for_target(&target_job_id, action, actor_user_id)
-                            .and_then(|job| runtime.intake_job(job))
-                    };
+                    let result = handle
+                        .timeline_store
+                        .get_job(&target_job_id)
+                        .map(|target| {
+                            Job::runtime_control(
+                                target.guild_id,
+                                target.voice_channel_id,
+                                actor_user_id,
+                                action,
+                                target_job_id,
+                            )
+                        })
+                        .and_then(|job| handle.timeline_store.create_job(job))
+                        .map(job_created_payload);
+                    if result.is_ok() {
+                        handle.executor.wake();
+                    }
                     let _ = reply.send(result);
                 }
             }
@@ -254,8 +291,12 @@ fn spawn_live_voice_loop(live_voice: Arc<LiveVoiceAdapter>) {
 fn spawn_maintainer_loop(handle: RuntimeHandle) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(maintainer_interval());
+        let notify = handle.executor.notify_handle();
         loop {
-            interval.tick().await;
+            tokio::select! {
+                _ = interval.tick() => {}
+                _ = notify.notified() => {}
+            }
             if let Err(error) = handle.run_maintenance_once().await {
                 log(&format!(
                     "runtime maintainer cycle failed: {}",
@@ -274,11 +315,19 @@ fn error_chain(error: &anyhow::Error) -> String {
         .join(": ")
 }
 
+fn job_created_payload(job: Job) -> Value {
+    json!({"kind": "job_created", "job_ids": [job.id.clone()], "job": job.to_value()})
+}
+
 async fn run_maintainer_cycle(
     runtime: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
+    executor: ServiceRuntimeExecutor,
 ) -> Result<Value> {
-    sync_voice_adapter_state(runtime.clone(), live_voice.clone())
+    let scheduled_before_sync = executor
+        .schedule_due_jobs()
+        .context("scheduling due jobs before sync")?;
+    sync_voice_adapter_state(runtime.clone(), live_voice)
         .await
         .context("syncing voice adapter state")?;
     let automation = {
@@ -288,37 +337,22 @@ async fn run_maintainer_cycle(
             .context("running runtime automations")?
             .to_json()
     };
-    let async_jobs = {
-        let mut runtime = runtime.lock().await;
-        runtime
-            .dispatch_due_jobs(Some(&live_voice))
-            .await
-            .context("dispatching due async jobs")?
-    };
-    let snapshot = {
-        let runtime = runtime.lock().await;
-        runtime.clone()
-    };
-    let blocking = tokio::task::spawn_blocking(move || {
-        let jobs = snapshot
-            .dispatch_due_blocking_jobs()
-            .context("dispatching due blocking jobs")?;
-        let maintenance = snapshot
-            .run_blocking_maintenance()
-            .context("running blocking maintenance")?;
-        Ok::<Value, anyhow::Error>(json!({
-            "jobs": jobs,
-            "maintenance": maintenance,
-        }))
-    })
-    .await
-    .context("joining blocking maintainer task")??;
-    let mut payload = Map::new();
-    payload.insert("ok".to_string(), Value::Bool(true));
-    payload.insert("automation".to_string(), automation);
-    payload.insert("jobs".to_string(), async_jobs);
-    payload.insert("blocking".to_string(), blocking);
-    Ok(Value::Object(payload))
+    let scheduled_after_automation = executor
+        .schedule_due_jobs()
+        .context("scheduling due jobs after automations")?;
+    let maintenance = executor
+        .run_maintenance()
+        .await
+        .context("running runtime maintenance")?;
+    Ok(json!({
+        "ok": true,
+        "automation": automation,
+        "scheduled": {
+            "beforeSync": scheduled_before_sync,
+            "afterAutomation": scheduled_after_automation,
+        },
+        "maintenance": maintenance,
+    }))
 }
 
 async fn sync_voice_adapter_state(

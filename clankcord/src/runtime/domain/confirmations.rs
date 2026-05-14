@@ -203,11 +203,7 @@ impl Runtime {
         }
         preview(&lines.join("\n"), 1900)
     }
-    pub async fn approve_confirmation(
-        &mut self,
-        job_id: &str,
-        actor_user_id: String,
-    ) -> Result<Value> {
+    pub fn approve_confirmation(&mut self, job_id: &str, actor_user_id: String) -> Result<Value> {
         let mut job = self.timeline_store.get_job(job_id)?;
         if job.kind != JobKind::ConfirmationRequired {
             return Err(discord_tool_error(format!(
@@ -233,7 +229,7 @@ impl Runtime {
             confirmation.approved_at = isoformat_z(None);
         }
         self.timeline_store.update_job(&job)?;
-        let dispatch_result = match self.create_command_job(command.clone(), Some(&job)).await {
+        let dispatch_result = match self.create_command_job_sync(command.clone(), Some(&job)) {
             Ok(result) => result,
             Err(error) => {
                 let mut latest = self.timeline_store.get_job(job_id).unwrap_or(job.clone());
