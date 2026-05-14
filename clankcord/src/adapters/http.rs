@@ -1,5 +1,6 @@
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -7,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::dashboard::DASHBOARD_HTML;
+use crate::dashboard::{APP_JS, INDEX_HTML, STYLES_CSS};
 use crate::runtime::{
     ContextResolveRequest, DebugOverviewRequest, JobsRequest, ListConversationsRequest,
     ParticipantTraceRequest, RenderTranscriptRequest, RouterCommand, Runtime, RuntimeHandle,
@@ -63,6 +64,8 @@ pub fn router(handle: RuntimeHandle) -> Router {
         )
         .route("/v1/voice/debug/overview", get(debug_overview))
         .route("/debug", get(debug_dashboard))
+        .route("/debug/dashboard.css", get(debug_dashboard_css))
+        .route("/debug/dashboard.js", get(debug_dashboard_js))
         .with_state(state)
 }
 
@@ -278,7 +281,24 @@ async fn debug_overview(
 }
 
 async fn debug_dashboard() -> Html<&'static str> {
-    Html(DASHBOARD_HTML)
+    Html(INDEX_HTML)
+}
+
+async fn debug_dashboard_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        STYLES_CSS,
+    )
+}
+
+async fn debug_dashboard_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        APP_JS,
+    )
 }
 
 type BTreeQuery = std::collections::BTreeMap<String, String>;

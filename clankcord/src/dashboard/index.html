@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clankcord Jobs Dashboard</title>
+  <link rel="stylesheet" href="./debug/dashboard.css">
+  <script defer src="./debug/dashboard.js"></script>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div>
+        <h1>Clankcord Runtime</h1>
+        <div class="muted" id="subtitle">Loading...</div>
+      </div>
+      <div class="controls">
+        <label>Window
+          <select id="since">
+            <option value="-15m">15m</option>
+            <option value="-1h" selected>1h</option>
+            <option value="-6h">6h</option>
+            <option value="-24h">24h</option>
+          </select>
+        </label>
+        <label>Limit
+          <select id="limit">
+            <option>40</option>
+            <option selected>80</option>
+            <option>150</option>
+            <option>250</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="auto" checked> Auto</label>
+        <button id="refresh" type="button">Refresh</button>
+        <a class="pill link-pill" id="jsonLink" href="#">JSON</a>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="active" type="button" data-view="overview">Overview</button>
+      <button type="button" data-view="jobs">Jobs</button>
+      <button type="button" data-view="rooms">Rooms</button>
+      <button type="button" data-view="router">Router</button>
+      <button type="button" data-view="timeline">Timeline</button>
+      <button type="button" data-view="raw">Raw</button>
+    </nav>
+  </header>
+  <main>
+    <div class="error" id="error"></div>
+    <div class="metrics" id="metrics"></div>
+
+    <div class="view active" id="view-overview">
+      <div class="layout overview-grid">
+        <div class="stack">
+          <section>
+            <h2>Queue Pressure <span id="queuePressureCount"></span></h2>
+            <div class="table-wrap" id="queuePressure"></div>
+          </section>
+          <section>
+            <h2>Room Job Load <span id="roomJobLoadCount"></span></h2>
+            <div class="table-wrap" id="roomJobLoad"></div>
+          </section>
+        </div>
+        <div class="stack">
+          <section>
+            <h2>State Mix</h2>
+            <div class="dense-list" id="stateMix"></div>
+          </section>
+          <section>
+            <h2>Recent Failures <span id="failureCount"></span></h2>
+            <div class="table-wrap" id="recentFailures"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-jobs">
+      <div class="jobs-layout">
+        <section>
+          <h2>Active Jobs <span id="activeJobsCount"></span></h2>
+          <div class="table-wrap tall" id="activeJobs"></div>
+        </section>
+        <section>
+          <h2>Selected Job <span id="selectedJobTitle"></span></h2>
+          <div id="selectedJob"></div>
+        </section>
+      </div>
+      <section>
+        <h2>Recent Jobs <span id="recentJobsCount"></span></h2>
+        <div class="table-wrap tall" id="recentJobs"></div>
+      </section>
+    </div>
+
+    <div class="view" id="view-rooms">
+      <div class="layout">
+        <div class="stack">
+          <section>
+            <h2>Rooms <span id="roomsCount"></span></h2>
+            <div class="table-wrap" id="rooms"></div>
+          </section>
+          <section>
+            <h2>Sessions <span id="sessionsCount"></span></h2>
+            <div class="table-wrap" id="sessions"></div>
+          </section>
+        </div>
+        <div class="stack">
+          <section>
+            <h2>Bots <span id="botsCount"></span></h2>
+            <div class="table-wrap" id="bots"></div>
+          </section>
+          <section>
+            <h2>Capacity</h2>
+            <div class="dense-list" id="capacity"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-router">
+      <div class="layout">
+        <section>
+          <h2>Router-Origin Jobs <span id="routerJobsCount"></span></h2>
+          <div class="table-wrap tall" id="routerJobs"></div>
+        </section>
+        <section>
+          <h2>Router Activity <span id="routerEventsCount"></span></h2>
+          <div class="timeline-list" id="routerEvents"></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="view" id="view-timeline">
+      <div class="layout">
+        <section>
+          <h2>Recent Events <span id="eventsCount"></span></h2>
+          <div class="table-wrap tall" id="events"></div>
+        </section>
+        <div class="stack">
+          <section>
+            <h2>Event Kinds</h2>
+            <div class="table-wrap" id="eventKinds"></div>
+          </section>
+          <section>
+            <h2>Publications <span id="publicationsCount"></span></h2>
+            <div class="table-wrap" id="publications"></div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" id="view-raw">
+      <section>
+        <h2>Raw Debug Snapshot</h2>
+        <pre id="raw"></pre>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
