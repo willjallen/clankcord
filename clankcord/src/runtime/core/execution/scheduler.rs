@@ -10,6 +10,8 @@ use crate::runtime::core::execution::RuntimeAdapterJobs;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{AgentRuntime, Job, JobKind, Runtime, log};
 
+const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
+
 #[derive(Clone)]
 pub(crate) struct RuntimeExecutor<E>
 where
@@ -111,7 +113,50 @@ where
             JobKind::AgentTask.as_str().to_string(),
             self.schedule_agent_tasks()?,
         );
+        let total_scheduled = scheduled
+            .values()
+            .map(scheduled_count_for_kind)
+            .sum::<usize>();
+        scheduled.insert("totalScheduled".to_string(), json!(total_scheduled));
         Ok(Value::Object(scheduled))
+    }
+
+    pub(crate) async fn drain_ready_jobs(&self) -> Result<Value> {
+        let max_passes = dispatch_drain_max_passes();
+        let mut passes = Vec::new();
+        let mut total_resolved = 0usize;
+        let mut total_scheduled = 0usize;
+        let mut exhausted = false;
+
+        for pass in 0..max_passes {
+            let resolved_waiting = {
+                let runtime = self.runtime.lock().await;
+                runtime.resolve_waiting_jobs()?
+            };
+            let scheduled = self.schedule_due_jobs()?;
+            let scheduled_count = scheduled_job_count(&scheduled);
+            let resolved_count = resolved_waiting.len();
+            total_resolved += resolved_count;
+            total_scheduled += scheduled_count;
+            passes.push(json!({
+                "pass": pass + 1,
+                "resolvedWaiting": resolved_waiting,
+                "scheduled": scheduled,
+            }));
+            if resolved_count == 0 && scheduled_count == 0 {
+                exhausted = true;
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        Ok(json!({
+            "ok": true,
+            "passes": passes,
+            "totalResolvedWaiting": total_resolved,
+            "totalScheduled": total_scheduled,
+            "exhausted": exhausted,
+        }))
     }
 
     pub(crate) async fn run_maintenance(&self) -> Result<Value> {
@@ -366,6 +411,14 @@ fn agent_dispatch_batch_limit() -> usize {
     env_usize("CLANKCORD_AGENT_JOB_BATCH_LIMIT", 4, 32)
 }
 
+fn dispatch_drain_max_passes() -> usize {
+    env_usize(
+        "CLANKCORD_DISPATCH_DRAIN_MAX_PASSES",
+        DEFAULT_DISPATCH_DRAIN_MAX_PASSES,
+        512,
+    )
+}
+
 fn env_usize(key: &str, default: usize, max: usize) -> usize {
     std::env::var(key)
         .ok()
@@ -376,6 +429,27 @@ fn env_usize(key: &str, default: usize, max: usize) -> usize {
 
 fn agent_session_key(job: &Job) -> String {
     AgentRuntime::task_session_key(&job.guild_id, &job.voice_channel_id)
+}
+
+fn scheduled_job_count(report: &Value) -> usize {
+    report
+        .get("totalScheduled")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or_else(|| {
+            report
+                .as_object()
+                .map(|object| object.values().map(scheduled_count_for_kind).sum())
+                .unwrap_or(0)
+        })
+}
+
+fn scheduled_count_for_kind(value: &Value) -> usize {
+    value
+        .get("scheduled")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(0)
 }
 
 fn error_chain(error: &anyhow::Error) -> String {

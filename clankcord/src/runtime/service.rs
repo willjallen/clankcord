@@ -105,6 +105,10 @@ impl RuntimeHandle {
         )
         .await
     }
+
+    pub async fn drain_ready_jobs(&self) -> Result<Value> {
+        self.executor.drain_ready_jobs().await
+    }
 }
 
 #[derive(Clone)]
@@ -294,8 +298,17 @@ fn spawn_maintainer_loop(handle: RuntimeHandle) {
         let notify = handle.executor.notify_handle();
         loop {
             tokio::select! {
+                biased;
+                _ = notify.notified() => {
+                    if let Err(error) = handle.drain_ready_jobs().await {
+                        log(&format!(
+                            "runtime dispatch drain failed: {}",
+                            error_chain(&error)
+                        ));
+                    }
+                    continue;
+                }
                 _ = interval.tick() => {}
-                _ = notify.notified() => {}
             }
             if let Err(error) = handle.run_maintenance_once().await {
                 log(&format!(
@@ -324,9 +337,10 @@ async fn run_maintainer_cycle(
     live_voice: Arc<LiveVoiceAdapter>,
     executor: ServiceRuntimeExecutor,
 ) -> Result<Value> {
-    let scheduled_before_sync = executor
-        .schedule_due_jobs()
-        .context("scheduling due jobs before sync")?;
+    let dispatch_before_sync = executor
+        .drain_ready_jobs()
+        .await
+        .context("draining ready jobs before sync")?;
     sync_voice_adapter_state(runtime.clone(), live_voice)
         .await
         .context("syncing voice adapter state")?;
@@ -337,19 +351,25 @@ async fn run_maintainer_cycle(
             .context("running runtime automations")?
             .to_json()
     };
-    let scheduled_after_automation = executor
-        .schedule_due_jobs()
-        .context("scheduling due jobs after automations")?;
+    let dispatch_after_automation = executor
+        .drain_ready_jobs()
+        .await
+        .context("draining ready jobs after automations")?;
     let maintenance = executor
         .run_maintenance()
         .await
         .context("running runtime maintenance")?;
+    let dispatch_after_maintenance = executor
+        .drain_ready_jobs()
+        .await
+        .context("draining ready jobs after maintenance")?;
     Ok(json!({
         "ok": true,
         "automation": automation,
-        "scheduled": {
-            "beforeSync": scheduled_before_sync,
-            "afterAutomation": scheduled_after_automation,
+        "dispatch": {
+            "beforeSync": dispatch_before_sync,
+            "afterAutomation": dispatch_after_automation,
+            "afterMaintenance": dispatch_after_maintenance,
         },
         "maintenance": maintenance,
     }))

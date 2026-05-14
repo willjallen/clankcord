@@ -152,7 +152,7 @@ impl Runtime {
         Ok(timed_out)
     }
 
-    fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
+    pub(crate) fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
         let mut resolved = Vec::new();
         for mut parent in self
             .timeline_store
