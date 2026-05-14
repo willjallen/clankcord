@@ -434,7 +434,7 @@ fn status(args: StatusArgs) -> Result<i32> {
 
 fn join(args: JoinArgs) -> Result<i32> {
     let room = args.channel.or(args.room);
-    submit_router_command(
+    submit_command(
         "join_room",
         args.guild,
         room.clone(),
@@ -445,7 +445,7 @@ fn join(args: JoinArgs) -> Result<i32> {
 
 fn leave(args: RoomArgs) -> Result<i32> {
     let room = args.channel.or(args.room);
-    submit_router_command(
+    submit_command(
         "leave_room",
         args.guild,
         room.clone(),
@@ -455,7 +455,7 @@ fn leave(args: RoomArgs) -> Result<i32> {
 }
 
 fn room_move(args: MoveArgs) -> Result<i32> {
-    submit_router_command(
+    submit_command(
         "join_room",
         None,
         Some(args.to.clone()),
@@ -533,7 +533,7 @@ fn transcript_materialize(args: TranscriptMaterializeArgs) -> Result<i32> {
         "materialize_transcript"
     };
     let has_from = args.from.is_some();
-    submit_router_command(
+    submit_command(
         command_kind,
         args.guild,
         args.channel,
@@ -613,7 +613,7 @@ fn confirmation_cancel(args: ConfirmationCancelArgs) -> Result<i32> {
 
 fn pause(args: PauseArgs) -> Result<i32> {
     let room = args.channel.or(args.room);
-    submit_router_command(
+    submit_command(
         "pause_listening",
         None,
         room.clone(),
@@ -624,7 +624,7 @@ fn pause(args: PauseArgs) -> Result<i32> {
 
 fn resume(args: RoomArgs) -> Result<i32> {
     let room = args.channel.or(args.room);
-    submit_router_command(
+    submit_command(
         "resume_listening",
         args.guild,
         room.clone(),
@@ -656,7 +656,7 @@ fn forget(args: ForgetArgs) -> Result<i32> {
     )
 }
 
-fn submit_router_command(
+fn submit_command(
     command_kind: &str,
     guild_id: Option<String>,
     channel_id: Option<String>,

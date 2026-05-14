@@ -307,6 +307,7 @@ impl TimelineStore {
             "stt_provider": input.stt_provider,
             "stt_model": stt_model,
             "stt": input.stt_metadata,
+            "wake": input.wake_metadata,
             "source_audio_path": source_path,
             "sourceAudioPath": source_path,
             "audio_checksum": input.audio_checksum,

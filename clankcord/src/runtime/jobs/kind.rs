@@ -11,7 +11,7 @@ pub enum JobKind {
     AgentTask,
     RefineTranscript,
     ConfirmationRequired,
-    RouterCommand,
+    Command,
     RoomAgentPlacement,
     RuntimeControl,
 }
@@ -23,7 +23,7 @@ impl JobKind {
             Self::AgentTask => "agent_task",
             Self::RefineTranscript => "refine_transcript",
             Self::ConfirmationRequired => "confirmation_required",
-            Self::RouterCommand => "router_command",
+            Self::Command => "command",
             Self::RoomAgentPlacement => "room_agent_placement",
             Self::RuntimeControl => "runtime_control",
         }
@@ -49,7 +49,7 @@ impl FromStr for JobKind {
             "agent_task" => Ok(Self::AgentTask),
             "refine_transcript" => Ok(Self::RefineTranscript),
             "confirmation_required" => Ok(Self::ConfirmationRequired),
-            "router_command" => Ok(Self::RouterCommand),
+            "command" => Ok(Self::Command),
             "room_agent_placement" => Ok(Self::RoomAgentPlacement),
             "runtime_control" => Ok(Self::RuntimeControl),
             value => anyhow::bail!("unknown job kind: {value}"),

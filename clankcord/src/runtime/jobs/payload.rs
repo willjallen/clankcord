@@ -99,7 +99,7 @@ impl BinaryPayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RouterAction {
+pub enum CommandAction {
     DispatchNow,
     WaitForMore,
     Ignore,
@@ -108,7 +108,7 @@ pub enum RouterAction {
     ReplaceJob,
 }
 
-impl RouterAction {
+impl CommandAction {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::DispatchNow => "dispatch_now",
@@ -121,13 +121,13 @@ impl RouterAction {
     }
 }
 
-impl Default for RouterAction {
+impl Default for CommandAction {
     fn default() -> Self {
         Self::DispatchNow
     }
 }
 
-impl FromStr for RouterAction {
+impl FromStr for CommandAction {
     type Err = anyhow::Error;
 
     fn from_str(raw: &str) -> Result<Self> {
@@ -138,13 +138,13 @@ impl FromStr for RouterAction {
             "cancel_job" => Ok(Self::CancelJob),
             "amend_job" => Ok(Self::AmendJob),
             "replace_job" => Ok(Self::ReplaceJob),
-            value => anyhow::bail!("unknown router action: {value}"),
+            value => anyhow::bail!("unknown command action: {value}"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RouterCommandKind {
+pub enum CommandKind {
     AgentTask,
     StartLiveTranscript,
     StartDraftTranscript,
@@ -158,7 +158,7 @@ pub enum RouterCommandKind {
     JoinRoom,
 }
 
-impl RouterCommandKind {
+impl CommandKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AgentTask => "agent_task",
@@ -192,13 +192,13 @@ impl RouterCommandKind {
     }
 }
 
-impl Default for RouterCommandKind {
+impl Default for CommandKind {
     fn default() -> Self {
         Self::AgentTask
     }
 }
 
-impl FromStr for RouterCommandKind {
+impl FromStr for CommandKind {
     type Err = anyhow::Error;
 
     fn from_str(raw: &str) -> Result<Self> {
@@ -214,7 +214,7 @@ impl FromStr for RouterCommandKind {
             "forget_window" => Ok(Self::ForgetWindow),
             "leave_room" => Ok(Self::LeaveRoom),
             "join_room" => Ok(Self::JoinRoom),
-            value => anyhow::bail!("unknown router command kind: {value}"),
+            value => anyhow::bail!("unknown command kind: {value}"),
         }
     }
 }
@@ -313,9 +313,9 @@ impl CommandArguments {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RouterCommand {
-    pub action: RouterAction,
-    pub command_kind: RouterCommandKind,
+pub struct CommandRequest {
+    pub action: CommandAction,
+    pub command_kind: CommandKind,
     pub guild_id: String,
     pub voice_channel_id: String,
     pub requested_by_user_id: String,
@@ -331,14 +331,14 @@ pub struct RouterCommand {
     opaque: BinaryPayload,
 }
 
-impl RouterCommand {
+impl CommandRequest {
     pub fn from_json(value: &Value) -> Result<Self> {
         if !value.is_object() {
-            anyhow::bail!("router command must be a JSON object at the boundary");
+            anyhow::bail!("command must be a JSON object at the boundary");
         }
-        let command_kind = RouterCommandKind::from_str(&string_field(value, "command_kind"))?;
+        let command_kind = CommandKind::from_str(&string_field(value, "command_kind"))?;
         Ok(Self {
-            action: RouterAction::from_str(&string_field(value, "action"))?,
+            action: CommandAction::from_str(&string_field(value, "action"))?,
             command_kind,
             guild_id: string_field(value, "guild_id"),
             voice_channel_id: string_field(value, "voice_channel_id"),
@@ -494,7 +494,7 @@ pub struct AudioSegmentPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
-    pub command: RouterCommand,
+    pub command: CommandRequest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -505,13 +505,13 @@ pub struct RefineTranscriptPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfirmationRequiredPayload {
-    pub command: RouterCommand,
+    pub command: CommandRequest,
     pub confirmation: ConfirmationContext,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RouterCommandPayload {
-    pub command: RouterCommand,
+pub struct CommandPayload {
+    pub command: CommandRequest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -568,7 +568,7 @@ pub enum JobPayload {
     AgentTask(AgentTaskPayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
-    RouterCommand(RouterCommandPayload),
+    Command(CommandPayload),
     RoomAgentPlacement(RoomAgentPlacementPayload),
     RuntimeControl(RuntimeControlPayload),
 }
@@ -580,30 +580,30 @@ impl JobPayload {
             Self::AgentTask(_) => JobKind::AgentTask,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
-            Self::RouterCommand(_) => JobKind::RouterCommand,
+            Self::Command(_) => JobKind::Command,
             Self::RoomAgentPlacement(_) => JobKind::RoomAgentPlacement,
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
         }
     }
 
-    pub fn command(&self) -> Option<&RouterCommand> {
+    pub fn command(&self) -> Option<&CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::ConfirmationRequired(payload) => Some(&payload.command),
-            Self::RouterCommand(payload) => Some(&payload.command),
+            Self::Command(payload) => Some(&payload.command),
             Self::RoomAgentPlacement(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
         }
     }
 
-    pub fn command_mut(&mut self) -> Option<&mut RouterCommand> {
+    pub fn command_mut(&mut self) -> Option<&mut CommandRequest> {
         match self {
             Self::AudioSegment(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
-            Self::RouterCommand(payload) => Some(&mut payload.command),
+            Self::Command(payload) => Some(&mut payload.command),
             Self::RoomAgentPlacement(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
@@ -652,7 +652,7 @@ impl JobPayload {
                 "command": payload.command.to_json(),
                 "confirmation": payload.confirmation.to_json(),
             }),
-            Self::RouterCommand(payload) => json!({"command": payload.command.to_json()}),
+            Self::Command(payload) => json!({"command": payload.command.to_json()}),
             Self::RoomAgentPlacement(payload) => {
                 let mut object = Map::new();
                 object.insert(

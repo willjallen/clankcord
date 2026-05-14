@@ -33,6 +33,7 @@ pub struct SpeechEventInput {
     pub stt_provider: String,
     pub stt_model: String,
     pub stt_metadata: Value,
+    pub wake_metadata: Value,
 }
 
 impl Default for SpeechEventInput {
@@ -59,6 +60,7 @@ impl Default for SpeechEventInput {
             stt_provider: "local".to_string(),
             stt_model: String::new(),
             stt_metadata: Value::Object(Map::new()),
+            wake_metadata: Value::Object(Map::new()),
         }
     }
 }

@@ -6,26 +6,26 @@ use crate::runtime::core::execution::RuntimeEffects;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::{isoformat_z, utc_now};
 use crate::runtime::{
-    ForgetRequest, Job, JobKind, MaterializeTranscriptRequest, RouterCommand, RouterCommandKind,
+    CommandKind, CommandRequest, ForgetRequest, Job, JobKind, MaterializeTranscriptRequest,
 };
 
 use crate::runtime::Runtime;
 
 impl Runtime {
-    pub async fn create_router_command_job(
+    pub async fn create_command_job(
         &mut self,
-        command: RouterCommand,
+        command: CommandRequest,
         parent_job: Option<&Job>,
     ) -> Result<Value> {
-        self.create_router_command_job_sync(command, parent_job)
+        self.create_command_job_sync(command, parent_job)
     }
 
-    pub(crate) fn create_router_command_job_sync(
+    pub(crate) fn create_command_job_sync(
         &self,
-        mut command: RouterCommand,
+        mut command: CommandRequest,
         parent_job: Option<&Job>,
     ) -> Result<Value> {
-        let (guild_id, channel_id, _) = self.router_command_scope(&command)?;
+        let (guild_id, channel_id, _) = self.command_scope(&command)?;
         command.guild_id = guild_id.clone();
         command.voice_channel_id = channel_id.clone();
         if requires_confirmation(command.command_kind.as_str())
@@ -55,7 +55,7 @@ impl Runtime {
             }));
         }
 
-        let job = Job::router_command(
+        let job = Job::command_request(
             &guild_id,
             &channel_id,
             command.requested_by_user_id.clone(),
@@ -67,35 +67,36 @@ impl Runtime {
             self.timeline_store.create_job(job)?
         };
         Ok(json!({
-            "kind": "router_command_created",
+            "kind": "command_created",
             "job_ids": [job.id.clone()],
             "job": job.to_value()
         }))
     }
 
-    pub(crate) async fn execute_router_command_job(
+    pub(crate) async fn execute_command_job(
         &mut self,
         job: &Job,
         effects: Option<&dyn RuntimeEffects>,
     ) -> Result<Value> {
-        if job.kind != JobKind::RouterCommand {
-            anyhow::bail!("job {} is not a router command", job.id);
+        if job.kind != JobKind::Command {
+            anyhow::bail!("job {} is not a command", job.id);
         }
-        let command = job.command().cloned().ok_or_else(|| {
-            anyhow::anyhow!("router command job {} has no command payload", job.id)
-        })?;
-        self.execute_router_command(command, job, effects).await
+        let command = job
+            .command()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("command job {} has no command payload", job.id))?;
+        self.execute_command(command, job, effects).await
     }
 
-    async fn execute_router_command(
+    async fn execute_command(
         &mut self,
-        command: RouterCommand,
+        command: CommandRequest,
         parent_job: &Job,
         effects: Option<&dyn RuntimeEffects>,
     ) -> Result<Value> {
         let command_kind = command.command_kind;
         let job_kind = command_kind.job_kind();
-        let (guild_id, channel_id, target_room_identifier) = self.router_command_scope(&command)?;
+        let (guild_id, channel_id, target_room_identifier) = self.command_scope(&command)?;
         match job_kind {
             "materialize_transcript" => {
                 let (start, end) = command.window_times(None);
@@ -117,7 +118,7 @@ impl Runtime {
                     } else {
                         command.arguments.publish.clone()
                     },
-                    live: command_kind == RouterCommandKind::StartLiveTranscript,
+                    live: command_kind == CommandKind::StartLiveTranscript,
                     refine: command.arguments.refine.unwrap_or(false),
                     created_by_user_id: command.requested_by_user_id.clone(),
                     parent_job_id: parent_job.id.clone(),
@@ -260,7 +261,7 @@ impl Runtime {
         }
     }
 
-    fn router_command_scope(&self, command: &RouterCommand) -> Result<(String, String, String)> {
+    fn command_scope(&self, command: &CommandRequest) -> Result<(String, String, String)> {
         let mut guild_id = command.guild_id.trim().to_string();
         let mut channel_id = command.voice_channel_id.trim().to_string();
         let target_room_identifier = command.target_room_identifier(&channel_id);
@@ -284,7 +285,7 @@ impl Runtime {
             channel_id = room.channel_id;
         }
         if guild_id.is_empty() || channel_id.is_empty() {
-            anyhow::bail!("router command is missing guild or channel");
+            anyhow::bail!("command is missing guild or channel");
         }
         Ok((guild_id, channel_id, target_room_identifier))
     }

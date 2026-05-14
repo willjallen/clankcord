@@ -59,14 +59,6 @@ pub fn agent_task_timeout_seconds() -> u64 {
         .max(30)
 }
 
-pub fn router_model_timeout_seconds() -> u64 {
-    env::var("CLAWCORD_ROUTER_MODEL_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(60)
-        .max(10)
-}
-
 pub fn first_non_empty<const N: usize>(values: [String; N]) -> String {
     values
         .into_iter()
@@ -88,25 +80,6 @@ pub(crate) fn update_object_fields<const N: usize>(
     Ok(())
 }
 
-pub(crate) fn set_if_blank(target: &mut Value, key: &str, value: Value) {
-    let Some(map) = target.as_object_mut() else {
-        return;
-    };
-    if map.get(key).is_none_or(value_is_blank) {
-        map.insert(key.to_string(), value);
-    }
-}
-
-fn value_is_blank(value: &Value) -> bool {
-    match value {
-        Value::Null => true,
-        Value::String(text) => text.trim().is_empty(),
-        Value::Array(items) => items.is_empty(),
-        Value::Object(map) => map.is_empty(),
-        _ => false,
-    }
-}
-
 pub(crate) fn job_cancel_requested(job: &Job) -> bool {
     job.cancel_requested()
 }
@@ -123,13 +96,4 @@ pub(crate) fn require_confirmation_actor(job: &Job, actor_user_id: &str) -> Resu
 
 pub(crate) fn preview(value: &str, limit: usize) -> String {
     value.trim().chars().take(limit).collect()
-}
-
-pub(crate) fn preview_tail(value: &str, limit: usize) -> String {
-    let trimmed = value.trim();
-    let count = trimmed.chars().count();
-    if count <= limit {
-        return trimmed.to_string();
-    }
-    trimmed.chars().skip(count - limit).collect()
 }

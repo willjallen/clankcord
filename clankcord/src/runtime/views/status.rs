@@ -152,13 +152,13 @@ impl Runtime {
             .take(limit)
             .map(Job::to_value)
             .collect::<Vec<_>>();
-        let router_jobs = all_jobs
+        let command_jobs = all_jobs
             .iter()
             .filter(|job| {
                 job.command().is_some()
                     || matches!(
                         job.kind,
-                        JobKind::RouterCommand
+                        JobKind::Command
                             | JobKind::ConfirmationRequired
                             | JobKind::AgentTask
                             | JobKind::RuntimeControl
@@ -181,7 +181,7 @@ impl Runtime {
                 "summary": job_summary(&all_jobs),
                 "active": active_jobs,
                 "recent": recent_jobs,
-                "router": router_jobs,
+                "commands": command_jobs,
             },
             "timeline": {
                 "since": isoformat_z(Some(since)),

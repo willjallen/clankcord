@@ -4,13 +4,13 @@ use crate::Result;
 use crate::adapters::stt::{
     should_drop_low_confidence_transcription, stt_drop_decision, transcribe_file_result_sync,
 };
+use crate::adapters::wakeword::detect_wake_file_sync;
 use crate::runtime::domain::interactions::{
-    ROUTER_LOOKBACK_SECONDS, acknowledgement_text_for_command, clean_question_text, dedupe_hash,
-    evaluate_router_candidate, router_action, validate_router_result,
+    VOICE_ACTIVATION_LOOKBACK_SECONDS, evaluate_voice_command, validate_voice_command_result,
+    voice_command_action,
 };
 use crate::runtime::timeline::{SpeechEventInput, event_start, sha256_file, string_field};
-use crate::runtime::util::first_non_empty;
-use crate::runtime::{AudioSegmentPayload, Job, RouterCommand, Runtime};
+use crate::runtime::{AudioSegmentPayload, CommandRequest, Job, Runtime};
 
 pub(crate) fn execute_segment_job(
     runtime: &Runtime,
@@ -65,6 +65,11 @@ pub(crate) fn execute_segment_job(
         "post_processing": payload.post_processing,
     });
 
+    let stream_id = wake_stream_id(payload);
+    let wake = detect_wake_file_sync(&wav_path, &stream_id, false)?;
+    let wake_metadata = wake.to_json();
+    merge_object(&mut capture, json!({"wake": wake_metadata.clone()}));
+
     let transcription = transcribe_file_result_sync(&wav_path)?;
     let text = transcription.text.trim().to_string();
     let stt_metadata = transcription.metadata;
@@ -110,6 +115,7 @@ pub(crate) fn execute_segment_job(
             segment_index: payload.segment_index,
             duration_ms: payload.duration_ms,
             stt_metadata,
+            wake_metadata,
             ..Default::default()
         })?;
     let _ = runtime.timeline_store.set_occupancy(json!({
@@ -137,8 +143,7 @@ fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Re
         .filter(|job| {
             matches!(
                 job.kind,
-                crate::runtime::JobKind::RouterCommand
-                    | crate::runtime::JobKind::ConfirmationRequired
+                crate::runtime::JobKind::Command | crate::runtime::JobKind::ConfirmationRequired
             )
         })
         .map(|job| job.to_value())
@@ -153,7 +158,7 @@ fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Re
     let recent_events = runtime.timeline_store.load_events(
         &string_field(event, "guild_id"),
         &string_field(event, "voice_channel_id"),
-        Some(started_at - chrono::Duration::seconds(ROUTER_LOOKBACK_SECONDS)),
+        Some(started_at - chrono::Duration::seconds(VOICE_ACTIVATION_LOOKBACK_SECONDS)),
         Some(started_at + chrono::Duration::seconds(1)),
         Some(&std::collections::BTreeSet::from([
             "speech_segment".to_string()
@@ -167,12 +172,9 @@ fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Re
         Some(&string_field(event, "voice_channel_name")),
     );
     let room_status = runtime.status_for_room(&room);
-    let result = promote_general_voice_request(
-        evaluate_router_candidate(event, &recent_events, &room_status, None),
-        event,
-    );
-    let (valid, reason) = validate_router_result(&result);
-    if !valid || router_action(&result) != "dispatch_now" {
+    let result = evaluate_voice_command(event, &recent_events, &room_status);
+    let (valid, reason) = validate_voice_command_result(&result);
+    if !valid || voice_command_action(&result) != "dispatch_now" {
         return Ok(json!({
             "status": "not_routed",
             "valid": valid,
@@ -180,98 +182,40 @@ fn route_voice_command(runtime: &Runtime, parent_job: &Job, event: &Value) -> Re
             "result": result,
         }));
     }
-    let command = RouterCommand::from_json(&result)?;
-    let created = runtime.create_router_command_job_sync(command, Some(parent_job))?;
+    let duplicate = existing_command_jobs_for_dedupe(runtime, &result)?;
+    if !duplicate.is_empty() {
+        return Ok(json!({"status": "duplicate", "result": result, "jobs": duplicate}));
+    }
+    let command = CommandRequest::from_json(&result)?;
+    let created = runtime.create_command_job_sync(command, Some(parent_job))?;
     Ok(json!({"status": "routed", "result": result, "created": created}))
 }
 
-fn promote_general_voice_request(mut result: Value, event: &Value) -> Value {
-    if router_action(&result) == "dispatch_now" {
-        return result;
+fn existing_command_jobs_for_dedupe(runtime: &Runtime, result: &Value) -> Result<Vec<Value>> {
+    let dedupe_hash = string_field(result, "dedupe_hash");
+    if dedupe_hash.is_empty() {
+        return Ok(Vec::new());
     }
-    if result.get("wake_phrase_detected").and_then(Value::as_bool) != Some(true) {
-        return result;
-    }
-    let instruction_text = string_field(&result, "instruction_text");
-    let request = clean_question_text(&instruction_text);
-    if request.split_whitespace().count() < 3 && !request.contains('?') {
-        return result;
-    }
-    let guild_id = first_non_empty([
-        string_field(&result, "guild_id"),
-        string_field(event, "guild_id"),
-        string_field(event, "guildId"),
-    ]);
-    let channel_id = first_non_empty([
-        string_field(&result, "voice_channel_id"),
-        string_field(event, "voice_channel_id"),
-        string_field(event, "channelId"),
-    ]);
-    let requested_by_user_id = first_non_empty([
-        string_field(&result, "requested_by_user_id"),
-        string_field(event, "speaker_user_id"),
-        string_field(event, "speakerId"),
-    ]);
-    let requested_by_speaker_label = first_non_empty([
-        string_field(&result, "requested_by_speaker_label"),
-        string_field(event, "speaker_label"),
-        string_field(event, "speakerLabel"),
-        requested_by_user_id.clone(),
-    ]);
-    let mut source_event_ids = result
-        .get("source_event_ids")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
+    let guild_id = string_field(result, "guild_id");
+    let channel_id = string_field(result, "voice_channel_id");
+    Ok(runtime
+        .timeline_store
+        .list_jobs(Some(&guild_id), None)?
+        .into_iter()
+        .filter(|job| job.voice_channel_id == channel_id)
+        .filter(|job| {
+            job.command_value()
+                .is_some_and(|command| string_field(&command, "dedupe_hash") == dedupe_hash)
         })
-        .unwrap_or_default();
-    if source_event_ids.is_empty() {
-        let event_id = first_non_empty([
-            string_field(event, "event_id"),
-            string_field(event, "eventId"),
-        ]);
-        if !event_id.is_empty() {
-            source_event_ids.push(event_id);
-        }
-    }
-    let arguments = json!({
-        "request": request,
-        "raw_text": string_field(&result, "candidate_text"),
-        "activated_text": string_field(&result, "activated_text"),
-        "instruction_text": instruction_text,
-        "respond_in": "agent_chat",
-    });
-    let dedupe = dedupe_hash(
-        &guild_id,
-        &channel_id,
-        &source_event_ids.join("|"),
-        "agent_task",
-        &arguments,
-    );
-    merge_object(
-        &mut result,
-        json!({
-            "action": "dispatch_now",
-            "is_command": true,
-            "confidence": 0.76,
-            "command_kind": "agent_task",
-            "guild_id": guild_id,
-            "voice_channel_id": channel_id,
-            "requested_by_user_id": requested_by_user_id,
-            "requested_by_speaker_label": requested_by_speaker_label,
-            "source_event_ids": source_event_ids,
-            "arguments": arguments,
-            "requires_confirmation": false,
-            "acknowledgement_text": acknowledgement_text_for_command("agent_task"),
-            "reason": "Native router promoted a wake-addressed non-control request to agent_task.",
-            "dedupe_hash": dedupe,
-        }),
-    );
-    result
+        .map(|job| job.to_value())
+        .collect())
+}
+
+fn wake_stream_id(payload: &AudioSegmentPayload) -> String {
+    format!(
+        "{}:{}:{}",
+        payload.guild_id, payload.voice_channel_id, payload.speaker_user_id
+    )
 }
 
 fn merge_object(target: &mut Value, source: Value) {

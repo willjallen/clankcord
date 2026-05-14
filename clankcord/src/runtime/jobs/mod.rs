@@ -5,10 +5,10 @@ mod util;
 
 pub use kind::{JobKind, JobState};
 pub use payload::{
-    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandArguments, ConfirmationContext,
-    ConfirmationRequiredPayload, JobPayload, OpaqueValue, RefineTranscriptPayload,
-    RoomAgentPlacementAction, RoomAgentPlacementPayload, RouterAction, RouterCommand,
-    RouterCommandKind, RouterCommandPayload, RuntimeControlAction, RuntimeControlPayload,
+    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
+    CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
+    JobPayload, OpaqueValue, RefineTranscriptPayload, RoomAgentPlacementAction,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
 };
 pub use record::{Job, JobMetadata};
 

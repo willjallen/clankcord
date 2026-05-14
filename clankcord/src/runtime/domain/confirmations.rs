@@ -8,7 +8,7 @@ use crate::config::string_field;
 use crate::errors::discord_tool_error;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::isoformat_z;
-use crate::runtime::{ConfirmationContext, Job, JobKind, JobState, RouterCommand};
+use crate::runtime::{CommandRequest, ConfirmationContext, Job, JobKind, JobState};
 
 use crate::runtime::Runtime;
 use crate::runtime::util::{first_non_empty, preview, require_confirmation_actor};
@@ -16,7 +16,7 @@ use crate::runtime::util::{first_non_empty, preview, require_confirmation_actor}
 impl Runtime {
     pub fn confirmation_context_for_command(
         &self,
-        command: &RouterCommand,
+        command: &CommandRequest,
     ) -> Result<ConfirmationContext> {
         let (start, end) = command.window_times(None);
         let guild_id = command.guild_id.clone();
@@ -167,7 +167,7 @@ impl Runtime {
         Ok(())
     }
 
-    pub fn confirmation_card_content(&self, job: &Job, command: &RouterCommand) -> String {
+    pub fn confirmation_card_content(&self, job: &Job, command: &CommandRequest) -> String {
         let (start, end) = command.window_times(None);
         let room = self.room_for_channel_ids(&command.guild_id, &command.voice_channel_id, None);
         let requester = first_non_empty([
@@ -233,10 +233,7 @@ impl Runtime {
             confirmation.approved_at = isoformat_z(None);
         }
         self.timeline_store.update_job(&job)?;
-        let dispatch_result = match self
-            .create_router_command_job(command.clone(), Some(&job))
-            .await
-        {
+        let dispatch_result = match self.create_command_job(command.clone(), Some(&job)).await {
             Ok(result) => result,
             Err(error) => {
                 let mut latest = self.timeline_store.get_job(job_id).unwrap_or(job.clone());

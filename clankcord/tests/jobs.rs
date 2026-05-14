@@ -2,13 +2,13 @@ use chrono::TimeZone;
 use serde_json::json;
 
 use clankcord::runtime::{
-    AudioSegmentPayload, BinaryPayload, Job, JobKind, JobPayload, JobState,
-    RefineTranscriptPayload, RouterCommand,
+    AudioSegmentPayload, BinaryPayload, CommandRequest, Job, JobKind, JobPayload, JobState,
+    RefineTranscriptPayload,
 };
 
 #[test]
 fn job_round_trips_as_binary_record() {
-    let command = RouterCommand::from_json(&json!({
+    let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
         "voice_channel_id": "channel",

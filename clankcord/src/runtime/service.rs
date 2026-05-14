@@ -8,7 +8,7 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 use crate::Result;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::{config_path, read_json};
-use crate::runtime::{Job, RouterCommand, Runtime, RuntimeControlAction, log};
+use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
 const DEFAULT_INTAKE_QUEUE_DEPTH: usize = 256;
 const DEFAULT_MAINTAINER_INTERVAL_SECONDS: f64 = 0.5;
@@ -26,8 +26,8 @@ impl RuntimeHandle {
         self.runtime.clone()
     }
 
-    pub async fn submit_router_command(&self, command: RouterCommand) -> Result<Value> {
-        submit_to_intake(&self.intake, |reply| RuntimeSubmission::RouterCommand {
+    pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
+        submit_to_intake(&self.intake, |reply| RuntimeSubmission::Command {
             command,
             reply,
         })
@@ -167,8 +167,8 @@ impl RuntimeService {
 }
 
 enum RuntimeSubmission {
-    RouterCommand {
-        command: RouterCommand,
+    Command {
+        command: CommandRequest,
         reply: oneshot::Sender<Result<Value>>,
     },
     Job {
@@ -201,10 +201,10 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
     tokio::spawn(async move {
         while let Some(submission) = intake.recv().await {
             match submission {
-                RuntimeSubmission::RouterCommand { command, reply } => {
+                RuntimeSubmission::Command { command, reply } => {
                     let result = {
                         let mut runtime = handle.runtime.lock().await;
-                        runtime.create_router_command_job(command, None).await
+                        runtime.create_command_job(command, None).await
                     };
                     let _ = reply.send(result);
                 }

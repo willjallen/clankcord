@@ -159,7 +159,7 @@ impl Runtime {
             .collect())
     }
 
-    pub fn router_interaction_context(
+    pub fn command_interaction_context(
         &self,
         interaction: &Value,
         guild_id: &str,

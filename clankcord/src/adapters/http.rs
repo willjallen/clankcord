@@ -10,9 +10,9 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::dashboard::{APP_JS, INDEX_HTML, STYLES_CSS};
 use crate::runtime::{
-    ContextResolveRequest, DebugOverviewRequest, JobsRequest, ListConversationsRequest,
-    ParticipantTraceRequest, RenderTranscriptRequest, RouterCommand, Runtime, RuntimeHandle,
-    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
+    ListConversationsRequest, ParticipantTraceRequest, RenderTranscriptRequest, Runtime,
+    RuntimeHandle, SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
 };
 
 #[derive(Clone)]
@@ -116,11 +116,11 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
 }
 
 async fn command_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
-    let command = match RouterCommand::from_json(&payload) {
+    let command = match CommandRequest::from_json(&payload) {
         Ok(command) => command,
         Err(error) => return err(error),
     };
-    result(state.handle.submit_router_command(command).await)
+    result(state.handle.submit_command(command).await)
 }
 
 async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {

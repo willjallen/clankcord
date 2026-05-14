@@ -9,29 +9,20 @@ use crate::runtime::agents::{AgentInfrastructureError, AgentRuntime, AgentSessio
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentRole {
-    Router,
     Task,
 }
 
 impl AgentRole {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
-            Self::Router => "router",
             Self::Task => "task",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AgentSessionPolicy {
-    Ephemeral,
-    Sticky,
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct AgentInvocationRequest {
     pub role: AgentRole,
-    pub session_policy: AgentSessionPolicy,
     pub session_key: String,
     pub job_id: String,
     pub guild_id: String,
@@ -64,16 +55,13 @@ impl AgentRuntime {
         if let Some(parent) = request.raw_result_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let started_session = match request.session_policy {
-            AgentSessionPolicy::Sticky => Some(self.begin_invocation(
-                request.role,
-                &request.session_key,
-                &request.guild_id,
-                &request.voice_channel_id,
-                &request.job_id,
-            )),
-            AgentSessionPolicy::Ephemeral => None,
-        };
+        let started_session = Some(self.begin_invocation(
+            request.role,
+            &request.session_key,
+            &request.guild_id,
+            &request.voice_channel_id,
+            &request.job_id,
+        ));
         let codex_result = match self.codex().run(CodexRunRequest {
             prompt: request.prompt,
             session_id: started_session

@@ -10,9 +10,9 @@ use super::util::{
     first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
 };
 use super::{
-    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, ConfirmationContext,
-    ConfirmationRequiredPayload, JobKind, JobPayload, JobState, RefineTranscriptPayload,
-    RoomAgentPlacementAction, RoomAgentPlacementPayload, RouterCommand, RouterCommandPayload,
+    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
+    ConfirmationContext, ConfirmationRequiredPayload, JobKind, JobPayload, JobState,
+    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload,
 };
 
@@ -388,7 +388,7 @@ impl Job {
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
-        command: RouterCommand,
+        command: CommandRequest,
     ) -> Self {
         Self::new(
             guild_id,
@@ -413,7 +413,7 @@ impl Job {
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
-        command: RouterCommand,
+        command: CommandRequest,
         confirmation: ConfirmationContext,
     ) -> Self {
         Self::new(
@@ -428,18 +428,18 @@ impl Job {
         )
     }
 
-    pub fn router_command(
+    pub fn command_request(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
-        command: RouterCommand,
+        command: CommandRequest,
     ) -> Self {
         Self::new(
             guild_id,
             voice_channel_id,
             requested_by_user_id,
             JobState::Queued,
-            JobPayload::RouterCommand(RouterCommandPayload { command }),
+            JobPayload::Command(CommandPayload { command }),
         )
     }
 
@@ -572,16 +572,16 @@ impl Job {
         self.payload.to_json()
     }
 
-    pub fn command(&self) -> Option<&RouterCommand> {
+    pub fn command(&self) -> Option<&CommandRequest> {
         self.payload.command()
     }
 
-    pub fn command_mut(&mut self) -> Option<&mut RouterCommand> {
+    pub fn command_mut(&mut self) -> Option<&mut CommandRequest> {
         self.payload.command_mut()
     }
 
     pub fn command_value(&self) -> Option<Value> {
-        self.command().map(RouterCommand::to_json)
+        self.command().map(CommandRequest::to_json)
     }
 
     pub fn command_kind(&self) -> String {

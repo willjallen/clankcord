@@ -17,10 +17,10 @@ pub use agents::AgentRuntime;
 pub use bots::RuntimeBotStatus;
 pub use core::Runtime;
 pub use jobs::{
-    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandArguments, ConfirmationContext,
-    ConfirmationRequiredPayload, Job, JobKind, JobPayload, JobState, RefineTranscriptPayload,
-    RoomAgentPlacementAction, RoomAgentPlacementPayload, RouterAction, RouterCommand,
-    RouterCommandKind, RouterCommandPayload, RuntimeControlAction, RuntimeControlPayload,
+    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
+    CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
+    Job, JobKind, JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use runtime_config::{ControlConfig, GuildConfig};

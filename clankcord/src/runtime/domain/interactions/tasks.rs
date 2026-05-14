@@ -13,9 +13,7 @@ use crate::adapters::discord::api::send_message;
 use crate::config::{
     MESSAGE_CHUNK_LIMIT, durable_dir, non_empty, split_message_chunks, string_field, write_json,
 };
-use crate::runtime::agents::{
-    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentSessionPolicy,
-};
+use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     BinaryPayload, DiscordPostMetadata, DiscordPostedMessageMetadata,
@@ -142,7 +140,6 @@ impl Runtime {
         let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
         let invocation = self.agents.invoke(AgentInvocationRequest {
             role: AgentRole::Task,
-            session_policy: AgentSessionPolicy::Sticky,
             session_key: crate::runtime::AgentRuntime::task_session_key(
                 &latest.guild_id,
                 &latest.voice_channel_id,
@@ -344,7 +341,7 @@ pub fn build_agent_task_message(packet_path: &Path, packet: &Value) -> String {
         "",
         "Preserve the job lane abstraction and only perform side effects authorized by this job.",
         "",
-        "Use the job payload as request evidence: requester, room, source events, router context, and raw activated speech.",
+        "Use the job payload as request evidence: requester, room, source events, wake activation context, and raw activated speech.",
         "Choose the relevant Clawcord tools yourself for timeline, transcript, search, conversation, participant, job, and control queries.",
         "Resolve named rooms, date phrases, and time ranges with tools and available context instead of assuming the current channel is always correct.",
         "If the listed tools are insufficient, you may inspect the local SQLite-backed voice memory directly and explain why.",

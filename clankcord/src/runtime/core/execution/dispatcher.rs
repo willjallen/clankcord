@@ -14,7 +14,7 @@ impl Runtime {
         let mut results = Map::new();
         for kind in [
             JobKind::RuntimeControl,
-            JobKind::RouterCommand,
+            JobKind::Command,
             JobKind::RoomAgentPlacement,
         ] {
             results.insert(

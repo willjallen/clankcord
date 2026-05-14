@@ -16,7 +16,7 @@ pub(crate) async fn execute_async(
 ) -> Result<Value> {
     match &job.payload {
         JobPayload::RuntimeControl(payload) => runtime_control::execute(runtime, payload).await,
-        JobPayload::RouterCommand(_) => commands::execute(runtime, job, effects).await,
+        JobPayload::Command(_) => commands::execute(runtime, job, effects).await,
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::execute(runtime, job, payload, effects).await
         }
@@ -88,7 +88,7 @@ mod commands {
         job: &Job,
         effects: Option<&dyn RuntimeEffects>,
     ) -> Result<Value> {
-        runtime.execute_router_command_job(job, effects).await
+        runtime.execute_command_job(job, effects).await
     }
 }
 

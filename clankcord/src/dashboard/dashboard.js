@@ -74,7 +74,7 @@ const eventSpeaker = (event) => event.speakerLabel || event.speaker_label || eve
 const eventWhen = (event) => event.startedAt || event.started_at || event.created_at || event.timestamp || '';
 const eventId = (event) => event.job_id || event.eventId || event.event_id || '';
 const eventDetail = (event) => {
-  const result = event.router_result || event.router_response || event.result || {};
+  const result = event.command_result || event.command_response || event.result || {};
   return event.text || event.reason || result.reason || result.action || event.state || '';
 };
 const transcriptText = (event) => event.text || event.text_draft || event.transcript || '';
@@ -239,7 +239,7 @@ function render(data) {
   renderOverview(data);
   renderJobs(data);
   renderRooms(data);
-  renderRouter(data);
+  renderCommands(data);
   renderFilterOptions(data);
   renderTimeline(data);
   renderTranscript(data);
@@ -374,9 +374,9 @@ function renderRooms(data) {
   ]);
 }
 
-function renderRouter(data) {
-  const routerJobs = jobs(data).router || [];
-  const rows = routerJobs.map((job) => {
+function renderCommands(data) {
+  const commandJobs = jobs(data).commands || [];
+  const rows = commandJobs.map((job) => {
     const command = jobCommand(job);
     const args = jobArgs(job);
     return `<tr>
@@ -390,15 +390,15 @@ function renderRouter(data) {
       ${td(text(short(args.request || args.question || command.acknowledgement_text || jobDetailText(job), 140)), 'text-cell')}
     </tr>`;
   });
-  $('routerJobsCount').textContent = `${rows.length}`;
-  $('routerJobs').innerHTML = table(['Job', 'Kind', 'State', 'Action', 'Command', 'Target', 'Updated', 'Request/Result'], rows, 'No router-origin jobs');
+  $('commandJobsCount').textContent = `${rows.length}`;
+  $('commandJobs').innerHTML = table(['Job', 'Kind', 'State', 'Action', 'Command', 'Target', 'Updated', 'Request/Result'], rows, 'No command-origin jobs');
 
-  const routerEvents = timelineEvents(data).filter((event) => {
+  const commandEvents = timelineEvents(data).filter((event) => {
     const kind = String(eventKind(event));
-    return kind.includes('router') || kind.includes('agent_task') || kind.includes('job_');
+    return kind.includes('command') || kind.includes('agent_task') || kind.includes('job_');
   });
-  $('routerEventsCount').textContent = `${routerEvents.length}`;
-  $('routerEvents').innerHTML = routerEvents.length ? routerEvents.map(renderTimelineCard).join('') : '<div class="empty">No router activity in this window.</div>';
+  $('commandEventsCount').textContent = `${commandEvents.length}`;
+  $('commandEvents').innerHTML = commandEvents.length ? commandEvents.map(renderTimelineCard).join('') : '<div class="empty">No command activity in this window.</div>';
 }
 
 function renderTimeline(data) {
@@ -468,7 +468,7 @@ function renderTranscriptLine(event) {
 }
 
 function renderTimelineCard(event) {
-  const result = event.router_result || event.router_response || event.result || {};
+  const result = event.command_result || event.command_response || event.result || {};
   return `<article class="timeline-card">
     <div class="timeline-head">
       <div class="detail-tags">
