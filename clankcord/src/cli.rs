@@ -128,6 +128,8 @@ enum ResponsesCommand {
 
 #[derive(Debug, Subcommand)]
 enum AutomationsCommand {
+    #[command(about = "Print the automation JSON spec manual.")]
+    Spec,
     Create(AutomationSpecArgs),
     Validate(AutomationSpecArgs),
     DryRun(AutomationSpecArgs),
@@ -484,6 +486,10 @@ fn run_cli(cli: Cli) -> Result<i32> {
             ResponsesCommand::Ask(args) => response_submit(args, "question"),
         },
         Command::Automations { command } => match command {
+            AutomationsCommand::Spec => {
+                print!("{}", crate::runtime::automations::AUTOMATION_SPEC_MANUAL);
+                Ok(0)
+            }
             AutomationsCommand::Create(args) => automation_spec(args, "/v1/voice/automations"),
             AutomationsCommand::Validate(args) => {
                 automation_spec(args, "/v1/voice/automations/validate")

@@ -9,42 +9,38 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
-use crate::config::{durable_dir, non_empty, write_json};
+use crate::config::{non_empty, write_json};
 use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     BinaryPayload,
 };
-use crate::runtime::timeline::isoformat_z;
+use crate::runtime::timeline::{event_text, first_value_string, isoformat_z};
 use crate::runtime::util::{
     agent_task_timeout_seconds, first_non_empty, job_cancel_requested, log, preview,
 };
-use crate::runtime::{Job, JobKind, JobPayload, JobState, Runtime};
+use crate::runtime::{CommandArguments, Job, JobKind, JobState, Runtime};
 
 #[derive(Debug, Clone)]
 struct AgentTaskPacket {
+    schema: String,
     job_id: String,
     kind: String,
+    root_job_id: String,
+    parent_job_id: String,
     requested_by_user_id: String,
     guild_id: String,
     voice_channel_id: String,
-    payload: JobPayload,
-    preflight: AgentPreflightMetadata,
-    storage: AgentTaskStorage,
+    request: Value,
     manuals: AgentTaskManuals,
     policy: AgentTaskPolicy,
     tools: AgentTaskTools,
 }
 
 #[derive(Debug, Clone)]
-struct AgentTaskStorage {
-    voice_memory_root: String,
-    sqlite_path: String,
-}
-
-#[derive(Debug, Clone)]
 struct AgentTaskManuals {
-    tools_manual: String,
+    automation_spec: String,
+    automation_spec_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -68,6 +64,8 @@ struct AgentTaskTools {
     search_messages: String,
     read_messages: String,
     submit_response: String,
+    automation_spec: String,
+    validate_automation: String,
     create_automation: String,
 }
 
@@ -129,7 +127,7 @@ impl Runtime {
             .channel_dir(&latest.guild_id, &latest.voice_channel_id)
             .join("jobs");
         fs::create_dir_all(&job_dir)?;
-        let packet = AgentTaskPacket::from_job(latest.clone(), preflight.clone());
+        let packet = AgentTaskPacket::from_job(&latest);
         let packet_path = job_dir.join(format!("{}.packet.json", latest.id));
         let packet_value = packet.to_json();
         write_json(&packet_path, &packet_value)?;
@@ -360,15 +358,15 @@ pub fn build_agent_task_message_for_session(
         "JOB_CONTEXT:",
         "This is a Clankcord agent-task job for the active Discord channel session.",
         &format!("Job packet path: {}", packet_path.display()),
-        "The full job packet is included below. Use it as the source of truth.",
+        "A compact job packet is included below. Use it as the starting point, then query Clankcord when you need more timeline, transcript, room, job, or participant context.",
         "Do not post to Discord yourself. Submit visible answers through `clankcord responses submit --job <job-id> --sink agent-chat --stdin`.",
         "You must use that response submission path for visible answers. After a successful submission, return only RESPONSE_SUBMITTED as your final message. Do not use final text as a publication channel.",
         "Preserve the job lane abstraction and only perform side effects authorized by this job.",
-        "Use the job payload as request evidence: requester, room, source events, wake activation context, and raw activated speech.",
+        "Use the compact request as evidence for requester, room, source events, wake activation context, and activated speech. Fetch raw details with the listed CLI tools only when they are relevant.",
         "Choose the relevant Clankcord tools yourself for timeline, transcript, search, conversation, participant, job, and control queries.",
         "Resolve named rooms, date phrases, and time ranges with tools and available context instead of assuming the current channel is always correct.",
         "If the listed tools are insufficient, you may inspect the local SQLite-backed voice memory directly and explain why.",
-        "Shell exec may use /bin/sh; wrap commands in bash -lc only when using bash-specific syntax. jq is installed and useful for inspecting JSON.",
+        "Shell exec may use /bin/sh; wrap commands in bash -lc only when using bash-specific syntax. jq and rg are installed and useful for inspecting JSON and searching text.",
         "Select the workflow and final answer from the available evidence.",
         "",
         "JOB_PACKET_JSON:",
@@ -400,7 +398,7 @@ pub fn agent_master_prompt() -> String {
         "Do not invent facts when research is possible.",
         "",
         "When a user asks for runtime work such as transcript creation, room control, sound playback, reminders, or publication, use the corresponding `clankcord` command.",
-        "When a user asks for future, conditional, or recurring behavior, register an automation with `clankcord automations create --stdin`. Automations default to one shot unless the user clearly asks for recurring behavior. Give automations reasonable expiries. Resolve named people to Discord user IDs before storing durable conditions whenever possible.",
+        "When a user asks for future, conditional, or recurring behavior, read `clankcord automations spec`, validate with `clankcord automations validate --stdin`, then register with `clankcord automations create --stdin`. Automations default to one shot unless the user clearly asks for recurring behavior. Give automations reasonable expiries. Resolve named people to Discord user IDs before storing durable conditions whenever possible.",
         "When the request is underspecified, ask a focused clarifying question through Clankcord. Keep the ongoing channel context in mind after the user answers.",
         "",
         "Be useful, complete, and intellectually honest. Do not choose a weak answer merely because it is shorter.",
@@ -450,6 +448,7 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         .unwrap_or_else(|_| "codex".to_string());
     let checks: Vec<Vec<String>> = vec![
         vec![codex_bin, "--version".to_string()],
+        vec!["rg".to_string(), "--version".to_string()],
         vec!["jq".to_string(), "--version".to_string()],
         vec!["sqlite3".to_string(), "--version".to_string()],
         vec![
@@ -503,6 +502,11 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         vec![
             "clankcord".to_string(),
             "automations".to_string(),
+            "spec".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "automations".to_string(),
             "create".to_string(),
             "--help".to_string(),
         ],
@@ -547,50 +551,41 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
 }
 
 impl AgentTaskPacket {
-    fn from_job(job: Job, preflight: AgentPreflightMetadata) -> Self {
-        let voice_memory_root = env::var("CLANKCORD_VOICE_MEMORY_ROOT")
-            .or_else(|_| env::var("VOICE_MEMORY_ROOT"))
-            .unwrap_or_else(|_| {
-                durable_dir()
-                    .join("clankcord")
-                    .join("voice")
-                    .display()
-                    .to_string()
-            });
+    fn from_job(job: &Job) -> Self {
         Self {
+            schema: "clankcord.agent_task.v0".to_string(),
             job_id: job.id.clone(),
             kind: job.kind.as_str().to_string(),
+            root_job_id: job.root_job_id.clone(),
+            parent_job_id: job.parent_job_id.clone().unwrap_or_default(),
             requested_by_user_id: job.requested_by_user_id.clone(),
             guild_id: job.guild_id.clone(),
             voice_channel_id: job.voice_channel_id.clone(),
-            payload: job.payload,
-            preflight,
-            storage: AgentTaskStorage {
-                voice_memory_root: voice_memory_root.clone(),
-                sqlite_path: format!("{voice_memory_root}/voice.sqlite3"),
-            },
+            request: compact_request_context(job),
             manuals: AgentTaskManuals {
-                tools_manual: env::var("CLANKCORD_AGENT_TASK_TOOLS_MANUAL").unwrap_or_default(),
+                automation_spec: "clankcord automations spec".to_string(),
+                automation_spec_path: "clankcord/docs/AUTOMATION_SPEC.md".to_string(),
             },
             policy: AgentTaskPolicy {
                 may_create_linear_without_confirmation: false,
                 may_publish_to_discord: true,
                 cross_channel_reads_require_explicit_scope_or_context_reason: true,
             },
-            tools: AgentTaskTools::for_job(&job.id),
+            tools: AgentTaskTools::for_job(job),
         }
     }
 
     fn to_json(&self) -> Value {
         json!({
+            "schema": self.schema,
             "job_id": self.job_id,
             "kind": self.kind,
+            "root_job_id": self.root_job_id,
+            "parent_job_id": self.parent_job_id,
             "requested_by_user_id": self.requested_by_user_id,
             "guild_id": self.guild_id,
             "voice_channel_id": self.voice_channel_id,
-            "payload": self.payload.to_json(),
-            "preflight": self.preflight.to_json(),
-            "storage": self.storage.to_json(),
+            "request": self.request,
             "manuals": self.manuals.to_json(),
             "policy": self.policy.to_json(),
             "tools": self.tools.to_json(),
@@ -598,20 +593,11 @@ impl AgentTaskPacket {
     }
 }
 
-impl AgentTaskStorage {
-    fn to_json(&self) -> Value {
-        json!({
-            "voice_memory_root": self.voice_memory_root,
-            "timeline_store": "SQLite-backed TimelineStore",
-            "sqlite_path": self.sqlite_path,
-        })
-    }
-}
-
 impl AgentTaskManuals {
     fn to_json(&self) -> Value {
         json!({
-            "tools_manual": self.tools_manual,
+            "automation_spec": self.automation_spec,
+            "automation_spec_path": self.automation_spec_path,
         })
     }
 }
@@ -626,37 +612,265 @@ impl AgentTaskPolicy {
     }
 }
 
+fn compact_request_context(job: &Job) -> Value {
+    let Some(command) = job.command() else {
+        return json!({});
+    };
+    let arguments = compact_command_arguments(&command.arguments);
+    let raw_arguments = command.arguments.to_json();
+    let mut object = Map::new();
+    insert_string(&mut object, "command_kind", command.command_kind.as_str());
+    insert_string(&mut object, "action", command.action.as_str());
+    insert_string(&mut object, "text", &command.arguments.request_text());
+    insert_string(
+        &mut object,
+        "requested_by_user_id",
+        &command.requested_by_user_id,
+    );
+    insert_string(
+        &mut object,
+        "requested_by_speaker_label",
+        &command.requested_by_speaker_label,
+    );
+    insert_string(&mut object, "target_room_id", &command.target_room_id);
+    insert_string(
+        &mut object,
+        "target_voice_channel_id",
+        &command.target_voice_channel_id,
+    );
+    insert_string(&mut object, "target_job_id", &command.target_job_id);
+    if !command.target_job_ids.is_empty() {
+        object.insert("target_job_ids".to_string(), json!(command.target_job_ids));
+    }
+    if command.requires_confirmation {
+        object.insert("requires_confirmation".to_string(), Value::Bool(true));
+    }
+    if !arguments.as_object().is_none_or(Map::is_empty) {
+        object.insert("arguments".to_string(), arguments);
+    }
+    let source_event_ids = string_array_field(&raw_arguments, "source_event_ids");
+    if !source_event_ids.is_empty() {
+        object.insert("source_event_ids".to_string(), json!(source_event_ids));
+    }
+    if let Some(activation) = raw_arguments.get("activation") {
+        let activation = compact_activation_context(activation);
+        if !activation.as_object().is_none_or(Map::is_empty) {
+            object.insert("activation".to_string(), activation);
+        }
+    }
+    Value::Object(object)
+}
+
+fn compact_command_arguments(arguments: &CommandArguments) -> Value {
+    let mut object = Map::new();
+    insert_string(&mut object, "query", &arguments.query);
+    insert_string(&mut object, "question", &arguments.question);
+    insert_string(&mut object, "request", &arguments.request);
+    insert_string(&mut object, "instruction_text", &arguments.instruction_text);
+    insert_string(&mut object, "relative_start", &arguments.relative_start);
+    insert_string(&mut object, "window_id", &arguments.window_id);
+    insert_string(&mut object, "from", &arguments.from);
+    insert_string(&mut object, "to", &arguments.to);
+    insert_string(&mut object, "room", &arguments.room);
+    insert_string(&mut object, "channel", &arguments.channel);
+    insert_string(&mut object, "target_room", &arguments.target_room);
+    insert_string(&mut object, "target_channel", &arguments.target_channel);
+    insert_string(&mut object, "publish", &arguments.publish);
+    if let Some(refine) = arguments.refine {
+        object.insert("refine".to_string(), Value::Bool(refine));
+    }
+    if let Some(duration_seconds) = arguments.duration_seconds {
+        object.insert("duration_seconds".to_string(), json!(duration_seconds));
+    }
+    if let Some(unpublished_only) = arguments.unpublished_only {
+        object.insert(
+            "unpublished_only".to_string(),
+            Value::Bool(unpublished_only),
+        );
+    }
+    Value::Object(object)
+}
+
+fn compact_activation_context(value: &Value) -> Value {
+    let mut object = Map::new();
+    for key in ["activation_id", "wake_event_id", "latest_wake_event_id"] {
+        insert_string(&mut object, key, &first_value_string(value, &[key]));
+    }
+    let amended_wake_event_ids = string_array_field(value, "amended_wake_event_ids");
+    if !amended_wake_event_ids.is_empty() {
+        object.insert(
+            "amended_wake_event_ids".to_string(),
+            json!(amended_wake_event_ids),
+        );
+    }
+    let source_event_ids = string_array_field(value, "source_event_ids");
+    if !source_event_ids.is_empty() {
+        object.insert("source_event_ids".to_string(), json!(source_event_ids));
+    }
+    if let Some(room) = value.get("room_snapshot") {
+        let room = compact_room_snapshot(room);
+        if !room.as_object().is_none_or(Map::is_empty) {
+            object.insert("room".to_string(), room);
+        }
+    }
+    if let Some(events) = value.get("prior_to_activation").and_then(Value::as_array) {
+        object.insert(
+            "prior_to_activation".to_string(),
+            Value::Array(events.iter().take(8).map(compact_timeline_event).collect()),
+        );
+    }
+    if let Some(events) = value.get("post_activation_turn").and_then(Value::as_array) {
+        object.insert(
+            "post_activation_turn".to_string(),
+            Value::Array(events.iter().take(12).map(compact_timeline_event).collect()),
+        );
+    }
+    Value::Object(object)
+}
+
+fn compact_room_snapshot(value: &Value) -> Value {
+    let mut object = Map::new();
+    for (output, keys) in [
+        ("room_id", &["room_id", "roomId"][..]),
+        ("guild_id", &["guild_id", "guildId"][..]),
+        ("voice_channel_id", &["voice_channel_id", "channelId"][..]),
+        (
+            "voice_channel_name",
+            &["voice_channel_name", "channelName"][..],
+        ),
+        ("channel_slug", &["channel_slug", "channelSlug"][..]),
+        (
+            "active_session_id",
+            &["active_session_id", "activeSessionId"][..],
+        ),
+    ] {
+        insert_string(&mut object, output, &first_value_string(value, keys));
+    }
+    if let Some(occupancy) = value.get("occupancy") {
+        let mut compact = Map::new();
+        for (output, keys) in [
+            (
+                "effective_human_count",
+                &["effective_human_count", "effectiveHumanCount"][..],
+            ),
+            ("human_count", &["human_count", "humanCount"][..]),
+            ("last_speech_at", &["last_speech_at", "lastSpeechAt"][..]),
+        ] {
+            insert_value_string(&mut compact, output, occupancy, keys);
+        }
+        if !compact.is_empty() {
+            object.insert("occupancy".to_string(), Value::Object(compact));
+        }
+    }
+    Value::Object(object)
+}
+
+fn compact_timeline_event(event: &Value) -> Value {
+    let mut object = Map::new();
+    for (output, keys) in [
+        ("event_id", &["event_id", "eventId"][..]),
+        ("kind", &["kind", "event_kind"][..]),
+        ("started_at", &["started_at", "startedAt", "timestamp"][..]),
+        ("ended_at", &["ended_at", "endedAt"][..]),
+        (
+            "speaker_user_id",
+            &["speaker_user_id", "speakerId", "user_id"][..],
+        ),
+        ("speaker_label", &["speaker_label", "speakerLabel"][..]),
+        ("voice_channel_id", &["voice_channel_id", "channelId"][..]),
+    ] {
+        insert_string(&mut object, output, &first_value_string(event, keys));
+    }
+    insert_string(&mut object, "text", &event_text(event));
+    if let Some(wake) = event.get("wake") {
+        let mut compact = Map::new();
+        for (output, keys) in [
+            ("wake", &["wake"][..]),
+            ("score", &["score"][..]),
+            ("threshold", &["threshold"][..]),
+            ("model_label", &["model_label", "modelLabel"][..]),
+        ] {
+            insert_value_string(&mut compact, output, wake, keys);
+        }
+        if !compact.is_empty() {
+            object.insert("wake".to_string(), Value::Object(compact));
+        }
+    }
+    Value::Object(object)
+}
+
+fn insert_string(object: &mut Map<String, Value>, key: &str, value: &str) {
+    if !value.trim().is_empty() {
+        object.insert(key.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn insert_value_string(
+    object: &mut Map<String, Value>,
+    output: &str,
+    source: &Value,
+    keys: &[&str],
+) {
+    let value = first_value_string(source, keys);
+    if !value.trim().is_empty() {
+        object.insert(output.to_string(), Value::String(value));
+    }
+}
+
+fn string_array_field(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl AgentTaskTools {
-    fn for_job(job_id: &str) -> Self {
+    fn for_job(job: &Job) -> Self {
+        let guild_id = &job.guild_id;
+        let voice_channel_id = &job.voice_channel_id;
         Self {
-            get_job: format!("clankcord jobs get {job_id}"),
-            status: "clankcord status --guild <guild-id> --channel <room-or-channel>".to_string(),
-            timeline_tail:
-                "clankcord timeline tail --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
-                    .to_string(),
-            timeline_range:
-                "clankcord timeline range --guild <guild-id> --channel <room-or-channel> --from <time> --to <time>"
-                    .to_string(),
-            list_conversations:
-                "clankcord conversations list --guild <guild-id> --channel <room-or-channel> --since <relative-time>"
-                    .to_string(),
-            resolve_context:
-                "clankcord context resolve --guild <guild-id> --channel <room-or-channel> --reference <natural-language-reference>"
-                    .to_string(),
-            render_transcript_range:
-                "clankcord transcripts render --guild <guild-id> --channel <room-or-channel> --from <time> --to <time> --format markdown"
-                    .to_string(),
-            search_transcripts:
-                "clankcord transcripts search --guild <guild-id> --channel <room-or-channel> --query <query> --since -7d"
-                    .to_string(),
-            participant_trace:
-                "clankcord participants trace --guild <guild-id> --user <user-id> --from <time> --to <time> --include-speech-snippets"
-                    .to_string(),
-            search_messages: "clankcord messages search --guild-id <guild-id> --query <query>"
-                .to_string(),
+            get_job: format!("clankcord jobs get {}", job.id),
+            status: format!("clankcord status --guild {guild_id} --channel {voice_channel_id}"),
+            timeline_tail: format!(
+                "clankcord timeline tail --guild {guild_id} --channel {voice_channel_id} --since -1h"
+            ),
+            timeline_range: format!(
+                "clankcord timeline range --guild {guild_id} --channel {voice_channel_id} --from <time> --to <time>"
+            ),
+            list_conversations: format!(
+                "clankcord conversations list --guild {guild_id} --channel {voice_channel_id} --since -2d"
+            ),
+            resolve_context: format!(
+                "clankcord context resolve --guild {guild_id} --channel {voice_channel_id} --reference <natural-language-reference>"
+            ),
+            render_transcript_range: format!(
+                "clankcord transcripts render --guild {guild_id} --channel {voice_channel_id} --from <time> --to <time> --format markdown"
+            ),
+            search_transcripts: format!(
+                "clankcord transcripts search --guild {guild_id} --channel {voice_channel_id} --query <query> --since -7d"
+            ),
+            participant_trace: format!(
+                "clankcord participants trace --guild {guild_id} --user <user-id> --from <time> --to <time> --include-speech-snippets"
+            ),
+            search_messages: format!(
+                "clankcord messages search --guild-id {guild_id} --query <query>"
+            ),
             read_messages: "clankcord messages read --target <channel-or-thread-id>".to_string(),
-            submit_response:
-                "clankcord responses submit --job <job-id> --sink agent-chat --stdin".to_string(),
+            submit_response: format!(
+                "clankcord responses submit --job {} --sink agent-chat --stdin",
+                job.id
+            ),
+            automation_spec: "clankcord automations spec".to_string(),
+            validate_automation: "clankcord automations validate --stdin".to_string(),
             create_automation: "clankcord automations create --stdin".to_string(),
         }
     }
@@ -687,10 +901,69 @@ impl AgentTaskTools {
         object.insert("search_messages".to_string(), json!(self.search_messages));
         object.insert("read_messages".to_string(), json!(self.read_messages));
         object.insert("submit_response".to_string(), json!(self.submit_response));
+        object.insert("automation_spec".to_string(), json!(self.automation_spec));
+        object.insert(
+            "validate_automation".to_string(),
+            json!(self.validate_automation),
+        );
         object.insert(
             "create_automation".to_string(),
             json!(self.create_automation),
         );
         Value::Object(object)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::CommandRequest;
+
+    #[test]
+    fn agent_task_packet_keeps_activation_context_compact() {
+        let command = CommandRequest::from_json(&json!({
+            "action": "dispatch_now",
+            "command_kind": "agent_task",
+            "guild_id": "guild",
+            "voice_channel_id": "voice",
+            "requested_by_user_id": "user",
+            "requested_by_speaker_label": "Will",
+            "arguments": {
+                "request": "summarize the floating point discussion",
+                "source_event_ids": ["evt_1", "evt_2"],
+                "activation": {
+                    "activation_id": "act_1",
+                    "wake_event_id": "evt_1",
+                    "source_event_ids": ["evt_1", "evt_2"],
+                    "prior_to_activation": [{
+                        "event_id": "evt_0",
+                        "event_kind": "speech_segment",
+                        "speaker_label": "Will",
+                        "text": "we were talking about floats",
+                        "token_logprobs": [{"token": "we", "logprob": -0.1}],
+                        "words": [{"word": "we", "start": 0.0, "end": 0.1}]
+                    }],
+                    "post_activation_turn": [{
+                        "event_id": "evt_2",
+                        "event_kind": "speech_segment",
+                        "speaker_label": "Will",
+                        "text": "hey clanky summarize this"
+                    }]
+                }
+            }
+        }))
+        .unwrap();
+        let job = Job::agent_task("guild", "voice", "user", command);
+
+        let packet = AgentTaskPacket::from_job(&job).to_json();
+        let text = serde_json::to_string(&packet).unwrap();
+
+        assert!(text.contains("summarize the floating point discussion"));
+        assert!(text.contains("we were talking about floats"));
+        assert!(text.contains("hey clanky summarize this"));
+        assert!(text.contains("clankcord automations spec"));
+        assert!(!text.contains("token_logprobs"));
+        assert!(!text.contains("logprob"));
+        assert!(!text.contains("words"));
     }
 }

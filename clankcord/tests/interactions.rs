@@ -12,7 +12,7 @@ fn agent_task_message_embeds_packet_source_of_truth() {
         "job_id": "job_test",
         "guild_id": "guild",
         "voice_channel_id": "code",
-        "payload": {"command": {"command_kind": "agent_task"}}
+        "request": {"command_kind": "agent_task", "text": "summarize this"}
     });
     let message = build_agent_task_message(&packet_path, &packet);
 
@@ -22,6 +22,7 @@ fn agent_task_message_embeds_packet_source_of_truth() {
     assert!(message.contains("Do not use final text as a publication channel"));
     assert!(!message.contains("response command is unavailable"));
     assert!(message.contains("You may search the web"));
+    assert!(message.contains("clankcord automations spec"));
     assert!(message.contains("Do not be sycophantic"));
     assert!(message.contains(&packet_path.display().to_string()));
     assert!(message.contains("\"job_id\": \"job_test\""));
@@ -36,7 +37,7 @@ fn resumed_agent_task_message_omits_large_session_instructions() {
         "job_id": "job_test",
         "guild_id": "guild",
         "voice_channel_id": "code",
-        "payload": {"command": {"command_kind": "agent_task"}}
+        "request": {"command_kind": "agent_task", "text": "summarize this"}
     });
     let message = build_agent_task_message_for_session(&packet_path, &packet, false);
 
