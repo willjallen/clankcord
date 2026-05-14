@@ -76,6 +76,9 @@ enum RoomsCommand {
     Join(JoinArgs),
     Leave(RoomArgs),
     Move(MoveArgs),
+    Mute(RoomArgs),
+    Unmute(RoomArgs),
+    PlayCue(PlayCueArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -184,6 +187,18 @@ struct MoveArgs {
     to: String,
     #[arg(long, default_value = "admin_force_move")]
     reason: String,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct PlayCueArgs {
+    cue: String,
+    room: Option<String>,
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    requested_by_user_id: Option<String>,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -439,6 +454,9 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 RoomsCommand::Join(args) => join(args),
                 RoomsCommand::Leave(args) => leave(args),
                 RoomsCommand::Move(args) => room_move(args),
+                RoomsCommand::Mute(args) => room_set_mute(args, true),
+                RoomsCommand::Unmute(args) => room_set_mute(args, false),
+                RoomsCommand::PlayCue(args) => room_play_cue(args),
             }
         }
         Command::Messages { command } => match command {
@@ -559,6 +577,28 @@ fn room_move(args: MoveArgs) -> Result<i32> {
         Some(args.to.clone()),
         None,
         json!({"target_room": args.to, "request": args.reason, "bot_id": args.bot}),
+    )
+}
+
+fn room_set_mute(args: RoomArgs, muted: bool) -> Result<i32> {
+    let room = args.channel.or(args.room);
+    submit_command(
+        "set_voice_mute",
+        args.guild,
+        room.clone(),
+        args.requested_by_user_id,
+        json!({"room": room, "muted": muted}),
+    )
+}
+
+fn room_play_cue(args: PlayCueArgs) -> Result<i32> {
+    let room = args.channel.or(args.room);
+    submit_command(
+        "play_voice_cue",
+        args.guild,
+        room.clone(),
+        args.requested_by_user_id,
+        json!({"room": room, "cue": args.cue}),
     )
 }
 

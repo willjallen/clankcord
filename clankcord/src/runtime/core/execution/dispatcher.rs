@@ -162,7 +162,10 @@ impl Runtime {
             if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
                 continue;
             }
-            if parent.kind == JobKind::RoomAgentPlacement {
+            if matches!(
+                parent.kind,
+                JobKind::RoomAgentPlacement | JobKind::DiscordVoicePlayback
+            ) {
                 parent.set_state(JobState::Queued);
                 parent.next_run_at = None;
             } else if children.iter().all(|job| job.state == JobState::Complete) {

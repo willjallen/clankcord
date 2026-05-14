@@ -19,6 +19,9 @@ pub(crate) fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> Result<
         )),
         JobPayload::Command(_) => commands::prepare(runtime, job),
         JobPayload::RoomAgentPlacement(payload) => room_agents::prepare(runtime, job, payload),
+        JobPayload::DiscordVoicePlayback(payload) => {
+            runtime.prepare_voice_playback_job(job, payload)
+        }
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
             payload.kind()
@@ -134,6 +137,7 @@ mod room_agents {
                     Some(target_room_identifier),
                     cooldown_seconds,
                     &job.requested_by_user_id,
+                    &job.id,
                 )
             }
         }

@@ -7,9 +7,9 @@ use crate::runtime::timeline::{CaptureRunInput, first_value_string, isoformat_z,
 
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, Job, JobKind, JobOutput, JobState, RoomAgentPlacementAction,
-    RoomAgentPlacementOutput, RoomAgentPlacementPayload, RoomConfig, Runtime, RuntimeBotStatus,
-    RuntimeSessionStatus,
+    DiscordVoiceLeavePayload, DiscordVoicePlaybackCue, Job, JobKind, JobOutput, JobState,
+    RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload, RoomConfig,
+    Runtime, RuntimeBotStatus, RuntimeSessionStatus,
 };
 
 impl Runtime {
@@ -284,6 +284,7 @@ impl Runtime {
         room_identifier: Option<&str>,
         cooldown_seconds: i64,
         requested_by_user_id: &str,
+        source_job_id: &str,
     ) -> Result<JobDecision> {
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
             let room = self.room_for_identifier(Some(identifier))?;
@@ -295,15 +296,18 @@ impl Runtime {
                 true,
             )?;
             if let Some(session_id) = self.active_session_id_for_room(&room) {
-                return Ok(JobDecision::WaitFor(vec![Job::discord_voice_leave(
-                    room.guild_id,
-                    room.channel_id,
-                    requested_by_user_id,
-                    DiscordVoiceLeavePayload {
-                        session_id,
-                        reason: "manual_leave".to_string(),
-                    },
-                )]));
+                let Some(session) = self.sessions.get(&session_id).cloned() else {
+                    anyhow::bail!("active room session {session_id} is missing from runtime state");
+                };
+                return Ok(JobDecision::WaitFor(vec![
+                    self.voice_playback_job_for_session(
+                        &session,
+                        requested_by_user_id,
+                        DiscordVoicePlaybackCue::Leave,
+                        "manual_leave",
+                        source_job_id,
+                    ),
+                ]));
             }
             self.persist_status_snapshot()?;
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
@@ -328,14 +332,12 @@ impl Runtime {
             .values()
             .cloned()
             .map(|session| {
-                Job::discord_voice_leave(
-                    session.guild_id,
-                    session.voice_channel_id,
+                self.voice_playback_job_for_session(
+                    &session,
                     requested_by_user_id,
-                    DiscordVoiceLeavePayload {
-                        session_id: session.session_id,
-                        reason: "manual_leave_all".to_string(),
-                    },
+                    DiscordVoicePlaybackCue::Leave,
+                    "manual_leave_all",
+                    source_job_id,
                 )
             })
             .collect::<Vec<_>>();
@@ -369,10 +371,9 @@ impl Runtime {
         if children.iter().any(|child| !child.state.is_terminal()) {
             return Ok(JobDecision::Wait);
         }
-        if let Some(failed) = children
-            .iter()
-            .find(|child| child.state != JobState::Complete)
-        {
+        if let Some(failed) = children.iter().find(|child| {
+            child.kind != JobKind::DiscordVoicePlayback && child.state != JobState::Complete
+        }) {
             if let Some(join_payload) = failed.discord_voice_join_payload() {
                 self.fail_join_room_job(join_payload, &failed.metadata.error)?;
             }
@@ -388,9 +389,25 @@ impl Runtime {
                     anyhow::anyhow!("join child {} has no join payload", child.id)
                 })?;
                 match child.metadata.output.clone() {
-                    Some(JobOutput::DiscordVoiceJoin(output)) => Ok(JobDecision::Complete(
-                        self.commit_join_room_job(request, output)?,
-                    )),
+                    Some(JobOutput::DiscordVoiceJoin(output)) => {
+                        let placement_output = self.commit_join_room_job(request, output)?;
+                        if !has_playback_child(&children, DiscordVoicePlaybackCue::Join) {
+                            if let JobOutput::RoomAgentPlacement(output) = &placement_output {
+                                if let Some(session) = &output.session {
+                                    return Ok(JobDecision::WaitFor(vec![
+                                        self.voice_playback_job_for_session(
+                                            session,
+                                            &request.requested_by_user_id,
+                                            DiscordVoicePlaybackCue::Join,
+                                            "room_join",
+                                            &job.id,
+                                        ),
+                                    ]));
+                                }
+                            }
+                        }
+                        Ok(JobDecision::Complete(placement_output))
+                    }
                     Some(other) => Ok(JobDecision::fail(format!(
                         "join child {} completed with wrong output kind: {:?}",
                         child.id, other
@@ -402,6 +419,34 @@ impl Runtime {
                 }
             }
             RoomAgentPlacementAction::Leave => {
+                if !children
+                    .iter()
+                    .any(|child| child.kind == JobKind::DiscordVoiceLeave)
+                {
+                    let leave_requests = children
+                        .iter()
+                        .filter_map(|child| {
+                            child
+                                .discord_voice_playback_payload()
+                                .map(|payload| (child, payload))
+                        })
+                        .filter(|(_, payload)| payload.cue == DiscordVoicePlaybackCue::Leave)
+                        .map(|(child, payload)| {
+                            Job::discord_voice_leave(
+                                child.guild_id.clone(),
+                                child.voice_channel_id.clone(),
+                                job.requested_by_user_id.clone(),
+                                DiscordVoiceLeavePayload {
+                                    session_id: payload.session_id.clone(),
+                                    reason: payload.reason.clone(),
+                                },
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    if !leave_requests.is_empty() {
+                        return Ok(JobDecision::WaitFor(leave_requests));
+                    }
+                }
                 let mut sessions = Vec::new();
                 for child in children
                     .iter()
@@ -578,6 +623,14 @@ fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&Job> {
     Ok(matches[0])
 }
 
+fn has_playback_child(children: &[Job], cue: DiscordVoicePlaybackCue) -> bool {
+    children.iter().any(|child| {
+        child
+            .discord_voice_playback_payload()
+            .is_some_and(|payload| payload.cue == cue)
+    })
+}
+
 fn session_directory(
     runtime: &Runtime,
     room: &RoomConfig,
@@ -701,8 +754,31 @@ mod tests {
             .resume_room_agent_placement_job(&parent, payload)
             .unwrap();
 
+        let JobDecision::WaitFor(playback_jobs) = decision else {
+            panic!("expected join placement to wait on playback");
+        };
+        assert_eq!(playback_jobs.len(), 1);
+        assert_eq!(playback_jobs[0].kind, JobKind::DiscordVoicePlayback);
+        assert_eq!(
+            playback_jobs[0]
+                .discord_voice_playback_payload()
+                .unwrap()
+                .cue,
+            DiscordVoicePlaybackCue::Join
+        );
+        let playback_child = store
+            .create_child_job(&parent, playback_jobs.into_iter().next().unwrap())
+            .unwrap();
+        let mut completed_playback = store.get_job(&playback_child.id).unwrap();
+        completed_playback.set_state(JobState::Failed);
+        completed_playback.metadata.error = "missing cue asset".to_string();
+        store.update_job(&completed_playback).unwrap();
+
+        let decision = runtime
+            .resume_room_agent_placement_job(&parent, payload)
+            .unwrap();
         let JobDecision::Complete(JobOutput::RoomAgentPlacement(output)) = decision else {
-            panic!("expected completed room placement output");
+            panic!("expected completed room placement output after playback");
         };
         assert_eq!(output.status, "assigned");
         assert_eq!(runtime.sessions["cap_1"].channel_id, room.channel_id);

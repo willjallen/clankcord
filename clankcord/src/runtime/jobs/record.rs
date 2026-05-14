@@ -9,7 +9,8 @@ use super::util::{
 use super::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
     ConfirmationContext, ConfirmationRequiredPayload, DiscordVoiceJoinPayload,
-    DiscordVoiceLeavePayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
+    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
     ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
     RuntimeControlPayload, WakeActivationPayload,
 };
@@ -534,6 +535,51 @@ impl Job {
         )
     }
 
+    pub fn discord_voice_playback(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordVoicePlaybackPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordVoicePlayback(payload),
+        )
+    }
+
+    pub fn discord_voice_mute(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordVoiceMutePayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordVoiceMute(payload),
+        )
+    }
+
+    pub fn discord_voice_play_audio(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordVoicePlayAudioPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordVoicePlayAudio(payload),
+        )
+    }
+
     pub fn runtime_control(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
@@ -695,6 +741,27 @@ impl Job {
     pub fn discord_voice_leave_payload(&self) -> Option<&DiscordVoiceLeavePayload> {
         match &self.payload {
             JobPayload::DiscordVoiceLeave(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_playback_payload(&self) -> Option<&DiscordVoicePlaybackPayload> {
+        match &self.payload {
+            JobPayload::DiscordVoicePlayback(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_mute_payload(&self) -> Option<&DiscordVoiceMutePayload> {
+        match &self.payload {
+            JobPayload::DiscordVoiceMute(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_play_audio_payload(&self) -> Option<&DiscordVoicePlayAudioPayload> {
+        match &self.payload {
+            JobPayload::DiscordVoicePlayAudio(payload) => Some(payload),
             _ => None,
         }
     }

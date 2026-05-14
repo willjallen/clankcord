@@ -6,7 +6,10 @@ use crate::runtime::bots::RuntimeBotStatus;
 use crate::runtime::rooms::RoomConfig;
 use crate::runtime::sessions::RuntimeSessionStatus;
 
-use super::payload::{BinaryPayload, ResponseSink, RoomAgentPlacementAction, RuntimeControlAction};
+use super::payload::{
+    BinaryPayload, DiscordVoicePlaybackCue, ResponseSink, RoomAgentPlacementAction,
+    RuntimeControlAction,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobFailure {
@@ -80,6 +83,40 @@ pub struct DiscordVoiceLeaveOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoicePlaybackOutput {
+    pub session_id: String,
+    pub cue: DiscordVoicePlaybackCue,
+    pub status: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub audio_path: String,
+    pub duration_ms: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceMuteOutput {
+    pub session_id: String,
+    pub muted: bool,
+    pub status: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoicePlayAudioOutput {
+    pub session_id: String,
+    pub cue: DiscordVoicePlaybackCue,
+    pub status: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub audio_path: String,
+    pub duration_ms: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobOutput {
     Empty,
     JobCreated(JobCreatedOutput),
@@ -88,6 +125,9 @@ pub enum JobOutput {
     RoomAgentPlacement(RoomAgentPlacementOutput),
     DiscordVoiceJoin(DiscordVoiceJoinOutput),
     DiscordVoiceLeave(DiscordVoiceLeaveOutput),
+    DiscordVoicePlayback(DiscordVoicePlaybackOutput),
+    DiscordVoiceMute(DiscordVoiceMuteOutput),
+    DiscordVoicePlayAudio(DiscordVoicePlayAudioOutput),
     Record(BinaryPayload),
 }
 
@@ -200,6 +240,43 @@ impl JobOutput {
                         ),
                     );
                 }
+                Value::Object(object)
+            }
+            Self::DiscordVoicePlayback(output) => {
+                let mut object = Map::new();
+                object.insert("kind".to_string(), json!("discord_voice_playback"));
+                object.insert("session_id".to_string(), json!(output.session_id));
+                object.insert("cue".to_string(), json!(output.cue.as_str()));
+                object.insert("status".to_string(), json!(output.status));
+                insert_non_empty(&mut object, "guild_id", &output.guild_id);
+                insert_non_empty(&mut object, "voice_channel_id", &output.voice_channel_id);
+                insert_non_empty(&mut object, "audio_path", &output.audio_path);
+                object.insert("duration_ms".to_string(), json!(output.duration_ms));
+                insert_non_empty(&mut object, "message", &output.message);
+                Value::Object(object)
+            }
+            Self::DiscordVoiceMute(output) => {
+                let mut object = Map::new();
+                object.insert("kind".to_string(), json!("discord_voice_mute"));
+                object.insert("session_id".to_string(), json!(output.session_id));
+                object.insert("muted".to_string(), json!(output.muted));
+                object.insert("status".to_string(), json!(output.status));
+                insert_non_empty(&mut object, "guild_id", &output.guild_id);
+                insert_non_empty(&mut object, "voice_channel_id", &output.voice_channel_id);
+                insert_non_empty(&mut object, "message", &output.message);
+                Value::Object(object)
+            }
+            Self::DiscordVoicePlayAudio(output) => {
+                let mut object = Map::new();
+                object.insert("kind".to_string(), json!("discord_voice_play_audio"));
+                object.insert("session_id".to_string(), json!(output.session_id));
+                object.insert("cue".to_string(), json!(output.cue.as_str()));
+                object.insert("status".to_string(), json!(output.status));
+                insert_non_empty(&mut object, "guild_id", &output.guild_id);
+                insert_non_empty(&mut object, "voice_channel_id", &output.voice_channel_id);
+                insert_non_empty(&mut object, "audio_path", &output.audio_path);
+                object.insert("duration_ms".to_string(), json!(output.duration_ms));
+                insert_non_empty(&mut object, "message", &output.message);
                 Value::Object(object)
             }
             Self::Record(payload) => payload.to_json(),

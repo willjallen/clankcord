@@ -157,6 +157,8 @@ pub enum CommandKind {
     ForgetWindow,
     LeaveRoom,
     JoinRoom,
+    SetVoiceMute,
+    PlayVoiceCue,
 }
 
 impl CommandKind {
@@ -173,6 +175,8 @@ impl CommandKind {
             Self::ForgetWindow => "forget_window",
             Self::LeaveRoom => "leave_room",
             Self::JoinRoom => "join_room",
+            Self::SetVoiceMute => "set_voice_mute",
+            Self::PlayVoiceCue => "play_voice_cue",
         }
     }
 
@@ -189,6 +193,8 @@ impl CommandKind {
             Self::ForgetWindow => "forget_window",
             Self::LeaveRoom => "leave_room",
             Self::JoinRoom => "join_room",
+            Self::SetVoiceMute => "set_voice_mute",
+            Self::PlayVoiceCue => "play_voice_cue",
         }
     }
 }
@@ -215,6 +221,8 @@ impl FromStr for CommandKind {
             "forget_window" => Ok(Self::ForgetWindow),
             "leave_room" => Ok(Self::LeaveRoom),
             "join_room" => Ok(Self::JoinRoom),
+            "set_voice_mute" => Ok(Self::SetVoiceMute),
+            "play_voice_cue" => Ok(Self::PlayVoiceCue),
             value => anyhow::bail!("unknown command kind: {value}"),
         }
     }
@@ -235,8 +243,10 @@ pub struct CommandArguments {
     pub target_room: String,
     pub target_channel: String,
     pub publish: String,
+    pub cue: String,
     pub refine: Option<bool>,
     pub duration_seconds: Option<i64>,
+    pub muted: Option<bool>,
     pub unpublished_only: Option<bool>,
     opaque: BinaryPayload,
 }
@@ -263,8 +273,10 @@ impl CommandArguments {
             target_room: string_field(object, "target_room"),
             target_channel: string_field(object, "target_channel"),
             publish: string_field(object, "publish"),
+            cue: string_field(object, "cue"),
             refine: object.get("refine").and_then(Value::as_bool),
             duration_seconds: i64_field(object, &["duration_seconds", "durationSeconds"]),
+            muted: bool_field(object, &["muted"]),
             unpublished_only: bool_field(object, &["unpublished_only", "unpublishedOnly"]),
             opaque: BinaryPayload::from_json(object)?,
         })
@@ -285,6 +297,7 @@ impl CommandArguments {
         insert_non_empty(&mut map, "target_room", &self.target_room);
         insert_non_empty(&mut map, "target_channel", &self.target_channel);
         insert_non_empty(&mut map, "publish", &self.publish);
+        insert_non_empty(&mut map, "cue", &self.cue);
         if let Some(refine) = self.refine {
             map.insert("refine".to_string(), Value::Bool(refine));
         }
@@ -293,6 +306,9 @@ impl CommandArguments {
                 "duration_seconds".to_string(),
                 Value::Number(Number::from(duration_seconds)),
             );
+        }
+        if let Some(muted) = self.muted {
+            map.insert("muted".to_string(), Value::Bool(muted));
         }
         if let Some(unpublished_only) = self.unpublished_only {
             map.insert(
@@ -852,6 +868,83 @@ pub struct DiscordVoiceLeavePayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiscordVoicePlaybackCue {
+    Join,
+    Leave,
+    Wake,
+    Ack,
+    Preempt,
+    Deafen,
+    Undeafen,
+}
+
+impl DiscordVoicePlaybackCue {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Join => "join",
+            Self::Leave => "leave",
+            Self::Wake => "wake",
+            Self::Ack => "ack",
+            Self::Preempt => "preempt",
+            Self::Deafen => "deafen",
+            Self::Undeafen => "undeafen",
+        }
+    }
+
+    pub fn asset_file_name(self) -> &'static str {
+        match self {
+            Self::Join => "clanky-join.wav",
+            Self::Leave => "clanky-leave.wav",
+            Self::Wake => "clanky-wake.wav",
+            Self::Ack => "clanky-ack.wav",
+            Self::Preempt => "clanky-preempt.wav",
+            Self::Deafen | Self::Undeafen => "clanky-deafen.wav",
+        }
+    }
+}
+
+impl FromStr for DiscordVoicePlaybackCue {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "join" => Ok(Self::Join),
+            "leave" => Ok(Self::Leave),
+            "wake" => Ok(Self::Wake),
+            "ack" => Ok(Self::Ack),
+            "preempt" => Ok(Self::Preempt),
+            "deafen" => Ok(Self::Deafen),
+            "undeafen" => Ok(Self::Undeafen),
+            value => anyhow::bail!("unknown voice cue: {value}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoicePlaybackPayload {
+    pub session_id: String,
+    pub cue: DiscordVoicePlaybackCue,
+    pub source_job_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceMutePayload {
+    pub session_id: String,
+    pub muted: bool,
+    pub source_job_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoicePlayAudioPayload {
+    pub session_id: String,
+    pub cue: DiscordVoicePlaybackCue,
+    pub source_job_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RuntimeControlAction {
     RetryJob,
     ApproveConfirmation,
@@ -887,6 +980,9 @@ pub enum JobPayload {
     RoomAgentPlacement(RoomAgentPlacementPayload),
     DiscordVoiceJoin(DiscordVoiceJoinPayload),
     DiscordVoiceLeave(DiscordVoiceLeavePayload),
+    DiscordVoicePlayback(DiscordVoicePlaybackPayload),
+    DiscordVoiceMute(DiscordVoiceMutePayload),
+    DiscordVoicePlayAudio(DiscordVoicePlayAudioPayload),
     RuntimeControl(RuntimeControlPayload),
 }
 
@@ -903,6 +999,9 @@ impl JobPayload {
             Self::RoomAgentPlacement(_) => JobKind::RoomAgentPlacement,
             Self::DiscordVoiceJoin(_) => JobKind::DiscordVoiceJoin,
             Self::DiscordVoiceLeave(_) => JobKind::DiscordVoiceLeave,
+            Self::DiscordVoicePlayback(_) => JobKind::DiscordVoicePlayback,
+            Self::DiscordVoiceMute(_) => JobKind::DiscordVoiceMute,
+            Self::DiscordVoicePlayAudio(_) => JobKind::DiscordVoicePlayAudio,
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
         }
     }
@@ -918,6 +1017,9 @@ impl JobPayload {
             Self::RoomAgentPlacement(_) => None,
             Self::DiscordVoiceJoin(_) => None,
             Self::DiscordVoiceLeave(_) => None,
+            Self::DiscordVoicePlayback(_) => None,
+            Self::DiscordVoiceMute(_) => None,
+            Self::DiscordVoicePlayAudio(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
         }
@@ -934,6 +1036,9 @@ impl JobPayload {
             Self::RoomAgentPlacement(_) => None,
             Self::DiscordVoiceJoin(_) => None,
             Self::DiscordVoiceLeave(_) => None,
+            Self::DiscordVoicePlayback(_) => None,
+            Self::DiscordVoiceMute(_) => None,
+            Self::DiscordVoicePlayAudio(_) => None,
             Self::RuntimeControl(_) => None,
             Self::RefineTranscript(_) => None,
         }
@@ -1034,6 +1139,24 @@ impl JobPayload {
             }),
             Self::DiscordVoiceLeave(payload) => json!({
                 "session_id": payload.session_id,
+                "reason": payload.reason,
+            }),
+            Self::DiscordVoicePlayback(payload) => json!({
+                "session_id": payload.session_id,
+                "cue": payload.cue.as_str(),
+                "source_job_id": payload.source_job_id,
+                "reason": payload.reason,
+            }),
+            Self::DiscordVoiceMute(payload) => json!({
+                "session_id": payload.session_id,
+                "muted": payload.muted,
+                "source_job_id": payload.source_job_id,
+                "reason": payload.reason,
+            }),
+            Self::DiscordVoicePlayAudio(payload) => json!({
+                "session_id": payload.session_id,
+                "cue": payload.cue.as_str(),
+                "source_job_id": payload.source_job_id,
                 "reason": payload.reason,
             }),
             Self::RuntimeControl(payload) => json!({

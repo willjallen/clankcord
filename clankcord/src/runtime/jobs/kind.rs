@@ -17,6 +17,9 @@ pub enum JobKind {
     RoomAgentPlacement,
     DiscordVoiceJoin,
     DiscordVoiceLeave,
+    DiscordVoicePlayback,
+    DiscordVoiceMute,
+    DiscordVoicePlayAudio,
     RuntimeControl,
 }
 
@@ -33,6 +36,9 @@ impl JobKind {
             Self::RoomAgentPlacement => "room_agent_placement",
             Self::DiscordVoiceJoin => "discord_voice_join",
             Self::DiscordVoiceLeave => "discord_voice_leave",
+            Self::DiscordVoicePlayback => "discord_voice_playback",
+            Self::DiscordVoiceMute => "discord_voice_mute",
+            Self::DiscordVoicePlayAudio => "discord_voice_play_audio",
             Self::RuntimeControl => "runtime_control",
         }
     }
@@ -63,6 +69,9 @@ impl FromStr for JobKind {
             "room_agent_placement" => Ok(Self::RoomAgentPlacement),
             "discord_voice_join" => Ok(Self::DiscordVoiceJoin),
             "discord_voice_leave" => Ok(Self::DiscordVoiceLeave),
+            "discord_voice_playback" => Ok(Self::DiscordVoicePlayback),
+            "discord_voice_mute" => Ok(Self::DiscordVoiceMute),
+            "discord_voice_play_audio" => Ok(Self::DiscordVoicePlayAudio),
             "runtime_control" => Ok(Self::RuntimeControl),
             value => anyhow::bail!("unknown job kind: {value}"),
         }

@@ -6,8 +6,9 @@ use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::{isoformat_z, utc_now};
 use crate::runtime::{
-    CommandKind, CommandRequest, ForgetRequest, Job, JobKind, JobOutput,
-    MaterializeTranscriptRequest, RoomAgentPlacementAction,
+    CommandKind, CommandRequest, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, ForgetRequest, Job, JobKind, JobOutput, MaterializeTranscriptRequest,
+    RoomAgentPlacementAction,
 };
 
 use crate::runtime::Runtime;
@@ -156,12 +157,26 @@ impl Runtime {
             "resume_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
                 self.resume_room(&room, &command.requested_by_user_id)?;
+                let _ = self.create_voice_playback_job_for_room(
+                    &room,
+                    &command.requested_by_user_id,
+                    DiscordVoicePlaybackCue::Undeafen,
+                    "resume_listening",
+                    &parent_job.id,
+                )?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "resume_listening", "job_ids": []}),
                 )?))
             }
             "deafen_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let _ = self.create_voice_playback_job_for_room(
+                    &room,
+                    &command.requested_by_user_id,
+                    DiscordVoicePlaybackCue::Deafen,
+                    "deafen_listening",
+                    &parent_job.id,
+                )?;
                 self.pause_room(
                     &room,
                     self.manual_leave_cooldown_seconds,
@@ -170,6 +185,49 @@ impl Runtime {
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "deafen_listening", "job_ids": []}),
                 )?))
+            }
+            "set_voice_mute" => {
+                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let session = self
+                    .active_session_for_channel(&room.guild_id, &room.channel_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("room {} has no active voice session to mute", room.room_id)
+                    })?;
+                let muted = command.arguments.muted.unwrap_or(false);
+                Ok(JobDecision::WaitFor(vec![Job::discord_voice_mute(
+                    room.guild_id,
+                    room.channel_id,
+                    command.requested_by_user_id.clone(),
+                    DiscordVoiceMutePayload {
+                        session_id: session.session_id,
+                        muted,
+                        source_job_id: parent_job.id.clone(),
+                        reason: "manual_voice_mute".to_string(),
+                    },
+                )]))
+            }
+            "play_voice_cue" => {
+                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let session = self
+                    .active_session_for_channel(&room.guild_id, &room.channel_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "room {} has no active voice session for playback",
+                            room.room_id
+                        )
+                    })?;
+                let cue: DiscordVoicePlaybackCue = command.arguments.cue.parse()?;
+                Ok(JobDecision::WaitFor(vec![Job::discord_voice_play_audio(
+                    room.guild_id,
+                    room.channel_id,
+                    command.requested_by_user_id.clone(),
+                    DiscordVoicePlayAudioPayload {
+                        session_id: session.session_id,
+                        cue,
+                        source_job_id: parent_job.id.clone(),
+                        reason: "manual_voice_cue".to_string(),
+                    },
+                )]))
             }
             "leave_room" => {
                 let job = Job::room_agent_placement(

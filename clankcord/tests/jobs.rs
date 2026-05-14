@@ -4,8 +4,10 @@ use serde_json::json;
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
     AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordVoiceJoinPayload,
-    DiscordVoiceLeaveOutput, Job, JobKind, JobOutput, JobPayload, JobState,
-    RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind, RoomConfig,
+    DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
+    DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload,
+    JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind, RoomConfig,
     WakeActivationPayload,
 };
 
@@ -314,6 +316,109 @@ fn discord_voice_jobs_are_first_class_binary_jobs() {
     assert!(matches!(
         completed.metadata.output,
         Some(JobOutput::DiscordVoiceLeave(_))
+    ));
+
+    let playback = Job::discord_voice_playback(
+        "guild",
+        "code",
+        "user-a",
+        DiscordVoicePlaybackPayload {
+            session_id: "cap_1".to_string(),
+            cue: DiscordVoicePlaybackCue::Deafen,
+            source_job_id: "job_parent".to_string(),
+            reason: "deafen_listening".to_string(),
+        },
+    );
+    let decoded = Job::decode(&playback.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordVoicePlayback);
+    let payload = decoded.discord_voice_playback_payload().unwrap();
+    assert_eq!(payload.cue, DiscordVoicePlaybackCue::Deafen);
+    assert_eq!(payload.cue.asset_file_name(), "clanky-deafen.wav");
+
+    let mut completed = decoded;
+    completed.metadata.output = Some(JobOutput::DiscordVoicePlayback(
+        DiscordVoicePlaybackOutput {
+            session_id: "cap_1".to_string(),
+            cue: DiscordVoicePlaybackCue::Undeafen,
+            status: "played".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            audio_path: "/workspace/clankcord/res/audio/clanky-deafen.wav".to_string(),
+            duration_ms: 250,
+            message: String::new(),
+        },
+    ));
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordVoicePlayback(_))
+    ));
+
+    let mute = Job::discord_voice_mute(
+        "guild",
+        "code",
+        "user-a",
+        DiscordVoiceMutePayload {
+            session_id: "cap_1".to_string(),
+            muted: false,
+            source_job_id: "job_parent".to_string(),
+            reason: "before_playback".to_string(),
+        },
+    );
+    let decoded = Job::decode(&mute.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordVoiceMute);
+    assert!(!decoded.discord_voice_mute_payload().unwrap().muted);
+
+    let mut completed = decoded;
+    completed.metadata.output = Some(JobOutput::DiscordVoiceMute(DiscordVoiceMuteOutput {
+        session_id: "cap_1".to_string(),
+        muted: false,
+        status: "set".to_string(),
+        guild_id: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        message: String::new(),
+    }));
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordVoiceMute(_))
+    ));
+
+    let play_audio = Job::discord_voice_play_audio(
+        "guild",
+        "code",
+        "user-a",
+        DiscordVoicePlayAudioPayload {
+            session_id: "cap_1".to_string(),
+            cue: DiscordVoicePlaybackCue::Wake,
+            source_job_id: "job_parent".to_string(),
+            reason: "wake_detected".to_string(),
+        },
+    );
+    let decoded = Job::decode(&play_audio.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordVoicePlayAudio);
+    assert_eq!(
+        decoded.discord_voice_play_audio_payload().unwrap().cue,
+        DiscordVoicePlaybackCue::Wake
+    );
+
+    let mut completed = decoded;
+    completed.metadata.output = Some(JobOutput::DiscordVoicePlayAudio(
+        DiscordVoicePlayAudioOutput {
+            session_id: "cap_1".to_string(),
+            cue: DiscordVoicePlaybackCue::Wake,
+            status: "played".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            audio_path: "/workspace/clankcord/res/audio/clanky-wake.wav".to_string(),
+            duration_ms: 250,
+            message: String::new(),
+        },
+    ));
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordVoicePlayAudio(_))
     ));
 }
 

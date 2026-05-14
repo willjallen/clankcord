@@ -7,7 +7,10 @@ mod common;
 
 use clankcord::runtime::domain::wake_activations::{execute, schedule_from_wake_event};
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, string_field};
-use clankcord::runtime::{AgentRuntime, ControlConfig, JobKind, JobState, Runtime};
+use clankcord::runtime::{
+    AgentRuntime, ControlConfig, DiscordVoicePlaybackCue, JobKind, JobState, Runtime,
+    RuntimeSessionStatus,
+};
 
 use common::dt;
 
@@ -130,6 +133,61 @@ fn wake_followup_before_execution_amends_existing_activation() {
             .amended_wake_event_ids
             .contains(&string_field(&second, "event_id"))
     );
+}
+
+#[test]
+fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let mut runtime = test_runtime(store);
+    runtime.sessions.insert(
+        "cap_test".to_string(),
+        RuntimeSessionStatus {
+            session_id: "cap_test".to_string(),
+            guild_id: "guild".to_string(),
+            channel_id: "code".to_string(),
+            voice_channel_id: "code".to_string(),
+            active: true,
+            ..RuntimeSessionStatus::default()
+        },
+    );
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let first = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    );
+    let second = append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(8),
+        start + chrono::Duration::seconds(9),
+        "Will",
+        "user-a",
+        "Hey Clanky add one more thing",
+        json!({"wake": true}),
+        2,
+    );
+
+    schedule_from_wake_event(&runtime, &first).unwrap();
+    schedule_from_wake_event(&runtime, &second).unwrap();
+
+    let cues = runtime
+        .timeline_store
+        .list_jobs(Some("guild"), None)
+        .unwrap()
+        .into_iter()
+        .filter_map(|job| {
+            job.discord_voice_playback_payload()
+                .map(|payload| payload.cue)
+        })
+        .collect::<Vec<_>>();
+    assert!(cues.contains(&DiscordVoicePlaybackCue::Wake));
+    assert!(cues.contains(&DiscordVoicePlaybackCue::Preempt));
 }
 
 #[test]

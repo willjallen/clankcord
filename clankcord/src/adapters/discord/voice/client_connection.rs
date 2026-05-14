@@ -1,8 +1,10 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::io::Cursor;
+use std::path::Path;
 use std::sync::{Arc, Weak};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 use serenity::async_trait;
@@ -15,7 +17,9 @@ use serenity::model::id::{ChannelId, GuildId};
 use serenity::model::voice::VoiceState;
 use songbird::driver::{DecodeConfig, DecodeMode};
 use songbird::events::{CoreEvent, Event, EventContext, EventHandler as VoiceEventHandler};
+use songbird::input::RawAdapter;
 use songbird::serenity::SerenityInit;
+use songbird::tracks::PlayMode;
 use songbird::{Config as SongbirdConfig, Songbird};
 use tokio::task::JoinHandle;
 
@@ -176,6 +180,38 @@ pub(super) async fn leave_voice_channel(voice: Arc<Songbird>, guild_id: u64) {
     let _ = voice.remove(GuildId::new(guild_id)).await;
 }
 
+pub(super) async fn set_voice_mute(voice: Arc<Songbird>, guild_id: u64, muted: bool) -> Result<()> {
+    let call = voice
+        .get(GuildId::new(guild_id))
+        .ok_or_else(|| anyhow!("voice call for guild {guild_id} is not active"))?;
+    let mut call = call.lock().await;
+    call.mute(muted)
+        .await
+        .map_err(|error| anyhow!("failed to set voice mute={muted}: {error}"))
+}
+
+pub(super) async fn play_voice_file(
+    voice: Arc<Songbird>,
+    guild_id: u64,
+    path: &Path,
+    timeout: Duration,
+) -> Result<Duration> {
+    let (input, audio_duration) = raw_input_from_wav(path)?;
+    let call = voice
+        .get(GuildId::new(guild_id))
+        .ok_or_else(|| anyhow!("voice call for guild {guild_id} is not active"))?;
+    let handle = {
+        let mut call = call.lock().await;
+        call.play_input(input)
+    };
+    handle
+        .make_playable_async()
+        .await
+        .map_err(|error| anyhow!("failed to prepare playback source: {error}"))?;
+    wait_for_track_end(&handle, timeout).await?;
+    Ok(audio_duration)
+}
+
 pub(super) fn load_client_token_specs() -> Result<Vec<(String, String)>> {
     parse_client_token_specs(raw_client_token_lines()?)
 }
@@ -274,6 +310,97 @@ fn parse_client_token_specs(lines: Vec<String>) -> Result<Vec<(String, String)>>
         }
     }
     Ok(specs)
+}
+
+fn raw_input_from_wav(path: &Path) -> Result<(songbird::input::Input, Duration)> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("failed to open voice cue {}", path.display()))?;
+    let spec = reader.spec();
+    let channels = u32::from(spec.channels);
+    if channels == 0 || channels > 2 {
+        anyhow::bail!(
+            "voice cue {} must be mono or stereo, found {} channels",
+            path.display(),
+            channels
+        );
+    }
+    if spec.sample_rate == 0 {
+        anyhow::bail!("voice cue {} has no sample rate", path.display());
+    }
+
+    let mut pcm = Vec::new();
+    match spec.sample_format {
+        hound::SampleFormat::Float => {
+            for sample in reader.samples::<f32>() {
+                push_f32_sample(&mut pcm, sample?);
+            }
+        }
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            8 => {
+                for sample in reader.samples::<i8>() {
+                    push_scaled_sample(&mut pcm, i32::from(sample?), 7);
+                }
+            }
+            16 => {
+                for sample in reader.samples::<i16>() {
+                    push_scaled_sample(&mut pcm, i32::from(sample?), 15);
+                }
+            }
+            24 => {
+                for sample in reader.samples::<i32>() {
+                    push_scaled_sample(&mut pcm, sample?, 23);
+                }
+            }
+            32 => {
+                for sample in reader.samples::<i32>() {
+                    push_scaled_sample(&mut pcm, sample?, 31);
+                }
+            }
+            bits => anyhow::bail!(
+                "voice cue {} uses unsupported PCM depth {}",
+                path.display(),
+                bits
+            ),
+        },
+    }
+
+    let sample_count = pcm.len() / std::mem::size_of::<f32>();
+    let frames = sample_count as f64 / f64::from(channels);
+    let seconds = frames / f64::from(spec.sample_rate);
+    let input = RawAdapter::new(Cursor::new(pcm), spec.sample_rate, channels).into();
+    Ok((input, Duration::from_secs_f64(seconds.max(0.0))))
+}
+
+fn push_scaled_sample(pcm: &mut Vec<u8>, sample: i32, scale_bits: u32) {
+    let scale = (1_i64 << scale_bits) as f32;
+    push_f32_sample(pcm, sample as f32 / scale);
+}
+
+fn push_f32_sample(pcm: &mut Vec<u8>, sample: f32) {
+    pcm.extend_from_slice(&sample.clamp(-1.0, 1.0).to_le_bytes());
+}
+
+async fn wait_for_track_end(
+    handle: &songbird::tracks::TrackHandle,
+    timeout: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        if started.elapsed() > timeout {
+            let _ = handle.stop();
+            anyhow::bail!("voice cue playback exceeded {} ms", timeout.as_millis());
+        }
+        match handle.get_info().await {
+            Ok(state) if state.playing.is_done() => {
+                if matches!(state.playing, PlayMode::Errored(_)) {
+                    anyhow::bail!("voice cue playback errored");
+                }
+                return Ok(());
+            }
+            Ok(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            Err(_) => return Ok(()),
+        }
+    }
 }
 
 struct DiscordGatewayHandler {

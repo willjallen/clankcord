@@ -9,7 +9,9 @@ use crate::runtime::timeline::{
     event_end, event_speaker, event_start, first_value_string, isoformat_z, new_id, parse_instant,
     utc_now,
 };
-use crate::runtime::{Job, JobKind, JobState, Runtime, WakeActivationPayload};
+use crate::runtime::{
+    DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
+};
 
 const DEFAULT_LOOKBACK_SECONDS: i64 = 30;
 const DEFAULT_MIN_POST_SECONDS: i64 = 5;
@@ -71,6 +73,14 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
                 speaker_user_id,
                 speaker_label,
             )?;
+            let _ = runtime.create_voice_playback_job_for_channel(
+                &guild_id,
+                &voice_channel_id,
+                &existing.requested_by_user_id,
+                DiscordVoicePlaybackCue::Preempt,
+                "wake_activation_amended",
+                &existing.id,
+            )?;
             return Ok(json!({
                 "status": "amended",
                 "job": existing.to_value(),
@@ -85,6 +95,14 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
             wake_ended_at,
             speaker_user_id,
             speaker_label,
+        )?;
+        let _ = runtime.create_voice_playback_job_for_channel(
+            &guild_id,
+            &voice_channel_id,
+            &replacement.requested_by_user_id,
+            DiscordVoicePlaybackCue::Preempt,
+            "wake_activation_replaced",
+            &replacement.id,
         )?;
         runtime.timeline_store.append_event(
             &guild_id,
@@ -159,6 +177,14 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
         payload.stt_flush_grace_seconds,
     ));
     let job = runtime.timeline_store.create_job(job)?;
+    let _ = runtime.create_voice_playback_job_for_channel(
+        &guild_id,
+        &voice_channel_id,
+        &job.requested_by_user_id,
+        DiscordVoicePlaybackCue::Wake,
+        "wake_detected",
+        &job.id,
+    )?;
     Ok(json!({
         "status": "scheduled",
         "job": job.to_value(),
@@ -218,6 +244,14 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
     attach_activation_bundle(&mut result, payload, &events, &room_status)?;
     let (valid, reason) = validate_voice_command_result(&result);
     if !valid || voice_command_action(&result) != "dispatch_now" {
+        let _ = runtime.create_voice_playback_job_for_channel(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.speaker_user_id,
+            DiscordVoicePlaybackCue::Ack,
+            "wake_activation_window_closed",
+            &job.id,
+        )?;
         runtime.timeline_store.append_event(
             &payload.guild_id,
             &payload.voice_channel_id,
@@ -239,6 +273,14 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
         }));
     }
     let command = crate::runtime::CommandRequest::from_json(&result)?;
+    let _ = runtime.create_voice_playback_job_for_channel(
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        &payload.speaker_user_id,
+        DiscordVoicePlaybackCue::Ack,
+        "wake_activation_window_closed",
+        &job.id,
+    )?;
     let created = runtime.create_command_job_sync(command, Some(job))?;
     runtime.timeline_store.append_event(
         &payload.guild_id,

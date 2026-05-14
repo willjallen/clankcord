@@ -20,11 +20,13 @@ pub use jobs::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload,
-    JobState, RefineTranscriptPayload, ResponseKind, ResponseOutput, ResponsePayload, ResponseSink,
-    ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementOutput,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload,
-    WakeActivationPayload,
+    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
+    DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobCreatedOutput, JobFailure,
+    JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload, ResponseKind,
+    ResponseOutput, ResponsePayload, ResponseSink, ResponseSinkKind, RoomAgentPlacementAction,
+    RoomAgentPlacementOutput, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlOutput, RuntimeControlPayload, WakeActivationPayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use runtime_config::{ControlConfig, GuildConfig};

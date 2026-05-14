@@ -88,6 +88,18 @@ where
             self.schedule_adapter_kind(JobKind::DiscordVoiceLeave)?,
         );
         scheduled.insert(
+            JobKind::DiscordVoicePlayback.as_str().to_string(),
+            self.schedule_async_kind(JobKind::DiscordVoicePlayback)?,
+        );
+        scheduled.insert(
+            JobKind::DiscordVoiceMute.as_str().to_string(),
+            self.schedule_adapter_kind(JobKind::DiscordVoiceMute)?,
+        );
+        scheduled.insert(
+            JobKind::DiscordVoicePlayAudio.as_str().to_string(),
+            self.schedule_adapter_kind(JobKind::DiscordVoicePlayAudio)?,
+        );
+        scheduled.insert(
             JobKind::Response.as_str().to_string(),
             self.schedule_blocking_kind(JobKind::Response, &self.lanes.response)?,
         );

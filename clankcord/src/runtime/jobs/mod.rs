@@ -6,15 +6,17 @@ mod util;
 
 pub use kind::{JobKind, JobState};
 pub use output::{
-    DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, JobCreatedOutput, JobFailure, JobOutput,
-    ResponseOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
+    DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, JobCreatedOutput, JobFailure,
+    JobOutput, ResponseOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
 };
 pub use payload::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, JobPayload, OpaqueValue,
-    RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSink, ResponseSinkKind,
-    RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload, JobPayload,
+    OpaqueValue, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSink,
+    ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
     RuntimeControlPayload, WakeActivationPayload,
 };
 pub use record::{Job, JobMetadata};

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fmt;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -19,7 +21,7 @@ use crate::Result;
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
-    load_client_token_specs, parse_discord_id,
+    load_client_token_specs, parse_discord_id, play_voice_file, set_voice_mute,
 };
 use crate::adapters::discord::voice::types::VoiceSession;
 use crate::config::{local_tz, read_json};
@@ -27,13 +29,16 @@ use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, Job, JobOutput, RuntimeBotStatus, RuntimeControlAction,
-    RuntimeJobSink, log,
+    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, Job, JobOutput, RuntimeBotStatus,
+    RuntimeControlAction, RuntimeJobSink, log,
 };
 
 const DEFAULT_FLUSH_INTERVAL_SECONDS: f64 = 0.5;
 const DEFAULT_SILENCE_MS: i64 = 1_000;
 const DEFAULT_MAX_SEGMENT_MS: i64 = 8_000;
+const DEFAULT_SOUND_ASSET_DIR: &str = "/workspace/clankcord/res/audio";
+const DEFAULT_PLAYBACK_TIMEOUT_MS: u64 = 10_000;
 
 pub struct LiveVoiceAdapter {
     job_sink: RuntimeJobSink,
@@ -71,6 +76,16 @@ impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
                 crate::runtime::JobPayload::DiscordVoiceLeave(payload) => {
                     Ok(JobOutput::DiscordVoiceLeave(
                         LiveVoiceAdapter::finish_session(self, payload).await?,
+                    ))
+                }
+                crate::runtime::JobPayload::DiscordVoiceMute(payload) => {
+                    Ok(JobOutput::DiscordVoiceMute(
+                        LiveVoiceAdapter::set_session_mute(self, payload).await?,
+                    ))
+                }
+                crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => {
+                    Ok(JobOutput::DiscordVoicePlayAudio(
+                        LiveVoiceAdapter::play_session_cue(self, payload).await?,
                     ))
                 }
                 payload => anyhow::bail!(
@@ -314,6 +329,94 @@ impl LiveVoiceAdapter {
             voice_channel_id: finished.voice_channel_id,
             capture_run_id: finished.capture_run_id,
             audio_jobs: finished.audio_jobs,
+        })
+    }
+
+    async fn set_session_mute(
+        self: &Arc<Self>,
+        request: DiscordVoiceMutePayload,
+    ) -> Result<DiscordVoiceMuteOutput> {
+        let session_id = request.session_id.clone();
+        let Some(live_session) = self.session(&session_id).await else {
+            return Ok(DiscordVoiceMuteOutput {
+                session_id,
+                status: "missing_session".to_string(),
+                muted: request.muted,
+                guild_id: String::new(),
+                voice_channel_id: String::new(),
+                message: "Voice session is not active.".to_string(),
+            });
+        };
+        let session = {
+            let live_session = live_session.lock().await;
+            live_session.metadata(local_tz())
+        };
+        let voice = {
+            let clients = self.clients.lock().await;
+            let client = clients.get(&session.bot_id).ok_or_else(|| {
+                discord_tool_error(format!("voice bot {} is not running", session.bot_id))
+            })?;
+            client.voice()
+        };
+        let guild_id = parse_discord_id("guild_id", &session.guild_id)?;
+        set_voice_mute(voice, guild_id, request.muted).await?;
+        Ok(DiscordVoiceMuteOutput {
+            session_id,
+            muted: request.muted,
+            status: "set".to_string(),
+            guild_id: session.guild_id,
+            voice_channel_id: session.voice_channel_id,
+            message: String::new(),
+        })
+    }
+
+    async fn play_session_cue(
+        self: &Arc<Self>,
+        request: DiscordVoicePlayAudioPayload,
+    ) -> Result<DiscordVoicePlayAudioOutput> {
+        let session_id = request.session_id.clone();
+        let Some(live_session) = self.session(&session_id).await else {
+            return Ok(DiscordVoicePlayAudioOutput {
+                session_id,
+                cue: request.cue,
+                status: "missing_session".to_string(),
+                guild_id: String::new(),
+                voice_channel_id: String::new(),
+                audio_path: String::new(),
+                duration_ms: 0,
+                message: "Voice session is not active.".to_string(),
+            });
+        };
+        let session = {
+            let live_session = live_session.lock().await;
+            live_session.metadata(local_tz())
+        };
+        let voice = {
+            let clients = self.clients.lock().await;
+            let client = clients.get(&session.bot_id).ok_or_else(|| {
+                discord_tool_error(format!("voice bot {} is not running", session.bot_id))
+            })?;
+            client.voice()
+        };
+        let guild_id = parse_discord_id("guild_id", &session.guild_id)?;
+        let audio_path = sound_asset_path(request.cue);
+        if !audio_path.is_file() {
+            anyhow::bail!(
+                "voice cue asset is missing for {}: {}",
+                request.cue.as_str(),
+                audio_path.display()
+            );
+        }
+        let duration = play_voice_file(voice, guild_id, &audio_path, playback_timeout()).await?;
+        Ok(DiscordVoicePlayAudioOutput {
+            session_id,
+            cue: request.cue,
+            status: "played".to_string(),
+            guild_id: session.guild_id,
+            voice_channel_id: session.voice_channel_id,
+            audio_path: audio_path.display().to_string(),
+            duration_ms: duration.as_millis().min(i64::MAX as u128) as i64,
+            message: String::new(),
         })
     }
 
@@ -578,4 +681,20 @@ fn capture_user_from_member(member: &Member) -> CaptureUser {
         global_name: member.user.global_name.clone().unwrap_or_default(),
         name: member.user.name.clone(),
     }
+}
+
+fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {
+    env::var("CLANKCORD_VOICE_SOUND_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOUND_ASSET_DIR))
+        .join(cue.asset_file_name())
+}
+
+fn playback_timeout() -> Duration {
+    Duration::from_millis(
+        env::var("CLANKCORD_VOICE_SOUND_TIMEOUT_MS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_PLAYBACK_TIMEOUT_MS),
+    )
 }
