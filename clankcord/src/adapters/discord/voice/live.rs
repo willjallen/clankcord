@@ -707,9 +707,27 @@ impl LiveVoiceAdapter {
         let Some(session) = session else {
             return;
         };
+        let (guild_id, channel_id, bot_user_id) = {
+            let live_session = session.lock().await;
+            (
+                live_session.session.room.guild_id.clone(),
+                live_session.session.room.channel_id.clone(),
+                live_session.session.bot_user_id.clone(),
+            )
+        };
+        let channel_users = self
+            .voice_users_for_channel(&guild_id, &channel_id, &bot_user_id)
+            .await;
         let mut live_session = session.lock().await;
         for (ssrc, data) in speaking {
-            let user = live_session.ssrc_users.get(&ssrc).cloned();
+            let user = live_session
+                .ssrc_users
+                .get(&ssrc)
+                .cloned()
+                .or_else(|| fallback_user_for_ssrc(ssrc, &channel_users));
+            if let Some(user) = user.as_ref() {
+                live_session.ssrc_users.insert(ssrc, user.clone());
+            }
             live_session.write_voice_data(user, data);
         }
         for ssrc in silent {
@@ -726,6 +744,32 @@ impl LiveVoiceAdapter {
                 },
             );
         }
+    }
+
+    async fn voice_users_for_channel(
+        &self,
+        guild_id: &str,
+        channel_id: &str,
+        bot_user_id: &str,
+    ) -> Vec<CaptureUser> {
+        let voice_states = self.voice_states.lock().await;
+        voice_states
+            .iter()
+            .filter_map(|((state_guild_id, user_id), state_channel_id)| {
+                if state_guild_id != guild_id
+                    || state_channel_id != channel_id
+                    || user_id == bot_user_id
+                {
+                    return None;
+                }
+                Some(CaptureUser {
+                    id: user_id.clone(),
+                    display_name: user_id.clone(),
+                    global_name: String::new(),
+                    name: user_id.clone(),
+                })
+            })
+            .collect()
     }
 
     async fn session(&self, session_id: &str) -> Option<Arc<Mutex<LiveVoiceSession>>> {
@@ -794,6 +838,18 @@ impl LiveVoiceSession {
         sink.write(&mut handler, data);
         self.capture_sink = sink;
     }
+}
+
+fn fallback_user_for_ssrc(ssrc: u32, channel_users: &[CaptureUser]) -> Option<CaptureUser> {
+    if channel_users.len() == 1 {
+        return channel_users.first().cloned();
+    }
+    Some(CaptureUser {
+        id: format!("ssrc:{ssrc}"),
+        display_name: format!("unknown-ssrc-{ssrc}"),
+        global_name: String::new(),
+        name: format!("unknown-ssrc-{ssrc}"),
+    })
 }
 
 struct SessionCaptureHandler<'a> {

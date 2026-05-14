@@ -125,4 +125,5 @@ fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
     assert_eq!(segment.segment_index, 0);
     assert_eq!(segment.wav_path, payload.source_audio_path);
     assert_eq!(segment.audio_checksum, payload.audio_checksum);
+    assert!(payload.audio_checksum.starts_with("sha256:"));
 }

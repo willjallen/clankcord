@@ -303,6 +303,42 @@ impl Runtime {
         bots: Vec<RuntimeBotStatus>,
         sessions: Vec<crate::runtime::RuntimeSessionStatus>,
     ) -> Result<()> {
+        let active_session_ids = sessions
+            .iter()
+            .filter(|session| session.active)
+            .map(|session| session.session_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        let ended_at = isoformat_z(None);
+        let mut stale_sessions = Vec::new();
+        for session in self.sessions.values_mut() {
+            if !active_session_ids.contains(&session.session_id)
+                && session.ended_at.trim().is_empty()
+            {
+                stale_sessions.push(session.clone());
+                session.mark_ended(ended_at.clone());
+            }
+        }
+        for session in stale_sessions {
+            let capture_run_id = first_value_string(
+                &session.to_json(),
+                &["capture_run_id", "captureRunId", "session_id", "sessionId"],
+            );
+            if !capture_run_id.trim().is_empty() {
+                let _ = self.timeline_store.close_capture_run(
+                    &session.guild_id,
+                    &session.voice_channel_id,
+                    &capture_run_id,
+                    Some(utc_now()),
+                    "adapter_sync_missing",
+                    "ended",
+                );
+            }
+        }
+        self.sessions.retain(|_, session| {
+            session.active
+                && session.ended_at.trim().is_empty()
+                && active_session_ids.contains(&session.session_id)
+        });
         for status in bots {
             self.bots.insert(status.bot_id.clone(), status);
         }

@@ -95,7 +95,7 @@ pub fn duration_ms_for_pcm(pcm_bytes: &[u8]) -> i64 {
 fn sha256_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 fn non_empty(value: &str, fallback: &str) -> String {

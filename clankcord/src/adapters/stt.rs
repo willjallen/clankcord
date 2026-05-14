@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
 use crate::Result;
+use crate::config::load_stt_base_url;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionResult {
@@ -15,14 +16,7 @@ pub struct TranscriptionResult {
 }
 
 pub fn stt_transcriptions_url() -> Result<String> {
-    let base_url = env::var("CLAWCORD_STT_BASE_URL")
-        .unwrap_or_default()
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
-    if base_url.is_empty() {
-        anyhow::bail!("CLAWCORD_STT_BASE_URL is not set");
-    }
+    let base_url = load_stt_base_url()?.trim_end_matches('/').to_string();
     if base_url.ends_with("/audio/transcriptions") {
         Ok(base_url)
     } else {
