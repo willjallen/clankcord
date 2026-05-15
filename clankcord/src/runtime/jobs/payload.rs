@@ -998,6 +998,11 @@ pub struct RuntimeControlPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeMaintenancePayload {
+    pub interval_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
     WakeActivation(WakeActivationPayload),
@@ -1014,6 +1019,7 @@ pub enum JobPayload {
     DiscordVoicePlayAudio(DiscordVoicePlayAudioPayload),
     RuntimeControl(RuntimeControlPayload),
     WakeProbe(WakeProbePayload),
+    RuntimeMaintenance(RuntimeMaintenancePayload),
 }
 
 impl JobPayload {
@@ -1034,6 +1040,7 @@ impl JobPayload {
             Self::DiscordVoicePlayAudio(_) => JobKind::DiscordVoicePlayAudio,
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
             Self::WakeProbe(_) => JobKind::WakeProbe,
+            Self::RuntimeMaintenance(_) => JobKind::RuntimeMaintenance,
         }
     }
 
@@ -1041,6 +1048,7 @@ impl JobPayload {
         match self {
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
+            Self::RuntimeMaintenance(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::Response(_) => None,
@@ -1061,6 +1069,7 @@ impl JobPayload {
         match self {
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
+            Self::RuntimeMaintenance(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::Response(_) => None,
@@ -1196,6 +1205,9 @@ impl JobPayload {
                 "action": payload.action.as_str(),
                 "target_job_id": payload.target_job_id,
                 "actor_user_id": payload.actor_user_id,
+            }),
+            Self::RuntimeMaintenance(payload) => json!({
+                "interval_ms": payload.interval_ms,
             }),
             Self::WakeProbe(payload) => json!({
                 "guild_id": payload.guild_id,

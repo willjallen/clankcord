@@ -199,6 +199,51 @@ impl TimelineStore {
         Ok(kinds)
     }
 
+    pub async fn next_queued_job_ready_at(&self) -> Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query(
+            r#"
+            SELECT ready_at_ms
+            FROM jobs
+            WHERE state = 'queued'
+            ORDER BY ready_at_ms, created_at_ms, job_id
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            let ready_at_ms: i64 = row.try_get("ready_at_ms")?;
+            ms_to_datetime(ready_at_ms)
+                .ok_or_else(|| anyhow::anyhow!("queued job has invalid ready_at_ms"))
+        })
+        .transpose()
+    }
+
+    pub async fn next_queued_job_ready_after(
+        &self,
+        after: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query(
+            r#"
+            SELECT ready_at_ms
+            FROM jobs
+            WHERE state = 'queued'
+              AND ready_at_ms > $1
+            ORDER BY ready_at_ms, created_at_ms, job_id
+            LIMIT 1
+            "#,
+        )
+        .bind(instant_ms_dt(after))
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            let ready_at_ms: i64 = row.try_get("ready_at_ms")?;
+            ms_to_datetime(ready_at_ms)
+                .ok_or_else(|| anyhow::anyhow!("queued job has invalid ready_at_ms"))
+        })
+        .transpose()
+    }
+
     pub async fn active_ordering_keys(&self) -> Result<BTreeSet<String>> {
         let rows = sqlx::query(
             r#"
@@ -313,6 +358,22 @@ impl TimelineStore {
         }
         transaction.commit().await?;
         Ok(claimed)
+    }
+
+    pub async fn replace_runtime_maintenance_job(&self, job: Job) -> Result<Job> {
+        let active = self
+            .list_jobs_by_kind_with_visibility(
+                crate::runtime::JobKind::RuntimeMaintenance,
+                500,
+                JobVisibility::OnlyEphemeral,
+            )
+            .await?;
+        for mut existing in active.into_iter().filter(|job| !job.state.is_terminal()) {
+            existing.mark_cancelled();
+            existing.metadata.error = "runtime maintenance singleton replaced".to_string();
+            self.update_job(&existing).await?;
+        }
+        self.create_job(job).await
     }
 
     pub async fn list_jobs(
@@ -441,21 +502,30 @@ impl TimelineStore {
         kind: crate::runtime::JobKind,
         limit: usize,
     ) -> Result<Vec<Job>> {
-        let rows = sqlx::query(
+        self.list_jobs_by_kind_with_visibility(kind, limit, JobVisibility::Visible)
+            .await
+    }
+
+    pub async fn list_jobs_by_kind_with_visibility(
+        &self,
+        kind: crate::runtime::JobKind,
+        limit: usize,
+        visibility: JobVisibility,
+    ) -> Result<Vec<Job>> {
+        let mut query = QueryBuilder::<Postgres>::new(
             r#"
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = $1
-            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
-            LIMIT $2
+            WHERE j.kind =
             "#,
-        )
-        .bind(kind.as_str())
-        .bind(limit.clamp(1, 500) as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        decode_job_rows(rows)
+        );
+        query.push_bind(kind.as_str());
+        let mut has_where = true;
+        push_visibility_filter(&mut query, &mut has_where, visibility);
+        query.push(" ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC LIMIT ");
+        query.push_bind(limit.clamp(1, 500) as i64);
+        decode_job_rows(query.build().fetch_all(&self.pool).await?)
     }
 
     pub async fn list_jobs_for_trigger(
@@ -1110,6 +1180,7 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         crate::runtime::JobKind::Response => "response",
         crate::runtime::JobKind::RefineTranscript => "refinement",
         crate::runtime::JobKind::AgentTask => "agent",
+        crate::runtime::JobKind::RuntimeMaintenance => "maintenance",
         _ => "general_async",
     }
 }
@@ -1153,6 +1224,7 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => {
             format!("voice:session:{}", payload.session_id)
         }
+        crate::runtime::JobPayload::RuntimeMaintenance(_) => "runtime:maintenance".to_string(),
         _ => String::new(),
     }
 }

@@ -9,13 +9,12 @@ use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 use super::routes;
 
 impl Runtime {
-    pub(crate) async fn run_blocking_maintenance(&self) -> Result<Value> {
+    pub(crate) async fn run_maintenance_tasks(&self) -> Result<Value> {
         let stale_wake_probes = self
             .timeline_store
             .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())
             .await?;
         let timed_out = self.fail_stale_running_jobs().await?;
-        let resolved_waiting = self.resolve_waiting_jobs().await?;
         let ephemeral_gc = self
             .timeline_store
             .garbage_collect_ephemeral_jobs(ephemeral_job_gc_batch_limit())
@@ -23,7 +22,6 @@ impl Runtime {
         Ok(json!({
             "staleWakeProbes": stale_wake_probes,
             "timedOutJobs": timed_out,
-            "resolvedWaitingJobs": resolved_waiting,
             "ephemeralJobGc": ephemeral_gc,
         }))
     }
@@ -175,16 +173,12 @@ impl Runtime {
                 continue;
             }
             job.set_state(JobState::FailedTimeout);
-            job.metadata.error = "job exceeded maintainer timeout".to_string();
+            job.metadata.error = "job exceeded stale running-job timeout".to_string();
             job.metadata.timed_out_at = crate::runtime::timeline::isoformat_z(None);
             self.timeline_store.update_job(&job).await?;
             timed_out.push(job.to_value());
         }
         Ok(timed_out)
-    }
-
-    pub(crate) async fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
-        self.timeline_store.resolve_waiting_jobs().await
     }
 }
 

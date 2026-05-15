@@ -12,7 +12,7 @@ use super::{
     DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
     ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, WakeActivationPayload, WakeProbePayload,
+    RuntimeControlPayload, RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -611,6 +611,16 @@ impl Job {
         )
     }
 
+    pub fn runtime_maintenance(interval_ms: i64) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::RuntimeMaintenance(RuntimeMaintenancePayload { interval_ms }),
+        )
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(bincode::serialize(self)?)
     }
@@ -786,6 +796,13 @@ impl Job {
     pub fn runtime_control_payload(&self) -> Option<&RuntimeControlPayload> {
         match &self.payload {
             JobPayload::RuntimeControl(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn runtime_maintenance_payload(&self) -> Option<&RuntimeMaintenancePayload> {
+        match &self.payload {
+            JobPayload::RuntimeMaintenance(payload) => Some(payload),
             _ => None,
         }
     }

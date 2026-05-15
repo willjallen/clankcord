@@ -26,7 +26,8 @@ pub use jobs::{
     JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload, ResponseKind,
     ResponseOutput, ResponsePayload, ResponseSink, ResponseSinkKind, RoomAgentPlacementAction,
     RoomAgentPlacementOutput, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlOutput, RuntimeControlPayload, WakeActivationPayload, WakeProbePayload,
+    RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload, WakeActivationPayload,
+    WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use runtime_config::{ControlConfig, GuildConfig};

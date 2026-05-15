@@ -22,6 +22,7 @@ pub enum JobKind {
     DiscordVoicePlayAudio,
     RuntimeControl,
     WakeProbe,
+    RuntimeMaintenance,
 }
 
 impl JobKind {
@@ -42,6 +43,7 @@ impl JobKind {
             Self::DiscordVoicePlayAudio => "discord_voice_play_audio",
             Self::RuntimeControl => "runtime_control",
             Self::WakeProbe => "wake_probe",
+            Self::RuntimeMaintenance => "runtime_maintenance",
         }
     }
 
@@ -50,7 +52,10 @@ impl JobKind {
     }
 
     pub fn is_ephemeral(self) -> bool {
-        matches!(self, Self::AudioSegment | Self::WakeProbe)
+        matches!(
+            self,
+            Self::AudioSegment | Self::WakeProbe | Self::RuntimeMaintenance
+        )
     }
 }
 
@@ -80,6 +85,7 @@ impl FromStr for JobKind {
             "discord_voice_play_audio" => Ok(Self::DiscordVoicePlayAudio),
             "runtime_control" => Ok(Self::RuntimeControl),
             "wake_probe" => Ok(Self::WakeProbe),
+            "runtime_maintenance" => Ok(Self::RuntimeMaintenance),
             value => anyhow::bail!("unknown job kind: {value}"),
         }
     }

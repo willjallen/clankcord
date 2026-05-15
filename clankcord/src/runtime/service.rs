@@ -2,7 +2,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
 
@@ -10,11 +9,11 @@ use crate::Result;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::{config_path, read_json};
 use crate::runtime::core::execution::RuntimeExecutor;
-use crate::runtime::timeline::TimelineStore;
+use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
 const DEFAULT_INTAKE_QUEUE_DEPTH: usize = 256;
-const DEFAULT_MAINTAINER_INTERVAL_SECONDS: f64 = 0.5;
+const DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS: i64 = 500;
 
 type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
 
@@ -94,15 +93,6 @@ impl RuntimeHandle {
             target_job_id,
         );
         self.submit_job(job).await
-    }
-
-    pub async fn run_maintenance_once(&self) -> Result<Value> {
-        run_maintainer_cycle(
-            self.timeline_store.clone(),
-            self.live_voice.clone(),
-            self.executor.clone(),
-        )
-        .await
     }
 
     pub async fn drain_ready_jobs(&self) -> Result<Value> {
@@ -188,6 +178,11 @@ impl RuntimeService {
             timeline_store.clone(),
         ));
         let executor = RuntimeExecutor::new(live_voice.clone(), timeline_store.clone());
+        timeline_store
+            .replace_runtime_maintenance_job(Job::runtime_maintenance(
+                runtime_maintenance_interval_ms(),
+            ))
+            .await?;
         Ok(Self {
             handle: RuntimeHandle {
                 live_voice,
@@ -208,7 +203,6 @@ impl RuntimeService {
         spawn_intake_loop(self.handle.clone(), self.intake);
         spawn_live_voice_loop(self.handle.live_voice.clone());
         spawn_dispatch_loop(self.handle.clone());
-        spawn_maintainer_loop(self.handle.clone());
     }
 }
 
@@ -319,31 +313,66 @@ fn spawn_live_voice_loop(live_voice: Arc<LiveVoiceAdapter>) {
     });
 }
 
-fn spawn_maintainer_loop(handle: RuntimeHandle) {
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(maintainer_interval());
-        loop {
-            interval.tick().await;
-            if let Err(error) = handle.run_maintenance_once().await {
-                log(&format!(
-                    "runtime maintainer cycle failed: {}",
-                    error_chain(&error)
-                ));
-            }
-        }
-    });
-}
-
 fn spawn_dispatch_loop(handle: RuntimeHandle) {
     tokio::spawn(async move {
         let notify = handle.executor.notify_handle();
         loop {
-            notify.notified().await;
-            if let Err(error) = handle.drain_ready_jobs().await {
-                log(&format!(
-                    "runtime dispatch drain failed: {}",
-                    error_chain(&error)
-                ));
+            match handle.drain_ready_jobs().await {
+                Ok(report) => {
+                    if report
+                        .get("exhausted")
+                        .and_then(Value::as_bool)
+                        .is_some_and(|exhausted| !exhausted)
+                    {
+                        continue;
+                    }
+                }
+                Err(error) => {
+                    log(&format!(
+                        "runtime dispatch drain failed: {}",
+                        error_chain(&error)
+                    ));
+                }
+            }
+            let next_ready_at = match handle.executor.next_queued_job_ready_at().await {
+                Ok(value) => value,
+                Err(error) => {
+                    log(&format!(
+                        "runtime next-ready lookup failed: {}",
+                        error_chain(&error)
+                    ));
+                    notify.notified().await;
+                    continue;
+                }
+            };
+            let now = utc_now();
+            let next_wake_at = match next_ready_at {
+                Some(ready_at) if ready_at <= now => {
+                    match handle.executor.next_queued_job_ready_after(now).await {
+                        Ok(value) => value,
+                        Err(error) => {
+                            log(&format!(
+                                "runtime future-ready lookup failed: {}",
+                                error_chain(&error)
+                            ));
+                            notify.notified().await;
+                            continue;
+                        }
+                    }
+                }
+                value => value,
+            };
+            match next_wake_at {
+                Some(ready_at) => {
+                    let sleep_ms = (ready_at - now).num_milliseconds().max(0) as u64;
+                    let sleep = tokio::time::sleep(Duration::from_millis(sleep_ms));
+                    tokio::pin!(sleep);
+                    tokio::select! {
+                        _ = notify.notified() => {}
+                        _ = &mut sleep => {}
+                    }
+                }
+                None => notify.notified().await,
             }
         }
     });
@@ -361,53 +390,13 @@ fn job_created_payload(job: Job) -> Value {
     json!({"kind": "job_created", "job_ids": [job.id.clone()], "job": job.to_value()})
 }
 
-async fn run_maintainer_cycle(
-    timeline_store: TimelineStore,
-    live_voice: Arc<LiveVoiceAdapter>,
-    executor: ServiceRuntimeExecutor,
-) -> Result<Value> {
-    sync_voice_adapter_state(timeline_store.clone(), live_voice)
-        .await
-        .context("syncing voice adapter state")?;
-    let automation = {
-        let mut runtime = Runtime::from_store(timeline_store.clone())?;
-        runtime
-            .run_automations()
-            .await
-            .context("running runtime automations")?
-            .to_json()
-    };
-    let maintenance = executor
-        .run_maintenance()
-        .await
-        .context("running runtime maintenance")?;
-    executor.wake();
-    Ok(json!({
-        "ok": true,
-        "automation": automation,
-        "maintenance": maintenance,
-        "dispatchNotified": true,
-    }))
-}
-
-async fn sync_voice_adapter_state(
-    timeline_store: TimelineStore,
-    live_voice: Arc<LiveVoiceAdapter>,
-) -> Result<()> {
-    let bots = live_voice.bot_statuses().await;
-    let sessions = live_voice.session_statuses().await;
-    Runtime::from_store(timeline_store)?
-        .sync_voice_adapter_status(bots, sessions)
-        .await
-}
-
-fn maintainer_interval() -> Duration {
-    let seconds = std::env::var("CLANKCORD_MAINTAINER_INTERVAL_SECONDS")
+fn runtime_maintenance_interval_ms() -> i64 {
+    let seconds = std::env::var("CLANKCORD_RUNTIME_MAINTENANCE_INTERVAL_SECONDS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(DEFAULT_MAINTAINER_INTERVAL_SECONDS)
-        .max(DEFAULT_MAINTAINER_INTERVAL_SECONDS);
-    Duration::from_millis((seconds * 1000.0).round() as u64)
+        .unwrap_or(DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS as f64 / 1000.0)
+        .max(DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS as f64 / 1000.0);
+    (seconds * 1000.0).round() as i64
 }
 
 pub async fn start_persistent_process() -> Result<()> {

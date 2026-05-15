@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
@@ -10,11 +11,16 @@ use crate::runtime::{Job, JobKind, Runtime, log};
 
 const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 14] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 15] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
         JobOrdering::None,
+    ),
+    JobExecutionPolicy::runtime_environment(
+        JobKind::RuntimeMaintenance,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
     ),
     JobExecutionPolicy::adapter(
         JobKind::DiscordVoiceMute,
@@ -119,6 +125,15 @@ impl JobExecutionPolicy {
             ordering,
         }
     }
+
+    const fn runtime_environment(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
+        Self {
+            kind,
+            executor: JobExecutor::RuntimeEnvironment,
+            lane,
+            ordering,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +142,7 @@ enum JobExecutor {
     RuntimeSnapshot,
     AdapterAsync,
     BlockingSnapshot,
+    RuntimeEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,6 +154,7 @@ enum JobLane {
     Response,
     Refinement,
     Agent,
+    Maintenance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +163,7 @@ enum JobOrdering {
     VoiceTarget,
     WakeStream,
     AgentSession,
+    RuntimeMaintenance,
 }
 
 #[derive(Clone)]
@@ -166,6 +184,7 @@ struct JobLanes {
     response: Arc<Semaphore>,
     refinement: Arc<Semaphore>,
     agent: Arc<Semaphore>,
+    maintenance: Arc<Semaphore>,
     async_jobs: Arc<Semaphore>,
 }
 
@@ -211,6 +230,17 @@ where
         Ok(Value::Object(scheduled))
     }
 
+    pub(crate) async fn next_queued_job_ready_at(&self) -> Result<Option<DateTime<Utc>>> {
+        self.timeline_store.next_queued_job_ready_at().await
+    }
+
+    pub(crate) async fn next_queued_job_ready_after(
+        &self,
+        after: DateTime<Utc>,
+    ) -> Result<Option<DateTime<Utc>>> {
+        self.timeline_store.next_queued_job_ready_after(after).await
+    }
+
     pub(crate) async fn drain_ready_jobs(&self) -> Result<Value> {
         let max_passes = dispatch_drain_max_passes();
         let mut passes = Vec::new();
@@ -246,11 +276,6 @@ where
         }))
     }
 
-    pub(crate) async fn run_maintenance(&self) -> Result<Value> {
-        let snapshot = Runtime::from_store(self.timeline_store.clone())?;
-        snapshot.run_blocking_maintenance().await
-    }
-
     async fn schedule_policy(&self, policy: JobExecutionPolicy) -> Result<Value> {
         let lane = self.lanes.semaphore(policy.lane);
         let permits = take_permits(&lane, dispatch_batch_limit(policy));
@@ -267,6 +292,7 @@ where
                 JobExecutor::RuntimeSnapshot => self.spawn_runtime_snapshot_job(job, permit),
                 JobExecutor::AdapterAsync => self.spawn_adapter_job(job, permit),
                 JobExecutor::BlockingSnapshot => self.spawn_blocking_snapshot_job(job, permit),
+                JobExecutor::RuntimeEnvironment => self.spawn_runtime_environment_job(job, permit),
             }
         }
         Ok(json!({
@@ -376,6 +402,37 @@ where
             notify.notify_one();
         });
     }
+
+    fn spawn_runtime_environment_job(&self, job: Job, permit: OwnedSemaphorePermit) {
+        let timeline_store = self.timeline_store.clone();
+        let adapter = self.adapter_jobs.clone();
+        let notify = self.notify.clone();
+        tokio::spawn(async move {
+            let job_id = job.id.clone();
+            let kind = job.kind;
+            let result = adapter
+                .execute_runtime_maintenance_job(timeline_store.clone(), job.clone())
+                .await;
+            let update = match result {
+                Ok(output) => match Runtime::from_store(timeline_store.clone()) {
+                    Ok(runtime) => runtime.complete_dispatched_job(&job_id, job, output).await,
+                    Err(error) => Err(error),
+                },
+                Err(error) => match Runtime::from_store(timeline_store.clone()) {
+                    Ok(runtime) => runtime.fail_dispatched_job(&job_id, job, error).await,
+                    Err(error) => Err(error),
+                },
+            };
+            if let Err(error) = update {
+                log(&format!(
+                    "runtime environment job worker failed {job_id} ({kind}): {}",
+                    error_chain(&error)
+                ));
+            }
+            drop(permit);
+            notify.notify_one();
+        });
+    }
 }
 
 impl JobLanes {
@@ -411,6 +468,11 @@ impl JobLanes {
                 4,
                 32,
             ))),
+            maintenance: Arc::new(Semaphore::new(env_usize(
+                "CLANKCORD_MAINTENANCE_JOB_CONCURRENCY",
+                1,
+                1,
+            ))),
             async_jobs: Arc::new(Semaphore::new(env_usize(
                 "CLANKCORD_ASYNC_JOB_CONCURRENCY",
                 16,
@@ -428,6 +490,7 @@ impl JobLanes {
             JobLane::Response => self.response.clone(),
             JobLane::Refinement => self.refinement.clone(),
             JobLane::Agent => self.agent.clone(),
+            JobLane::Maintenance => self.maintenance.clone(),
         }
     }
 }
@@ -451,6 +514,7 @@ fn dispatch_batch_limit(policy: JobExecutionPolicy) -> usize {
         JobLane::Response => env_usize("CLANKCORD_RESPONSE_JOB_BATCH_LIMIT", 12, 64),
         JobLane::Refinement => env_usize("CLANKCORD_REFINEMENT_JOB_BATCH_LIMIT", 4, 32),
         JobLane::Agent => env_usize("CLANKCORD_AGENT_JOB_BATCH_LIMIT", 4, 32),
+        JobLane::Maintenance => env_usize("CLANKCORD_MAINTENANCE_JOB_BATCH_LIMIT", 1, 1),
         JobLane::GeneralAsync => env_usize("CLANKCORD_ASYNC_JOB_BATCH_LIMIT", 16, 128),
     }
 }

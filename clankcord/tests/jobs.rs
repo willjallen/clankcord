@@ -130,6 +130,20 @@ async fn wake_probe_payload_references_ready_audio_artifact() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn runtime_maintenance_job_is_ephemeral_and_round_trips() {
+    let job = Job::runtime_maintenance(500);
+    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+
+    assert_eq!(decoded.kind, JobKind::RuntimeMaintenance);
+    assert!(decoded.kind.is_ephemeral());
+    assert_eq!(
+        decoded.runtime_maintenance_payload().unwrap().interval_ms,
+        500
+    );
+    assert_eq!(decoded.payload_value()["interval_ms"], json!(500));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn opaque_json_lowers_to_binary_payload() {
     let payload = BinaryPayload::from_json(&json!({"nested": ["value", 1]})).unwrap();
     assert!(!payload.as_bytes().is_empty());
@@ -267,6 +281,30 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_reports_earliest_queued_ready_time() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let early = Utc::now() + Duration::seconds(30);
+    let late = early + Duration::seconds(30);
+    let mut early_job = Job::response("guild", "code", "user-a", response_payload("early"));
+    let mut late_job = Job::response("guild", "code", "user-a", response_payload("late"));
+    early_job.next_run_at = Some(early.to_rfc3339_opts(SecondsFormat::Millis, true));
+    late_job.next_run_at = Some(late.to_rfc3339_opts(SecondsFormat::Millis, true));
+
+    store.create_job(late_job).await.unwrap();
+    store.create_job(early_job).await.unwrap();
+
+    let next = store.next_queued_job_ready_at().await.unwrap().unwrap();
+    assert_eq!(next.timestamp_millis(), early.timestamp_millis());
+    let next_after_early = store
+        .next_queued_job_ready_after(early)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(next_after_early.timestamp_millis(), late.timestamp_millis());
 }
 
 #[tokio::test(flavor = "current_thread")]
