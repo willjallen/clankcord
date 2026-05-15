@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,21 +14,33 @@ use crate::runtime::timeline::{
     event_start, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
 use crate::runtime::util::first_non_empty;
-use crate::runtime::{Job, JobKind, JobState, Runtime};
+use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
+const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
+const AGENT_SESSION_JOB_LIMIT: usize = 100;
 
 #[derive(Debug, Clone)]
 pub struct DebugOverviewRequest {
-    pub since: String,
-    pub limit: usize,
+    pub jobs_limit: usize,
+    pub agent_limit: usize,
+    pub timeline_since: String,
+    pub timeline_limit: usize,
+    pub transcript_since: String,
+    pub transcript_limit: usize,
+    pub publication_limit: usize,
 }
 
 impl Default for DebugOverviewRequest {
     fn default() -> Self {
         Self {
-            since: "-1h".to_string(),
-            limit: 80,
+            jobs_limit: 120,
+            agent_limit: 120,
+            timeline_since: "-1h".to_string(),
+            timeline_limit: 120,
+            transcript_since: "-24h".to_string(),
+            transcript_limit: 500,
+            publication_limit: 120,
         }
     }
 }
@@ -36,9 +48,13 @@ impl Default for DebugOverviewRequest {
 impl Runtime {
     pub fn debug_overview(&self, request: DebugOverviewRequest) -> Result<Value> {
         let now = utc_now();
-        let since = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
-            .unwrap_or_else(|| now - chrono::Duration::hours(1));
-        let limit = request.limit.clamp(10, 250);
+        let timeline_since = resolve_debug_since(&request.timeline_since, "-1h", now)?;
+        let transcript_since = resolve_debug_since(&request.transcript_since, "-24h", now)?;
+        let jobs_limit = request.jobs_limit.clamp(10, 500);
+        let agent_limit = request.agent_limit.clamp(10, 500);
+        let timeline_limit = request.timeline_limit.clamp(10, 1000);
+        let transcript_limit = request.transcript_limit.clamp(10, 5000);
+        let publication_limit = request.publication_limit.clamp(10, 500);
         let status = self.status_payload(None);
         let active_job_records = self.timeline_store.list_jobs_by_states(
             None,
@@ -60,10 +76,10 @@ impl Runtime {
                 JobState::FailedDraftRetained,
             ],
         )?;
-        let recent_job_records = self.timeline_store.list_recent_jobs(None, limit)?;
+        let recent_job_records = self.timeline_store.list_recent_jobs(None, jobs_limit)?;
         let agent_job_records = self
             .timeline_store
-            .list_jobs_by_kind(JobKind::AgentTask, 256)?;
+            .list_jobs_by_kind(JobKind::AgentTask, agent_limit)?;
         let summary_jobs = merge_jobs(
             active_job_records
                 .iter()
@@ -73,31 +89,18 @@ impl Runtime {
         );
         let active_jobs = active_job_records
             .iter()
-            .map(Runtime::public_job_view)
+            .map(debug_job_value)
             .collect::<Vec<_>>();
         let recent_jobs = recent_job_records
             .iter()
-            .map(Runtime::public_job_view)
-            .collect::<Vec<_>>();
-        let command_jobs = recent_job_records
-            .iter()
-            .chain(agent_job_records.iter())
-            .filter(|job| {
-                job.command().is_some()
-                    || matches!(
-                        job.kind,
-                        JobKind::Command
-                            | JobKind::ConfirmationRequired
-                            | JobKind::AgentTask
-                            | JobKind::RuntimeControl
-                    )
-            })
-            .take(limit)
-            .map(Runtime::public_interaction_job_context)
+            .map(debug_job_value)
             .collect::<Vec<_>>();
         let recent_events = self
-            .recent_events(since, limit)
+            .recent_events(timeline_since, timeline_limit)
             .context("loading recent timeline events for debug overview")?;
+        let transcript_events = self
+            .recent_transcript_events(transcript_since, transcript_limit)
+            .context("loading recent transcript events for debug overview")?;
         let event_kind_counts = event_kind_counts(&recent_events);
         let summary = job_summary(&summary_jobs);
         let database = database_diagnostics(self);
@@ -112,20 +115,23 @@ impl Runtime {
             "health": health,
             "database": database,
             "load": load_payload(&active_job_records, now),
-            "agents": agent_dashboard_payload(self, &agent_job_records, limit),
+            "agents": agent_dashboard_payload(self, &agent_job_records, agent_limit),
             "status": status,
             "jobs": {
                 "summary": summary,
                 "active": active_jobs,
                 "recent": recent_jobs,
-                "commands": command_jobs,
             },
             "timeline": {
-                "since": isoformat_z(Some(since)),
+                "since": debug_since_label(timeline_since),
                 "recentEvents": recent_events,
                 "eventKindCounts": event_kind_counts,
             },
-            "publications": self.timeline_store.list_publications(None, None, None).context("loading publications for debug overview")?.into_iter().take(limit).collect::<Vec<_>>(),
+            "transcript": {
+                "since": debug_since_label(transcript_since),
+                "events": transcript_events,
+            },
+            "publications": self.timeline_store.list_publications(None, None, None).context("loading publications for debug overview")?.into_iter().take(publication_limit).collect::<Vec<_>>(),
             "links": {
                 "json": "/v1/voice/debug/overview",
                 "poolStatus": "/v1/voice/pool/status",
@@ -135,15 +141,33 @@ impl Runtime {
         }))
     }
 
-    pub fn recent_events(&self, since: DateTime<Utc>, limit: usize) -> Result<Vec<Value>> {
+    pub fn recent_events(&self, since: Option<DateTime<Utc>>, limit: usize) -> Result<Vec<Value>> {
+        self.recent_events_by_kind(since, limit, None)
+    }
+
+    pub fn recent_transcript_events(
+        &self,
+        since: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
+        self.recent_events_by_kind(since, limit, Some(&kinds))
+    }
+
+    fn recent_events_by_kind(
+        &self,
+        since: Option<DateTime<Utc>>,
+        limit: usize,
+        kinds: Option<&BTreeSet<String>>,
+    ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
         for room in self.known_rooms() {
             let mut room_events = self.timeline_store.load_events(
                 &room.guild_id,
                 &room.channel_id,
-                Some(since),
+                since,
                 None,
-                None,
+                kinds,
                 None,
                 false,
             )?;
@@ -160,8 +184,39 @@ impl Runtime {
         if job.kind != JobKind::AgentTask {
             anyhow::bail!("job {job_id} is not an agent task");
         }
-        Ok(agent_job_payload(&job))
+        agent_job_payload(self, &job)
     }
+}
+
+fn resolve_debug_since(
+    raw: &str,
+    default: &str,
+    now: DateTime<Utc>,
+) -> Result<Option<DateTime<Utc>>> {
+    let value = non_empty(raw.trim().to_string(), default.to_string());
+    if value.eq_ignore_ascii_case("all") {
+        return Ok(None);
+    }
+    resolve_time_reference(&value, Some(now))
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("invalid dashboard time window: {value}"))
+}
+
+fn debug_since_label(since: Option<DateTime<Utc>>) -> String {
+    since
+        .map(|since| isoformat_z(Some(since)))
+        .unwrap_or_else(|| "all".to_string())
+}
+
+fn debug_job_value(job: &Job) -> Value {
+    let mut value = job.to_value();
+    if let Value::Object(object) = &mut value {
+        let command_kind = job.command_kind();
+        if !command_kind.trim().is_empty() {
+            object.insert("command_kind".to_string(), json!(command_kind));
+        }
+    }
+    value
 }
 
 fn merge_jobs<'a>(jobs: impl Iterator<Item = &'a Job>) -> Vec<Job> {
@@ -223,14 +278,34 @@ fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
 
 fn database_diagnostics(runtime: &Runtime) -> Value {
     let db_path = runtime.timeline_store.db_path.clone();
+    let files = database_files(&db_path);
+    let main_exists = files
+        .first()
+        .and_then(|file| file.get("exists"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !main_exists {
+        return json!({
+            "ok": false,
+            "path": db_path.display().to_string(),
+            "root": runtime.timeline_store.root.display().to_string(),
+            "ftsEnabled": runtime.timeline_store.fts_enabled,
+            "error": "sqlite database file is missing",
+            "files": files,
+            "tables": [],
+        });
+    }
     let db = match runtime.timeline_store.connect() {
         Ok(db) => db,
         Err(error) => {
             return json!({
                 "ok": false,
                 "path": db_path.display().to_string(),
+                "root": runtime.timeline_store.root.display().to_string(),
+                "ftsEnabled": runtime.timeline_store.fts_enabled,
                 "error": error.to_string(),
-                "files": database_files(&db_path),
+                "files": files,
+                "tables": [],
             });
         }
     };
@@ -248,6 +323,10 @@ fn database_diagnostics(runtime: &Runtime) -> Value {
             })
         })
         .collect::<Vec<_>>();
+    let physical_bytes = files
+        .iter()
+        .filter_map(|file| file.get("bytes").and_then(Value::as_u64))
+        .sum::<u64>();
     json!({
         "ok": true,
         "path": db_path.display().to_string(),
@@ -257,9 +336,10 @@ fn database_diagnostics(runtime: &Runtime) -> Value {
         "pageSize": page_size,
         "freelistCount": freelist_count,
         "estimatedBytes": page_count.saturating_mul(page_size),
+        "physicalBytes": physical_bytes,
         "journalMode": journal_mode,
         "synchronous": synchronous,
-        "files": database_files(&db_path),
+        "files": files,
         "tables": table_rows,
     })
 }
@@ -285,11 +365,13 @@ fn file_payload(path: PathBuf) -> Value {
             "path": path.display().to_string(),
             "exists": true,
             "bytes": metadata.len(),
+            "modified": metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|duration| duration.as_secs()).unwrap_or(0),
         }),
         Err(_) => json!({
             "path": path.display().to_string(),
             "exists": false,
             "bytes": 0,
+            "modified": 0,
         }),
     }
 }
@@ -664,11 +746,11 @@ fn agent_summary(jobs: &[Job]) -> Value {
     })
 }
 
-fn agent_job_payload(job: &Job) -> Value {
+fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
     let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
     let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
-    json!({
+    Ok(json!({
         "job": job.to_value(),
         "paths": {
             "packet": metadata.packet_path,
@@ -681,7 +763,138 @@ fn agent_job_payload(job: &Job) -> Value {
         "result": read_text_artifact(&metadata.result_path, AGENT_ARTIFACT_MAX_BYTES),
         "raw": raw,
         "codex": codex,
+        "session": agent_session_payload(runtime, job)?,
+    }))
+}
+
+fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Value> {
+    let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.voice_channel_id);
+    let live = runtime
+        .agents
+        .session_snapshot(&key)
+        .map(|session| session.to_json());
+    let mut jobs = runtime.timeline_store.list_jobs_by_scope_kind(
+        &selected.guild_id,
+        &selected.voice_channel_id,
+        JobKind::AgentTask,
+    )?;
+    jobs.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let truncated = jobs.len() > AGENT_SESSION_JOB_LIMIT;
+    if truncated {
+        jobs = jobs[jobs.len().saturating_sub(AGENT_SESSION_JOB_LIMIT)..].to_vec();
+    }
+    let rows = jobs
+        .iter()
+        .map(agent_session_job_payload)
+        .collect::<Vec<_>>();
+    let transcript = agent_session_transcript(&rows);
+    let mut timeline = Vec::new();
+    for row in &rows {
+        let job_id = string_field(row, "job_id");
+        let events = row
+            .get("codex")
+            .and_then(|codex| codex.get("timeline"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for mut event in events {
+            if let Value::Object(object) = &mut event {
+                object.insert("job_id".to_string(), json!(job_id));
+            }
+            timeline.push(event);
+        }
+    }
+    Ok(json!({
+        "key": key,
+        "live": live,
+        "jobCount": rows.len(),
+        "truncated": truncated,
+        "jobs": rows,
+        "transcript": {
+            "content": transcript,
+            "bytes": transcript.len(),
+        },
+        "codex": {
+            "timeline": timeline,
+        },
+    }))
+}
+
+fn agent_session_job_payload(job: &Job) -> Value {
+    let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
+    let prompt = read_text_artifact(&metadata.prompt_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
+    let result = read_text_artifact(&metadata.result_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
+    let raw = read_text_artifact(&metadata.raw_result_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
+    let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
+    json!({
+        "job_id": job.id.clone(),
+        "state": job.state.as_str(),
+        "created_at": job.created_at.clone(),
+        "updated_at": job.updated_at.clone(),
+        "request": job.command().map(|command| command.arguments.request_text()).unwrap_or_default(),
+        "session_id": metadata.agent.session_id,
+        "model": metadata.agent.model,
+        "prompt": prompt,
+        "result": result,
+        "raw": raw,
+        "codex": codex,
     })
+}
+
+fn agent_session_transcript(rows: &[Value]) -> String {
+    let mut parts = Vec::new();
+    for row in rows {
+        let job_id = string_field(row, "job_id");
+        let state = string_field(row, "state");
+        let created_at = string_field(row, "created_at");
+        let request = string_field(row, "request");
+        parts.push(format!("JOB {job_id} [{state}] {created_at}"));
+        if !request.trim().is_empty() {
+            parts.push(format!("REQUEST:\n{request}"));
+        }
+        let prompt = row
+            .get("prompt")
+            .and_then(|artifact| artifact.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !prompt.is_empty() {
+            parts.push(format!("PROMPT:\n{prompt}"));
+        }
+        let result = row
+            .get("result")
+            .and_then(|artifact| artifact.get("content"))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if !result.is_empty() {
+            parts.push(format!("RESULT:\n{result}"));
+        }
+        let messages = row
+            .get("codex")
+            .and_then(|codex| codex.get("messages"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let message_text = messages
+            .iter()
+            .filter_map(|message| {
+                let role = string_field(message, "role");
+                let text = string_field(message, "text");
+                (!text.trim().is_empty()).then(|| format!("{role}: {text}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !message_text.is_empty() {
+            parts.push(format!("VISIBLE MESSAGES:\n{message_text}"));
+        }
+        parts.push(String::new());
+    }
+    parts.join("\n\n").trim().to_string()
 }
 
 fn compact_agent_job_payload(job: &Job) -> Value {

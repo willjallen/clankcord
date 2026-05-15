@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::dashboard::{APP_JS, INDEX_HTML, STYLES_CSS};
+use crate::dashboard::{ALPINE_JS, APP_JS, INDEX_HTML, STYLES_CSS};
 use crate::runtime::automations::AutomationState;
 use crate::runtime::{
     CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
@@ -84,6 +84,7 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/debug", get(debug_dashboard))
         .route("/debug/dashboard.css", get(debug_dashboard_css))
         .route("/debug/dashboard.js", get(debug_dashboard_js))
+        .route("/debug/alpine.min.js", get(debug_alpine_js))
         .with_state(state)
 }
 
@@ -360,8 +361,13 @@ async fn debug_overview(
 ) -> Response {
     let runtime = state.runtime_snapshot().await;
     result(runtime.debug_overview(DebugOverviewRequest {
-        since: query_str(&query, &["since"]),
-        limit: query_usize(&query, &["limit"], 80),
+        jobs_limit: query_usize(&query, &["jobsLimit"], 120),
+        agent_limit: query_usize(&query, &["agentLimit"], 120),
+        timeline_since: query_str(&query, &["timelineSince"]),
+        timeline_limit: query_usize(&query, &["timelineLimit"], 120),
+        transcript_since: query_str(&query, &["transcriptSince"]),
+        transcript_limit: query_usize(&query, &["transcriptLimit"], 500),
+        publication_limit: query_usize(&query, &["publicationLimit"], 120),
     }))
 }
 
@@ -388,6 +394,16 @@ async fn debug_dashboard_js() -> impl IntoResponse {
             "application/javascript; charset=utf-8",
         )],
         APP_JS,
+    )
+}
+
+async fn debug_alpine_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        ALPINE_JS,
     )
 }
 

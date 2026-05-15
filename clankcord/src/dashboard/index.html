@@ -3,246 +3,610 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Clankcord Jobs Dashboard</title>
+  <title>Clankcord Dashboard</title>
   <link rel="stylesheet" href="./debug/dashboard.css">
   <script defer src="./debug/dashboard.js"></script>
+  <script defer src="./debug/alpine.min.js"></script>
 </head>
-<body>
+<body x-data="dashboard()" x-init="init()" x-cloak>
   <header>
     <div class="topbar">
-      <div>
+      <div class="brand-block">
         <h1>Clankcord Runtime</h1>
-        <div class="muted" id="subtitle">Loading...</div>
+        <div class="muted" x-text="subtitle()"></div>
       </div>
       <div class="controls">
-        <label>Window
-          <select id="since">
-            <option value="-15m">15m</option>
-            <option value="-1h" selected>1h</option>
-            <option value="-6h">6h</option>
-            <option value="-24h">24h</option>
-          </select>
-        </label>
-        <label>Limit
-          <select id="limit">
-            <option>40</option>
-            <option selected>80</option>
-            <option>150</option>
-            <option>250</option>
-          </select>
-        </label>
-        <label><input type="checkbox" id="auto" checked> Auto</label>
-        <button id="refresh" type="button">Refresh</button>
-        <a class="pill link-pill" id="jsonLink" href="#">JSON</a>
+        <label class="check"><input type="checkbox" x-model="autoRefresh" @change="syncAutoRefresh()"> Auto</label>
+        <button type="button" class="icon-button" title="Refresh" @click="refresh({force: true})">Refresh</button>
+        <a class="pill link-pill" :href="jsonUrl()" target="_blank" rel="noreferrer">JSON</a>
       </div>
     </div>
-    <nav class="tabs">
-      <button class="active" type="button" data-view="overview">Overview</button>
-      <button type="button" data-view="jobs">Jobs</button>
-      <button type="button" data-view="agents">Agent Jobs</button>
-      <button type="button" data-view="health">Health</button>
-      <button type="button" data-view="rooms">Rooms</button>
-      <button type="button" data-view="commands">Commands</button>
-      <button type="button" data-view="timeline">Timeline</button>
-      <button type="button" data-view="transcript">Transcript</button>
-      <button type="button" data-view="raw">Raw</button>
+    <nav class="tabs" aria-label="Dashboard views">
+      <template x-for="tab in tabs" :key="tab.id">
+        <button type="button" :class="{active: activeView === tab.id}" @click="activateView(tab.id)" x-text="tab.label"></button>
+      </template>
     </nav>
   </header>
-  <main>
-    <div class="error" id="error"></div>
-    <div class="metrics" id="metrics"></div>
 
-    <div class="view active" id="view-overview">
+  <main>
+    <div class="error" x-show="error" x-text="error"></div>
+
+    <section class="metrics-band" aria-label="Runtime metrics">
+      <template x-for="item in metrics()" :key="item.label">
+        <div class="metric">
+          <div class="label" x-text="item.label"></div>
+          <div class="value" :class="item.className" x-text="item.value"></div>
+        </div>
+      </template>
+    </section>
+
+    <div class="view active" x-show="activeView === 'overview'">
       <div class="layout overview-grid">
         <div class="stack">
           <section>
-            <h2>Queue Pressure <span id="queuePressureCount"></span></h2>
-            <div class="table-wrap" id="queuePressure"></div>
+            <h2><span>Queue Pressure</span><small x-text="activeJobs.length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Command</th><th>Updated</th><th>Detail</th></tr></thead>
+                <tbody>
+                  <template x-for="job in activeJobs.slice(0, 20)" :key="job.job_id">
+                    <tr>
+                      <td><button class="link-button mono" type="button" @click="selectJob(job.job_id)" x-text="short(job.job_id)"></button></td>
+                      <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
+                      <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
+                      <td x-text="commandKind(job)"></td>
+                      <td x-text="ago(jobTime(job))"></td>
+                      <td class="text-cell" x-text="short(jobDetail(job), 150)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!activeJobs.length">No active jobs.</div>
+            </div>
           </section>
           <section>
-            <h2>Room Job Load <span id="roomJobLoadCount"></span></h2>
-            <div class="table-wrap" id="roomJobLoad"></div>
+            <h2><span>Room Job Load</span><small x-text="roomJobLoad().length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Guild</th><th>Channel</th><th>Total</th><th>Active</th><th>Failed</th><th>Latest</th></tr></thead>
+                <tbody>
+                  <template x-for="room in roomJobLoad()" :key="`${room.guild_id}:${room.voice_channel_id}`">
+                    <tr>
+                      <td class="mono" x-text="short(room.guild_id, 14)"></td>
+                      <td class="mono" x-text="short(room.voice_channel_id, 18)"></td>
+                      <td x-text="room.total"></td>
+                      <td x-text="room.active"></td>
+                      <td x-text="room.failed"></td>
+                      <td x-text="ago(room.latest_at)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!roomJobLoad().length">No job history.</div>
+            </div>
           </section>
         </div>
         <div class="stack">
           <section>
-            <h2>State Mix</h2>
-            <div class="dense-list" id="stateMix"></div>
+            <h2><span>State Mix</span></h2>
+            <div class="dense-list">
+              <template x-for="row in jobSummary().byState || []" :key="row.state">
+                <div class="dense-row"><span x-text="row.state"></span><strong x-text="row.count"></strong></div>
+              </template>
+            </div>
           </section>
           <section>
-            <h2>Recent Failures <span id="failureCount"></span></h2>
-            <div class="table-wrap" id="recentFailures"></div>
+            <h2><span>Recent Failures</span><small x-text="recentFailures().length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Updated</th><th>Detail</th></tr></thead>
+                <tbody>
+                  <template x-for="job in recentFailures().slice(0, 14)" :key="job.job_id">
+                    <tr>
+                      <td><button class="link-button mono" type="button" @click="selectJob(job.job_id)" x-text="short(job.job_id)"></button></td>
+                      <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
+                      <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
+                      <td x-text="ago(jobTime(job))"></td>
+                      <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!recentFailures().length">No recent failures.</div>
+            </div>
           </section>
         </div>
       </div>
     </div>
 
-    <div class="view" id="view-jobs">
+    <div class="view active" x-show="activeView === 'jobs'">
+      <div class="panel-toolbar">
+        <label>Limit
+          <select x-model.number="filters.jobsLimit" @change="filterChanged()">
+            <option>80</option><option>120</option><option>250</option><option>500</option>
+          </select>
+        </label>
+      </div>
       <div class="jobs-layout">
         <section>
-          <h2>Active Jobs <span id="activeJobsCount"></span></h2>
-          <div class="table-wrap tall" id="activeJobs"></div>
+          <h2><span>Active Jobs</span><small x-text="activeJobs.length"></small></h2>
+          <div class="table-wrap tall scroll-region">
+            <table>
+              <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Command</th><th>Parent</th><th>Attempts</th><th>Updated</th><th>Detail</th></tr></thead>
+              <tbody>
+                <template x-for="job in activeJobs" :key="job.job_id">
+                  <tr class="selectable" :class="{selected: selectedJobId === job.job_id}" @click="selectJob(job.job_id)">
+                    <td class="mono" x-text="short(job.job_id)"></td>
+                    <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
+                    <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
+                    <td x-text="commandKind(job)"></td>
+                    <td class="mono" x-text="short(job.parent_job_id || job.root_job_id || '', 16)"></td>
+                    <td x-text="job.attempts ?? 0"></td>
+                    <td x-text="ago(jobTime(job))"></td>
+                    <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+            <div class="empty" x-show="!activeJobs.length">No active jobs.</div>
+          </div>
         </section>
         <section>
-          <h2>Selected Job <span id="selectedJobTitle"></span></h2>
-          <div id="selectedJob"></div>
+          <h2><span>Selected Job</span><small x-text="selectedJobId"></small></h2>
+          <div class="detail scroll-region" x-show="selectedJob()">
+            <div class="detail-head">
+              <span class="pill" :class="statusClass(selectedJob()?.kind)" x-text="selectedJob()?.kind"></span>
+              <span class="pill" :class="statusClass(selectedJob()?.state)" x-text="selectedJob()?.state"></span>
+              <span class="pill" x-show="commandKind(selectedJob())" x-text="commandKind(selectedJob())"></span>
+            </div>
+            <div class="kv-grid">
+              <template x-for="item in selectedJobFacts()" :key="item.label">
+                <div class="kv"><div class="k" x-text="item.label"></div><div class="v mono" x-text="item.value"></div></div>
+              </template>
+            </div>
+            <div class="kv" x-show="jobDetail(selectedJob())">
+              <div class="k">Detail</div>
+              <div class="v" x-text="jobDetail(selectedJob())"></div>
+            </div>
+            <details open><summary>Payload</summary><pre x-text="json(selectedJob()?.payload || {})"></pre></details>
+            <details><summary>Metadata</summary><pre x-text="json(selectedJob()?.metadata || {})"></pre></details>
+            <details><summary>Job Record</summary><pre x-text="json(selectedJob())"></pre></details>
+          </div>
+          <div class="empty" x-show="!selectedJob()">No job selected.</div>
         </section>
       </div>
       <section>
-        <h2>Recent Jobs <span id="recentJobsCount"></span></h2>
-        <div class="table-wrap tall" id="recentJobs"></div>
+        <h2><span>Recent Jobs</span><small x-text="recentJobs.length"></small></h2>
+        <div class="table-wrap tall scroll-region">
+          <table>
+            <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Command</th><th>Parent</th><th>Attempts</th><th>Updated</th><th>Detail</th></tr></thead>
+            <tbody>
+              <template x-for="job in recentJobs" :key="job.job_id">
+                <tr class="selectable" :class="{selected: selectedJobId === job.job_id}" @click="selectJob(job.job_id)">
+                  <td class="mono" x-text="short(job.job_id)"></td>
+                  <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
+                  <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
+                  <td x-text="commandKind(job)"></td>
+                  <td class="mono" x-text="short(job.parent_job_id || job.root_job_id || '', 16)"></td>
+                  <td x-text="job.attempts ?? 0"></td>
+                  <td x-text="ago(jobTime(job))"></td>
+                  <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty" x-show="!recentJobs.length">No recent jobs.</div>
+        </div>
       </section>
     </div>
 
-    <div class="view" id="view-agents">
+    <div class="view active" x-show="activeView === 'agents'">
+      <div class="panel-toolbar">
+        <label>Limit
+          <select x-model.number="filters.agentLimit" @change="filterChanged()">
+            <option>50</option><option>120</option><option>250</option><option>500</option>
+          </select>
+        </label>
+      </div>
       <div class="agents-layout">
         <div class="stack">
           <section>
-            <h2>Agent Jobs <span id="agentJobsCount"></span></h2>
-            <div class="table-wrap tall" id="agentJobs"></div>
+            <h2><span>Agent Jobs</span><small x-text="agentJobs.length"></small></h2>
+            <div class="table-wrap tall scroll-region">
+              <table>
+                <thead><tr><th>Job</th><th>State</th><th>Request</th><th>Session</th><th>Model</th><th>Context</th><th>Updated</th><th>Detail</th></tr></thead>
+                <tbody>
+                  <template x-for="entry in agentJobs" :key="entry.job?.job_id">
+                    <tr class="selectable" :class="{selected: selectedAgentJobId === entry.job?.job_id}" @click="selectAgentJob(entry.job?.job_id)">
+                      <td class="mono" x-text="short(entry.job?.job_id)"></td>
+                      <td><span class="pill" :class="statusClass(entry.job?.state)" x-text="entry.job?.state"></span></td>
+                      <td class="text-cell" x-text="short(agentRequest(entry), 120)"></td>
+                      <td class="mono" x-text="short(agentSessionId(entry), 18)"></td>
+                      <td x-text="agentModel(entry)"></td>
+                      <td x-text="contextUsageLabel(codexUsageStats(entry.codex || {}, agentMetadata(entry.job)))"></td>
+                      <td x-text="ago(jobTime(entry.job || {}))"></td>
+                      <td class="text-cell" x-text="short(jobDetail(entry.job || {}), 130)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!agentJobs.length">No agent jobs.</div>
+            </div>
           </section>
           <section>
-            <h2>Agent Sessions <span id="agentSessionsCount"></span></h2>
-            <div class="table-wrap" id="agentSessions"></div>
+            <h2><span>Agent Sessions</span><small x-text="agentSessions.length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Key</th><th>Status</th><th>Codex Session</th><th>Active Job</th><th>Runs</th><th>Last Used</th><th>Error</th></tr></thead>
+                <tbody>
+                  <template x-for="session in agentSessions" :key="session.key">
+                    <tr>
+                      <td class="mono" x-text="short(session.key, 32)"></td>
+                      <td><span class="pill" :class="statusClass(session.status)" x-text="session.status"></span></td>
+                      <td class="mono" x-text="short(session.session_id, 20)"></td>
+                      <td class="mono" x-text="short(session.active_job_id, 18)"></td>
+                      <td x-text="session.invocation_count ?? 0"></td>
+                      <td x-text="ago(session.last_used_at)"></td>
+                      <td class="text-cell" x-text="short(session.last_error, 100)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!agentSessions.length">No agent sessions.</div>
+            </div>
           </section>
           <section>
-            <h2>Codex Usage</h2>
-            <div id="codexUsage"></div>
-          </section>
-          <section>
-            <h2>Codex Account</h2>
-            <div class="dense-list" id="codexAccount"></div>
+            <h2><span>Codex Usage</span></h2>
+            <div class="usage-window-grid">
+              <template x-for="window in codexUsageWindows()" :key="window.label">
+                <div class="usage-window">
+                  <div class="usage-window-head"><strong x-text="window.label"></strong><span class="muted" x-text="window.latestAt ? `latest ${ago(window.latestAt)}` : 'no runs'"></span></div>
+                  <div class="dense-list">
+                    <div class="dense-row"><span>Agent jobs</span><strong x-text="`${int(window.jobs)} total / ${int(window.jobsWithUsage)} with usage`"></strong></div>
+                    <div class="dense-row"><span>Input tokens</span><strong x-text="int(window.inputTokens)"></strong></div>
+                    <div class="dense-row"><span>Cached input</span><strong x-text="int(window.cachedInputTokens)"></strong></div>
+                    <div class="dense-row"><span>Output tokens</span><strong x-text="int(window.outputTokens)"></strong></div>
+                    <div class="dense-row"><span>Reasoning output</span><strong x-text="int(window.reasoningOutputTokens)"></strong></div>
+                  </div>
+                </div>
+              </template>
+            </div>
           </section>
         </div>
         <section>
-          <h2>Selected Agent Job <span id="selectedAgentJobTitle"></span></h2>
-          <div id="selectedAgentJob"></div>
-        </section>
-      </div>
-    </div>
-
-    <div class="view" id="view-health">
-      <div class="layout">
-        <div class="stack">
-          <section>
-            <h2>Service Health</h2>
-            <div class="dense-list" id="serviceHealth"></div>
-          </section>
-          <section>
-            <h2>Load</h2>
-            <div class="dense-list" id="loadHealth"></div>
-          </section>
-          <section>
-            <h2>Capacity</h2>
-            <div class="dense-list" id="healthCapacity"></div>
-          </section>
-        </div>
-        <div class="stack">
-          <section>
-            <h2>SQLite Files</h2>
-            <div class="table-wrap" id="sqliteFiles"></div>
-          </section>
-          <section>
-            <h2>SQLite Tables</h2>
-            <div class="table-wrap tall" id="sqliteTables"></div>
-          </section>
-        </div>
-      </div>
-    </div>
-
-    <div class="view" id="view-rooms">
-      <div class="layout">
-        <div class="stack">
-          <section>
-            <h2>Rooms <span id="roomsCount"></span></h2>
-            <div class="table-wrap" id="rooms"></div>
-          </section>
-          <section>
-            <h2>Sessions <span id="sessionsCount"></span></h2>
-            <div class="table-wrap" id="sessions"></div>
-          </section>
-        </div>
-        <div class="stack">
-          <section>
-            <h2>Bots <span id="botsCount"></span></h2>
-            <div class="table-wrap" id="bots"></div>
-          </section>
-          <section>
-            <h2>Capacity</h2>
-            <div class="dense-list" id="capacity"></div>
-          </section>
-        </div>
-      </div>
-    </div>
-
-    <div class="view" id="view-commands">
-      <div class="layout">
-        <section>
-          <h2>Command-Origin Jobs <span id="commandJobsCount"></span></h2>
-          <div class="table-wrap tall" id="commandJobs"></div>
-        </section>
-        <section>
-          <h2>Command Activity <span id="commandEventsCount"></span></h2>
-          <div class="timeline-list" id="commandEvents"></div>
-        </section>
-      </div>
-    </div>
-
-    <div class="view" id="view-timeline">
-      <div class="layout">
-        <section>
-          <h2>Recent Events <span id="eventsCount"></span></h2>
-          <div class="filterbar">
-            <label>Kind
-              <select id="timelineKind">
-                <option value="">All</option>
-              </select>
-            </label>
-            <label>Channel
-              <select id="timelineChannel">
-                <option value="">All</option>
-              </select>
-            </label>
-            <label>Search
-              <input id="timelineSearch" type="search" autocomplete="off">
-            </label>
+          <h2><span>Selected Agent Job</span><small x-text="selectedAgentJobId"></small></h2>
+          <div class="detail agent-detail scroll-region" x-show="selectedAgentEntry()">
+            <div class="detail-head">
+              <span class="pill" :class="statusClass(selectedAgentJob()?.kind)" x-text="selectedAgentJob()?.kind"></span>
+              <span class="pill" :class="statusClass(selectedAgentJob()?.state)" x-text="selectedAgentJob()?.state"></span>
+              <span class="mono" x-text="short(selectedAgentCodex().sessionId || agentMetadata(selectedAgentJob()).agent?.session_id || '', 38)"></span>
+            </div>
+            <div class="kv-grid">
+              <template x-for="item in selectedAgentFacts()" :key="item.label">
+                <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
+              </template>
+            </div>
+            <div class="embedded-panel">
+              <h2><span>Session Trace</span><small x-text="`${sessionTrace().length} events`"></small></h2>
+              <div class="agent-trace scroll-region">
+                <template x-for="(event, index) in sessionTrace()" :key="`${event.job_id || 'event'}:${index}`">
+                  <article class="timeline-card">
+                    <div class="timeline-head">
+                      <div class="detail-tags">
+                        <span class="pill" :class="statusClass(event.kind)" x-text="event.kind"></span>
+                        <span class="pill" x-show="event.role" x-text="event.role"></span>
+                        <span class="pill" x-show="event.name" x-text="event.name"></span>
+                        <span class="muted" x-text="ago(event.timestamp)"></span>
+                      </div>
+                      <span class="mono" x-text="short(event.job_id || event.callId || '', 18)"></span>
+                    </div>
+                    <pre x-text="traceBody(event)"></pre>
+                  </article>
+                </template>
+                <div class="empty" x-show="!sessionTrace().length">No Codex trace captured yet.</div>
+              </div>
+            </div>
+            <details open><summary>Cumulative Session Text</summary><pre x-text="selectedAgentSession()?.transcript?.content || ''"></pre></details>
+            <details><summary>Prompt Sent For Selected Job</summary><pre x-text="selectedAgentEntry()?.prompt?.content || ''"></pre></details>
+            <details><summary>Job Packet JSON</summary><pre x-text="json(selectedAgentEntry()?.packet?.value || {})"></pre></details>
+            <details><summary>Raw Codex JSONL</summary><pre x-text="selectedAgentEntry()?.raw?.content || ''"></pre></details>
+            <details><summary>Job Record</summary><pre x-text="json(selectedAgentJob())"></pre></details>
           </div>
-          <div class="table-wrap tall" id="events"></div>
+          <div class="empty" x-show="!selectedAgentEntry()">No agent job selected.</div>
         </section>
+      </div>
+    </div>
+
+    <div class="view active" x-show="activeView === 'health'">
+      <div class="layout">
         <div class="stack">
           <section>
-            <h2>Event Kinds</h2>
-            <div class="table-wrap" id="eventKinds"></div>
+            <h2><span>Service Health</span></h2>
+            <div class="dense-list">
+              <template x-for="row in healthRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong :class="row.className" x-text="row.value"></strong></div>
+              </template>
+            </div>
           </section>
           <section>
-            <h2>Publications <span id="publicationsCount"></span></h2>
-            <div class="table-wrap" id="publications"></div>
+            <h2><span>Load</span></h2>
+            <div class="dense-list">
+              <template x-for="row in loadRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+              </template>
+            </div>
+          </section>
+          <section>
+            <h2><span>Database Summary</span></h2>
+            <div class="dense-list">
+              <template x-for="row in databaseRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+              </template>
+            </div>
+          </section>
+        </div>
+        <div class="stack">
+          <section>
+            <h2><span>SQLite Files</span></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Path</th><th>State</th><th>Size</th><th>Modified</th></tr></thead>
+                <tbody>
+                  <template x-for="file in database().files || []" :key="file.path">
+                    <tr>
+                      <td class="text-cell" x-text="file.path"></td>
+                      <td><span class="pill" :class="file.exists ? 'ok' : 'bad'" x-text="file.exists ? 'present' : 'missing'"></span></td>
+                      <td x-text="bytes(file.bytes)"></td>
+                      <td x-text="unixTime(file.modified)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h2><span>SQLite Tables</span></h2>
+            <div class="table-wrap tall scroll-region">
+              <table>
+                <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+                <tbody>
+                  <template x-for="row in database().tables || []" :key="row.table">
+                    <tr><td x-text="row.table"></td><td x-text="int(row.rows)"></td></tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
           </section>
         </div>
       </div>
     </div>
 
-    <div class="view" id="view-transcript">
+    <div class="view active" x-show="activeView === 'rooms'">
+      <div class="layout">
+        <div class="stack">
+          <section>
+            <h2><span>Rooms</span><small x-text="rooms.length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Room</th><th>Channel</th><th>Session</th><th>Auto</th><th>Humans</th><th>Control</th><th>Last Speech</th></tr></thead>
+                <tbody>
+                  <template x-for="room in rooms" :key="room.channelId">
+                    <tr>
+                      <td x-text="roomName(room)"></td>
+                      <td class="mono" x-text="short(room.channelId, 18)"></td>
+                      <td><span class="pill" :class="room.activeSessionId ? 'ok' : 'warn'" x-text="room.activeSessionId ? 'active' : 'absent'"></span></td>
+                      <td x-text="room.autoJoin ? 'yes' : 'no'"></td>
+                      <td x-text="roomHumanCount(room)"></td>
+                      <td><span class="pill" :class="statusClass(room.control?.target_state || room.control?.targetState)" x-text="room.control?.target_state || room.control?.targetState || 'none'"></span></td>
+                      <td x-text="ago(room.occupancy?.last_speech_at || room.occupancy?.lastSpeechAt)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h2><span>Sessions</span><small x-text="sessions.length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Room</th><th>Capture Run</th><th>Mode</th><th>Bot</th><th>Transcripts</th><th>Last Transcript</th></tr></thead>
+                <tbody>
+                  <template x-for="session in sessions" :key="session.sessionId || session.captureRunId || session.assignmentId">
+                    <tr>
+                      <td x-text="session.room?.channelName || session.roomId || session.voiceChannelId || ''"></td>
+                      <td class="mono" x-text="short(session.captureRunId || session.sessionId || session.assignmentId, 18)"></td>
+                      <td><span class="pill" :class="statusClass(session.mode || 'active')" x-text="session.mode || 'active'"></span></td>
+                      <td x-text="session.botId || ''"></td>
+                      <td x-text="session.captureStats?.transcriptEvents ?? session.transcriptEventCount ?? 0"></td>
+                      <td x-text="ago(session.captureStats?.lastTranscriptAt || session.lastTranscriptAt)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+        <div class="stack">
+          <section>
+            <h2><span>Bots</span><small x-text="bots.length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Bot</th><th>State</th><th>Assignment</th><th>Voice Channel</th><th>Audio</th></tr></thead>
+                <tbody>
+                  <template x-for="bot in bots" :key="bot.botId || bot.voice_bot_id">
+                    <tr>
+                      <td x-text="bot.botId || bot.voice_bot_id || ''"></td>
+                      <td><span class="pill" :class="statusClass(bot.state || (bot.ready ? 'ready' : 'starting'))" x-text="bot.state || (bot.ready ? 'ready' : 'starting')"></span></td>
+                      <td class="mono" x-text="short(bot.assignedSessionId || '', 18)"></td>
+                      <td class="mono" x-text="short(bot.voiceDebug?.voiceClientChannelId || bot.voiceDebug?.voiceStateChannelId || '', 18)"></td>
+                      <td x-text="bot.voiceDebug?.selfDeaf ? 'deaf' : 'listening'"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h2><span>Capacity</span></h2>
+            <div class="dense-list">
+              <div class="dense-row"><span>Configured bots</span><strong x-text="status().pool?.configuredBots ?? 0"></strong></div>
+              <div class="dense-row"><span>Active assignments</span><strong x-text="status().pool?.activeAssignments ?? 0"></strong></div>
+              <div class="dense-row"><span>Available bots</span><strong x-text="status().pool?.availableBots ?? 0"></strong></div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <div class="view active" x-show="activeView === 'control'">
+      <div class="control-layout">
+        <section>
+          <h2><span>Room Agent Control</span></h2>
+          <div class="control-panel">
+            <label>Room
+              <select x-model="control.roomId">
+                <template x-for="room in rooms" :key="room.channelId">
+                  <option :value="room.channelId" x-text="roomName(room)"></option>
+                </template>
+              </select>
+            </label>
+            <label>Requested By
+              <input type="text" x-model="control.requestedByUserId" autocomplete="off">
+            </label>
+            <div class="button-grid">
+              <button type="button" @click="sendCommand('join_room')">Move / Join</button>
+              <button type="button" @click="sendCommand('leave_room')">Leave</button>
+              <button type="button" @click="sendCommand('deafen_listening')">Deafen</button>
+              <button type="button" @click="sendCommand('resume_listening')">Resume</button>
+              <button type="button" @click="sendCommand('set_voice_mute', {muted: true})">Mute</button>
+              <button type="button" @click="sendCommand('set_voice_mute', {muted: false})">Unmute</button>
+            </div>
+            <div class="inline-command">
+              <label>Sound
+                <select x-model="control.cue">
+                  <option value="ack">Ack</option>
+                  <option value="wake">Wake</option>
+                  <option value="preempt">Preempt</option>
+                  <option value="join">Join</option>
+                  <option value="leave">Leave</option>
+                  <option value="deafen">Deafen</option>
+                  <option value="undeafen">Undeafen</option>
+                </select>
+              </label>
+              <button type="button" @click="sendCommand('play_voice_cue', {cue: control.cue})">Play</button>
+            </div>
+            <label>Agent Task
+              <textarea x-model="control.agentTask" rows="5" spellcheck="true"></textarea>
+            </label>
+            <button type="button" class="primary-action" @click="sendCommand('agent_task', {request: control.agentTask})">Send Agent Task</button>
+          </div>
+        </section>
+        <section>
+          <h2><span>Command Result</span></h2>
+          <div class="detail">
+            <div class="detail-head" x-show="control.lastKind">
+              <span class="pill ok" x-text="control.lastKind"></span>
+              <span class="muted" x-text="control.lastAt"></span>
+            </div>
+            <pre x-text="json(control.result || {})"></pre>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="view active" x-show="activeView === 'timeline'">
       <section>
-        <h2>Channel Transcript <span id="transcriptCount"></span></h2>
+        <h2><span>Timeline Events</span><small x-text="`${filteredTimelineEvents().length}/${timelineEvents.length}`"></small></h2>
         <div class="filterbar">
-          <label>Channel
-            <select id="transcriptChannel">
-              <option value="">All</option>
+          <label>Window
+            <select x-model="filters.timelineSince" @change="filterChanged()">
+              <option value="-15m">15m</option><option value="-1h">1h</option><option value="-6h">6h</option><option value="-24h">24h</option><option value="-3d">3d</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option>
             </select>
           </label>
-          <label>Search
-            <input id="transcriptSearch" type="search" autocomplete="off">
+          <label>Limit
+            <select x-model.number="filters.timelineLimit" @change="filterChanged()">
+              <option>80</option><option>150</option><option>300</option><option>600</option><option>1000</option>
+            </select>
           </label>
+          <label>Event Type
+            <select x-model="filters.timelineKind">
+              <option value="">All</option>
+              <template x-for="kind in timelineKinds()" :key="kind"><option :value="kind" x-text="kind"></option></template>
+            </select>
+          </label>
+          <label>Channel
+            <select x-model="filters.timelineChannel">
+              <option value="">All</option>
+              <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
+            </select>
+          </label>
+          <label>Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" autocomplete="off"></label>
         </div>
-        <div class="transcript-view" id="transcript"></div>
+        <div class="table-wrap tall scroll-region">
+          <table>
+            <thead><tr><th>When</th><th>Event Type</th><th>Room</th><th>Speaker</th><th>Text / Detail</th><th>Id</th></tr></thead>
+            <tbody>
+              <template x-for="event in filteredTimelineEvents()" :key="event.event_id || event.eventId || event.job_id">
+                <tr>
+                  <td x-text="ago(eventWhen(event))"></td>
+                  <td><span class="pill" :class="statusClass(eventKind(event))" x-text="eventKind(event)"></span></td>
+                  <td x-text="eventChannelName(event)"></td>
+                  <td x-text="eventSpeaker(event)"></td>
+                  <td class="text-cell" x-text="short(eventDetail(event), 180)"></td>
+                  <td class="mono" x-text="short(eventId(event), 20)"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+          <div class="empty" x-show="!filteredTimelineEvents().length">No timeline events match.</div>
+        </div>
       </section>
     </div>
 
-    <div class="view" id="view-raw">
+    <div class="view active" x-show="activeView === 'transcript'">
       <section>
-        <h2>Raw Debug Snapshot</h2>
-        <pre id="raw"></pre>
+        <h2><span>Transcript</span><small x-text="filteredTranscriptEvents().length"></small></h2>
+        <div class="filterbar">
+          <label>Window
+            <select x-model="filters.transcriptSince" @change="filterChanged()">
+              <option value="-1h">1h</option><option value="-6h">6h</option><option value="-24h">24h</option><option value="-3d">3d</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option>
+            </select>
+          </label>
+          <label>Limit
+            <select x-model.number="filters.transcriptLimit" @change="filterChanged()">
+              <option>250</option><option>500</option><option>1000</option><option>2500</option><option>5000</option>
+            </select>
+          </label>
+          <label>Channel
+            <select x-model="filters.transcriptChannel">
+              <option value="">All</option>
+              <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
+            </select>
+          </label>
+          <label>Search <input type="search" x-model.debounce.150ms="filters.transcriptSearch" autocomplete="off"></label>
+        </div>
+        <div class="transcript-view scroll-region">
+          <template x-for="group in transcriptGroups()" :key="group.channelId">
+            <div class="transcript-group">
+              <div class="transcript-channel"><span x-text="group.channelName"></span><span class="muted mono" x-text="group.channelId"></span></div>
+              <template x-for="event in group.events" :key="event.event_id || event.eventId">
+                <div class="transcript-line">
+                  <div class="transcript-time" x-text="clock(eventWhen(event))"></div>
+                  <div class="transcript-speaker" x-text="eventSpeaker(event) || 'unknown'"></div>
+                  <div class="transcript-text" x-text="transcriptText(event)"></div>
+                </div>
+              </template>
+            </div>
+          </template>
+          <div class="empty" x-show="!filteredTranscriptEvents().length">No transcript events match.</div>
+        </div>
+      </section>
+    </div>
+
+    <div class="view active" x-show="activeView === 'raw'">
+      <section>
+        <h2><span>Raw Debug Snapshot</span></h2>
+        <pre class="raw-view scroll-region" x-text="json(data || {})"></pre>
       </section>
     </div>
   </main>
