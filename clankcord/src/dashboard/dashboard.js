@@ -46,6 +46,7 @@ window.dashboard = function dashboard() {
       { id: 'overview', label: 'Overview' },
       { id: 'jobs', label: 'Jobs' },
       { id: 'agents', label: 'Agent Jobs' },
+      { id: 'automations', label: 'Automations' },
       { id: 'health', label: 'Health' },
       { id: 'rooms', label: 'Rooms' },
       { id: 'control', label: 'Control' },
@@ -60,6 +61,7 @@ window.dashboard = function dashboard() {
     filters: { ...defaultFilters, ...storedJson(filterStorageKey, {}) },
     selectedJobId: '',
     selectedAgentJobId: '',
+    selectedAutomationId: '',
     agentDetails: {},
     autoRefresh: true,
     timer: null,
@@ -186,6 +188,9 @@ window.dashboard = function dashboard() {
       if (!this.selectedAgentJobId || !this.agentJobs.some((entry) => entry.job?.job_id === this.selectedAgentJobId)) {
         this.selectedAgentJobId = this.agentJobs[0]?.job?.job_id || '';
       }
+      if (!this.selectedAutomationId || !this.automations.some((record) => record.automation_id === this.selectedAutomationId)) {
+        this.selectedAutomationId = this.automations[0]?.automation_id || '';
+      }
       if (!this.control.roomId || !this.rooms.some((room) => room.channelId === this.control.roomId)) {
         this.control.roomId = this.rooms[0]?.channelId || '';
       }
@@ -199,6 +204,10 @@ window.dashboard = function dashboard() {
     selectAgentJob(jobId) {
       this.selectedAgentJobId = jobId || '';
       this.loadSelectedAgentDetail({ force: true });
+    },
+
+    selectAutomation(automationId) {
+      this.selectedAutomationId = automationId || '';
     },
 
     async loadSelectedAgentDetail(options = {}) {
@@ -306,6 +315,14 @@ window.dashboard = function dashboard() {
       return this.data?.agents?.sessions || [];
     },
 
+    get automations() {
+      return this.data?.automations?.records || [];
+    },
+
+    automationSummary() {
+      return this.data?.automations?.summary || {};
+    },
+
     get rooms() {
       return this.status().rooms || [];
     },
@@ -347,6 +364,10 @@ window.dashboard = function dashboard() {
       return this.selectedAgentEntry()?.session || null;
     },
 
+    selectedAutomation() {
+      return this.automations.find((record) => record.automation_id === this.selectedAutomationId) || null;
+    },
+
     selectedJobFacts() {
       const job = this.selectedJob();
       if (!job) return [];
@@ -381,6 +402,23 @@ window.dashboard = function dashboard() {
         ['Context', this.contextUsageLabel(stats)],
         ['Events', codex.eventCount ?? 0],
         ['Session Jobs', entry?.session?.jobCount ?? ''],
+      ].map(([label, value]) => ({ label, value: textValue(value) }));
+    },
+
+    selectedAutomationFacts() {
+      const record = this.selectedAutomation();
+      if (!record) return [];
+      return [
+        ['Automation', record.automation_id],
+        ['Name', record.spec?.name],
+        ['State', record.state],
+        ['Scope', this.automationScope(record)],
+        ['Trigger', this.automationTrigger(record)],
+        ['Fires', `${record.fire_count ?? 0}${record.spec?.expiry?.max_fires ? `/${record.spec.expiry.max_fires}` : ''}`],
+        ['Created', record.created_at],
+        ['Updated', record.updated_at],
+        ['Last Evaluated', record.last_evaluated_at],
+        ['Last Fired', record.last_fired_at],
       ].map(([label, value]) => ({ label, value: textValue(value) }));
     },
 
@@ -642,6 +680,41 @@ window.dashboard = function dashboard() {
       ]);
     },
 
+    automationScope(record) {
+      const scope = record?.spec?.scope || {};
+      return [scope.guild_id || scope.guildId, scope.voice_channel_id || scope.voiceChannelId || scope.channelId].filter(Boolean).join(' / ');
+    },
+
+    automationTrigger(record) {
+      const trigger = record?.spec?.trigger || {};
+      if (trigger.Event) return `event: ${(trigger.Event.event_kinds || trigger.Event.eventKinds || []).join(', ')}`;
+      if (trigger.Job) return `job: ${(trigger.Job.job_kinds || trigger.Job.jobKinds || []).join(', ')} -> ${(trigger.Job.states || []).join(', ')}`;
+      if (trigger.Tick) return `tick: ${trigger.Tick.interval_seconds || trigger.Tick.intervalSeconds || 0}s`;
+      if (trigger.RoomStateChanged !== undefined) return 'room state changed';
+      if (trigger.kind === 'event') return `event: ${(trigger.event_kinds || trigger.eventKinds || []).join(', ')}`;
+      if (trigger.kind === 'job') return `job: ${(trigger.job_kinds || trigger.jobKinds || []).join(', ')} -> ${(trigger.states || []).join(', ')}`;
+      if (trigger.kind === 'tick') return `tick: ${trigger.interval_seconds || trigger.intervalSeconds || 0}s`;
+      return this.short(this.json(trigger), 120);
+    },
+
+    automationActions(record) {
+      return (record?.spec?.actions || []).map((action) => {
+        if (action.ResponseSend) return `response.send -> ${this.automationSink(action.ResponseSend.sink)}`;
+        if (action.AgentTaskStart) return 'agent_task.start';
+        if (action.SoundPlay) return `sound.play ${action.SoundPlay.name || ''}`.trim();
+        if (action.TranscriptStartLive) return 'transcript.start_live';
+        if (action.kind) return action.kind;
+        return this.short(this.json(action), 80);
+      }).join(', ');
+    },
+
+    automationSink(sink) {
+      if (!sink) return '';
+      const kind = sink.kind || Object.keys(sink)[0] || '';
+      const id = sink.id || sink.channel_id || sink.channelId || sink.user_id || sink.userId || '';
+      return [kind, id].filter(Boolean).join(':');
+    },
+
     transcriptText(event) {
       return event?.text || event?.text_draft || event?.transcript || '';
     },
@@ -655,7 +728,19 @@ window.dashboard = function dashboard() {
     },
 
     roomHumanCount(room) {
-      return room?.occupancy?.effective_human_count ?? room?.occupancy?.effectiveHumanCount ?? '';
+      const live = this.liveRoomOccupants(room).length;
+      return live || room?.occupancy?.effective_human_count || room?.occupancy?.effectiveHumanCount || '';
+    },
+
+    liveRoomOccupants(room) {
+      const guildId = room?.guildId || room?.guild_id || '';
+      const channelId = room?.channelId || room?.voice_channel_id || '';
+      const rooms = this.status().liveVoiceOccupancy?.rooms || [];
+      const match = rooms.find((entry) => (
+        (entry.guild_id || entry.guildId) === guildId
+        && (entry.voice_channel_id || entry.voiceChannelId || entry.channelId) === channelId
+      ));
+      return match?.occupants || [];
     },
 
     statusClass(value) {

@@ -131,6 +131,54 @@ async fn timeline_finds_existing_speech_segment_for_audio_retry() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn voice_state_updates_are_durable_and_emit_participant_events() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+
+    let joined = voice_state("code", "user-a", "Will", false, false);
+    let events = store
+        .record_voice_state_update(None, joined.clone())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(string_field(&events[0], "event_kind"), "participant_joined");
+    assert_eq!(string_field(&events[0], "user_id"), "user-a");
+
+    let occupants = store.room_occupants("guild", "code").await.unwrap();
+    assert_eq!(occupants.len(), 1);
+    assert_eq!(string_field(&occupants[0], "display_name"), "Will");
+    let snapshot = store.voice_occupancy_snapshot().await.unwrap();
+    assert_eq!(snapshot["rooms"][0]["occupants"][0]["user_id"], "user-a");
+
+    let muted = voice_state("code", "user-a", "Will", true, false);
+    let events = store
+        .record_voice_state_update(Some(joined), muted.clone())
+        .await
+        .unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(
+        string_field(&events[0], "event_kind"),
+        "participant_mute_changed"
+    );
+    assert_eq!(events[0]["current"], true);
+
+    let duplicate = store.record_voice_state_update(None, muted).await.unwrap();
+    assert!(duplicate.is_empty());
+
+    let left = voice_state("", "user-a", "Will", false, false);
+    let events = store.record_voice_state_update(None, left).await.unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(string_field(&events[0], "event_kind"), "participant_left");
+    assert!(
+        store
+            .room_occupants("guild", "code")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn forget_tombstone_filters_unpublished_speech() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
@@ -322,4 +370,28 @@ async fn retention_sweep_dry_run_and_idempotence() {
             .is_empty()
     );
     assert_eq!(second["retired_events"], json!(0));
+}
+
+fn voice_state(
+    voice_channel_id: &str,
+    user_id: &str,
+    display_name: &str,
+    self_mute: bool,
+    self_deaf: bool,
+) -> serde_json::Value {
+    json!({
+        "guild_id": "guild",
+        "voice_channel_id": voice_channel_id,
+        "user_id": user_id,
+        "display_name": display_name,
+        "member_display_name": display_name,
+        "username": display_name.to_lowercase(),
+        "mute": false,
+        "deaf": false,
+        "self_mute": self_mute,
+        "self_deaf": self_deaf,
+        "self_stream": false,
+        "self_video": false,
+        "suppress": false,
+    })
 }

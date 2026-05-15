@@ -12,6 +12,7 @@ use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
 use crate::config::{non_empty, string_field};
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
+use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::timeline::{
     event_start, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
@@ -57,7 +58,16 @@ impl Runtime {
         let timeline_limit = request.timeline_limit.clamp(10, 1000);
         let transcript_limit = request.transcript_limit.clamp(10, 5000);
         let publication_limit = request.publication_limit.clamp(10, 500);
-        let status = self.status_payload(None).await;
+        let mut status = self.status_payload(None).await;
+        if let Value::Object(object) = &mut status {
+            object.insert(
+                "liveVoiceOccupancy".to_string(),
+                self.timeline_store
+                    .voice_occupancy_snapshot()
+                    .await
+                    .context("loading live voice occupancy for debug overview")?,
+            );
+        }
         let active_job_records = self
             .timeline_store
             .list_jobs_by_states(
@@ -127,6 +137,11 @@ impl Runtime {
             .into_iter()
             .take(publication_limit)
             .collect::<Vec<_>>();
+        let automations = self
+            .timeline_store
+            .list_automations(None, None, None)
+            .await
+            .context("loading automations for debug overview")?;
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "process": {
@@ -153,6 +168,7 @@ impl Runtime {
                 "since": debug_since_label(transcript_since),
                 "events": transcript_events,
             },
+            "automations": automation_dashboard_payload(&automations),
             "publications": publications,
             "links": {
                 "json": "/v1/voice/debug/overview",
@@ -342,6 +358,7 @@ fn observed_tables() -> &'static [&'static str] {
         "bot_states",
         "assignments",
         "occupancy",
+        "voice_states",
         "discord_member_cache_refreshes",
         "discord_members",
         "capture_runs",
@@ -431,6 +448,45 @@ fn agent_dashboard_payload(jobs: &[Job], limit: usize) -> Value {
             "usage": codex_usage_rollup(jobs, utc_now()),
         },
     })
+}
+
+fn automation_dashboard_payload(records: &[AutomationRecord]) -> Value {
+    let mut by_state = BTreeMap::<String, usize>::new();
+    let mut by_trigger = BTreeMap::<String, usize>::new();
+    let mut active = 0_usize;
+    let mut fired = 0_usize;
+    for record in records {
+        let state = format!("{:?}", record.state).to_lowercase();
+        *by_state.entry(state.clone()).or_insert(0) += 1;
+        if state == "active" {
+            active += 1;
+        }
+        if record.fire_count > 0 {
+            fired += 1;
+        }
+        *by_trigger
+            .entry(automation_trigger_kind(&record.spec.trigger).to_string())
+            .or_insert(0) += 1;
+    }
+    json!({
+        "records": records.iter().map(AutomationRecord::to_json).collect::<Vec<_>>(),
+        "summary": {
+            "total": records.len(),
+            "active": active,
+            "fired": fired,
+            "byState": count_rows(by_state, "state"),
+            "byTrigger": count_rows(by_trigger, "trigger"),
+        },
+    })
+}
+
+fn automation_trigger_kind(trigger: &AutomationTrigger) -> &'static str {
+    match trigger {
+        AutomationTrigger::Tick { .. } => "tick",
+        AutomationTrigger::Event { .. } => "event",
+        AutomationTrigger::Job { .. } => "job",
+        AutomationTrigger::RoomStateChanged => "room_state_changed",
+    }
 }
 
 #[derive(Debug, Clone)]

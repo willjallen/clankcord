@@ -406,6 +406,59 @@ async fn stored_event_automation_emits_response_job_once_and_expires() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn participant_left_automation_fires_from_durable_voice_transition() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
+        .await
+        .unwrap();
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "left watcher",
+                "idempotency_key": "job_1:left-watcher",
+                "trigger": {"kind": "event", "event_kinds": ["participant_left"]},
+                "condition": {
+                    "kind": "predicate",
+                    "path": "event.user_id",
+                    "op": "eq",
+                    "value": "blake"
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake left."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    let transition_events = store
+        .record_voice_state_update(None, voice_state("", "blake", "Blake"))
+        .await
+        .unwrap();
+    assert_eq!(
+        transition_events[0]["event_kind"],
+        json!("participant_left")
+    );
+    let mut runtime = test_runtime(store);
+    runtime.load_automation_registry().await.unwrap();
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let payload = job.response_payload().unwrap();
+    assert_eq!(payload.content, "Blake left.");
+    assert!(!runtime.automations.contains_key(&record.automation_id));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
@@ -688,4 +741,22 @@ async fn append_speech(
         )
         .await
         .unwrap();
+}
+
+fn voice_state(voice_channel_id: &str, user_id: &str, display_name: &str) -> Value {
+    json!({
+        "guild_id": "guild",
+        "voice_channel_id": voice_channel_id,
+        "user_id": user_id,
+        "display_name": display_name,
+        "member_display_name": display_name,
+        "username": display_name.to_lowercase(),
+        "mute": false,
+        "deaf": false,
+        "self_mute": false,
+        "self_deaf": false,
+        "self_stream": false,
+        "self_video": false,
+        "suppress": false,
+    })
 }

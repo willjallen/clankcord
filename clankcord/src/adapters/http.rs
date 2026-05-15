@@ -153,15 +153,15 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
             Ok(room) => {
                 let mut payload = runtime.status_for_room(&room).await;
                 if let Value::Object(object) = &mut payload {
-                    object.insert(
-                        "liveOccupants".to_string(),
-                        json!(
-                            state
-                                .handle
-                                .room_occupants(&room.guild_id, &room.channel_id)
-                                .await
-                        ),
-                    );
+                    let occupants = match state
+                        .handle
+                        .room_occupants(&room.guild_id, &room.channel_id)
+                        .await
+                    {
+                        Ok(occupants) => occupants,
+                        Err(error) => return err(error),
+                    };
+                    object.insert("liveOccupants".to_string(), json!(occupants));
                 }
                 ok(payload)
             }
@@ -172,29 +172,42 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
             .status_payload(non_empty_string(channel).as_deref())
             .await;
         if let Value::Object(object) = &mut payload {
-            object.insert(
-                "liveVoiceOccupancy".to_string(),
-                state.handle.voice_occupancy_snapshot().await,
-            );
+            let occupancy = match state.handle.voice_occupancy_snapshot().await {
+                Ok(occupancy) => occupancy,
+                Err(error) => return err(error),
+            };
+            object.insert("liveVoiceOccupancy".to_string(), occupancy);
         }
         ok(payload)
     }
 }
 
-async fn room_occupants(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
+async fn room_occupants(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
     let runtime = runtime_context!(state);
     let guild = query_str(&query, &["guild", "guildId"]);
     let channel = query_str(&query, &["channel", "channelId", "room"]);
     if guild.is_empty() || channel.is_empty() {
-        return err(crate::errors::discord_tool_error("guild and room/channel are required"));
+        return err(crate::errors::discord_tool_error(
+            "guild and room/channel are required",
+        ));
     }
     match runtime.resolve_room_scope(&guild, Some(&channel)) {
-        Ok(room) => ok(json!({
-            "guildId": room.guild_id,
-            "channelId": room.channel_id,
-            "room": room.to_json(),
-            "occupants": state.handle.room_occupants(&room.guild_id, &room.channel_id).await,
-        })),
+        Ok(room) => match state
+            .handle
+            .room_occupants(&room.guild_id, &room.channel_id)
+            .await
+        {
+            Ok(occupants) => ok(json!({
+                "guildId": room.guild_id,
+                "channelId": room.channel_id,
+                "room": room.to_json(),
+                "occupants": occupants,
+            })),
+            Err(error) => err(error),
+        },
         Err(error) => err(error),
     }
 }

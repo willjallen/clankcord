@@ -28,6 +28,7 @@ use crate::adapters::discord::voice::types::VoiceSession;
 use crate::config::{local_tz, read_json};
 use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
+use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
@@ -48,10 +49,10 @@ type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
 
 pub struct LiveVoiceAdapter {
     job_sink: RuntimeJobSink,
+    timeline_store: TimelineStore,
     voice_clients_lock: Mutex<BTreeMap<String, DiscordVoiceClient>>,
     capture_sessions_lock: Mutex<BTreeMap<String, LiveCaptureSessionLock>>,
     speaker_profiles_lock: Mutex<BTreeMap<String, CaptureUser>>,
-    voice_states_lock: Mutex<BTreeMap<String, Value>>,
     flush_interval: Duration,
     silence_ms: i64,
     max_segment_ms: i64,
@@ -107,7 +108,7 @@ impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
 }
 
 impl LiveVoiceAdapter {
-    pub fn new(job_sink: RuntimeJobSink) -> Self {
+    pub fn new(job_sink: RuntimeJobSink, timeline_store: TimelineStore) -> Self {
         let payload = read_json(&crate::config::config_path(), json!({}));
         let transcription = payload
             .get("transcription")
@@ -150,10 +151,10 @@ impl LiveVoiceAdapter {
         };
         Self {
             job_sink,
+            timeline_store,
             voice_clients_lock: Mutex::new(BTreeMap::new()),
             capture_sessions_lock: Mutex::new(BTreeMap::new()),
             speaker_profiles_lock: Mutex::new(BTreeMap::new()),
-            voice_states_lock: Mutex::new(BTreeMap::new()),
             flush_interval: Duration::from_millis((DEFAULT_FLUSH_INTERVAL_SECONDS * 1000.0) as u64),
             silence_ms: silence_ms.max(0),
             max_segment_ms: max_segment_ms.max(250),
@@ -499,52 +500,6 @@ impl LiveVoiceAdapter {
         statuses
     }
 
-    pub async fn room_occupants(&self, guild_id: &str, channel_id: &str) -> Vec<Value> {
-        let states = self.voice_states_lock.lock().await;
-        let mut occupants = states
-            .values()
-            .filter(|state| {
-                state.get("guild_id").and_then(Value::as_str) == Some(guild_id)
-                    && state.get("voice_channel_id").and_then(Value::as_str) == Some(channel_id)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        occupants.sort_by(|left, right| {
-            string_from_value(left, "display_name").cmp(&string_from_value(right, "display_name"))
-        });
-        occupants
-    }
-
-    pub async fn voice_occupancy_snapshot(&self) -> Value {
-        let states = self.voice_states_lock.lock().await;
-        let mut rooms = BTreeMap::<String, Vec<Value>>::new();
-        for state in states.values() {
-            let guild_id = string_from_value(state, "guild_id");
-            let channel_id = string_from_value(state, "voice_channel_id");
-            if guild_id.is_empty() || channel_id.is_empty() {
-                continue;
-            }
-            rooms
-                .entry(format!("{guild_id}:{channel_id}"))
-                .or_default()
-                .push(state.clone());
-        }
-        let mut values = Vec::new();
-        for (_, mut occupants) in rooms {
-            occupants.sort_by(|left, right| {
-                string_from_value(left, "display_name")
-                    .cmp(&string_from_value(right, "display_name"))
-            });
-            let first = occupants.first().cloned().unwrap_or_else(|| json!({}));
-            values.push(json!({
-                "guild_id": string_from_value(&first, "guild_id"),
-                "voice_channel_id": string_from_value(&first, "voice_channel_id"),
-                "occupants": occupants,
-            }));
-        }
-        json!({"rooms": values})
-    }
-
     pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
         {
             let mut clients = self.voice_clients_lock.lock().await;
@@ -558,7 +513,16 @@ impl LiveVoiceAdapter {
         log(&format!("bot {bot_id} ready as {}", ready.user.name));
     }
 
-    pub(super) async fn note_voice_state(&self, bot_id: &str, state: VoiceState) {
+    pub(super) async fn note_voice_state(
+        &self,
+        bot_id: &str,
+        old: Option<VoiceState>,
+        state: VoiceState,
+    ) {
+        if let Some(member) = old.as_ref().and_then(|state| state.member.as_ref()) {
+            self.cache_speaker_profile(capture_user_from_member(member))
+                .await;
+        }
         if let Some(member) = state.member.as_ref() {
             self.cache_speaker_profile(capture_user_from_member(member))
                 .await;
@@ -580,16 +544,17 @@ impl LiveVoiceAdapter {
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>()
         };
-        if !guild_id.is_empty() {
-            let key = format!("{guild_id}:{user_id}");
-            let mut states = self.voice_states_lock.lock().await;
-            if channel_id.is_empty() || bot_user_ids.iter().any(|bot_id| bot_id == &user_id) {
-                states.remove(&key);
-            } else {
-                states.insert(
-                    key,
-                    voice_state_payload(&guild_id, &channel_id, &user_id, state.member.as_ref()),
-                );
+        if !guild_id.is_empty() && !bot_user_ids.iter().any(|bot_id| bot_id == &user_id) {
+            let old_payload = old.as_ref().map(voice_state_payload);
+            let new_payload = voice_state_payload(&state);
+            if let Err(error) = self
+                .timeline_store
+                .record_voice_state_update(old_payload, new_payload)
+                .await
+            {
+                log(&format!(
+                    "recording Discord voice state failed for user {user_id}: {error}"
+                ));
             }
         }
 
@@ -819,12 +784,17 @@ fn capture_user_from_member(member: &Member) -> CaptureUser {
     }
 }
 
-fn voice_state_payload(
-    guild_id: &str,
-    channel_id: &str,
-    user_id: &str,
-    member: Option<&Member>,
-) -> Value {
+fn voice_state_payload(state: &VoiceState) -> Value {
+    let guild_id = state
+        .guild_id
+        .map(|value| value.get().to_string())
+        .unwrap_or_default();
+    let channel_id = state
+        .channel_id
+        .map(|value| value.get().to_string())
+        .unwrap_or_default();
+    let user_id = state.user_id.get().to_string();
+    let member = state.member.as_ref();
     let display_name = member
         .map(|member| member.display_name().to_string())
         .unwrap_or_else(|| user_id.to_string());
@@ -834,25 +804,43 @@ fn voice_state_payload(
     let global_name = member
         .and_then(|member| member.user.global_name.clone())
         .unwrap_or_default();
-    let nick = member.and_then(|member| member.nick.clone()).unwrap_or_default();
+    let nick = member
+        .and_then(|member| member.nick.clone())
+        .unwrap_or_default();
+    let request_to_speak_timestamp = state
+        .request_to_speak_timestamp
+        .map(|value| value.to_string())
+        .unwrap_or_default();
     json!({
         "guild_id": guild_id,
+        "guildId": guild_id,
         "voice_channel_id": channel_id,
+        "voiceChannelId": channel_id,
+        "channelId": channel_id,
         "user_id": user_id,
+        "userId": user_id,
+        "speaker_user_id": user_id,
         "username": username,
         "global_name": global_name,
+        "globalName": global_name,
         "nick": if nick.is_empty() { Value::Null } else { Value::String(nick) },
         "display_name": display_name,
+        "member_display_name": display_name,
+        "deaf": state.deaf,
+        "mute": state.mute,
+        "self_deaf": state.self_deaf,
+        "self_mute": state.self_mute,
+        "self_stream": state.self_stream.unwrap_or(false),
+        "self_video": state.self_video,
+        "suppress": state.suppress,
+        "voice_session_id": state.session_id,
+        "request_to_speak_timestamp": if request_to_speak_timestamp.is_empty() {
+            Value::Null
+        } else {
+            Value::String(request_to_speak_timestamp)
+        },
+        "updated_at": crate::runtime::timeline::isoformat_z(None),
     })
-}
-
-fn string_from_value(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string()
 }
 
 fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {

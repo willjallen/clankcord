@@ -417,9 +417,9 @@ impl EventHandler for DiscordGatewayHandler {
         }
     }
 
-    async fn voice_state_update(&self, _ctx: Context, _old: Option<VoiceState>, new: VoiceState) {
+    async fn voice_state_update(&self, _ctx: Context, old: Option<VoiceState>, new: VoiceState) {
         if let Some(adapter) = self.adapter.upgrade() {
-            adapter.note_voice_state(&self.bot_id, new).await;
+            adapter.note_voice_state(&self.bot_id, old, new).await;
         }
     }
 

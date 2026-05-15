@@ -317,6 +317,65 @@
       </div>
     </div>
 
+    <div class="view active" x-show="activeView === 'automations'">
+      <div class="layout">
+        <div class="stack">
+          <section>
+            <h2><span>Automation Summary</span><small x-text="automations.length"></small></h2>
+            <div class="dense-list">
+              <div class="dense-row"><span>Total</span><strong x-text="automationSummary().total ?? 0"></strong></div>
+              <div class="dense-row"><span>Active</span><strong class="ok" x-text="automationSummary().active ?? 0"></strong></div>
+              <div class="dense-row"><span>Fired</span><strong x-text="automationSummary().fired ?? 0"></strong></div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Automations</span><small x-text="automations.length"></small></h2>
+            <div class="table-wrap tall scroll-region">
+              <table>
+                <thead><tr><th>Automation</th><th>State</th><th>Trigger</th><th>Scope</th><th>Fires</th><th>Last Evaluated</th><th>Last Fired</th><th>Actions</th></tr></thead>
+                <tbody>
+                  <template x-for="record in automations" :key="record.automation_id">
+                    <tr class="selectable" :class="{selected: selectedAutomationId === record.automation_id}" @click="selectAutomation(record.automation_id)">
+                      <td><div x-text="record.spec?.name || record.automation_id"></div><div class="muted mono" x-text="short(record.automation_id, 18)"></div></td>
+                      <td><span class="pill" :class="statusClass(record.state)" x-text="record.state"></span></td>
+                      <td class="text-cell" x-text="short(automationTrigger(record), 140)"></td>
+                      <td class="mono" x-text="short(automationScope(record), 34)"></td>
+                      <td x-text="`${record.fire_count ?? 0}${record.spec?.expiry?.max_fires ? '/' + record.spec.expiry.max_fires : ''}`"></td>
+                      <td x-text="ago(record.last_evaluated_at)"></td>
+                      <td x-text="ago(record.last_fired_at)"></td>
+                      <td class="text-cell" x-text="short(automationActions(record), 150)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!automations.length">No stored automations.</div>
+            </div>
+          </section>
+        </div>
+        <section>
+          <h2><span>Selected Automation</span><small x-text="selectedAutomationId"></small></h2>
+          <div class="detail scroll-region" x-show="selectedAutomation()">
+            <div class="detail-head">
+              <span class="pill" :class="statusClass(selectedAutomation()?.state)" x-text="selectedAutomation()?.state"></span>
+              <span class="pill" x-text="automationTrigger(selectedAutomation())"></span>
+            </div>
+            <div class="kv-grid">
+              <template x-for="item in selectedAutomationFacts()" :key="item.label">
+                <div class="kv"><div class="k" x-text="item.label"></div><div class="v mono" x-text="item.value"></div></div>
+              </template>
+            </div>
+            <div class="kv" x-show="automationActions(selectedAutomation())">
+              <div class="k">Actions</div>
+              <div class="v" x-text="automationActions(selectedAutomation())"></div>
+            </div>
+            <details open><summary>Spec</summary><pre x-text="json(selectedAutomation()?.spec || {})"></pre></details>
+            <details><summary>Record</summary><pre x-text="json(selectedAutomation())"></pre></details>
+          </div>
+          <div class="empty" x-show="!selectedAutomation()">No automation selected.</div>
+        </section>
+      </div>
+    </div>
+
     <div class="view active" x-show="activeView === 'health'">
       <div class="layout">
         <div class="stack">

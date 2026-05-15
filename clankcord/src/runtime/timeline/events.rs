@@ -1,4 +1,211 @@
 use super::*;
+use serde_json::json;
+
+fn voice_state_transition_events(
+    previous: Option<&Value>,
+    current: &Value,
+) -> Vec<(String, Value)> {
+    let previous_channel_id = previous
+        .map(|state| {
+            first_value_string(state, &["voice_channel_id", "voiceChannelId", "channelId"])
+        })
+        .unwrap_or_default();
+    let current_channel_id = first_value_string(
+        current,
+        &["voice_channel_id", "voiceChannelId", "channelId"],
+    );
+    let mut events = Vec::new();
+
+    if previous_channel_id != current_channel_id {
+        if !previous_channel_id.is_empty() {
+            events.push((
+                previous_channel_id.clone(),
+                voice_transition_event("participant_left", previous, current),
+            ));
+        }
+        if !current_channel_id.is_empty() {
+            events.push((
+                current_channel_id.clone(),
+                voice_transition_event("participant_joined", previous, current),
+            ));
+        }
+        if !previous_channel_id.is_empty() && !current_channel_id.is_empty() {
+            events.push((
+                current_channel_id.clone(),
+                voice_transition_event("participant_moved", previous, current),
+            ));
+        }
+        return events;
+    }
+
+    if previous.is_some() && !current_channel_id.is_empty() {
+        for (event_kind, field, previous_value, current_value) in
+            voice_flag_changes(previous, current)
+        {
+            if previous_value == current_value {
+                continue;
+            }
+            let mut event = voice_transition_event(event_kind, previous, current);
+            if let Value::Object(object) = &mut event {
+                object.insert("field".to_string(), json!(field));
+                object.insert("previous".to_string(), json!(previous_value));
+                object.insert("current".to_string(), json!(current_value));
+            }
+            events.push((current_channel_id.clone(), event));
+        }
+    }
+
+    events
+}
+
+fn voice_transition_event(event_kind: &str, previous: Option<&Value>, current: &Value) -> Value {
+    let empty_previous = Value::Null;
+    let previous = previous.unwrap_or(&empty_previous);
+    let user_id = non_empty(
+        first_value_string(current, &["user_id", "userId", "speaker_user_id"]),
+        first_value_string(previous, &["user_id", "userId", "speaker_user_id"]),
+    );
+    let display_name = voice_display_name(current, previous, &user_id);
+    let previous_channel_id = first_value_string(
+        previous,
+        &["voice_channel_id", "voiceChannelId", "channelId"],
+    );
+    let current_channel_id = first_value_string(
+        current,
+        &["voice_channel_id", "voiceChannelId", "channelId"],
+    );
+    json!({
+        "event_kind": event_kind,
+        "kind": event_kind,
+        "created_at": string_field(current, "updated_at"),
+        "updated_at": string_field(current, "updated_at"),
+        "user_id": user_id,
+        "userId": user_id,
+        "speaker_user_id": user_id,
+        "speaker_label": display_name,
+        "display_name": display_name,
+        "member_display_name": display_name,
+        "username": first_value_string(current, &["username"]),
+        "global_name": first_value_string(current, &["global_name", "globalName"]),
+        "nick": first_value_string(current, &["nick"]),
+        "voice_channel_id": current_channel_id,
+        "previous_voice_channel_id": previous_channel_id,
+        "current_voice_channel_id": current_channel_id,
+        "from_voice_channel_id": previous_channel_id,
+        "to_voice_channel_id": current_channel_id,
+        "muted": voice_muted(current),
+        "deafened": voice_deafened(current),
+        "self_mute": voice_state_bool(current, "self_mute"),
+        "server_mute": voice_state_bool(current, "mute"),
+        "self_deaf": voice_state_bool(current, "self_deaf"),
+        "server_deaf": voice_state_bool(current, "deaf"),
+        "streaming": voice_state_bool(current, "self_stream"),
+        "video": voice_state_bool(current, "self_video"),
+        "suppress": voice_state_bool(current, "suppress"),
+        "text": voice_event_text(event_kind, &display_name, &previous_channel_id, &current_channel_id),
+    })
+}
+
+fn voice_flag_changes(
+    previous: Option<&Value>,
+    current: &Value,
+) -> Vec<(&'static str, &'static str, bool, bool)> {
+    let empty_previous = Value::Null;
+    let previous = previous.unwrap_or(&empty_previous);
+    vec![
+        (
+            "participant_mute_changed",
+            "muted",
+            voice_muted(previous),
+            voice_muted(current),
+        ),
+        (
+            "participant_deafen_changed",
+            "deafened",
+            voice_deafened(previous),
+            voice_deafened(current),
+        ),
+        (
+            "participant_stream_changed",
+            "streaming",
+            voice_state_bool(previous, "self_stream"),
+            voice_state_bool(current, "self_stream"),
+        ),
+        (
+            "participant_video_changed",
+            "video",
+            voice_state_bool(previous, "self_video"),
+            voice_state_bool(current, "self_video"),
+        ),
+        (
+            "participant_suppress_changed",
+            "suppress",
+            voice_state_bool(previous, "suppress"),
+            voice_state_bool(current, "suppress"),
+        ),
+    ]
+}
+
+fn voice_display_name(current: &Value, previous: &Value, user_id: &str) -> String {
+    non_empty(
+        first_value_string(
+            current,
+            &[
+                "member_display_name",
+                "display_name",
+                "displayName",
+                "global_name",
+                "username",
+            ],
+        ),
+        non_empty(
+            first_value_string(
+                previous,
+                &[
+                    "member_display_name",
+                    "display_name",
+                    "displayName",
+                    "global_name",
+                    "username",
+                ],
+            ),
+            user_id.to_string(),
+        ),
+    )
+}
+
+fn voice_muted(state: &Value) -> bool {
+    voice_state_bool(state, "mute") || voice_state_bool(state, "self_mute")
+}
+
+fn voice_deafened(state: &Value) -> bool {
+    voice_state_bool(state, "deaf") || voice_state_bool(state, "self_deaf")
+}
+
+fn voice_state_bool(state: &Value, key: &str) -> bool {
+    state.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn voice_event_text(
+    event_kind: &str,
+    display_name: &str,
+    previous_channel_id: &str,
+    current_channel_id: &str,
+) -> String {
+    match event_kind {
+        "participant_joined" => format!("{display_name} joined voice channel {current_channel_id}"),
+        "participant_left" => format!("{display_name} left voice channel {previous_channel_id}"),
+        "participant_moved" => {
+            format!("{display_name} moved from {previous_channel_id} to {current_channel_id}")
+        }
+        "participant_mute_changed" => format!("{display_name} changed voice mute state"),
+        "participant_deafen_changed" => format!("{display_name} changed voice deafen state"),
+        "participant_stream_changed" => format!("{display_name} changed stream state"),
+        "participant_video_changed" => format!("{display_name} changed video state"),
+        "participant_suppress_changed" => format!("{display_name} changed suppress state"),
+        _ => event_kind.to_string(),
+    }
+}
 
 impl TimelineStore {
     pub async fn ensure_room(
@@ -124,6 +331,158 @@ impl TimelineStore {
         event: Value,
     ) -> Result<Value> {
         self.append_event(guild_id, voice_channel_id, event).await
+    }
+
+    pub async fn record_voice_state_update(
+        &self,
+        old_state: Option<Value>,
+        new_state: Value,
+    ) -> Result<Vec<Value>> {
+        let guild_id = non_empty(
+            first_value_string(&new_state, &["guild_id", "guildId"]),
+            old_state
+                .as_ref()
+                .map(|state| first_value_string(state, &["guild_id", "guildId"]))
+                .unwrap_or_default(),
+        );
+        let user_id = non_empty(
+            first_value_string(&new_state, &["user_id", "userId", "speaker_user_id"]),
+            old_state
+                .as_ref()
+                .map(|state| first_value_string(state, &["user_id", "userId", "speaker_user_id"]))
+                .unwrap_or_default(),
+        );
+        if guild_id.is_empty() || user_id.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut current_object = new_state.as_object().cloned().unwrap_or_default();
+        set_default_string(&mut current_object, "guild_id", &guild_id);
+        set_default_string(&mut current_object, "guildId", &guild_id);
+        set_default_string(&mut current_object, "user_id", &user_id);
+        set_default_string(&mut current_object, "userId", &user_id);
+        set_default_string(&mut current_object, "speaker_user_id", &user_id);
+        set_default_string(&mut current_object, "updated_at", &isoformat_z(None));
+        let current = Value::Object(current_object);
+        let current_channel_id = first_value_string(
+            &current,
+            &["voice_channel_id", "voiceChannelId", "channelId"],
+        );
+        let updated_ms = instant_ms_str(Some(&string_field(&current, "updated_at")))
+            .unwrap_or_else(|| instant_ms_dt(utc_now()));
+
+        let previous = {
+            let mut transaction = self.pool.begin().await?;
+            let previous_row = sqlx::query(
+                r#"
+                SELECT payload_json
+                FROM voice_states
+                WHERE guild_id = $1 AND user_id = $2
+                FOR UPDATE
+                "#,
+            )
+            .bind(&guild_id)
+            .bind(&user_id)
+            .fetch_optional(transaction.as_mut())
+            .await?;
+            let previous = previous_row
+                .as_ref()
+                .map(|row| json_value(row, "payload_json"))
+                .transpose()?
+                .or(old_state);
+            sqlx::query(
+                r#"
+                INSERT INTO voice_states(guild_id, user_id, voice_channel_id, updated_at_ms, payload_json)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                  voice_channel_id = EXCLUDED.voice_channel_id,
+                  updated_at_ms = EXCLUDED.updated_at_ms,
+                  payload_json = EXCLUDED.payload_json
+                "#,
+            )
+            .bind(&guild_id)
+            .bind(&user_id)
+            .bind(&current_channel_id)
+            .bind(updated_ms)
+            .bind(&current)
+            .execute(transaction.as_mut())
+            .await?;
+            transaction.commit().await?;
+            previous
+        };
+
+        let mut appended = Vec::new();
+        for (voice_channel_id, event) in voice_state_transition_events(previous.as_ref(), &current)
+        {
+            appended.push(
+                self.append_participant_event(&guild_id, &voice_channel_id, event)
+                    .await?,
+            );
+        }
+        Ok(appended)
+    }
+
+    pub async fn room_occupants(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+    ) -> Result<Vec<Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT payload_json
+            FROM voice_states
+            WHERE guild_id = $1 AND voice_channel_id = $2
+            ORDER BY
+              COALESCE(NULLIF(payload_json->>'display_name', ''), NULLIF(payload_json->>'username', ''), user_id),
+              user_id
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| json_value(row, "payload_json"))
+            .collect()
+    }
+
+    pub async fn voice_occupancy_snapshot(&self) -> Result<Value> {
+        let rows = sqlx::query(
+            r#"
+            SELECT guild_id, voice_channel_id, payload_json
+            FROM voice_states
+            WHERE voice_channel_id <> ''
+            ORDER BY
+              guild_id,
+              voice_channel_id,
+              COALESCE(NULLIF(payload_json->>'display_name', ''), NULLIF(payload_json->>'username', ''), user_id),
+              user_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut rooms = BTreeMap::<String, (String, String, Vec<Value>)>::new();
+        for row in rows {
+            let guild_id: String = row.try_get("guild_id")?;
+            let voice_channel_id: String = row.try_get("voice_channel_id")?;
+            let occupant = json_value(&row, "payload_json")?;
+            rooms
+                .entry(format!("{guild_id}:{voice_channel_id}"))
+                .or_insert_with(|| (guild_id, voice_channel_id, Vec::new()))
+                .2
+                .push(occupant);
+        }
+        let rooms = rooms
+            .into_values()
+            .map(|(guild_id, voice_channel_id, occupants)| {
+                json!({
+                    "guild_id": guild_id,
+                    "voice_channel_id": voice_channel_id,
+                    "occupants": occupants,
+                })
+            })
+            .collect::<Vec<_>>();
+        Ok(json!({"rooms": rooms}))
     }
 
     pub async fn load_events(

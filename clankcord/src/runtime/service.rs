@@ -109,12 +109,14 @@ impl RuntimeHandle {
         self.executor.drain_ready_jobs().await
     }
 
-    pub async fn room_occupants(&self, guild_id: &str, channel_id: &str) -> Vec<Value> {
-        self.live_voice.room_occupants(guild_id, channel_id).await
+    pub async fn room_occupants(&self, guild_id: &str, channel_id: &str) -> Result<Vec<Value>> {
+        self.timeline_store
+            .room_occupants(guild_id, channel_id)
+            .await
     }
 
-    pub async fn voice_occupancy_snapshot(&self) -> Value {
-        self.live_voice.voice_occupancy_snapshot().await
+    pub async fn voice_occupancy_snapshot(&self) -> Result<Value> {
+        self.timeline_store.voice_occupancy_snapshot().await
     }
 }
 
@@ -171,7 +173,10 @@ impl RuntimeService {
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),
         };
-        let live_voice = Arc::new(LiveVoiceAdapter::new(job_sink.clone()));
+        let live_voice = Arc::new(LiveVoiceAdapter::new(
+            job_sink.clone(),
+            timeline_store.clone(),
+        ));
         let executor = RuntimeExecutor::new(live_voice.clone(), timeline_store.clone());
         Ok(Self {
             handle: RuntimeHandle {
