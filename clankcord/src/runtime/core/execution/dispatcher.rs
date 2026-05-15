@@ -164,6 +164,9 @@ impl Runtime {
             )
             .await?
         {
+            if job.kind == JobKind::AgentTask {
+                continue;
+            }
             let updated_at = parse_instant(&job.updated_at);
             if updated_at
                 .map(|value| (now - value).num_minutes() < 30)

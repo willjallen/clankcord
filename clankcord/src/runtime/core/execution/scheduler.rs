@@ -359,21 +359,16 @@ where
     fn spawn_blocking_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
         let notify = self.notify.clone();
-        tokio::spawn(async move {
+        let runtime_handle = tokio::runtime::Handle::current();
+        tokio::task::spawn_blocking(move || {
             let job_id = job.id.clone();
             let kind = job.kind;
-            let result = match Runtime::from_store(timeline_store) {
-                Ok(snapshot) => snapshot.dispatch_claimed_blocking_job(job).await,
-                Err(error) => {
-                    log(&format!(
-                        "blocking job worker failed {job_id} ({kind}) before dispatch: {}",
-                        error_chain(&error)
-                    ));
-                    drop(permit);
-                    notify.notify_one();
-                    return;
+            let result = runtime_handle.block_on(async move {
+                match Runtime::from_store(timeline_store) {
+                    Ok(snapshot) => snapshot.dispatch_claimed_blocking_job(job).await,
+                    Err(error) => Err(error),
                 }
-            };
+            });
             match result {
                 Ok(_) => {}
                 Err(error) => log(&format!(

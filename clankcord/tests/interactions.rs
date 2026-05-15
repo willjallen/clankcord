@@ -15,7 +15,10 @@ fn agent_task_message_uses_compact_transcript_context() {
     assert!(message.contains("Final text is not a publication path"));
     assert!(message.contains("You may search the web"));
     assert!(message.contains("Do not be sycophantic"));
-    assert!(message.contains("CLANKCORD_AGENT_WORKDIR=/clankcord/state/agent-workspaces/task/guild/code"));
+    assert!(
+        message
+            .contains("CLANKCORD_AGENT_WORKDIR=/clankcord/state/agent-workspaces/task/guild/code")
+    );
     assert!(message.contains("===== PREVIOUS CONTEXT ====="));
     assert!(message.contains("===== QUESTION / ACTIVATION ====="));
     assert!(message.contains("vince (user-2): prior context"));
@@ -47,11 +50,7 @@ fn prompt_context() -> AgentTaskPromptContext {
         requested_by: "will".to_string(),
         request: "summarize this".to_string(),
         workdir: "/clankcord/state/agent-workspaces/task/guild/code".to_string(),
-        previous_context: vec![
-            "[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string(),
-        ],
-        question: vec![
-            "[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string(),
-        ],
+        previous_context: vec!["[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string()],
+        question: vec!["[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string()],
     }
 }

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use crate::Result;
 use crate::adapters::codex::{CodexRunRequest, CodexRunResult};
@@ -31,7 +30,6 @@ pub(crate) struct AgentInvocationRequest {
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
-    pub timeout: Duration,
     pub env: BTreeMap<String, String>,
     pub result_path: PathBuf,
     pub raw_result_path: PathBuf,
@@ -43,7 +41,6 @@ pub(crate) struct AgentInvocationResult {
     pub stderr: String,
     pub returncode: Option<i32>,
     pub success: bool,
-    pub timed_out: bool,
     pub session_id: String,
     pub model: String,
     pub final_message: String,
@@ -73,7 +70,6 @@ impl AgentRuntime {
             },
             cwd: request.cwd,
             model: request.model,
-            timeout: request.timeout,
             env: request.env,
             output_last_message_path: request.result_path,
             stdout_path: Some(request.raw_result_path),
@@ -94,7 +90,6 @@ impl AgentRuntime {
             stderr: codex_result.stderr,
             returncode: codex_result.returncode,
             success: codex_result.success,
-            timed_out: codex_result.timed_out,
             session_id: codex_result.session_id,
             model: codex_result.model,
             final_message: codex_result.final_message,

@@ -46,7 +46,11 @@ impl Runtime {
     pub async fn members_resolve(&self, request: MemberResolveRequest) -> Result<Value> {
         let guild_id = require_guild(request.guild_id)?;
         let refresh = self.ensure_member_cache(&guild_id).await?;
-        if request.query.chars().all(|character| character.is_ascii_digit()) {
+        if request
+            .query
+            .chars()
+            .all(|character| character.is_ascii_digit())
+        {
             if let Some(user) = self
                 .timeline_store
                 .get_discord_member(&guild_id, &request.query)
@@ -106,10 +110,15 @@ impl Runtime {
     }
 
     async fn ensure_member_cache(&self, guild_id: &str) -> Result<Value> {
-        let age = self.timeline_store.discord_member_cache_age_ms(guild_id).await?;
+        let age = self
+            .timeline_store
+            .discord_member_cache_age_ms(guild_id)
+            .await?;
         let current_count = self.timeline_store.count_discord_members(guild_id).await?;
         if age.is_some_and(|age| age < MEMBER_CACHE_MAX_AGE_MS) && current_count > 0 {
-            return Ok(json!({"refreshed": false, "ageMs": age.unwrap_or(0), "count": current_count}));
+            return Ok(
+                json!({"refreshed": false, "ageMs": age.unwrap_or(0), "count": current_count}),
+            );
         }
         let guild = guild_id.to_string();
         let fetched = tokio::task::spawn_blocking(move || list_guild_members(&guild)).await?;

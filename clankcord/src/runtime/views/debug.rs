@@ -1044,7 +1044,10 @@ fn workspace_artifact(path: &str) -> Value {
             let name = entry.file_name().to_string_lossy().to_string();
             let mut object = serde_json::Map::new();
             object.insert("name".to_string(), json!(name));
-            object.insert("path".to_string(), json!(entry.path().display().to_string()));
+            object.insert(
+                "path".to_string(),
+                json!(entry.path().display().to_string()),
+            );
             object.insert("is_dir".to_string(), json!(metadata.is_dir()));
             object.insert("bytes".to_string(), json!(metadata.len()));
             if metadata.is_file() && metadata.len() <= 4096 {

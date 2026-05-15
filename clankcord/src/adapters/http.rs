@@ -430,7 +430,10 @@ async fn participant_trace(
     )
 }
 
-async fn members_search(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
+async fn members_search(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
     let runtime = runtime_context!(state);
     result(
         runtime
@@ -498,7 +501,11 @@ async fn jobs_get(
     Query(query): Query<BTreeQuery>,
 ) -> Response {
     let runtime = runtime_context!(state);
-    result(runtime.get_job_payload(&job_id, query_bool(&query, &["verbose"], false)).await)
+    result(
+        runtime
+            .get_job_payload(&job_id, query_bool(&query, &["verbose"], false))
+            .await,
+    )
 }
 
 async fn jobs_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {

@@ -40,7 +40,7 @@ pub use sessions::{
 pub use util::{duration_to_seconds, log};
 pub use views::{
     ContextResolveRequest, DebugOverviewRequest, ForgetRequest, JobsRequest,
-    ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest,
-    MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
+    ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest, MemberResolveRequest,
+    MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
     SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
 };

@@ -477,19 +477,25 @@ impl std::str::FromStr for AutomationState {
 impl TimelineStore {
     pub async fn create_automation(&self, spec: AutomationSpec) -> Result<AutomationRecord> {
         spec.validate()?;
-        if let Some(existing) = self
-            .find_active_automation_by_idempotency_key(
-                &spec.scope.guild_id,
-                &spec.scope.voice_channel_id,
-                &spec.idempotency_key,
-            )
-            .await?
+        let mut transaction = self.pool.begin().await?;
+        if let Some(existing) =
+            find_active_automation_by_idempotency_key_in_tx(&mut transaction, &spec).await?
         {
+            transaction.commit().await?;
             return Ok(existing);
         }
-
+        if let Some(source_job_id) = agent_owner_source_job_id(&spec.owner) {
+            lock_agent_automation_source(&mut transaction, source_job_id).await?;
+            if let Some(existing) =
+                find_active_agent_automation_by_source_in_tx(&mut transaction, &spec).await?
+            {
+                transaction.commit().await?;
+                return Ok(existing);
+            }
+        }
         let record = AutomationRecord::new(spec);
-        self.upsert_automation_record(&record).await?;
+        upsert_automation_record_in_tx(&mut transaction, &record).await?;
+        transaction.commit().await?;
         self.append_event(
             &record.spec.scope.guild_id,
             &record.spec.scope.voice_channel_id,
@@ -561,39 +567,119 @@ impl TimelineStore {
         Ok(record)
     }
 
-    async fn find_active_automation_by_idempotency_key(
-        &self,
-        guild_id: &str,
-        voice_channel_id: &str,
-        idempotency_key: &str,
-    ) -> Result<Option<AutomationRecord>> {
-        if idempotency_key.trim().is_empty() {
-            return Ok(None);
-        }
-        let row = sqlx::query(
-            "SELECT payload_blob FROM automations WHERE guild_id = $1 AND voice_channel_id = $2 AND idempotency_key = $3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
-        )
-        .bind(guild_id)
-        .bind(voice_channel_id)
-        .bind(idempotency_key)
-        .fetch_optional(&self.pool)
-        .await?;
-        row.map(|row| -> Result<AutomationRecord> {
-            let payload: Vec<u8> = row.try_get("payload_blob")?;
-            AutomationRecord::decode(&payload)
-        })
-        .transpose()
+    async fn upsert_automation_record(&self, record: &AutomationRecord) -> Result<()> {
+        let mut transaction = self.pool.begin().await?;
+        upsert_automation_record_in_tx(&mut transaction, record).await?;
+        transaction.commit().await?;
+        Ok(())
     }
 
-    async fn upsert_automation_record(&self, record: &AutomationRecord) -> Result<()> {
-        let created_ms = instant_ms_str(Some(&record.created_at)).unwrap_or(0);
-        let updated_ms = instant_ms_str(Some(&record.updated_at)).unwrap_or(created_ms);
-        let expires_at_ms = record.spec.expiry.expires_at.as_deref().and_then(|value| {
-            parse_instant(value)
-                .and_then(|expires_at| instant_ms_str(Some(&isoformat_z(Some(expires_at)))))
-        });
-        sqlx::query(
-            r#"
+    async fn automation_rows(&self) -> Result<Vec<AutomationRecord>> {
+        let rows = sqlx::query("SELECT payload_blob FROM automations ORDER BY created_at_ms DESC")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut records = Vec::new();
+        for row in rows {
+            let payload: Vec<u8> = row.try_get("payload_blob")?;
+            records.push(AutomationRecord::decode(&payload)?);
+        }
+        Ok(records)
+    }
+}
+
+async fn find_active_automation_by_idempotency_key_in_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    spec: &AutomationSpec,
+) -> Result<Option<AutomationRecord>> {
+    if spec.idempotency_key.trim().is_empty() {
+        return Ok(None);
+    }
+    let row = sqlx::query(
+        "SELECT payload_blob FROM automations WHERE guild_id = $1 AND voice_channel_id = $2 AND idempotency_key = $3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
+    )
+    .bind(&spec.scope.guild_id)
+    .bind(&spec.scope.voice_channel_id)
+    .bind(&spec.idempotency_key)
+    .fetch_optional(transaction.as_mut())
+    .await?;
+    row.map(|row| -> Result<AutomationRecord> {
+        let payload: Vec<u8> = row.try_get("payload_blob")?;
+        AutomationRecord::decode(&payload)
+    })
+    .transpose()
+}
+
+async fn lock_agent_automation_source(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    source_job_id: &str,
+) -> Result<()> {
+    let row = sqlx::query("SELECT kind FROM jobs WHERE job_id = $1 FOR UPDATE")
+        .bind(source_job_id)
+        .fetch_optional(transaction.as_mut())
+        .await?;
+    let Some(row) = row else {
+        anyhow::bail!("agent-owned automation source job does not exist: {source_job_id}");
+    };
+    let kind: String = row.try_get("kind")?;
+    if kind != JobKind::AgentTask.as_str() {
+        anyhow::bail!(
+            "agent-owned automation source job {source_job_id} is {kind}, not agent_task"
+        );
+    }
+    Ok(())
+}
+
+async fn find_active_agent_automation_by_source_in_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    spec: &AutomationSpec,
+) -> Result<Option<AutomationRecord>> {
+    let Some(source_job_id) = agent_owner_source_job_id(&spec.owner) else {
+        return Ok(None);
+    };
+    let rows = sqlx::query(
+        r#"
+        SELECT payload_blob
+        FROM automations
+        WHERE guild_id = $1
+          AND voice_channel_id = $2
+          AND state = 'active'
+        ORDER BY created_at_ms, automation_id
+        "#,
+    )
+    .bind(&spec.scope.guild_id)
+    .bind(&spec.scope.voice_channel_id)
+    .fetch_all(transaction.as_mut())
+    .await?;
+    for row in rows {
+        let payload: Vec<u8> = row.try_get("payload_blob")?;
+        let record = AutomationRecord::decode(&payload)?;
+        if agent_owner_source_job_id(&record.spec.owner) == Some(source_job_id) {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+fn agent_owner_source_job_id(owner: &AutomationOwner) -> Option<&str> {
+    match owner {
+        AutomationOwner::Agent { source_job_id, .. } => Some(source_job_id.as_str()),
+        AutomationOwner::User { .. } | AutomationOwner::System => None,
+    }
+    .filter(|source_job_id| !source_job_id.trim().is_empty())
+}
+
+async fn upsert_automation_record_in_tx(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    record: &AutomationRecord,
+) -> Result<()> {
+    let created_ms = instant_ms_str(Some(&record.created_at)).unwrap_or(0);
+    let updated_ms = instant_ms_str(Some(&record.updated_at)).unwrap_or(created_ms);
+    let expires_at_ms = record.spec.expiry.expires_at.as_deref().and_then(|value| {
+        parse_instant(value)
+            .and_then(|expires_at| instant_ms_str(Some(&isoformat_z(Some(expires_at)))))
+    });
+    sqlx::query(
+        r#"
             INSERT INTO automations(
               automation_id,
               guild_id,
@@ -619,34 +705,21 @@ impl TimelineStore {
               max_fires = EXCLUDED.max_fires,
               payload_blob = EXCLUDED.payload_blob
             "#,
-        )
-        .bind(&record.automation_id)
-        .bind(&record.spec.scope.guild_id)
-        .bind(&record.spec.scope.voice_channel_id)
-        .bind(record.state.as_str())
-        .bind(&record.spec.idempotency_key)
-        .bind(created_ms)
-        .bind(updated_ms)
-        .bind(expires_at_ms)
-        .bind(record.fire_count as i64)
-        .bind(record.spec.expiry.max_fires.map(|value| value as i64))
-        .bind(record.encode()?)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn automation_rows(&self) -> Result<Vec<AutomationRecord>> {
-        let rows = sqlx::query("SELECT payload_blob FROM automations ORDER BY created_at_ms DESC")
-            .fetch_all(&self.pool)
-            .await?;
-        let mut records = Vec::new();
-        for row in rows {
-            let payload: Vec<u8> = row.try_get("payload_blob")?;
-            records.push(AutomationRecord::decode(&payload)?);
-        }
-        Ok(records)
-    }
+    )
+    .bind(&record.automation_id)
+    .bind(&record.spec.scope.guild_id)
+    .bind(&record.spec.scope.voice_channel_id)
+    .bind(record.state.as_str())
+    .bind(&record.spec.idempotency_key)
+    .bind(created_ms)
+    .bind(updated_ms)
+    .bind(expires_at_ms)
+    .bind(record.fire_count as i64)
+    .bind(record.spec.expiry.max_fires.map(|value| value as i64))
+    .bind(record.encode()?)
+    .execute(transaction.as_mut())
+    .await?;
+    Ok(())
 }
 
 impl Runtime {

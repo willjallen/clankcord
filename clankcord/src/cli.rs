@@ -1217,7 +1217,9 @@ fn ensure_json_format(format: &str) -> Result<()> {
     if format.trim().is_empty() || format.trim() == "json" {
         Ok(())
     } else {
-        Err(discord_tool_error("--format json is the only supported format"))
+        Err(discord_tool_error(
+            "--format json is the only supported format",
+        ))
     }
 }
 
@@ -1225,7 +1227,14 @@ fn payload_record_count(payload: &Value) -> Option<usize> {
     if let Some(count) = payload.get("count").and_then(Value::as_u64) {
         return Some(count as usize);
     }
-    for key in ["events", "hits", "jobs", "members", "candidates", "occupants"] {
+    for key in [
+        "events",
+        "hits",
+        "jobs",
+        "members",
+        "candidates",
+        "occupants",
+    ] {
         if let Some(count) = payload.get(key).and_then(Value::as_array).map(Vec::len) {
             return Some(count);
         }

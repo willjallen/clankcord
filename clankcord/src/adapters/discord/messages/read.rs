@@ -106,13 +106,18 @@ pub fn run(args: Args) -> Result<i32> {
 
 fn emit_json(payload: Value, format: &str, file: Option<&str>) -> Result<()> {
     if format.trim() != "json" {
-        return Err(discord_tool_error("--format json is the only supported format"));
+        return Err(discord_tool_error(
+            "--format json is the only supported format",
+        ));
     }
     let rendered = serde_json::to_string_pretty(&payload)?;
     if let Some(path) = file.map(str::trim).filter(|value| !value.is_empty()) {
         std::fs::write(path, format!("{rendered}\n"))?;
         println!("Wrote JSON to {path}");
-        println!("Records: {}", payload.get("count").and_then(Value::as_u64).unwrap_or(0));
+        println!(
+            "Records: {}",
+            payload.get("count").and_then(Value::as_u64).unwrap_or(0)
+        );
     } else {
         println!("{rendered}");
     }

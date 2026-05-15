@@ -8,8 +8,8 @@ use clankcord::runtime::automations::{
 };
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    AgentRuntime, ControlConfig, Job, JobKind, JobState, ResponseKind, ResponsePayload,
-    ResponseSink, ResponseSinkKind, Runtime,
+    AgentRuntime, CommandRequest, ControlConfig, Job, JobKind, JobState, ResponseKind,
+    ResponsePayload, ResponseSink, ResponseSinkKind, Runtime,
 };
 
 mod common;
@@ -307,6 +307,7 @@ async fn invalid_automation_specs_return_actionable_errors() {
 async fn automation_store_is_binary_idempotent_and_cancellable() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let spec = AutomationSpec::from_json(&json!({
         "schema": "clankcord.automation.v0",
         "name": "remind blake",
@@ -331,6 +332,11 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
     let first = store.create_automation(spec.clone()).await.unwrap();
     let second = store.create_automation(spec).await.unwrap();
     assert_eq!(first.automation_id, second.automation_id);
+    let different_key_same_source = store
+        .create_automation(reminder_spec("job_1:different-key-same-source"))
+        .await
+        .unwrap();
+    assert_eq!(first.automation_id, different_key_same_source.automation_id);
 
     let active = store
         .list_automations(Some("guild"), Some("code"), Some(AutomationState::Active))
@@ -353,6 +359,7 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
 async fn runtime_loads_active_automations_after_restart() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let record = store
         .create_automation(reminder_spec("job_1:restart"))
         .await
@@ -368,6 +375,7 @@ async fn runtime_loads_active_automations_after_restart() {
 async fn stored_event_automation_emits_response_job_once_and_expires() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let record = store
         .create_automation(reminder_spec("job_1:event-fire"))
         .await
@@ -409,6 +417,7 @@ async fn stored_event_automation_emits_response_job_once_and_expires() {
 async fn participant_left_automation_fires_from_durable_voice_transition() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     store
         .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
         .await
@@ -462,6 +471,7 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
 async fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "compound reminder",
         "idempotency_key": "job_1:compound",
@@ -510,6 +520,7 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
 async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allows_more() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "two fire reminder",
         "idempotency_key": "job_1:two-fire",
@@ -553,6 +564,7 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
 async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "job follow-up",
         "idempotency_key": "job_1:job-followup",
@@ -605,6 +617,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
 async fn automation_action_failures_are_audited_without_crashing_runner() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "sound request",
         "idempotency_key": "job_1:sound",
@@ -719,6 +732,18 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
         manual_join_hold_seconds: 60 * 60,
         pause_release_seconds: 20 * 60,
     }
+}
+
+async fn insert_agent_source_job(store: &TimelineStore) {
+    let mut job = Job::agent_task(
+        "guild",
+        "code",
+        "user-a",
+        CommandRequest::agent_task("guild", "code", "user-a", "source request"),
+    );
+    job.id = "job_1".to_string();
+    job.root_job_id = "job_1".to_string();
+    store.create_job(job).await.unwrap();
 }
 
 async fn append_speech(

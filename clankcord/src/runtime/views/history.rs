@@ -591,12 +591,7 @@ fn compact_timeline_event(event: Value) -> Value {
         ("voice_channel_id", &["voice_channel_id", "channelId"][..]),
         (
             "timestamp",
-            &[
-                "segment_start_time",
-                "startedAt",
-                "created_at",
-                "timestamp",
-            ][..],
+            &["segment_start_time", "startedAt", "created_at", "timestamp"][..],
         ),
         ("speaker_user_id", &["speaker_user_id", "speakerId"][..]),
         ("speaker_label", &["speaker_label", "speakerLabel"][..]),

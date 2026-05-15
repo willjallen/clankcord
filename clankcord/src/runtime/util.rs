@@ -1,5 +1,3 @@
-use std::env;
-
 use serde_json::Value;
 
 use crate::Result;
@@ -49,14 +47,6 @@ pub fn duration_to_seconds(raw: &str) -> i64 {
         .parse::<f64>()
         .map(|number| (number * multiplier).max(0.0) as i64)
         .unwrap_or(0)
-}
-
-pub fn agent_task_timeout_seconds() -> u64 {
-    env::var("CLANKCORD_AGENT_TASK_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(240)
-        .max(30)
 }
 
 pub fn first_non_empty<const N: usize>(values: [String; N]) -> String {

@@ -6,7 +6,8 @@ use crate::config::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::jobs::{DiscordPostMetadata, DiscordPostedMessageMetadata};
 use crate::runtime::util::first_non_empty;
 use crate::runtime::{
-    Job, JobOutput, ResponseKind, ResponseOutput, ResponsePayload, ResponseSinkKind, Runtime,
+    Job, JobKind, JobOutput, ResponseKind, ResponseOutput, ResponsePayload, ResponseSinkKind,
+    Runtime,
 };
 
 impl Runtime {
@@ -41,6 +42,15 @@ impl Runtime {
                 .as_ref()
                 .map(|job| job.requested_by_user_id.clone())
                 .unwrap_or_default();
+        }
+        if let Some(source_job) = source.as_ref().filter(|job| job.kind == JobKind::AgentTask) {
+            let existing = self
+                .timeline_store
+                .list_response_jobs_for_source(&source_job.id)
+                .await?;
+            if !existing.is_empty() {
+                anyhow::bail!("agent task {} already has a response job", source_job.id);
+            }
         }
         Ok(Job::response(
             guild_id,

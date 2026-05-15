@@ -1,11 +1,9 @@
+use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
-
-use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
@@ -18,14 +16,56 @@ use crate::runtime::jobs::{
     BinaryPayload,
 };
 use crate::runtime::timeline::{
-    event_text, first_value_string, isoformat_z, parse_instant, set, utc_now,
+    JobVisibility, event_text, first_value_string, isoformat_z, parse_instant, set, utc_now,
 };
-use crate::runtime::util::{
-    agent_task_timeout_seconds, first_non_empty, job_cancel_requested, log, preview,
+use crate::runtime::util::{first_non_empty, job_cancel_requested, log, preview};
+use crate::runtime::{
+    Job, JobKind, JobState, ResponseKind, ResponsePayload, ResponseSink, Runtime,
 };
-use crate::runtime::{Job, JobKind, JobState, Runtime};
+
+const AGENT_UNAVAILABLE_MESSAGE: &str =
+    "It looks like ChatGPT is unavailable right now. Try again later.";
 
 impl Runtime {
+    pub(crate) async fn recover_interrupted_agent_tasks(&self) -> Result<Vec<Value>> {
+        let mut recovered = Vec::new();
+        for job in self
+            .timeline_store
+            .list_jobs_with_visibility(None, Some(JobState::Running), JobVisibility::Visible)
+            .await?
+            .into_iter()
+            .filter(|job| job.kind == JobKind::AgentTask)
+        {
+            let submitted_responses = self.response_jobs_for_source(&job.id).await?;
+            if !submitted_responses.is_empty() {
+                let mut completed = job.clone();
+                completed.mark_complete();
+                completed.metadata.agent_task_mut().response_text =
+                    "RESPONSE_SUBMITTED".to_string();
+                self.timeline_store.update_job(&completed).await?;
+                recovered.push(json!({
+                    "dispatched": true,
+                    "job": completed.to_value(),
+                    "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+                    "recovered": true,
+                }));
+                continue;
+            }
+            let mut interrupted = job.clone();
+            interrupted.set_state(JobState::AgentDispatchFailed);
+            interrupted.metadata.agent_task_mut().dispatch_error =
+                "agent task was interrupted by runtime restart".to_string();
+            self.timeline_store.update_job(&interrupted).await?;
+            let result = json!({
+                "dispatched": false,
+                "job": interrupted.to_value(),
+                "interrupted": true,
+            });
+            recovered.push(result);
+        }
+        Ok(recovered)
+    }
+
     pub(crate) async fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
         let job_id = job.id.clone();
         let attempts = job
@@ -124,7 +164,6 @@ impl Runtime {
             prompt,
             cwd: Some(workdir.clone()),
             model: agent_task_model(),
-            timeout: Duration::from_secs(agent_task_timeout_seconds()),
             env: agent_env,
             result_path: result_path.clone(),
             raw_result_path: raw_result_path.clone(),
@@ -134,11 +173,6 @@ impl Runtime {
             let detail = first_non_empty([
                 invocation.stderr.trim().to_string(),
                 invocation.stdout.trim().to_string(),
-                if invocation.timed_out {
-                    "codex agent task invocation timed out".to_string()
-                } else {
-                    String::new()
-                },
                 format!(
                     "codex exited {}",
                     invocation
@@ -147,6 +181,9 @@ impl Runtime {
                         .unwrap_or_else(|| "without a status code".to_string())
                 ),
             ]);
+            if agent_invocation_infrastructure_failure(&detail) {
+                return Err(AgentInfrastructureError::new(detail).into());
+            }
             anyhow::bail!("{detail}");
         }
 
@@ -298,6 +335,8 @@ impl Runtime {
         let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
         let is_infrastructure_error = infrastructure_error.is_some();
         let error_text = error.to_string();
+        let publish_unavailable_response =
+            is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
         let mut latest = self.timeline_store.get_job(&job_id).await?;
         if job_cancel_requested(&latest) {
             let cancelled_at = non_empty(
@@ -309,6 +348,19 @@ impl Runtime {
             latest.metadata.agent_task_mut().dispatch_error_after_cancel = error_text;
             self.timeline_store.update_job(&latest).await?;
             return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
+        }
+        let submitted_responses = self.response_jobs_for_source(&job_id).await?;
+        if !submitted_responses.is_empty() {
+            latest.mark_complete();
+            latest.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
+            latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
+            self.timeline_store.update_job(&latest).await?;
+            return Ok(json!({
+                "dispatched": true,
+                "job": latest.to_value(),
+                "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+                "error_after_response": error_text,
+            }));
         }
         if let Some(preflight) = infrastructure_error.and_then(AgentInfrastructureError::preflight)
         {
@@ -326,12 +378,57 @@ impl Runtime {
         } else {
             JobState::Queued
         });
+        let response_job = if publish_unavailable_response {
+            self.agent_unavailable_response_job(&latest).await?
+        } else {
+            None
+        };
         self.timeline_store.update_job(&latest).await?;
         log(&format!(
             "agent task dispatch failed for {job_id}: {error_text}"
         ));
-        Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
+        Ok(json!({
+            "dispatched": false,
+            "job": latest.to_value(),
+            "error": error_text,
+            "response_job": response_job.map(|job| job.to_value()),
+        }))
     }
+
+    async fn agent_unavailable_response_job(&self, job: &Job) -> Result<Option<Job>> {
+        if !self.response_jobs_for_source(&job.id).await?.is_empty() {
+            return Ok(None);
+        }
+        let requested_by_user_id = agent_task_requester_id(job);
+        let response = Job::response(
+            job.guild_id.clone(),
+            job.voice_channel_id.clone(),
+            requested_by_user_id.clone(),
+            ResponsePayload::new(
+                ResponseKind::Message,
+                ResponseSink::default(),
+                AGENT_UNAVAILABLE_MESSAGE,
+                job.id.clone(),
+                requested_by_user_id,
+                false,
+            ),
+        );
+        self.timeline_store.create_job(response).await.map(Some)
+    }
+}
+
+fn agent_task_requester_id(job: &Job) -> String {
+    let command_requester = job
+        .command()
+        .map(|command| command.requested_by_user_id.clone())
+        .unwrap_or_default();
+    first_non_empty([job.requested_by_user_id.clone(), command_requester])
+}
+
+fn agent_invocation_infrastructure_failure(detail: &str) -> bool {
+    detail.contains("TokenRefreshFailed")
+        || detail.contains("invalid_grant")
+        || detail.contains("Auth(")
 }
 
 #[derive(Debug, Clone, Default)]
@@ -563,10 +660,7 @@ fn agent_task_env(
         workdir.display().to_string(),
     );
     vars.insert("CLANKCORD_AGENT_JOB_ID".to_string(), job.id.clone());
-    vars.insert(
-        "CLANKCORD_AGENT_GUILD_ID".to_string(),
-        job.guild_id.clone(),
-    );
+    vars.insert("CLANKCORD_AGENT_GUILD_ID".to_string(), job.guild_id.clone());
     vars.insert(
         "CLANKCORD_AGENT_VOICE_CHANNEL_ID".to_string(),
         job.voice_channel_id.clone(),
@@ -813,5 +907,15 @@ mod tests {
         assert!(!prompt.contains("\"tools\""));
         assert!(!prompt.contains("\"manuals\""));
         assert!(!prompt.contains("\"policy\""));
+    }
+
+    #[test]
+    fn codex_auth_failure_is_infrastructure_failure_but_watchdog_text_is_not() {
+        assert!(agent_invocation_infrastructure_failure(
+            "Auth(TokenRefreshFailed(\"invalid_grant\"))"
+        ));
+        assert!(!agent_invocation_infrastructure_failure(
+            "codex command timed out after 240 seconds"
+        ));
     }
 }

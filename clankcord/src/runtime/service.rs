@@ -169,6 +169,16 @@ impl RuntimeService {
         let timeline_store = runtime.timeline_store.clone();
         timeline_store.initialize().await?;
         runtime.start().await?;
+        match runtime.recover_interrupted_agent_tasks().await {
+            Ok(recovered) if !recovered.is_empty() => {
+                log(&format!(
+                    "recovered {} interrupted agent task(s)",
+                    recovered.len()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) => log(&format!("agent task recovery failed: {error}")),
+        }
         let (intake, intake_receiver) = mpsc::channel(DEFAULT_INTAKE_QUEUE_DEPTH);
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),

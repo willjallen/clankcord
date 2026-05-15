@@ -5,8 +5,6 @@ use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 use crate::Result;
 
@@ -33,7 +31,6 @@ pub(crate) struct CodexRunRequest {
     pub session_id: Option<String>,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
-    pub timeout: Duration,
     pub env: BTreeMap<String, String>,
     pub output_last_message_path: PathBuf,
     pub stdout_path: Option<PathBuf>,
@@ -45,7 +42,6 @@ pub(crate) struct CodexRunResult {
     pub stderr: String,
     pub returncode: Option<i32>,
     pub success: bool,
-    pub timed_out: bool,
     pub session_id: String,
     pub model: String,
     pub final_message: String,
@@ -81,31 +77,9 @@ impl CodexAdapter {
             stdin.write_all(request.prompt.as_bytes())?;
         }
 
-        let deadline = Instant::now() + request.timeout;
-        let mut timed_out = false;
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                timed_out = true;
-                let _ = child.kill();
-                break child.wait()?;
-            }
-            thread::sleep(Duration::from_millis(100));
-        };
-
+        let status = child.wait()?;
         let stdout = read_stdout(&request, stdout_file.as_ref());
-        let mut stderr = fs::read_to_string(stderr_file.path()).unwrap_or_default();
-        if timed_out {
-            if !stderr.trim().is_empty() {
-                stderr.push('\n');
-            }
-            stderr.push_str(&format!(
-                "codex command timed out after {} seconds",
-                request.timeout.as_secs()
-            ));
-        }
+        let stderr = fs::read_to_string(stderr_file.path()).unwrap_or_default();
         let final_message =
             fs::read_to_string(&request.output_last_message_path).unwrap_or_default();
         let session_id = non_empty(
@@ -121,8 +95,7 @@ impl CodexAdapter {
             stdout,
             stderr,
             returncode: status.code(),
-            success: status.success() && !timed_out,
-            timed_out,
+            success: status.success(),
             session_id,
             model,
             final_message,
