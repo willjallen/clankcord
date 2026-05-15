@@ -3,7 +3,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 const BINARY_RECORD_SCHEMA_KEY: &str = "binary_record_schema";
-const BINARY_RECORD_SCHEMA_VERSION: &str = "job-projection-2026-05-15";
+const BINARY_RECORD_SCHEMA_VERSION: &str = "job-projection-2026-05-15-speaker-segment";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedTranscript {
@@ -336,7 +336,9 @@ impl TimelineStore {
               command_kind TEXT NOT NULL DEFAULT '',
               source_job_id TEXT NOT NULL DEFAULT '',
               stream_id TEXT NOT NULL DEFAULT '',
-              target_job_id TEXT NOT NULL DEFAULT ''
+              target_job_id TEXT NOT NULL DEFAULT '',
+              speaker_user_id TEXT NOT NULL DEFAULT '',
+              segment_end_ms INTEGER
             );
 
             CREATE TABLE IF NOT EXISTS job_payloads (
@@ -402,6 +404,9 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_response_source
               ON jobs(source_job_id, updated_at_ms DESC, job_id)
               WHERE kind = 'response';
+            CREATE INDEX IF NOT EXISTS idx_jobs_audio_segment_pending_speaker
+              ON jobs(guild_id, voice_channel_id, speaker_user_id, segment_end_ms, job_id)
+              WHERE kind = 'audio_segment' AND terminal = 0;
             CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
               ON job_dependencies(child_job_id, parent_job_id);
             CREATE INDEX IF NOT EXISTS idx_automations_scope_state
@@ -421,9 +426,7 @@ impl TimelineStore {
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
-        if current.as_deref() == Some(BINARY_RECORD_SCHEMA_VERSION)
-            && self.job_payloads_decode(db)?
-        {
+        if current.as_deref() == Some(BINARY_RECORD_SCHEMA_VERSION) {
             return Ok(());
         }
 
@@ -453,18 +456,6 @@ impl TimelineStore {
         )?;
         crate::runtime::log("runtime job projection schema hard cut applied");
         Ok(())
-    }
-
-    fn job_payloads_decode(&self, db: &Connection) -> Result<bool> {
-        let mut statement = db.prepare("SELECT payload_blob FROM job_payloads")?;
-        let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
-        for payload in rows {
-            let payload = payload?;
-            if Job::decode(&payload).is_err() {
-                return Ok(false);
-            }
-        }
-        Ok(true)
     }
 }
 

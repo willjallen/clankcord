@@ -6,8 +6,8 @@ use crate::runtime::domain::interactions::{
     evaluate_voice_command, validate_voice_command_result, voice_command_action,
 };
 use crate::runtime::timeline::{
-    JobVisibility, event_end, event_speaker, event_start, event_text, first_value_string,
-    isoformat_z, new_id, parse_instant, utc_now,
+    event_end, event_speaker, event_start, event_text, first_value_string, isoformat_z, new_id,
+    parse_instant, utc_now,
 };
 use crate::runtime::{
     DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
@@ -15,8 +15,8 @@ use crate::runtime::{
 
 const DEFAULT_LOOKBACK_SECONDS: i64 = 30;
 const DEFAULT_MIN_POST_SECONDS: i64 = 5;
-const DEFAULT_IDLE_SECONDS: i64 = 5;
-const DEFAULT_STT_FLUSH_GRACE_SECONDS: i64 = 2;
+const DEFAULT_IDLE_SECONDS: i64 = 3;
+const DEFAULT_STT_FLUSH_GRACE_SECONDS: i64 = 0;
 const DEFAULT_MAX_WINDOW_SECONDS: i64 = 60;
 const DEFAULT_ADDITIVE_PREEMPT_SECONDS: i64 = 10;
 const DEFAULT_INDEPENDENT_AFTER_SECONDS: i64 = 45;
@@ -625,26 +625,14 @@ fn has_pending_speaker_audio_segment(
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
 ) -> Result<bool> {
-    let jobs = runtime.timeline_store.list_jobs_by_states_with_visibility(
-        Some(&payload.guild_id),
-        &[
-            JobState::Queued,
-            JobState::Running,
-            JobState::Waiting,
-            JobState::CancelRequested,
-        ],
-        JobVisibility::IncludeEphemeral,
-    )?;
-    Ok(jobs.into_iter().any(|job| {
-        if job.kind != JobKind::AudioSegment || job.voice_channel_id != payload.voice_channel_id {
-            return false;
-        }
-        let Some(segment) = job.audio_segment_payload() else {
-            return false;
-        };
-        segment.speaker_user_id == payload.speaker_user_id
-            && segment.segment_end_time >= latest_wake_at
-    }))
+    runtime
+        .timeline_store
+        .has_pending_audio_segment_for_speaker(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.speaker_user_id,
+            latest_wake_at,
+        )
 }
 
 fn has_post_wake_speech(

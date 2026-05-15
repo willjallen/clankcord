@@ -25,6 +25,21 @@ struct JobProjection {
     source_job_id: String,
     stream_id: String,
     target_job_id: String,
+    speaker_user_id: String,
+    segment_end_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct DueJobCandidate {
+    job_id: String,
+    ordering_key: String,
+}
+
+#[derive(Debug, Clone)]
+struct JobSummary {
+    id: String,
+    kind: crate::runtime::JobKind,
+    state: crate::runtime::JobState,
 }
 
 impl TimelineStore {
@@ -249,9 +264,8 @@ impl TimelineStore {
         params_values.push(Box::new(candidate_limit as i64));
         let sql = format!(
             r#"
-            SELECT j.ordering_key, p.payload_blob
+            SELECT j.job_id, j.ordering_key
             FROM jobs j
-            JOIN job_payloads p ON p.job_id = j.job_id
             WHERE {}
             ORDER BY j.ready_at_ms, j.created_at_ms, j.job_id
             LIMIT ?
@@ -261,21 +275,27 @@ impl TimelineStore {
         let mut statement = db.prepare(&sql)?;
         let rows = statement.query_map(
             params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            |row| {
+                Ok(DueJobCandidate {
+                    job_id: row.get::<_, String>(0)?,
+                    ordering_key: row.get::<_, String>(1)?,
+                })
+            },
         )?;
         let mut candidates = Vec::new();
-        for (ordering_key, payload) in rows.collect::<rusqlite::Result<Vec<_>>>()? {
-            if !ordering_key.trim().is_empty() && blocked_ordering_keys.contains(&ordering_key) {
+        for candidate in rows.collect::<rusqlite::Result<Vec<_>>>()? {
+            if !candidate.ordering_key.trim().is_empty()
+                && blocked_ordering_keys.contains(&candidate.ordering_key)
+            {
                 continue;
             }
-            let job = Job::decode(&payload)?;
-            if job.id.trim().is_empty() {
+            if candidate.job_id.trim().is_empty() {
                 continue;
             }
-            if !ordering_key.trim().is_empty() {
-                blocked_ordering_keys.insert(ordering_key);
+            if !candidate.ordering_key.trim().is_empty() {
+                blocked_ordering_keys.insert(candidate.ordering_key.clone());
             }
-            candidates.push(job);
+            candidates.push(candidate);
             if candidates.len() >= limit {
                 break;
             }
@@ -289,10 +309,16 @@ impl TimelineStore {
         let mut db = self.connect()?;
         let transaction = db.transaction()?;
         let mut claimed = Vec::new();
-        for mut job in candidates {
+        for candidate in candidates {
             if claimed.len() >= limit {
                 break;
             }
+            let payload_blob = transaction.query_row(
+                "SELECT payload_blob FROM job_payloads WHERE job_id = ?1",
+                params![candidate.job_id],
+                |row| row.get::<_, Vec<u8>>(0),
+            )?;
+            let mut job = Job::decode(&payload_blob)?;
             job.mark_running();
             let payload = job.touched();
             let projection = project_job(&payload);
@@ -359,19 +385,33 @@ impl TimelineStore {
         Ok(kinds)
     }
 
+    pub fn active_ordering_keys(&self) -> Result<BTreeSet<String>> {
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT DISTINCT ordering_key
+            FROM jobs
+            WHERE ordering_key <> ''
+              AND state IN ('running', 'cancel_requested')
+            "#,
+        )?;
+        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .collect())
+    }
+
     pub fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
         let mut resolved = Vec::new();
-        for mut parent in self.list_jobs_with_visibility(
-            None,
-            Some(crate::runtime::JobState::Waiting),
-            JobVisibility::IncludeEphemeral,
-        )? {
-            let children = self.list_child_jobs(&parent.id)?;
+        for parent_summary in self.list_waiting_job_summaries()? {
+            let children = self.list_child_job_summaries(&parent_summary.id)?;
             if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
                 continue;
             }
+            let mut parent = self.get_job(&parent_summary.id)?;
             if matches!(
-                parent.kind,
+                parent_summary.kind,
                 crate::runtime::JobKind::RoomAgentPlacement
                     | crate::runtime::JobKind::DiscordVoicePlayback
             ) {
@@ -389,7 +429,7 @@ impl TimelineStore {
                 parent.mark_cancelled();
             } else {
                 parent.set_state(
-                    if parent.kind == crate::runtime::JobKind::ConfirmationRequired {
+                    if parent_summary.kind == crate::runtime::JobKind::ConfirmationRequired {
                         crate::runtime::JobState::ApprovalFailed
                     } else {
                         crate::runtime::JobState::Failed
@@ -406,6 +446,21 @@ impl TimelineStore {
             resolved.push(parent.to_value());
         }
         Ok(resolved)
+    }
+
+    fn list_waiting_job_summaries(&self) -> Result<Vec<JobSummary>> {
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT job_id, kind, state
+            FROM jobs
+            WHERE state = 'waiting'
+            ORDER BY updated_at_ms, created_at_ms, job_id
+            "#,
+        )?;
+        let rows = statement.query_map([], job_summary_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
     }
 
     pub fn list_jobs(
@@ -732,6 +787,75 @@ impl TimelineStore {
         Ok(children)
     }
 
+    pub fn has_child_jobs(&self, parent_job_id: &str) -> Result<bool> {
+        let db = self.connect()?;
+        let exists = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM job_dependencies WHERE parent_job_id = ?1)",
+            params![parent_job_id],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(exists != 0)
+    }
+
+    pub fn has_pending_audio_segment_for_speaker(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        speaker_user_id: &str,
+        segment_end_at_or_after: DateTime<Utc>,
+    ) -> Result<bool> {
+        let states = [
+            crate::runtime::JobState::Queued,
+            crate::runtime::JobState::Running,
+            crate::runtime::JobState::Waiting,
+            crate::runtime::JobState::CancelRequested,
+        ];
+        let mut params_values: Vec<Box<dyn ToSql>> = vec![
+            Box::new(guild_id.to_string()),
+            Box::new(voice_channel_id.to_string()),
+            Box::new(speaker_user_id.to_string()),
+            Box::new(instant_ms_dt(segment_end_at_or_after)),
+        ];
+        for state in states {
+            params_values.push(Box::new(state.as_str().to_string()));
+        }
+        let sql = format!(
+            r#"
+            SELECT 1
+            FROM jobs
+            WHERE guild_id = ?
+              AND voice_channel_id = ?
+              AND speaker_user_id = ?
+              AND segment_end_ms >= ?
+              AND kind = 'audio_segment'
+              AND state IN ({})
+            LIMIT 1
+            "#,
+            placeholders(states.len())
+        );
+        let db = self.connect()?;
+        let mut statement = db.prepare(&sql)?;
+        let mut rows =
+            statement.query(params_from_iter(params_values.iter().map(|value| &**value)))?;
+        Ok(rows.next()?.is_some())
+    }
+
+    fn list_child_job_summaries(&self, parent_job_id: &str) -> Result<Vec<JobSummary>> {
+        let db = self.connect()?;
+        let mut statement = db.prepare(
+            r#"
+            SELECT j.job_id, j.kind, j.state
+            FROM job_dependencies d
+            JOIN jobs j ON j.job_id = d.child_job_id
+            WHERE d.parent_job_id = ?1
+            ORDER BY d.created_at_ms, d.child_job_id
+            "#,
+        )?;
+        let rows = statement.query_map(params![parent_job_id], job_summary_from_row)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     fn list_child_job_ids(&self, parent_job_id: &str) -> Result<Vec<String>> {
         let db = self.connect()?;
         let mut statement = db.prepare(
@@ -768,6 +892,26 @@ fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
     }
 }
 
+fn job_summary_from_row(row: &Row<'_>) -> rusqlite::Result<JobSummary> {
+    let kind = row
+        .get::<_, String>(1)?
+        .parse::<crate::runtime::JobKind>()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, error.into())
+        })?;
+    let state = row
+        .get::<_, String>(2)?
+        .parse::<crate::runtime::JobState>()
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, error.into())
+        })?;
+    Ok(JobSummary {
+        id: row.get::<_, String>(0)?,
+        kind,
+        state,
+    })
+}
+
 fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result<()> {
     let projection = project_job(job);
     transaction.execute(
@@ -797,9 +941,11 @@ fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result
           command_kind,
           source_job_id,
           stream_id,
-          target_job_id
+          target_job_id,
+          speaker_user_id,
+          segment_end_ms
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
+        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
         ON CONFLICT(job_id) DO UPDATE SET
           guild_id = excluded.guild_id,
           voice_channel_id = excluded.voice_channel_id,
@@ -824,7 +970,9 @@ fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result
           command_kind = excluded.command_kind,
           source_job_id = excluded.source_job_id,
           stream_id = excluded.stream_id,
-          target_job_id = excluded.target_job_id
+          target_job_id = excluded.target_job_id,
+          speaker_user_id = excluded.speaker_user_id,
+          segment_end_ms = excluded.segment_end_ms
         "#,
         params![
             &job.id,
@@ -852,6 +1000,8 @@ fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result
             &projection.source_job_id,
             &projection.stream_id,
             &projection.target_job_id,
+            &projection.speaker_user_id,
+            projection.segment_end_ms,
         ],
     )?;
     transaction.execute(
@@ -899,6 +1049,8 @@ fn project_job(job: &Job) -> JobProjection {
         source_job_id: source_job_id(job),
         stream_id: wake_probe_stream_id(job).unwrap_or_default().to_string(),
         target_job_id: target_job_id(job),
+        speaker_user_id: speaker_user_id(job),
+        segment_end_ms: audio_segment_end_ms(job),
     }
 }
 
@@ -1022,6 +1174,24 @@ fn target_job_id(job: &Job) -> String {
             payload.command.target_job_id.clone()
         }
         _ => String::new(),
+    }
+}
+
+fn speaker_user_id(job: &Job) -> String {
+    match &job.payload {
+        crate::runtime::JobPayload::AudioSegment(payload) => payload.speaker_user_id.clone(),
+        crate::runtime::JobPayload::WakeActivation(payload) => payload.speaker_user_id.clone(),
+        crate::runtime::JobPayload::WakeProbe(payload) => payload.speaker_user_id.clone(),
+        _ => String::new(),
+    }
+}
+
+fn audio_segment_end_ms(job: &Job) -> Option<i64> {
+    match &job.payload {
+        crate::runtime::JobPayload::AudioSegment(payload) => {
+            Some(instant_ms_dt(payload.segment_end_time))
+        }
+        _ => None,
     }
 }
 

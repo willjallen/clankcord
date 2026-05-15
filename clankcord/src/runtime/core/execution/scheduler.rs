@@ -1,14 +1,17 @@
-use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 
 use anyhow::Context;
 use serde_json::{Map, Value, json};
 use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
+#[cfg(test)]
+use crate::runtime::AgentRuntime;
+#[cfg(test)]
+use crate::runtime::JobPayload;
 use crate::runtime::core::execution::RuntimeAdapterJobs;
 use crate::runtime::timeline::TimelineStore;
-use crate::runtime::{AgentRuntime, Job, JobKind, JobPayload, Runtime, log};
+use crate::runtime::{Job, JobKind, Runtime, log};
 
 const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
 
@@ -170,7 +173,6 @@ struct JobLanes {
     refinement: Arc<Semaphore>,
     agent: Arc<Semaphore>,
     async_jobs: Arc<Semaphore>,
-    active_ordering_keys_lock: StdMutex<BTreeSet<String>>,
 }
 
 impl<E> RuntimeExecutor<E>
@@ -269,44 +271,29 @@ where
         let lane = self.lanes.semaphore(policy.lane);
         let permits = take_permits(&lane, dispatch_batch_limit(policy));
         let permit_count = permits.len();
-        let mut blocked_keys = self.lanes.active_ordering_keys();
+        let mut blocked_keys = self.timeline_store.active_ordering_keys()?;
         let jobs =
             self.timeline_store
                 .claim_due_jobs(policy.kind, permit_count, &mut blocked_keys)?;
         let count = jobs.len();
         for (permit, job) in permits.into_iter().zip(jobs) {
-            let active_key = ordering_key(policy.ordering, &job);
-            if let Some(key) = active_key.as_deref() {
-                self.lanes.mark_ordering_key_active(key);
-            }
             match policy.executor {
-                JobExecutor::RuntimeExclusive => {
-                    self.spawn_runtime_exclusive_job(job, permit, active_key)
-                }
-                JobExecutor::RuntimeSnapshot => {
-                    self.spawn_runtime_snapshot_job(job, permit, active_key)
-                }
-                JobExecutor::AdapterAsync => self.spawn_adapter_job(job, permit, active_key),
-                JobExecutor::BlockingSnapshot => {
-                    self.spawn_blocking_snapshot_job(job, permit, active_key)
-                }
+                JobExecutor::RuntimeExclusive => self.spawn_runtime_exclusive_job(job, permit),
+                JobExecutor::RuntimeSnapshot => self.spawn_runtime_snapshot_job(job, permit),
+                JobExecutor::AdapterAsync => self.spawn_adapter_job(job, permit),
+                JobExecutor::BlockingSnapshot => self.spawn_blocking_snapshot_job(job, permit),
             }
         }
         Ok(json!({
             "scheduled": count,
             "availablePermits": lane.available_permits(),
-            "activeOrderingKeys": self.lanes.active_ordering_keys().len(),
+            "activeOrderingKeys": blocked_keys.len(),
+            "ordering": format!("{:?}", policy.ordering),
         }))
     }
 
-    fn spawn_runtime_exclusive_job(
-        &self,
-        job: Job,
-        permit: OwnedSemaphorePermit,
-        active_key: Option<String>,
-    ) {
+    fn spawn_runtime_exclusive_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let runtime_cache_lock = self.runtime_cache_lock.clone();
-        let lanes = self.lanes.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
@@ -321,22 +308,13 @@ where
                     error_chain(&error)
                 ));
             }
-            if let Some(key) = active_key {
-                lanes.mark_ordering_key_inactive(&key);
-            }
             drop(permit);
             notify.notify_one();
         });
     }
 
-    fn spawn_runtime_snapshot_job(
-        &self,
-        job: Job,
-        permit: OwnedSemaphorePermit,
-        active_key: Option<String>,
-    ) {
+    fn spawn_runtime_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let runtime_cache_lock = self.runtime_cache_lock.clone();
-        let lanes = self.lanes.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
@@ -354,23 +332,14 @@ where
                     error_chain(&error)
                 ));
             }
-            if let Some(key) = active_key {
-                lanes.mark_ordering_key_inactive(&key);
-            }
             drop(permit);
             notify.notify_one();
         });
     }
 
-    fn spawn_adapter_job(
-        &self,
-        job: Job,
-        permit: OwnedSemaphorePermit,
-        active_key: Option<String>,
-    ) {
+    fn spawn_adapter_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let runtime_cache_lock = self.runtime_cache_lock.clone();
         let adapter = self.adapter_jobs.clone();
-        let lanes = self.lanes.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
@@ -390,22 +359,13 @@ where
                     error_chain(&error)
                 ));
             }
-            if let Some(key) = active_key {
-                lanes.mark_ordering_key_inactive(&key);
-            }
             drop(permit);
             notify.notify_one();
         });
     }
 
-    fn spawn_blocking_snapshot_job(
-        &self,
-        job: Job,
-        permit: OwnedSemaphorePermit,
-        active_key: Option<String>,
-    ) {
+    fn spawn_blocking_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let runtime_cache_lock = self.runtime_cache_lock.clone();
-        let lanes = self.lanes.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
@@ -427,9 +387,6 @@ where
                 Err(error) => log(&format!(
                     "blocking job worker panicked {job_id} ({kind}): {error}"
                 )),
-            }
-            if let Some(key) = active_key {
-                lanes.mark_ordering_key_inactive(&key);
             }
             drop(permit);
             notify.notify_one();
@@ -475,7 +432,6 @@ impl JobLanes {
                 16,
                 128,
             ))),
-            active_ordering_keys_lock: StdMutex::new(BTreeSet::new()),
         }
     }
 
@@ -489,27 +445,6 @@ impl JobLanes {
             JobLane::Refinement => self.refinement.clone(),
             JobLane::Agent => self.agent.clone(),
         }
-    }
-
-    fn active_ordering_keys(&self) -> BTreeSet<String> {
-        self.active_ordering_keys_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
-    }
-
-    fn mark_ordering_key_active(&self, key: &str) {
-        self.active_ordering_keys_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(key.to_string());
-    }
-
-    fn mark_ordering_key_inactive(&self, key: &str) {
-        self.active_ordering_keys_lock
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(key);
     }
 }
 
@@ -552,10 +487,12 @@ fn env_usize(key: &str, default: usize, max: usize) -> usize {
         .clamp(1, max)
 }
 
+#[cfg(test)]
 fn agent_session_key(job: &Job) -> String {
     AgentRuntime::task_session_key(&job.guild_id, &job.voice_channel_id)
 }
 
+#[cfg(test)]
 fn ordering_key(ordering: JobOrdering, job: &Job) -> Option<String> {
     match ordering {
         JobOrdering::None => None,
@@ -565,6 +502,7 @@ fn ordering_key(ordering: JobOrdering, job: &Job) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn wake_stream_key(job: &Job) -> Option<String> {
     match &job.payload {
         JobPayload::WakeProbe(payload) => Some(format!("wake:stream:{}", payload.stream_id)),
@@ -572,6 +510,7 @@ fn wake_stream_key(job: &Job) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn voice_target_key(job: &Job) -> Option<String> {
     match &job.payload {
         JobPayload::RoomAgentPlacement(payload) => {
@@ -603,6 +542,7 @@ fn voice_target_key(job: &Job) -> Option<String> {
     }
 }
 
+#[cfg(test)]
 fn ordering_key_part(value: &str) -> String {
     let normalized = value
         .trim()

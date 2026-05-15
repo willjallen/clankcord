@@ -123,7 +123,7 @@ mod room_agents {
         job: &Job,
         payload: &RoomAgentPlacementPayload,
     ) -> Result<JobDecision> {
-        if !runtime.timeline_store.list_child_jobs(&job.id)?.is_empty() {
+        if runtime.timeline_store.has_child_jobs(&job.id)? {
             return runtime.resume_room_agent_placement_job(job, payload);
         }
         let target_room_identifier = if payload.room_id.trim().is_empty() {
