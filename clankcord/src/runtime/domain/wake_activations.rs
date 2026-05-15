@@ -6,8 +6,8 @@ use crate::runtime::domain::interactions::{
     evaluate_voice_command, validate_voice_command_result, voice_command_action,
 };
 use crate::runtime::timeline::{
-    event_end, event_speaker, event_start, event_text, first_value_string, isoformat_z, new_id,
-    parse_instant, utc_now,
+    JobVisibility, event_end, event_speaker, event_start, event_text, first_value_string,
+    isoformat_z, new_id, parse_instant, utc_now,
 };
 use crate::runtime::{
     DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
@@ -20,6 +20,13 @@ const DEFAULT_STT_FLUSH_GRACE_SECONDS: i64 = 2;
 const DEFAULT_MAX_WINDOW_SECONDS: i64 = 60;
 const DEFAULT_ADDITIVE_PREEMPT_SECONDS: i64 = 10;
 const DEFAULT_INDEPENDENT_AFTER_SECONDS: i64 = 45;
+const ACTIVE_CAPTURE_POLL_MS: i64 = 500;
+
+#[derive(Debug, Clone, Copy)]
+struct CaptureHold {
+    reason: &'static str,
+    next_run_at: DateTime<Utc>,
+}
 
 pub fn event_has_wake(event: &Value) -> bool {
     event
@@ -242,6 +249,20 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
+            "next_run_at": deferred.next_run_at,
+        }));
+    }
+    if let Some(hold) = activation_capture_hold(runtime, payload, latest_wake_at, now, hard_cap)?
+        && now < hard_cap
+    {
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(hold.next_run_at, hard_cap))));
+        runtime.timeline_store.update_job(&deferred)?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "deferred",
+            "reason": hold.reason,
             "next_run_at": deferred.next_run_at,
         }));
     }
@@ -518,16 +539,112 @@ fn activation_due_at(
     events: &[Value],
     latest_wake_at: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    let latest_speaker_end = events
+    let latest_speaker_end =
+        latest_speaker_event_end(payload, events, latest_wake_at).unwrap_or(latest_wake_at);
+    let min_post_at = latest_wake_at + chrono::Duration::seconds(payload.min_post_seconds);
+    let idle_at = latest_speaker_end + chrono::Duration::seconds(payload.speaker_idle_seconds);
+    std::cmp::max(min_post_at, idle_at) + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
+}
+
+fn latest_speaker_event_end(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    latest_wake_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    events
         .iter()
         .filter(|event| same_speaker(event, &payload.speaker_user_id))
         .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
         .filter_map(event_end)
         .max()
-        .unwrap_or(latest_wake_at);
-    let min_post_at = latest_wake_at + chrono::Duration::seconds(payload.min_post_seconds);
-    let idle_at = latest_speaker_end + chrono::Duration::seconds(payload.speaker_idle_seconds);
-    std::cmp::max(min_post_at, idle_at) + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
+}
+
+fn activation_capture_hold(
+    runtime: &Runtime,
+    payload: &WakeActivationPayload,
+    latest_wake_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    hard_cap: DateTime<Utc>,
+) -> Result<Option<CaptureHold>> {
+    if now >= hard_cap {
+        return Ok(None);
+    }
+    if let Some(hold) = live_speaker_capture_hold(runtime, payload, latest_wake_at, now) {
+        return Ok(Some(hold));
+    }
+    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at)? {
+        return Ok(Some(CaptureHold {
+            reason: "waiting_for_audio_segment_transcription",
+            next_run_at: now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS),
+        }));
+    }
+    Ok(None)
+}
+
+fn live_speaker_capture_hold(
+    runtime: &Runtime,
+    payload: &WakeActivationPayload,
+    latest_wake_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Option<CaptureHold> {
+    let session =
+        runtime.active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)?;
+    let speaker = session
+        .capture_stats
+        .speakers
+        .get(&payload.speaker_user_id)?;
+    let last_pcm_at = parse_instant(&speaker.last_pcm_at);
+    if last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at < latest_wake_at) {
+        return None;
+    }
+    let has_live_audio =
+        speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
+    if !has_live_audio {
+        return None;
+    }
+    let settled_at = last_pcm_at
+        .map(|last_pcm_at| {
+            last_pcm_at
+                + chrono::Duration::seconds(payload.speaker_idle_seconds)
+                + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
+        })
+        .unwrap_or(now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS));
+    let next_run_at = if speaker.active && settled_at > now {
+        settled_at
+    } else {
+        now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS)
+    };
+    Some(CaptureHold {
+        reason: "waiting_for_live_speaker_audio",
+        next_run_at,
+    })
+}
+
+fn has_pending_speaker_audio_segment(
+    runtime: &Runtime,
+    payload: &WakeActivationPayload,
+    latest_wake_at: DateTime<Utc>,
+) -> Result<bool> {
+    let jobs = runtime.timeline_store.list_jobs_by_states_with_visibility(
+        Some(&payload.guild_id),
+        &[
+            JobState::Queued,
+            JobState::Running,
+            JobState::Waiting,
+            JobState::CancelRequested,
+        ],
+        JobVisibility::IncludeEphemeral,
+    )?;
+    Ok(jobs.into_iter().any(|job| {
+        if job.kind != JobKind::AudioSegment || job.voice_channel_id != payload.voice_channel_id {
+            return false;
+        }
+        let Some(segment) = job.audio_segment_payload() else {
+            return false;
+        };
+        segment.speaker_user_id == payload.speaker_user_id
+            && segment.segment_end_time >= latest_wake_at
+    }))
 }
 
 fn has_post_wake_speech(

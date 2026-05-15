@@ -9,6 +9,7 @@ use crate::adapters::discord::voice::diagnostics::default_packet_debug;
 use crate::config::format_timestamp_local;
 use crate::runtime::{
     ArtifactStatus, RoomConfig, RuntimeSessionStatus, SessionArtifacts, SessionCaptureStats,
+    SessionSpeakerCaptureStats,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -22,6 +23,7 @@ pub struct SpeakerBuffer {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub last_packet_monotonic: f64,
+    pub last_pcm_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub active: bool,
     #[serde(default)]
@@ -47,6 +49,7 @@ impl SpeakerBuffer {
             pcm: Vec::new(),
             started_at: None,
             last_packet_monotonic: 0.0,
+            last_pcm_at: None,
             active: false,
             flush_in_flight: false,
             wake_probe_counter: 0,
@@ -135,6 +138,31 @@ impl VoiceSession {
         let last_transcript = self
             .last_transcript_at
             .map(|value| format_timestamp_local(value, tz));
+        let speaker_stats = self
+            .buffers
+            .iter()
+            .map(|(user_id, speaker)| {
+                let started = speaker
+                    .started_at
+                    .map(|value| format_timestamp_local(value, tz));
+                let last_pcm = speaker
+                    .last_pcm_at
+                    .map(|value| format_timestamp_local(value, tz));
+                (
+                    user_id.clone(),
+                    SessionSpeakerCaptureStats {
+                        user_id: speaker.user_id.clone(),
+                        label: speaker.label.clone(),
+                        username: speaker.username.clone(),
+                        active: speaker.active,
+                        buffered_audio_bytes: speaker.pcm.len(),
+                        flush_in_flight: speaker.flush_in_flight,
+                        segment_started_at: timestamp_field_opt(started.as_ref(), "iso"),
+                        last_pcm_at: timestamp_field_opt(last_pcm.as_ref(), "iso"),
+                    },
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         RuntimeSessionStatus {
             session_id: self.session_id.clone(),
             room_id: self.room.room_id.clone(),
@@ -180,6 +208,7 @@ impl VoiceSession {
                     last_transcript.as_ref(),
                     "local_iso",
                 ),
+                speakers: speaker_stats,
             },
             artifacts: SessionArtifacts {
                 recording_mp3: artifact_status(recording_path),

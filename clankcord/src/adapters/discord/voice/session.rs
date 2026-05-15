@@ -90,6 +90,7 @@ impl SessionAudioPipeline {
         }
         speaker.pcm.extend_from_slice(pcm);
         speaker.last_packet_monotonic = now_monotonic;
+        speaker.last_pcm_at = Some(now);
         speaker.active = true;
         session.participants.insert(
             user_id.to_string(),
@@ -168,6 +169,7 @@ impl SessionAudioPipeline {
         }
         speaker.pcm.extend_from_slice(&PCM_20MS_SILENCE);
         speaker.last_packet_monotonic = monotonic_seconds();
+        speaker.last_pcm_at = Some(now);
         speaker.active = true;
         session.last_pcm_at = Some(now);
         session.last_pcm_monotonic = speaker.last_packet_monotonic;

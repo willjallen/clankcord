@@ -38,6 +38,7 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 14] = [
         JobLane::Wake,
         JobOrdering::WakeStream,
     ),
+    JobExecutionPolicy::blocking_snapshot(JobKind::AudioSegment, JobLane::Audio, JobOrdering::None),
     JobExecutionPolicy::runtime_snapshot(
         JobKind::WakeActivation,
         JobLane::GeneralAsync,
@@ -74,7 +75,6 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 14] = [
         JobLane::Agent,
         JobOrdering::AgentSession,
     ),
-    JobExecutionPolicy::blocking_snapshot(JobKind::AudioSegment, JobLane::Audio, JobOrdering::None),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -679,6 +679,7 @@ mod tests {
         assert!(position(JobKind::DiscordVoicePlayAudio) < position(JobKind::AudioSegment));
         assert!(position(JobKind::DiscordVoicePlayback) < position(JobKind::AudioSegment));
         assert!(position(JobKind::WakeProbe) < position(JobKind::AudioSegment));
+        assert!(position(JobKind::AudioSegment) < position(JobKind::WakeActivation));
     }
 
     #[test]

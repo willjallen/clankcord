@@ -33,7 +33,10 @@ pub use runtime_config::{ControlConfig, GuildConfig};
 pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };
-pub use sessions::{ArtifactStatus, RuntimeSessionStatus, SessionArtifacts, SessionCaptureStats};
+pub use sessions::{
+    ArtifactStatus, RuntimeSessionStatus, SessionArtifacts, SessionCaptureStats,
+    SessionSpeakerCaptureStats,
+};
 pub use util::{duration_to_seconds, log};
 pub use views::{
     ContextResolveRequest, DebugOverviewRequest, ForgetRequest, JobsRequest,

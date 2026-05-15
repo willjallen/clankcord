@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use chrono::SecondsFormat;
+use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 mod common;
@@ -8,8 +8,8 @@ mod common;
 use clankcord::runtime::domain::wake_activations::{execute, schedule_from_wake_event};
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, string_field};
 use clankcord::runtime::{
-    AgentRuntime, ControlConfig, DiscordVoicePlaybackCue, JobKind, JobState, Runtime,
-    RuntimeSessionStatus,
+    AgentRuntime, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue, Job, JobKind,
+    JobState, Runtime, RuntimeSessionStatus, SessionCaptureStats, SessionSpeakerCaptureStats,
 };
 
 use common::dt;
@@ -241,6 +241,122 @@ fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
         .collect::<Vec<_>>();
     assert!(cues.contains(&DiscordVoicePlaybackCue::Wake));
     assert!(cues.contains(&DiscordVoicePlaybackCue::Preempt));
+}
+
+#[test]
+fn wake_activation_waits_for_live_activating_speaker_audio() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let mut runtime = test_runtime(store);
+    let now = Utc::now();
+    let start = now - chrono::Duration::seconds(20);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(2),
+        "Will",
+        "user-a",
+        "Hey Clanky are you working",
+        json!({"wake": true}),
+        1,
+    );
+    let scheduled = schedule_from_wake_event(&runtime, &wake).unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime.timeline_store.get_job(&activation_job_id).unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    runtime.sessions.insert(
+        "cap_test".to_string(),
+        RuntimeSessionStatus {
+            session_id: "cap_test".to_string(),
+            guild_id: "guild".to_string(),
+            channel_id: "code".to_string(),
+            voice_channel_id: "code".to_string(),
+            active: true,
+            capture_stats: SessionCaptureStats {
+                speakers: BTreeMap::from([(
+                    "user-a".to_string(),
+                    SessionSpeakerCaptureStats {
+                        user_id: "user-a".to_string(),
+                        label: "Will".to_string(),
+                        username: "will".to_string(),
+                        active: true,
+                        buffered_audio_bytes: 4096,
+                        flush_in_flight: false,
+                        segment_started_at: (now - chrono::Duration::seconds(3))
+                            .to_rfc3339_opts(SecondsFormat::Millis, true),
+                        last_pcm_at: (now - chrono::Duration::milliseconds(250))
+                            .to_rfc3339_opts(SecondsFormat::Millis, true),
+                    },
+                )]),
+                ..SessionCaptureStats::default()
+            },
+            ..RuntimeSessionStatus::default()
+        },
+    );
+
+    let result = execute(&mut runtime, &activation_job, &payload).unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_live_speaker_audio"));
+}
+
+#[test]
+fn wake_activation_waits_for_pending_speaker_audio_segment_transcription() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let mut runtime = test_runtime(store);
+    let now = Utc::now();
+    let start = now - chrono::Duration::seconds(20);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(2),
+        "Will",
+        "user-a",
+        "Hey Clanky are you working",
+        json!({"wake": true}),
+        1,
+    );
+    let scheduled = schedule_from_wake_event(&runtime, &wake).unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime.timeline_store.get_job(&activation_job_id).unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: now - chrono::Duration::seconds(6),
+            segment_end_time: now - chrono::Duration::seconds(1),
+            segment_index: 2,
+            duration_ms: 5000,
+            source_audio_path: raw.path().join("pending.wav"),
+            audio_checksum: "sha256:pending".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload).unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(
+        result["reason"],
+        json!("waiting_for_audio_segment_transcription")
+    );
 }
 
 #[test]

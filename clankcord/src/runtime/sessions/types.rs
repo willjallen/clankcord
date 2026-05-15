@@ -20,6 +20,19 @@ pub struct SessionArtifacts {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct SessionSpeakerCaptureStats {
+    pub user_id: String,
+    pub label: String,
+    pub username: String,
+    pub active: bool,
+    pub buffered_audio_bytes: usize,
+    pub flush_in_flight: bool,
+    pub segment_started_at: String,
+    pub last_pcm_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SessionCaptureStats {
     pub audio_segments: usize,
     pub transcript_events: i64,
@@ -27,6 +40,7 @@ pub struct SessionCaptureStats {
     pub last_pcm_at_local: String,
     pub last_transcript_at: String,
     pub last_transcript_at_local: String,
+    pub speakers: BTreeMap<String, SessionSpeakerCaptureStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
