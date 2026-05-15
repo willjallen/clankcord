@@ -611,6 +611,39 @@ impl TimelineStore {
         Ok(row.try_get::<bool, _>("exists")?)
     }
 
+    pub async fn has_pending_audio_segment_for_speaker_until(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        speaker_user_id: &str,
+        segment_end_at_or_after: DateTime<Utc>,
+        segment_end_at_or_before: DateTime<Utc>,
+    ) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT EXISTS(
+              SELECT 1
+              FROM jobs
+              WHERE guild_id = $1
+                AND voice_channel_id = $2
+                AND speaker_user_id = $3
+                AND segment_end_ms >= $4
+                AND segment_end_ms <= $5
+                AND kind = 'audio_segment'
+                AND state IN ('queued', 'running', 'waiting', 'cancel_requested')
+            ) AS exists
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(speaker_user_id)
+        .bind(instant_ms_dt(segment_end_at_or_after))
+        .bind(instant_ms_dt(segment_end_at_or_before))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<bool, _>("exists")?)
+    }
+
     pub async fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
         let parent_rows = sqlx::query(
             r#"

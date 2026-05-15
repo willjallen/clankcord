@@ -15,6 +15,7 @@ const DEFAULT_MIN_POST_SECONDS: i64 = 5;
 const DEFAULT_IDLE_SECONDS: i64 = 3;
 const DEFAULT_STT_FLUSH_GRACE_SECONDS: i64 = 0;
 const DEFAULT_MAX_WINDOW_SECONDS: i64 = 60;
+const DEFAULT_STT_SETTLE_SECONDS: i64 = 120;
 const DEFAULT_ADDITIVE_PREEMPT_SECONDS: i64 = 10;
 const DEFAULT_INDEPENDENT_AFTER_SECONDS: i64 = 45;
 const ACTIVE_CAPTURE_POLL_MS: i64 = 500;
@@ -227,21 +228,25 @@ pub async fn execute(
             false,
         )
         .await?;
-    if !has_post_wake_speech(payload, &events, latest_wake_at) && now < hard_cap {
-        let next_run_at = std::cmp::min(now + chrono::Duration::milliseconds(500), hard_cap);
-        let mut deferred = job.clone();
-        deferred.state = JobState::Queued;
-        deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
-        runtime.timeline_store.update_job(&deferred).await?;
-        return Ok(json!({
-            "kind": "wake_activation",
-            "status": "deferred",
-            "reason": "waiting_for_post_wake_speech",
-            "next_run_at": deferred.next_run_at,
-        }));
+
+    if let Some(closed_at) = activation_window_closed_at(payload, &events) {
+        return dispatch_after_stt_settles(
+            runtime,
+            job,
+            payload,
+            window_start,
+            latest_wake_at,
+            closed_at,
+            now,
+        )
+        .await;
     }
-    let due_at = activation_due_at(payload, &events, latest_wake_at);
-    if now < due_at && now < hard_cap {
+
+    let due_at = std::cmp::min(
+        activation_due_at(payload, &events, latest_wake_at),
+        hard_cap,
+    );
+    if now < due_at {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(due_at)));
@@ -252,13 +257,14 @@ pub async fn execute(
             "next_run_at": deferred.next_run_at,
         }));
     }
-    if let Some(hold) =
-        activation_capture_hold(runtime, payload, latest_wake_at, now, hard_cap).await?
+
+    if let Some(hold) = activation_voice_capture_hold(runtime, payload, latest_wake_at, now)
         && now < hard_cap
     {
+        let next_run_at = std::cmp::min(hold.next_run_at, hard_cap);
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
-        deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(hold.next_run_at, hard_cap))));
+        deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
         runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
@@ -268,17 +274,87 @@ pub async fn execute(
         }));
     }
 
-    let command = activation_agent_task_command(payload, &events)?;
-    let _ = runtime
-        .create_voice_playback_job_for_channel(
+    let closed_at = if now >= hard_cap { hard_cap } else { due_at };
+    record_activation_window_closed(runtime, job, payload, closed_at).await?;
+
+    dispatch_after_stt_settles(
+        runtime,
+        job,
+        payload,
+        window_start,
+        latest_wake_at,
+        closed_at,
+        now,
+    )
+    .await
+}
+
+async fn dispatch_after_stt_settles(
+    runtime: &mut Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    window_start: DateTime<Utc>,
+    latest_wake_at: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Value> {
+    let settle_deadline = closed_at
+        + chrono::Duration::seconds(env_i64(
+            "CLANKCORD_WAKE_ACTIVATION_STT_SETTLE_SECONDS",
+            DEFAULT_STT_SETTLE_SECONDS,
+        ));
+    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at, closed_at).await? {
+        if now < settle_deadline {
+            let mut deferred = job.clone();
+            deferred.state = JobState::Queued;
+            deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(
+                now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS),
+                settle_deadline,
+            ))));
+            runtime.timeline_store.update_job(&deferred).await?;
+            return Ok(json!({
+                "kind": "wake_activation",
+                "status": "deferred",
+                "reason": "waiting_for_request_transcription",
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "next_run_at": deferred.next_run_at,
+            }));
+        }
+        record_activation_no_request(runtime, job, payload, closed_at, "stt_settlement_expired")
+            .await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "no_request_captured",
+            "reason": "stt_settlement_expired",
+            "request_audio_closed_at": isoformat_z(Some(closed_at)),
+        }));
+    }
+
+    let request_events = runtime
+        .timeline_store
+        .load_events(
             &payload.guild_id,
             &payload.voice_channel_id,
-            &payload.speaker_user_id,
-            DiscordVoicePlaybackCue::Ack,
-            "wake_activation_window_closed",
-            &job.id,
+            Some(window_start),
+            Some(closed_at + chrono::Duration::milliseconds(1)),
+            None,
+            None,
+            false,
         )
         .await?;
+    let request = activation_request_text(payload, &request_events, closed_at);
+    if request.trim().is_empty() {
+        record_activation_no_request(runtime, job, payload, closed_at, "empty_request_text")
+            .await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "no_request_captured",
+            "reason": "empty_request_text",
+            "request_audio_closed_at": isoformat_z(Some(closed_at)),
+        }));
+    }
+
+    let command = activation_agent_task_command(payload, &request_events, closed_at)?;
     let agent_job = Job::agent_task(
         &payload.guild_id,
         &payload.voice_channel_id,
@@ -304,15 +380,81 @@ pub async fn execute(
                 "kind": "wake_activation_dispatched",
                 "job_id": job.id,
                 "activation_id": payload.activation_id,
-                "created": created,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "created": created.clone(),
             }),
         )
         .await?;
     Ok(json!({
         "kind": "wake_activation",
         "status": "dispatched",
+        "request_audio_closed_at": isoformat_z(Some(closed_at)),
         "created": created,
     }))
+}
+
+async fn record_activation_window_closed(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+) -> Result<()> {
+    runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_window_closed",
+                "kind": "wake_activation_window_closed",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "wake_event_id": payload.wake_event_id,
+                "latest_wake_event_id": payload.latest_wake_event_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "startedAt": isoformat_z(Some(closed_at)),
+                "endedAt": isoformat_z(Some(closed_at)),
+            }),
+        )
+        .await?;
+    let _ = runtime
+        .create_voice_playback_job_for_channel(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.speaker_user_id,
+            DiscordVoicePlaybackCue::Ack,
+            "wake_activation_window_closed",
+            &job.id,
+        )
+        .await?;
+    Ok(())
+}
+
+async fn record_activation_no_request(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+    reason: &str,
+) -> Result<()> {
+    runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_no_request",
+                "kind": "wake_activation_no_request",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "reason": reason,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn activation_followup_target(
@@ -531,7 +673,7 @@ fn activation_due_at(
         latest_speaker_event_end(payload, events, latest_wake_at).unwrap_or(latest_wake_at);
     let min_post_at = latest_wake_at + chrono::Duration::seconds(payload.min_post_seconds);
     let idle_at = latest_speaker_end + chrono::Duration::seconds(payload.speaker_idle_seconds);
-    std::cmp::max(min_post_at, idle_at) + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
+    std::cmp::max(min_post_at, idle_at)
 }
 
 fn latest_speaker_event_end(
@@ -547,26 +689,30 @@ fn latest_speaker_event_end(
         .max()
 }
 
-async fn activation_capture_hold(
+fn activation_window_closed_at(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+) -> Option<DateTime<Utc>> {
+    events
+        .iter()
+        .filter(|event| {
+            first_value_string(event, &["event_kind", "kind"]) == "wake_activation_window_closed"
+                && first_value_string(event, &["activation_id"]) == payload.activation_id
+        })
+        .filter_map(|event| {
+            parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
+                .or_else(|| event_start(event))
+        })
+        .max()
+}
+
+fn activation_voice_capture_hold(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
     now: DateTime<Utc>,
-    hard_cap: DateTime<Utc>,
-) -> Result<Option<CaptureHold>> {
-    if now >= hard_cap {
-        return Ok(None);
-    }
-    if let Some(hold) = live_speaker_capture_hold(runtime, payload, latest_wake_at, now) {
-        return Ok(Some(hold));
-    }
-    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at).await? {
-        return Ok(Some(CaptureHold {
-            reason: "waiting_for_audio_segment_transcription",
-            next_run_at: now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS),
-        }));
-    }
-    Ok(None)
+) -> Option<CaptureHold> {
+    live_speaker_capture_hold(runtime, payload, latest_wake_at, now)
 }
 
 fn live_speaker_capture_hold(
@@ -585,19 +731,16 @@ fn live_speaker_capture_hold(
     if last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at < latest_wake_at) {
         return None;
     }
+    let settled_at = last_pcm_at
+        .map(|last_pcm_at| last_pcm_at + chrono::Duration::seconds(payload.speaker_idle_seconds))
+        .unwrap_or(now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS));
     let has_live_audio =
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
-    if !has_live_audio {
+    let waiting_for_idle = settled_at > now;
+    if !has_live_audio && !waiting_for_idle {
         return None;
     }
-    let settled_at = last_pcm_at
-        .map(|last_pcm_at| {
-            last_pcm_at
-                + chrono::Duration::seconds(payload.speaker_idle_seconds)
-                + chrono::Duration::seconds(payload.stt_flush_grace_seconds)
-        })
-        .unwrap_or(now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS));
-    let next_run_at = if speaker.active && settled_at > now {
+    let next_run_at = if waiting_for_idle {
         settled_at
     } else {
         now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS)
@@ -612,36 +755,27 @@ async fn has_pending_speaker_audio_segment(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
 ) -> Result<bool> {
     runtime
         .timeline_store
-        .has_pending_audio_segment_for_speaker(
+        .has_pending_audio_segment_for_speaker_until(
             &payload.guild_id,
             &payload.voice_channel_id,
             &payload.speaker_user_id,
             latest_wake_at,
+            closed_at,
         )
         .await
-}
-
-fn has_post_wake_speech(
-    payload: &WakeActivationPayload,
-    events: &[Value],
-    latest_wake_at: DateTime<Utc>,
-) -> bool {
-    events.iter().any(|event| {
-        same_speaker(event, &payload.speaker_user_id)
-            && event_overlaps_or_follows(event, latest_wake_at)
-            && !event_text(event).is_empty()
-    })
 }
 
 fn activation_agent_task_command(
     payload: &WakeActivationPayload,
     events: &[Value],
+    closed_at: DateTime<Utc>,
 ) -> Result<CommandRequest> {
-    let request = activation_request_text(payload, events);
-    let source_event_ids = activation_source_event_ids(payload, events);
+    let request = activation_request_text(payload, events, closed_at);
+    let source_event_ids = activation_source_event_ids(payload, events, closed_at);
     let activation = activation_summary(payload, &source_event_ids);
     CommandRequest::from_json(&json!({
         "action": "dispatch_now",
@@ -677,22 +811,31 @@ fn activation_summary(payload: &WakeActivationPayload, source_event_ids: &[Strin
     })
 }
 
-fn activation_request_text(payload: &WakeActivationPayload, events: &[Value]) -> String {
+fn activation_request_text(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    closed_at: DateTime<Utc>,
+) -> String {
     let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
     let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
-    collapse_ws(
+    let collapsed = collapse_ws(
         &events
             .iter()
             .filter(|event| same_speaker(event, &payload.speaker_user_id))
-            .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
+            .filter(|event| event_is_in_request_window(event, latest_wake_at, closed_at))
             .map(event_text)
             .filter(|text| !text.is_empty())
             .collect::<Vec<_>>()
             .join(" "),
-    )
+    );
+    strip_leading_wake_phrase(&collapsed).to_string()
 }
 
-fn activation_source_event_ids(payload: &WakeActivationPayload, events: &[Value]) -> Vec<String> {
+fn activation_source_event_ids(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    closed_at: DateTime<Utc>,
+) -> Vec<String> {
     let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
     let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
     let mut ids = Vec::new();
@@ -709,7 +852,7 @@ fn activation_source_event_ids(payload: &WakeActivationPayload, events: &[Value]
     }
     for event in events
         .iter()
-        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
+        .filter(|event| event_is_in_request_window(event, latest_wake_at, closed_at))
         .filter(|event| !event_text(event).is_empty() || event_has_wake(event))
     {
         let id = first_value_string(event, &["event_id", "eventId"]);
@@ -729,12 +872,12 @@ fn ready_at_string(
     ended_at: DateTime<Utc>,
     min_post_seconds: i64,
     idle_seconds: i64,
-    flush_grace_seconds: i64,
+    _flush_grace_seconds: i64,
 ) -> String {
     let due_at = std::cmp::max(
         started_at + chrono::Duration::seconds(min_post_seconds),
         ended_at + chrono::Duration::seconds(idle_seconds),
-    ) + chrono::Duration::seconds(flush_grace_seconds);
+    );
     due_at.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
@@ -746,6 +889,56 @@ fn event_overlaps_or_follows(event: &Value, instant: DateTime<Utc>) -> bool {
     event_end(event)
         .or_else(|| event_start(event))
         .is_some_and(|ended| ended >= instant)
+}
+
+fn event_is_in_request_window(
+    event: &Value,
+    latest_wake_at: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+) -> bool {
+    event_end(event)
+        .or_else(|| event_start(event))
+        .is_some_and(|ended| ended >= latest_wake_at)
+        && event_start(event)
+            .or_else(|| event_end(event))
+            .is_some_and(|started| started <= closed_at)
+}
+
+fn strip_leading_wake_phrase(text: &str) -> &str {
+    let value = text.trim();
+    let Some(after_hey) = strip_ascii_word(value, "hey") else {
+        return strip_activation_separator(strip_ascii_word(value, "clanky").unwrap_or(value));
+    };
+    let after_hey = strip_activation_separator(after_hey);
+    strip_activation_separator(strip_ascii_word(after_hey, "clanky").unwrap_or(value))
+}
+
+fn strip_ascii_word<'a>(value: &'a str, word: &str) -> Option<&'a str> {
+    let trimmed = value.trim_start();
+    if trimmed.len() < word.len() {
+        return None;
+    }
+    let prefix = trimmed.get(..word.len())?;
+    if !prefix.eq_ignore_ascii_case(word) {
+        return None;
+    }
+    let rest = &trimmed[word.len()..];
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some(rest)
+}
+
+fn strip_activation_separator(value: &str) -> &str {
+    value
+        .trim_start_matches(|ch: char| {
+            ch.is_ascii_whitespace() || matches!(ch, ',' | '.' | ':' | ';' | '-' | '!' | '?')
+        })
+        .trim()
 }
 
 fn env_i64(key: &str, fallback: i64) -> i64 {

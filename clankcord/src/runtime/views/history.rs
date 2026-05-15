@@ -575,6 +575,8 @@ fn timeline_event_is_ephemeral(kind: &str) -> bool {
             | "wake_activation_ignored"
             | "wake_activation_dispatched"
             | "wake_activation_amended"
+            | "wake_activation_window_closed"
+            | "wake_activation_no_request"
             | "voice_bot_assigned"
             | "voice_bot_released"
             | "retention_retired"

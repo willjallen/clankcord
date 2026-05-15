@@ -92,7 +92,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     assert_eq!(command_value["command_kind"], json!("agent_task"));
     assert_eq!(
         command_value["arguments"]["request"],
-        json!("Hey Clanky summarize what Vince said about floats")
+        json!("summarize what Vince said about floats")
     );
     assert!(command_value["arguments"]["activation"]["prior_to_activation"].is_null());
     assert!(command_value["arguments"]["activation"]["post_activation_turn"].is_null());
@@ -181,12 +181,12 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let command_value = command.command_value().unwrap();
     assert_eq!(
         command_value["arguments"]["request"],
-        json!("hey clanky summarize the floating point discussion")
+        json!("summarize the floating point discussion")
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn wake_activation_dispatches_agent_task_for_bare_wake_word() {
+async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
@@ -215,12 +215,14 @@ async fn wake_activation_dispatches_agent_task_for_bare_wake_word() {
         .await
         .unwrap();
 
-    assert_eq!(result["status"], json!("dispatched"));
-    let agent_job_id = string_field(&result["created"]["job"], "job_id");
-    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
-    assert_eq!(agent_job.kind, JobKind::AgentTask);
-    let command_value = agent_job.command_value().unwrap();
-    assert_eq!(command_value["arguments"]["request"], json!("Hey Clanky"));
+    assert_eq!(result["status"], json!("no_request_captured"));
+    assert_eq!(result["reason"], json!("empty_request_text"));
+    let jobs = runtime
+        .timeline_store
+        .list_jobs(Some("guild"), None)
+        .await
+        .unwrap();
+    assert!(!jobs.iter().any(|job| job.kind == JobKind::AgentTask));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -283,7 +285,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     assert_eq!(
         command_value["arguments"]["request"],
         json!(
-            "Hey Clanky can you check the Codex usage inside the Docker environment but I would like you to try"
+            "can you check the Codex usage inside the Docker environment but I would like you to try"
         )
     );
     assert!(
@@ -514,8 +516,8 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
             speaker_user_id: "user-a".to_string(),
             speaker_label: "Will".to_string(),
             speaker_username: "will".to_string(),
-            segment_start_time: now - chrono::Duration::seconds(6),
-            segment_end_time: now - chrono::Duration::seconds(1),
+            segment_start_time: now - chrono::Duration::seconds(18),
+            segment_end_time: now - chrono::Duration::seconds(16),
             segment_index: 2,
             duration_ms: 5000,
             source_audio_path: raw.path().join("pending.wav"),
@@ -535,9 +537,148 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
         .unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    runtime.sessions.insert(
+        "cap_test".to_string(),
+        RuntimeSessionStatus {
+            session_id: "cap_test".to_string(),
+            guild_id: "guild".to_string(),
+            channel_id: "code".to_string(),
+            voice_channel_id: "code".to_string(),
+            active: true,
+            ..RuntimeSessionStatus::default()
+        },
+    );
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(10);
+    let request_started_at = wake_started_at + chrono::Duration::seconds(1);
+    let request_ended_at = wake_started_at + chrono::Duration::seconds(4);
+    let wake = runtime
+        .timeline_store
+        .append_event(
+            "guild",
+            "code",
+            json!({
+                "event_kind": "wake_detected",
+                "kind": "wake_detected",
+                "capture_run_id": "cap_test",
+                "speaker_user_id": "user-a",
+                "speakerId": "user-a",
+                "speaker_label": "Will",
+                "speakerLabel": "Will",
+                "startedAt": wake_started_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                "endedAt": (wake_started_at + chrono::Duration::milliseconds(500)).to_rfc3339_opts(SecondsFormat::Millis, true),
+                "wake": {"wake": true, "score": 0.91},
+                "wake_detected": true,
+            }),
+        )
+        .await
+        .unwrap();
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let pending_audio = runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: request_started_at,
+            segment_end_time: request_ended_at,
+            segment_index: 2,
+            duration_ms: (request_ended_at - request_started_at).num_milliseconds(),
+            source_audio_path: raw.path().join("pending-late.wav"),
+            audio_checksum: "sha256:pending-late".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let deferred = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+    assert_eq!(deferred["status"], json!("deferred"));
     assert_eq!(
-        result["reason"],
-        json!("waiting_for_audio_segment_transcription")
+        deferred["reason"],
+        json!("waiting_for_request_transcription")
+    );
+    let jobs = runtime
+        .timeline_store
+        .list_jobs(Some("guild"), None)
+        .await
+        .unwrap();
+    assert!(jobs.iter().any(|job| {
+        job.discord_voice_playback_payload()
+            .is_some_and(|payload| payload.cue == DiscordVoicePlaybackCue::Ack)
+    }));
+
+    let speech = append_event(
+        &runtime.timeline_store,
+        request_started_at,
+        request_ended_at,
+        "Will",
+        "user-a",
+        "Hey Clanky send Vince the note",
+        json!({}),
+        3,
+    )
+    .await;
+    let mut completed_audio = pending_audio;
+    completed_audio.mark_complete();
+    runtime
+        .timeline_store
+        .update_job(&completed_audio)
+        .await
+        .unwrap();
+
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let dispatched = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(dispatched["status"], json!("dispatched"));
+    let agent_job_id = string_field(&dispatched["created"]["job"], "job_id");
+    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
+    let command_value = agent_job.command_value().unwrap();
+    assert_eq!(
+        command_value["arguments"]["request"],
+        json!("send Vince the note")
+    );
+    assert!(
+        command_value["arguments"]["source_event_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&speech["event_id"])
     );
 }
 
