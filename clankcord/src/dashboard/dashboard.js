@@ -485,14 +485,16 @@ window.dashboard = function dashboard() {
     },
 
     loadRows() {
-      const load = this.data?.load || {};
-      const summary = this.jobSummary();
+      const backlog = this.operationBacklog();
       return [
-        { label: 'Due queued jobs', value: load.dueQueuedJobs ?? 0 },
-        { label: 'Oldest queued age', value: `${load.oldestQueuedAgeSeconds ?? 0}s` },
-        { label: 'Running jobs', value: summary.running ?? 0 },
-        { label: 'Waiting jobs', value: summary.waiting ?? 0 },
-        { label: 'Cancellable jobs', value: summary.cancellable ?? 0 },
+        { label: 'Active jobs', value: this.int(backlog.total) },
+        { label: 'Due queued jobs', value: this.int(backlog.dueQueued) },
+        { label: 'Queued jobs', value: this.int(backlog.queued) },
+        { label: 'Running jobs', value: this.int(backlog.running) },
+        { label: 'Waiting jobs', value: this.int(backlog.waiting) },
+        { label: 'Oldest queued age', value: this.seconds(backlog.oldestQueuedAgeSeconds) },
+        { label: 'Oldest running age', value: this.seconds(backlog.oldestRunningAgeSeconds) },
+        { label: 'Cancellable jobs', value: this.int(backlog.cancellable) },
       ];
     },
 
@@ -504,6 +506,52 @@ window.dashboard = function dashboard() {
         { label: 'User', value: database.user || '' },
         { label: 'Root', value: database.root || '' },
       ];
+    },
+
+    operations() {
+      return this.data?.operations || {};
+    },
+
+    operationBacklog() {
+      return this.operations().backlog || {};
+    },
+
+    serverLoadRows() {
+      const load = this.data?.process?.load || {};
+      const avg = load.loadAverage || {};
+      const memory = load.memory || {};
+      const cpu = load.cpu || {};
+      const process = cpu.process || {};
+      const cgroup = cpu.cgroup || {};
+      return [
+        { label: 'PID', value: load.pid || '' },
+        { label: 'Threads', value: this.int(load.threads) },
+        { label: 'Open files', value: this.int(load.openFileDescriptors) },
+        { label: 'Load avg', value: [avg.oneMinute, avg.fiveMinute, avg.fifteenMinute].map((value) => Number(value || 0).toFixed(2)).join(' / ') },
+        { label: 'Runnable threads', value: `${this.int(avg.runnableThreads)} / ${this.int(avg.totalThreads)}` },
+        { label: 'RSS', value: this.bytes(memory.rssBytes) },
+        { label: 'Virtual memory', value: this.bytes(memory.vmSizeBytes) },
+        { label: 'Cgroup memory', value: `${this.bytes(memory.cgroupCurrentBytes)}${memory.cgroupMaxBytes ? ` / ${this.bytes(memory.cgroupMaxBytes)}` : ''}` },
+        { label: 'Host available RAM', value: `${this.bytes(memory.hostAvailableBytes)} / ${this.bytes(memory.hostTotalBytes)}` },
+        { label: 'CPU ticks', value: this.int(process.totalTicks) },
+        { label: 'Cgroup CPU', value: this.micros(cgroup.usage_usec) },
+      ];
+    },
+
+    backlogKindRows() {
+      return this.operationBacklog().byKind || [];
+    },
+
+    speechWakeWindows() {
+      return this.operations().windows || [];
+    },
+
+    latencyWindows() {
+      return this.operations().latencies?.windows || [];
+    },
+
+    latencyKindRows() {
+      return this.operations().latencies?.byKind || [];
     },
 
     codexUsageWindows() {
@@ -825,6 +873,40 @@ window.dashboard = function dashboard() {
     short(value, n = 16) {
       const text = textValue(value);
       return text.length > n ? `${text.slice(0, n)}...` : text;
+    },
+
+    seconds(value) {
+      const total = Number(value || 0);
+      if (!Number.isFinite(total) || total <= 0) return '0s';
+      if (total < 60) return `${Math.round(total)}s`;
+      const minutes = total / 60;
+      if (minutes < 60) return `${minutes.toFixed(minutes >= 10 ? 0 : 1)}m`;
+      const hours = minutes / 60;
+      if (hours < 48) return `${hours.toFixed(hours >= 10 ? 0 : 1)}h`;
+      return `${(hours / 24).toFixed(1)}d`;
+    },
+
+    millis(value) {
+      const ms = Number(value);
+      if (!Number.isFinite(ms)) return '';
+      if (ms < 1000) return `${Math.round(ms)}ms`;
+      if (ms < 60000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`;
+      return `${(ms / 60000).toFixed(1)}m`;
+    },
+
+    micros(value) {
+      const us = Number(value);
+      if (!Number.isFinite(us) || us <= 0) return '0ms';
+      return this.millis(us / 1000);
+    },
+
+    latencyValue(stats, name, field = 'p95') {
+      return this.millis(stats?.[name]?.[field]);
+    },
+
+    jobWindowLabel(window, key) {
+      const stats = window?.[key] || {};
+      return `${this.int(stats.total)} / ${this.int(stats.active)} active / ${this.int(stats.failed)} failed`;
     },
 
     bytes(value) {

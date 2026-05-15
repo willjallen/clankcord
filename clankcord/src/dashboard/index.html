@@ -399,7 +399,7 @@
     </div>
 
     <div class="view active" x-show="activeView === 'health'">
-      <div class="layout">
+      <div class="layout health-layout">
         <div class="stack">
           <section>
             <h2><span>Service Health</span></h2>
@@ -410,7 +410,15 @@
             </div>
           </section>
           <section>
-            <h2><span>Load</span></h2>
+            <h2><span>Runtime Load</span></h2>
+            <div class="dense-list">
+              <template x-for="row in serverLoadRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+              </template>
+            </div>
+          </section>
+          <section>
+            <h2><span>Job Backlog</span></h2>
             <div class="dense-list">
               <template x-for="row in loadRows()" :key="row.label">
                 <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
@@ -428,8 +436,98 @@
         </div>
         <div class="stack">
           <section>
-            <h2><span>Postgres Server</span></h2>
-            <pre x-text="database().version || ''"></pre>
+            <h2><span>Job Latency Windows</span><small>queue / run / total</small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Window</th><th>Jobs</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Run p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Failed</th></tr></thead>
+                <tbody>
+                  <template x-for="window in latencyWindows()" :key="window.label">
+                    <tr>
+                      <td x-text="window.label"></td>
+                      <td x-text="int(window.all?.count)"></td>
+                      <td x-text="latencyValue(window.all, 'totalMs', 'p50')"></td>
+                      <td x-text="latencyValue(window.all, 'totalMs', 'p95')"></td>
+                      <td x-text="latencyValue(window.all, 'totalMs', 'max')"></td>
+                      <td x-text="latencyValue(window.all, 'runMs', 'p95')"></td>
+                      <td x-text="latencyValue(window.all, 'queueMs', 'p95')"></td>
+                      <td x-text="latencyValue(window.stt, 'totalMs', 'p95')"></td>
+                      <td x-text="latencyValue(window.wakeword, 'totalMs', 'p95')"></td>
+                      <td x-text="int(window.all?.failed)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!latencyWindows().length">No latency samples.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Speech And Wake Windows</span></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Window</th><th>Speech</th><th>Audio Jobs</th><th>Wake Probes</th><th>Wake Window Jobs</th><th>Wake Hits</th><th>Wake Dispatches</th><th>Speakers</th></tr></thead>
+                <tbody>
+                  <template x-for="window in speechWakeWindows()" :key="window.label">
+                    <tr>
+                      <td x-text="window.label"></td>
+                      <td><div x-text="int(window.events?.speechSegments)"></div><div class="muted" x-text="seconds((window.events?.speechAudioMs || 0) / 1000)"></div></td>
+                      <td x-text="jobWindowLabel(window, 'audioSegmentJobs')"></td>
+                      <td x-text="jobWindowLabel(window, 'wakeProbeJobs')"></td>
+                      <td x-text="jobWindowLabel(window, 'wakeActivationJobs')"></td>
+                      <td x-text="int(window.events?.wakeDetected)"></td>
+                      <td x-text="int(window.events?.wakeActivationDispatched)"></td>
+                      <td x-text="int(window.events?.speakers)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!speechWakeWindows().length">No speech or wake samples.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Backlog By Job Type</span><small x-text="backlogKindRows().length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Job Type</th><th>Active</th><th>Queued</th><th>Due</th><th>Running</th><th>Waiting</th><th>Oldest Queued</th><th>Oldest Running</th></tr></thead>
+                <tbody>
+                  <template x-for="row in backlogKindRows()" :key="row.kind">
+                    <tr>
+                      <td><span class="pill" :class="statusClass(row.kind)" x-text="row.kind"></span></td>
+                      <td x-text="int(row.active)"></td>
+                      <td x-text="int(row.queued)"></td>
+                      <td x-text="int(row.dueQueued)"></td>
+                      <td x-text="int(row.running)"></td>
+                      <td x-text="int(row.waiting)"></td>
+                      <td x-text="seconds(row.oldestQueuedAgeSeconds)"></td>
+                      <td x-text="seconds(row.oldestRunningAgeSeconds)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!backlogKindRows().length">No active backlog.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Latency By Job Type</span><small>last hour</small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Run p95</th><th>Queue p95</th></tr></thead>
+                <tbody>
+                  <template x-for="row in latencyKindRows()" :key="row.kind">
+                    <tr>
+                      <td><span class="pill" :class="statusClass(row.kind)" x-text="row.kind"></span></td>
+                      <td x-text="int(row.count)"></td>
+                      <td x-text="int(row.failed)"></td>
+                      <td x-text="latencyValue(row, 'totalMs', 'p50')"></td>
+                      <td x-text="latencyValue(row, 'totalMs', 'p95')"></td>
+                      <td x-text="latencyValue(row, 'totalMs', 'max')"></td>
+                      <td x-text="latencyValue(row, 'runMs', 'p95')"></td>
+                      <td x-text="latencyValue(row, 'queueMs', 'p95')"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!latencyKindRows().length">No completed job samples.</div>
+            </div>
           </section>
           <section>
             <h2><span>Postgres Tables</span></h2>
@@ -443,6 +541,10 @@
                 </tbody>
               </table>
             </div>
+          </section>
+          <section>
+            <h2><span>Postgres Server</span></h2>
+            <pre x-text="database().version || ''"></pre>
           </section>
         </div>
       </div>

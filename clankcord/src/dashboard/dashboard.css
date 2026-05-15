@@ -203,6 +203,10 @@ main {
   grid-template-columns: minmax(360px, 0.75fr) minmax(0, 1.25fr);
 }
 
+.health-layout {
+  grid-template-columns: minmax(340px, 0.72fr) minmax(0, 1.28fr);
+}
+
 .stack {
   display: grid;
   gap: 16px;
@@ -585,7 +589,8 @@ details summary {
   .layout,
   .jobs-layout,
   .agents-layout,
-  .control-layout {
+  .control-layout,
+  .health-layout {
     grid-template-columns: 1fr;
   }
 }

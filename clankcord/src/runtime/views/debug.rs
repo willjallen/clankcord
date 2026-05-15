@@ -14,7 +14,8 @@ use crate::config::{non_empty, string_field};
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::timeline::{
-    event_start, isoformat_z, parse_instant, resolve_time_reference, utc_now,
+    event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
+    utc_now,
 };
 use crate::runtime::util::{first_non_empty, preview};
 use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
@@ -22,6 +23,7 @@ use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
+const HEALTH_WINDOWS: &[(&str, i64)] = &[("5m", 5 * 60), ("15m", 15 * 60), ("1h", 60 * 60)];
 
 #[derive(Debug, Clone)]
 pub struct DebugOverviewRequest {
@@ -129,6 +131,9 @@ impl Runtime {
         let summary = job_summary(&summary_jobs);
         let database = database_diagnostics(self).await;
         let health = runtime_health(self, &summary_jobs, &database);
+        let operations = operational_diagnostics(self, now)
+            .await
+            .context("loading operational health diagnostics")?;
         let publications = self
             .timeline_store
             .list_publications(None, None, None)
@@ -148,10 +153,12 @@ impl Runtime {
                 "startedAt": isoformat_z(Some(self.started_at)),
                 "uptimeSeconds": (now - self.started_at).num_seconds(),
                 "autoJoin": {"enabled": self.auto_join_enabled},
+                "load": process_load_payload(),
             },
             "health": health,
             "database": database,
             "load": load_payload(&active_job_records, now),
+            "operations": operations,
             "agents": agent_dashboard_payload(&agent_job_records, agent_limit),
             "status": status,
             "jobs": {
@@ -298,6 +305,117 @@ struct EventKindSummary {
     latest_at: String,
 }
 
+#[derive(Debug, Clone)]
+struct JobDiagnosticRow {
+    kind: String,
+    state: String,
+    lane: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+    ready_at_ms: i64,
+    started_at_ms: Option<i64>,
+    completed_at_ms: Option<i64>,
+    terminal: bool,
+    failed: bool,
+    cancellable: bool,
+}
+
+impl JobDiagnosticRow {
+    fn activity_ms(&self) -> i64 {
+        let mut activity = self.created_at_ms.max(self.updated_at_ms);
+        if let Some(started_at_ms) = self.started_at_ms {
+            activity = activity.max(started_at_ms);
+        }
+        if let Some(completed_at_ms) = self.completed_at_ms {
+            activity = activity.max(completed_at_ms);
+        }
+        activity
+    }
+
+    fn is_active(&self) -> bool {
+        !self.terminal
+    }
+
+    fn is_failed(&self) -> bool {
+        self.failed || is_failed_state(&self.state)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EventDiagnosticRow {
+    event_kind: String,
+    at_ms: i64,
+    ended_at_ms: Option<i64>,
+    speaker_user_id: String,
+}
+
+#[derive(Debug, Default)]
+struct BacklogKindSummary {
+    kind: String,
+    active: usize,
+    queued: usize,
+    due_queued: usize,
+    running: usize,
+    waiting: usize,
+    cancel_requested: usize,
+    confirmation_pending: usize,
+    cancellable: usize,
+    oldest_queued_age_seconds: i64,
+    oldest_running_age_seconds: i64,
+    oldest_active_age_seconds: i64,
+}
+
+impl BacklogKindSummary {
+    fn add(&mut self, row: &JobDiagnosticRow, now_ms: i64) {
+        self.active += 1;
+        if row.cancellable {
+            self.cancellable += 1;
+        }
+        self.oldest_active_age_seconds = self
+            .oldest_active_age_seconds
+            .max(age_seconds(now_ms, row.created_at_ms));
+        match row.state.as_str() {
+            "queued" => {
+                self.queued += 1;
+                if row.ready_at_ms <= now_ms {
+                    self.due_queued += 1;
+                }
+                self.oldest_queued_age_seconds = self
+                    .oldest_queued_age_seconds
+                    .max(age_seconds(now_ms, row.created_at_ms));
+            }
+            "running" => {
+                self.running += 1;
+                self.oldest_running_age_seconds = self.oldest_running_age_seconds.max(age_seconds(
+                    now_ms,
+                    row.started_at_ms.unwrap_or(row.created_at_ms),
+                ));
+            }
+            "waiting" => self.waiting += 1,
+            "cancel_requested" => self.cancel_requested += 1,
+            "confirmation_pending" => self.confirmation_pending += 1,
+            _ => {}
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "kind": self.kind,
+            "active": self.active,
+            "queued": self.queued,
+            "dueQueued": self.due_queued,
+            "running": self.running,
+            "waiting": self.waiting,
+            "cancelRequested": self.cancel_requested,
+            "confirmationPending": self.confirmation_pending,
+            "cancellable": self.cancellable,
+            "oldestQueuedAgeSeconds": self.oldest_queued_age_seconds,
+            "oldestRunningAgeSeconds": self.oldest_running_age_seconds,
+            "oldestActiveAgeSeconds": self.oldest_active_age_seconds,
+        })
+    }
+}
+
 fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let failed_jobs = jobs
@@ -384,6 +502,599 @@ async fn table_counts(runtime: &Runtime) -> Vec<Value> {
         rows.push(json!({"table": table, "rows": count}));
     }
     rows
+}
+
+async fn operational_diagnostics(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+    let since_ms = instant_ms_dt(now - chrono::Duration::seconds(max_health_window_seconds()));
+    let job_rows = diagnostic_job_rows(runtime, since_ms).await?;
+    let event_rows = diagnostic_event_rows(runtime, since_ms).await?;
+    Ok(json!({
+        "backlog": backlog_payload(&job_rows, now),
+        "windows": operational_windows(&job_rows, &event_rows, now),
+        "latencies": latency_payload(&job_rows, now),
+    }))
+}
+
+async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<JobDiagnosticRow>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT kind, state, lane, created_at_ms, updated_at_ms, ready_at_ms,
+               started_at_ms, completed_at_ms, terminal, failed, cancellable
+        FROM jobs
+        WHERE terminal = FALSE
+           OR created_at_ms >= $1
+           OR updated_at_ms >= $1
+           OR completed_at_ms >= $1
+        ORDER BY updated_at_ms DESC
+        "#,
+    )
+    .bind(since_ms)
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(JobDiagnosticRow {
+                kind: row.try_get("kind")?,
+                state: row.try_get("state")?,
+                lane: row.try_get("lane")?,
+                created_at_ms: row.try_get("created_at_ms")?,
+                updated_at_ms: row.try_get("updated_at_ms")?,
+                ready_at_ms: row.try_get("ready_at_ms")?,
+                started_at_ms: row.try_get("started_at_ms")?,
+                completed_at_ms: row.try_get("completed_at_ms")?,
+                terminal: row.try_get("terminal")?,
+                failed: row.try_get("failed")?,
+                cancellable: row.try_get("cancellable")?,
+            })
+        })
+        .collect()
+}
+
+async fn diagnostic_event_rows(
+    runtime: &Runtime,
+    since_ms: i64,
+) -> Result<Vec<EventDiagnosticRow>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT event_kind, COALESCE(started_at_ms, created_at_ms) AS at_ms,
+               ended_at_ms, speaker_user_id
+        FROM timeline_events
+        WHERE forgotten = FALSE
+          AND COALESCE(started_at_ms, created_at_ms) >= $1
+          AND (
+            event_kind IN (
+              'speech_segment',
+              'transcript',
+              'wake_detected',
+              'wake_activation_dispatched',
+              'wake_activation_amended',
+              'wake_activation_replaced',
+              'wake_activation_ignored',
+              'wake_activation_window_closed'
+            )
+            OR event_kind LIKE 'wake_%'
+          )
+        ORDER BY COALESCE(started_at_ms, created_at_ms) DESC
+        "#,
+    )
+    .bind(since_ms)
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(EventDiagnosticRow {
+                event_kind: row.try_get("event_kind")?,
+                at_ms: row.try_get("at_ms")?,
+                ended_at_ms: row.try_get("ended_at_ms")?,
+                speaker_user_id: row.try_get("speaker_user_id")?,
+            })
+        })
+        .collect()
+}
+
+fn backlog_payload(rows: &[JobDiagnosticRow], now: DateTime<Utc>) -> Value {
+    let now_ms = instant_ms_dt(now);
+    let mut total = 0_usize;
+    let mut queued = 0_usize;
+    let mut due_queued = 0_usize;
+    let mut running = 0_usize;
+    let mut waiting = 0_usize;
+    let mut cancel_requested = 0_usize;
+    let mut confirmation_pending = 0_usize;
+    let mut cancellable = 0_usize;
+    let mut oldest_active_age_seconds = 0_i64;
+    let mut oldest_queued_age_seconds = 0_i64;
+    let mut oldest_running_age_seconds = 0_i64;
+    let mut by_state = BTreeMap::<String, usize>::new();
+    let mut by_kind_state = BTreeMap::<(String, String), usize>::new();
+    let mut by_lane_state = BTreeMap::<(String, String), usize>::new();
+    let mut by_kind = BTreeMap::<String, BacklogKindSummary>::new();
+
+    for row in rows.iter().filter(|row| row.is_active()) {
+        total += 1;
+        *by_state.entry(row.state.clone()).or_insert(0) += 1;
+        *by_kind_state
+            .entry((row.kind.clone(), row.state.clone()))
+            .or_insert(0) += 1;
+        *by_lane_state
+            .entry((row.lane.clone(), row.state.clone()))
+            .or_insert(0) += 1;
+        if row.cancellable {
+            cancellable += 1;
+        }
+        oldest_active_age_seconds =
+            oldest_active_age_seconds.max(age_seconds(now_ms, row.created_at_ms));
+        match row.state.as_str() {
+            "queued" => {
+                queued += 1;
+                if row.ready_at_ms <= now_ms {
+                    due_queued += 1;
+                }
+                oldest_queued_age_seconds =
+                    oldest_queued_age_seconds.max(age_seconds(now_ms, row.created_at_ms));
+            }
+            "running" => {
+                running += 1;
+                oldest_running_age_seconds = oldest_running_age_seconds.max(age_seconds(
+                    now_ms,
+                    row.started_at_ms.unwrap_or(row.created_at_ms),
+                ));
+            }
+            "waiting" => waiting += 1,
+            "cancel_requested" => cancel_requested += 1,
+            "confirmation_pending" => confirmation_pending += 1,
+            _ => {}
+        }
+        let entry = by_kind
+            .entry(row.kind.clone())
+            .or_insert_with(|| BacklogKindSummary {
+                kind: row.kind.clone(),
+                ..BacklogKindSummary::default()
+            });
+        entry.add(row, now_ms);
+    }
+
+    let mut kind_rows = by_kind
+        .into_values()
+        .map(|summary| summary.to_json())
+        .collect::<Vec<_>>();
+    kind_rows.sort_by(|left, right| {
+        json_usize(right, "active")
+            .cmp(&json_usize(left, "active"))
+            .then_with(|| json_usize(right, "dueQueued").cmp(&json_usize(left, "dueQueued")))
+            .then_with(|| string_field(left, "kind").cmp(&string_field(right, "kind")))
+    });
+
+    json!({
+        "total": total,
+        "queued": queued,
+        "dueQueued": due_queued,
+        "running": running,
+        "waiting": waiting,
+        "cancelRequested": cancel_requested,
+        "confirmationPending": confirmation_pending,
+        "cancellable": cancellable,
+        "oldestActiveAgeSeconds": oldest_active_age_seconds,
+        "oldestQueuedAgeSeconds": oldest_queued_age_seconds,
+        "oldestRunningAgeSeconds": oldest_running_age_seconds,
+        "byState": count_rows(by_state, "state"),
+        "byKindState": count_pair_rows(by_kind_state, "kind", "state"),
+        "byLaneState": count_pair_rows(by_lane_state, "lane", "state"),
+        "byKind": kind_rows,
+    })
+}
+
+fn operational_windows(
+    jobs: &[JobDiagnosticRow],
+    events: &[EventDiagnosticRow],
+    now: DateTime<Utc>,
+) -> Vec<Value> {
+    let now_ms = instant_ms_dt(now);
+    HEALTH_WINDOWS
+        .iter()
+        .map(|(label, seconds)| {
+            let since_ms = now_ms - (seconds * 1000);
+            let window_events = events
+                .iter()
+                .filter(|event| event.at_ms >= since_ms)
+                .collect::<Vec<_>>();
+            let speakers = window_events
+                .iter()
+                .filter_map(|event| {
+                    (!event.speaker_user_id.trim().is_empty())
+                        .then(|| event.speaker_user_id.clone())
+                })
+                .collect::<BTreeSet<_>>();
+            let speech_audio_ms = window_events
+                .iter()
+                .filter(|event| event.event_kind == "speech_segment")
+                .filter_map(|event| event.ended_at_ms.map(|ended| ended - event.at_ms))
+                .filter(|duration| *duration > 0)
+                .sum::<i64>();
+
+            json!({
+                "label": *label,
+                "since": ms_iso(since_ms),
+                "allJobs": job_window_counts(jobs, since_ms, None),
+                "audioSegmentJobs": job_window_counts(jobs, since_ms, Some("audio_segment")),
+                "wakeProbeJobs": job_window_counts(jobs, since_ms, Some("wake_probe")),
+                "wakeActivationJobs": job_window_counts(jobs, since_ms, Some("wake_activation")),
+                "events": {
+                    "speechSegments": window_events.iter().filter(|event| event.event_kind == "speech_segment").count(),
+                    "transcripts": window_events.iter().filter(|event| event.event_kind == "transcript").count(),
+                    "wakeDetected": window_events.iter().filter(|event| event.event_kind == "wake_detected").count(),
+                    "wakeActivationDispatched": window_events.iter().filter(|event| event.event_kind == "wake_activation_dispatched").count(),
+                    "wakeEvents": window_events.iter().filter(|event| event.event_kind.starts_with("wake_")).count(),
+                    "speakers": speakers.len(),
+                    "speechAudioMs": speech_audio_ms,
+                },
+            })
+        })
+        .collect()
+}
+
+fn job_window_counts(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str>) -> Value {
+    let mut total = 0_usize;
+    let mut active = 0_usize;
+    let mut queued = 0_usize;
+    let mut running = 0_usize;
+    let mut waiting = 0_usize;
+    let mut completed = 0_usize;
+    let mut failed = 0_usize;
+    let mut latest_ms = None::<i64>;
+
+    for row in rows
+        .iter()
+        .filter(|row| row.activity_ms() >= since_ms && kind.is_none_or(|kind| row.kind == kind))
+    {
+        total += 1;
+        if row.is_active() {
+            active += 1;
+        }
+        match row.state.as_str() {
+            "queued" => queued += 1,
+            "running" => running += 1,
+            "waiting" => waiting += 1,
+            "complete" => completed += 1,
+            _ => {}
+        }
+        if row.is_failed() {
+            failed += 1;
+        }
+        let activity_ms = row.activity_ms();
+        latest_ms = Some(latest_ms.map_or(activity_ms, |latest| latest.max(activity_ms)));
+    }
+
+    json!({
+        "total": total,
+        "active": active,
+        "queued": queued,
+        "running": running,
+        "waiting": waiting,
+        "completed": completed,
+        "failed": failed,
+        "latestAt": latest_ms.map(ms_iso).unwrap_or_default(),
+    })
+}
+
+fn latency_payload(rows: &[JobDiagnosticRow], now: DateTime<Utc>) -> Value {
+    let now_ms = instant_ms_dt(now);
+    let windows = HEALTH_WINDOWS
+        .iter()
+        .map(|(label, seconds)| {
+            let since_ms = now_ms - (seconds * 1000);
+            json!({
+                "label": *label,
+                "since": ms_iso(since_ms),
+                "all": latency_stats_for(rows, since_ms, None),
+                "stt": latency_stats_for(rows, since_ms, Some("audio_segment")),
+                "wakeword": latency_stats_for(rows, since_ms, Some("wake_probe")),
+            })
+        })
+        .collect::<Vec<_>>();
+    let since_ms = now_ms - (max_health_window_seconds() * 1000);
+    json!({
+        "windows": windows,
+        "byKind": latency_by_kind(rows, since_ms),
+    })
+}
+
+fn latency_by_kind(rows: &[JobDiagnosticRow], since_ms: i64) -> Vec<Value> {
+    let kinds = rows
+        .iter()
+        .filter(|row| {
+            row.completed_at_ms
+                .is_some_and(|completed| completed >= since_ms)
+        })
+        .map(|row| row.kind.clone())
+        .collect::<BTreeSet<_>>();
+    let mut values = kinds
+        .into_iter()
+        .map(|kind| {
+            let mut value = latency_stats_for(rows, since_ms, Some(&kind));
+            if let Value::Object(object) = &mut value {
+                object.insert("kind".to_string(), json!(kind));
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        json_usize(right, "count")
+            .cmp(&json_usize(left, "count"))
+            .then_with(|| string_field(left, "kind").cmp(&string_field(right, "kind")))
+    });
+    values.truncate(16);
+    values
+}
+
+fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str>) -> Value {
+    let mut queue_ms = Vec::new();
+    let mut run_ms = Vec::new();
+    let mut total_ms = Vec::new();
+    let mut count = 0_usize;
+    let mut failed = 0_usize;
+    let mut latest_ms = None::<i64>;
+
+    for row in rows.iter().filter(|row| {
+        kind.is_none_or(|kind| row.kind == kind)
+            && row
+                .completed_at_ms
+                .is_some_and(|completed_at_ms| completed_at_ms >= since_ms)
+    }) {
+        let completed_at_ms = row
+            .completed_at_ms
+            .expect("latency row has completed_at_ms");
+        count += 1;
+        if row.is_failed() {
+            failed += 1;
+        }
+        total_ms.push((completed_at_ms - row.created_at_ms).max(0));
+        if let Some(started_at_ms) = row.started_at_ms {
+            queue_ms.push((started_at_ms - row.created_at_ms).max(0));
+            run_ms.push((completed_at_ms - started_at_ms).max(0));
+        }
+        latest_ms = Some(latest_ms.map_or(completed_at_ms, |latest| latest.max(completed_at_ms)));
+    }
+
+    json!({
+        "count": count,
+        "failed": failed,
+        "queueMs": latency_metric(queue_ms),
+        "runMs": latency_metric(run_ms),
+        "totalMs": latency_metric(total_ms),
+        "latestAt": latest_ms.map(ms_iso).unwrap_or_default(),
+    })
+}
+
+fn latency_metric(mut values: Vec<i64>) -> Value {
+    values.sort_unstable();
+    if values.is_empty() {
+        return json!({
+            "count": 0,
+            "p50": Value::Null,
+            "p95": Value::Null,
+            "max": Value::Null,
+        });
+    }
+    json!({
+        "count": values.len(),
+        "p50": percentile(&values, 50),
+        "p95": percentile(&values, 95),
+        "max": values[values.len() - 1],
+    })
+}
+
+fn percentile(values: &[i64], percentile: usize) -> i64 {
+    let rank = ((percentile as f64 / 100.0) * values.len() as f64).ceil() as usize;
+    values[rank.saturating_sub(1).min(values.len() - 1)]
+}
+
+fn max_health_window_seconds() -> i64 {
+    HEALTH_WINDOWS
+        .iter()
+        .map(|(_, seconds)| *seconds)
+        .max()
+        .expect("health windows are configured")
+}
+
+fn process_load_payload() -> Value {
+    let status = proc_status_fields();
+    let meminfo = proc_meminfo_fields();
+    json!({
+        "pid": std::process::id(),
+        "threads": status.get("Threads").copied(),
+        "openFileDescriptors": open_file_descriptor_count(),
+        "loadAverage": proc_load_average_payload(),
+        "memory": {
+            "rssBytes": status.get("VmRSS").copied(),
+            "vmSizeBytes": status.get("VmSize").copied(),
+            "vmPeakBytes": status.get("VmPeak").copied(),
+            "hostTotalBytes": meminfo.get("MemTotal").copied(),
+            "hostAvailableBytes": meminfo.get("MemAvailable").copied(),
+            "cgroupCurrentBytes": read_u64_file("/sys/fs/cgroup/memory.current"),
+            "cgroupMaxBytes": cgroup_memory_max(),
+        },
+        "cpu": {
+            "process": proc_self_stat_payload(),
+            "cgroup": cgroup_cpu_stat_payload(),
+        },
+    })
+}
+
+fn proc_status_fields() -> BTreeMap<String, u64> {
+    let mut fields = BTreeMap::new();
+    let Ok(content) = fs::read_to_string("/proc/self/status") else {
+        return fields;
+    };
+    for line in content.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key == "Threads" {
+            if let Some(value) = value.split_whitespace().next().and_then(parse_u64) {
+                fields.insert(key.to_string(), value);
+            }
+            continue;
+        }
+        if key.starts_with("Vm") {
+            if let Some(bytes) = parse_kb_value(value) {
+                fields.insert(key.to_string(), bytes);
+            }
+        }
+    }
+    fields
+}
+
+fn proc_meminfo_fields() -> BTreeMap<String, u64> {
+    let mut fields = BTreeMap::new();
+    let Ok(content) = fs::read_to_string("/proc/meminfo") else {
+        return fields;
+    };
+    for line in content.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if matches!(key, "MemTotal" | "MemAvailable") {
+            if let Some(bytes) = parse_kb_value(value) {
+                fields.insert(key.to_string(), bytes);
+            }
+        }
+    }
+    fields
+}
+
+fn proc_load_average_payload() -> Value {
+    let Ok(content) = fs::read_to_string("/proc/loadavg") else {
+        return json!({});
+    };
+    let parts = content.split_whitespace().collect::<Vec<_>>();
+    let (runnable, total_threads) = parts
+        .get(3)
+        .and_then(|value| value.split_once('/'))
+        .map(|(running, total)| (parse_u64(running), parse_u64(total)))
+        .unwrap_or((None, None));
+    json!({
+        "oneMinute": parts.first().and_then(|value| value.parse::<f64>().ok()),
+        "fiveMinute": parts.get(1).and_then(|value| value.parse::<f64>().ok()),
+        "fifteenMinute": parts.get(2).and_then(|value| value.parse::<f64>().ok()),
+        "runnableThreads": runnable,
+        "totalThreads": total_threads,
+        "lastPid": parts.get(4).and_then(|value| parse_u64(value)),
+    })
+}
+
+fn proc_self_stat_payload() -> Value {
+    let Ok(content) = fs::read_to_string("/proc/self/stat") else {
+        return json!({});
+    };
+    let Some(close_comm) = content.rfind(')') else {
+        return json!({});
+    };
+    let fields = content[close_comm + 1..]
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    let user_ticks = fields.get(11).and_then(|value| parse_u64(value));
+    let system_ticks = fields.get(12).and_then(|value| parse_u64(value));
+    json!({
+        "userTicks": user_ticks,
+        "systemTicks": system_ticks,
+        "totalTicks": user_ticks.zip(system_ticks).map(|(user, system)| user + system),
+        "startTimeTicks": fields.get(19).and_then(|value| parse_u64(value)),
+    })
+}
+
+fn cgroup_cpu_stat_payload() -> Value {
+    let Ok(content) = fs::read_to_string("/sys/fs/cgroup/cpu.stat") else {
+        return json!({});
+    };
+    let mut object = Map::new();
+    for line in content.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(key) = parts.next() else {
+            continue;
+        };
+        let Some(value) = parts.next().and_then(parse_u64) else {
+            continue;
+        };
+        object.insert(key.to_string(), json!(value));
+    }
+    Value::Object(object)
+}
+
+fn cgroup_memory_max() -> Value {
+    let Ok(raw) = fs::read_to_string("/sys/fs/cgroup/memory.max") else {
+        return Value::Null;
+    };
+    let value = raw.trim();
+    if value == "max" {
+        Value::Null
+    } else {
+        parse_u64(value).map_or(Value::Null, |value| json!(value))
+    }
+}
+
+fn read_u64_file(path: &str) -> Option<u64> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|content| parse_u64(content.trim()))
+}
+
+fn open_file_descriptor_count() -> Option<usize> {
+    fs::read_dir("/proc/self/fd")
+        .ok()
+        .map(|entries| entries.filter_map(std::result::Result::ok).count())
+}
+
+fn parse_kb_value(value: &str) -> Option<u64> {
+    value
+        .split_whitespace()
+        .next()
+        .and_then(parse_u64)
+        .map(|kb| kb.saturating_mul(1024))
+}
+
+fn parse_u64(value: &str) -> Option<u64> {
+    value.parse::<u64>().ok()
+}
+
+fn age_seconds(now_ms: i64, then_ms: i64) -> i64 {
+    ((now_ms - then_ms) / 1000).max(0)
+}
+
+fn ms_iso(value: i64) -> String {
+    ms_to_datetime(value)
+        .map(|instant| isoformat_z(Some(instant)))
+        .expect("health timestamp is representable")
+}
+
+fn count_pair_rows(
+    counts: BTreeMap<(String, String), usize>,
+    left_key: &str,
+    right_key: &str,
+) -> Vec<Value> {
+    let mut rows = counts
+        .into_iter()
+        .map(|((left, right), count)| {
+            let mut object = Map::new();
+            object.insert(left_key.to_string(), json!(left));
+            object.insert(right_key.to_string(), json!(right));
+            object.insert("count".to_string(), json!(count));
+            Value::Object(object)
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|left, right| {
+        json_usize(right, "count")
+            .cmp(&json_usize(left, "count"))
+            .then_with(|| string_field(left, left_key).cmp(&string_field(right, left_key)))
+            .then_with(|| string_field(left, right_key).cmp(&string_field(right, right_key)))
+    });
+    rows
+}
+
+fn json_usize(value: &Value, key: &str) -> usize {
+    value.get(key).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
 fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
