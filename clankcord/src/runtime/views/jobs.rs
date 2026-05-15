@@ -18,7 +18,7 @@ pub struct JobsRequest {
 }
 
 impl Runtime {
-    pub fn jobs(&self, request: JobsRequest) -> Result<Value> {
+    pub async fn jobs(&self, request: JobsRequest) -> Result<Value> {
         let state_filter = if request.state.is_empty() {
             None
         } else {
@@ -34,15 +34,16 @@ impl Runtime {
         } else {
             JobVisibility::Visible
         };
-        let jobs =
-            self.timeline_store
-                .list_jobs_with_visibility(guild_id, state_filter, visibility)?;
+        let jobs = self
+            .timeline_store
+            .list_jobs_with_visibility(guild_id, state_filter, visibility)
+            .await?;
         let payloads = jobs.iter().map(Job::to_value).collect::<Vec<_>>();
         Ok(json!({"jobs": payloads, "count": jobs.len()}))
     }
 
-    pub fn get_job_payload(&self, job_id: &str) -> Result<Value> {
-        Ok(self.timeline_store.get_job(job_id)?.to_value())
+    pub async fn get_job_payload(&self, job_id: &str) -> Result<Value> {
+        Ok(self.timeline_store.get_job(job_id).await?.to_value())
     }
 
     pub fn public_job_view(job: &Job) -> Value {
@@ -99,7 +100,7 @@ impl Runtime {
         })
     }
 
-    pub fn cancellable_jobs_for_channel(
+    pub async fn cancellable_jobs_for_channel(
         &self,
         guild_id: &str,
         channel_id: &str,
@@ -107,7 +108,8 @@ impl Runtime {
     ) -> Result<Vec<Value>> {
         let mut jobs = self
             .timeline_store
-            .list_jobs(Some(guild_id), None)?
+            .list_jobs(Some(guild_id), None)
+            .await?
             .into_iter()
             .filter(|job| job.voice_channel_id == channel_id && job.state.is_cancellable())
             .collect::<Vec<_>>();
@@ -123,7 +125,7 @@ impl Runtime {
             .collect())
     }
 
-    pub fn recent_agent_task_jobs_for_channel(
+    pub async fn recent_agent_task_jobs_for_channel(
         &self,
         guild_id: &str,
         channel_id: &str,
@@ -133,7 +135,8 @@ impl Runtime {
         let requester = requester_user_id.trim();
         let mut jobs = self
             .timeline_store
-            .list_jobs(Some(guild_id), None)?
+            .list_jobs(Some(guild_id), None)
+            .await?
             .into_iter()
             .filter(|job| {
                 job.voice_channel_id == channel_id
@@ -166,16 +169,19 @@ impl Runtime {
             .collect())
     }
 
-    pub fn command_interaction_context(
+    pub async fn command_interaction_context(
         &self,
         interaction: &Value,
         guild_id: &str,
         channel_id: &str,
     ) -> Result<Value> {
-        let active_jobs = self.cancellable_jobs_for_channel(guild_id, channel_id, 10)?;
+        let active_jobs = self
+            .cancellable_jobs_for_channel(guild_id, channel_id, 10)
+            .await?;
         let requester_id = string_field(interaction, "current_requester_user_id");
-        let recent_jobs =
-            self.recent_agent_task_jobs_for_channel(guild_id, channel_id, &requester_id, 5)?;
+        let recent_jobs = self
+            .recent_agent_task_jobs_for_channel(guild_id, channel_id, &requester_id, 5)
+            .await?;
         let cancellable_job_ids = active_jobs
             .iter()
             .filter(|job| job.get("cancellable").and_then(Value::as_bool) == Some(true))
@@ -204,12 +210,12 @@ impl Runtime {
         }))
     }
 
-    pub fn retry_job_payload(&self, job_id: &str) -> Result<Value> {
-        let mut job = self.timeline_store.get_job(job_id)?;
+    pub async fn retry_job_payload(&self, job_id: &str) -> Result<Value> {
+        let mut job = self.timeline_store.get_job(job_id).await?;
         job.set_state(JobState::Queued);
         job.metadata.error.clear();
         job.metadata.reset_agent_task_retry();
-        self.timeline_store.update_job(&job)?;
+        self.timeline_store.update_job(&job).await?;
         Ok(job.to_value())
     }
 }

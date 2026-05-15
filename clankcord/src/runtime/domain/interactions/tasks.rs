@@ -10,7 +10,9 @@ use serde_json::{Map, Value, json};
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
 use crate::config::{non_empty, write_json};
-use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
+use crate::runtime::agents::{
+    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
+};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     BinaryPayload,
@@ -19,7 +21,7 @@ use crate::runtime::timeline::{event_text, first_value_string, isoformat_z};
 use crate::runtime::util::{
     agent_task_timeout_seconds, first_non_empty, job_cancel_requested, log, preview,
 };
-use crate::runtime::{CommandArguments, Job, JobState, Runtime};
+use crate::runtime::{CommandArguments, Job, JobKind, JobState, Runtime};
 
 #[derive(Debug, Clone)]
 struct AgentTaskPacket {
@@ -70,7 +72,7 @@ struct AgentTaskTools {
 }
 
 impl Runtime {
-    pub(crate) fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
+    pub(crate) async fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
         let job_id = job.id.clone();
         let attempts = job
             .metadata
@@ -80,25 +82,28 @@ impl Runtime {
         if attempts >= 3 {
             let mut failed = job.clone();
             failed.set_state(JobState::AgentDispatchFailed);
-            self.timeline_store.update_job(&failed)?;
+            self.timeline_store.update_job(&failed).await?;
             return Ok(
                 json!({"dispatched": false, "job": failed.to_value(), "reason": "agent task dispatch attempts exhausted"}),
             );
         }
 
-        match self.dispatch_agent_task(&job) {
+        match self.dispatch_agent_task(&job).await {
             Ok(dispatch_result) => {
-                match self.complete_agent_task_job(job_id.clone(), dispatch_result) {
+                match self
+                    .complete_agent_task_job(job_id.clone(), dispatch_result)
+                    .await
+                {
                     Ok(value) => Ok(value),
-                    Err(error) => self.fail_agent_task_job(job_id, attempts, error),
+                    Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
                 }
             }
-            Err(error) => self.fail_agent_task_job(job_id, attempts, error),
+            Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
         }
     }
 
-    fn dispatch_agent_task(&self, job: &Job) -> Result<AgentTaskMetadata> {
-        let latest = self.timeline_store.get_job(&job.id)?;
+    async fn dispatch_agent_task(&self, job: &Job) -> Result<AgentTaskMetadata> {
+        let latest = self.timeline_store.get_job(&job.id).await?;
         validate_agent_task_job(&latest)?;
         if latest.cancel_requested() {
             anyhow::bail!("agent task was cancelled before the agent process started");
@@ -128,14 +133,17 @@ impl Runtime {
         let prompt_path = job_dir.join(format!("{}.agent-prompt.txt", latest.id));
         let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
         let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
-        let session_key = crate::runtime::AgentRuntime::task_session_key(
-            &latest.guild_id,
-            &latest.voice_channel_id,
+        let session_key =
+            AgentRuntime::task_session_key(&latest.guild_id, &latest.voice_channel_id);
+        let prior_session_id = non_empty(
+            latest
+                .metadata
+                .agent_task()
+                .map(|task| task.agent.session_id.clone())
+                .unwrap_or_default(),
+            self.latest_agent_session_id(&latest).await?,
         );
-        let include_master_prompt = self
-            .agents
-            .session_snapshot(&session_key)
-            .is_none_or(|session| session.session_id.trim().is_empty());
+        let include_master_prompt = prior_session_id.trim().is_empty();
         let prompt = build_agent_task_message_for_session(
             &packet_path,
             &packet_value,
@@ -143,21 +151,25 @@ impl Runtime {
         );
         fs::write(&prompt_path, &prompt)?;
         let mut prepared = latest.clone();
-        prepared.metadata.set_agent_task(AgentTaskMetadata {
-            packet_path: packet_path.display().to_string(),
-            prompt_path: prompt_path.display().to_string(),
-            result_path: result_path.display().to_string(),
-            raw_result_path: raw_result_path.display().to_string(),
-            preflight: Some(preflight.clone()),
-            ..AgentTaskMetadata::default()
-        });
-        self.timeline_store.update_job(&prepared)?;
+        let mut task_metadata = prepared
+            .metadata
+            .agent_task()
+            .cloned()
+            .unwrap_or_else(AgentTaskMetadata::default);
+        task_metadata.packet_path = packet_path.display().to_string();
+        task_metadata.prompt_path = prompt_path.display().to_string();
+        task_metadata.result_path = result_path.display().to_string();
+        task_metadata.raw_result_path = raw_result_path.display().to_string();
+        task_metadata.preflight = Some(preflight.clone());
+        prepared.metadata.set_agent_task(task_metadata);
+        self.timeline_store.update_job(&prepared).await?;
         let invocation = self.agents.invoke(AgentInvocationRequest {
             role: AgentRole::Task,
             session_key,
             job_id: latest.id.clone(),
             guild_id: latest.guild_id.clone(),
             voice_channel_id: latest.voice_channel_id.clone(),
+            prior_session_id,
             prompt,
             cwd: agent_task_cwd(),
             model: agent_task_model(),
@@ -216,12 +228,12 @@ impl Runtime {
         })
     }
 
-    fn complete_agent_task_job(
+    async fn complete_agent_task_job(
         &self,
         job_id: String,
         dispatch_result: AgentTaskMetadata,
     ) -> Result<Value> {
-        let mut latest = self.timeline_store.get_job(&job_id)?;
+        let mut latest = self.timeline_store.get_job(&job_id).await?;
         latest.metadata.set_agent_task(dispatch_result);
         if job_cancel_requested(&latest) {
             let cancelled_at = non_empty(
@@ -232,24 +244,26 @@ impl Runtime {
             latest.cancelled_at = Some(cancelled_at);
             latest.completed_at = Some(isoformat_z(None));
             latest.metadata.agent_task_mut().result_suppressed = true;
-            self.timeline_store.update_job(&latest)?;
-            self.timeline_store.append_event(
-                &latest.guild_id,
-                &latest.voice_channel_id,
-                json!({
-                    "event_kind": "agent_task_result_suppressed",
-                    "kind": "agent_task_result_suppressed",
-                    "job_id": job_id,
-                    "job_kind": latest.kind.as_str(),
-                    "reason": "job was cancelled before the agent task result was posted",
-                }),
-            )?;
+            self.timeline_store.update_job(&latest).await?;
+            self.timeline_store
+                .append_event(
+                    &latest.guild_id,
+                    &latest.voice_channel_id,
+                    json!({
+                        "event_kind": "agent_task_result_suppressed",
+                        "kind": "agent_task_result_suppressed",
+                        "job_id": job_id,
+                        "job_kind": latest.kind.as_str(),
+                        "reason": "job was cancelled before the agent task result was posted",
+                    }),
+                )
+                .await?;
             return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
         }
-        let submitted_responses = self.response_jobs_for_source(&latest.id)?;
+        let submitted_responses = self.response_jobs_for_source(&latest.id).await?;
         if !submitted_responses.is_empty() {
             latest.mark_complete();
-            self.timeline_store.update_job(&latest)?;
+            self.timeline_store.update_job(&latest).await?;
             return Ok(json!({
                 "dispatched": true,
                 "job": latest.to_value(),
@@ -275,12 +289,37 @@ impl Runtime {
         )
     }
 
-    fn response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
+    async fn response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
         self.timeline_store
             .list_response_jobs_for_source(source_job_id)
+            .await
     }
 
-    fn fail_agent_task_job(
+    async fn latest_agent_session_id(&self, job: &Job) -> Result<String> {
+        let mut jobs = self
+            .timeline_store
+            .list_jobs_by_scope_kind(&job.guild_id, &job.voice_channel_id, JobKind::AgentTask)
+            .await?;
+        jobs.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        Ok(jobs
+            .into_iter()
+            .rev()
+            .filter(|candidate| candidate.id != job.id)
+            .filter_map(|candidate| {
+                candidate
+                    .metadata
+                    .agent_task()
+                    .map(|task| task.agent.session_id.clone())
+            })
+            .find(|session_id| !session_id.trim().is_empty())
+            .unwrap_or_default())
+    }
+
+    async fn fail_agent_task_job(
         &self,
         job_id: String,
         attempts: i64,
@@ -289,7 +328,7 @@ impl Runtime {
         let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
         let is_infrastructure_error = infrastructure_error.is_some();
         let error_text = error.to_string();
-        let mut latest = self.timeline_store.get_job(&job_id)?;
+        let mut latest = self.timeline_store.get_job(&job_id).await?;
         if job_cancel_requested(&latest) {
             let cancelled_at = non_empty(
                 latest.cancelled_at.clone().unwrap_or_default(),
@@ -298,7 +337,7 @@ impl Runtime {
             latest.mark_cancelled();
             latest.cancelled_at = Some(cancelled_at);
             latest.metadata.agent_task_mut().dispatch_error_after_cancel = error_text;
-            self.timeline_store.update_job(&latest)?;
+            self.timeline_store.update_job(&latest).await?;
             return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
         }
         if let Some(preflight) = infrastructure_error.and_then(AgentInfrastructureError::preflight)
@@ -317,7 +356,7 @@ impl Runtime {
         } else {
             JobState::Queued
         });
-        self.timeline_store.update_job(&latest)?;
+        self.timeline_store.update_job(&latest).await?;
         log(&format!(
             "agent task dispatch failed for {job_id}: {error_text}"
         ));
@@ -350,7 +389,7 @@ pub fn build_agent_task_message_for_session(
         "Use the compact request as evidence for requester, room, source events, wake activation context, and activated speech. Fetch raw details with the listed CLI tools only when they are relevant.",
         "Choose the relevant Clankcord tools yourself for timeline, transcript, search, conversation, participant, job, and control queries.",
         "Resolve named rooms, date phrases, and time ranges with tools and available context instead of assuming the current channel is always correct.",
-        "If the listed tools are insufficient, you may inspect the local SQLite-backed voice memory directly and explain why.",
+        "If the listed tools are insufficient, you may inspect the local Postgres-backed voice memory directly and explain why.",
         "Shell exec may use /bin/sh; wrap commands in bash -lc only when using bash-specific syntax. jq and rg are installed and useful for inspecting JSON and searching text.",
         "Select the workflow and final answer from the available evidence.",
         "",
@@ -368,7 +407,7 @@ pub fn agent_master_prompt() -> String {
         "Your job is to help them understand, remember, research, coordinate, and act on conversations.",
         "You can answer questions, inspect prior discussion, fact-check claims, research outside information, set reminders, create automations, ask clarifying questions, and report useful results back to Discord through Clankcord.",
         "",
-        "Clankcord is the local system that connects you to Discord. It captures voice, turns speech into transcript events, stores those events in a SQLite-backed timeline, manages runtime jobs and automations, stores transcript artifacts, and publishes responses.",
+        "Clankcord is the local system that connects you to Discord. It captures voice, turns speech into transcript events, stores those events in a Postgres-backed timeline, manages runtime jobs and automations, stores transcript artifacts, and publishes responses.",
         "The timeline is the authoritative memory of what happened in the server: who spoke, what was said, what jobs ran, what automations fired, and what was published.",
         "Use Clankcord tools to inspect that memory instead of guessing from the user's latest sentence alone.",
         "Clankcord voice bots such as clanky-vc1 and clanky-vc2 capture audio; they are not you.",
@@ -435,7 +474,7 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         vec![codex_bin, "--version".to_string()],
         vec!["rg".to_string(), "--version".to_string()],
         vec!["jq".to_string(), "--version".to_string()],
-        vec!["sqlite3".to_string(), "--version".to_string()],
+        vec!["psql".to_string(), "--version".to_string()],
         vec![
             "clankcord".to_string(),
             "transcripts".to_string(),

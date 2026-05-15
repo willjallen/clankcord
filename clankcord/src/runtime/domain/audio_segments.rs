@@ -7,18 +7,22 @@ use crate::adapters::stt::{
 use crate::runtime::timeline::{SpeechEventInput, sha256_file};
 use crate::runtime::{AudioSegmentPayload, Runtime};
 
-pub(crate) fn execute_segment_job(
+pub(crate) async fn execute_segment_job(
     runtime: &Runtime,
     _job: &crate::runtime::Job,
     payload: &AudioSegmentPayload,
 ) -> Result<Value> {
-    if let Some(event) = runtime.timeline_store.speech_event_for_segment(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        &payload.capture_run_id,
-        &payload.speaker_user_id,
-        payload.segment_index,
-    )? {
+    if let Some(event) = runtime
+        .timeline_store
+        .speech_event_for_segment(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.capture_run_id,
+            &payload.speaker_user_id,
+            payload.segment_index,
+        )
+        .await?
+    {
         return Ok(json!({
             "kind": "audio_segment",
             "status": "already_transcribed",
@@ -104,13 +108,15 @@ pub(crate) fn execute_segment_job(
             duration_ms: payload.duration_ms,
             stt_metadata,
             ..Default::default()
-        })?;
+        })
+        .await?;
     let _ = runtime.timeline_store.set_occupancy(json!({
         "guild_id": payload.guild_id,
         "voice_channel_id": payload.voice_channel_id,
         "voice_channel_name": payload.voice_channel_name,
         "last_speech_at": payload.segment_end_time.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    }));
+    }))
+    .await;
     merge_object(
         &mut capture,
         json!({"status": "transcribed", "event": event}),

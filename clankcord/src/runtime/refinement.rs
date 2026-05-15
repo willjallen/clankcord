@@ -268,8 +268,8 @@ pub fn align_speakers(provider_payload: &Value, sidecar: &Value) -> Value {
     })
 }
 
-pub fn run_refinement_job(store: &TimelineStore, job_id: &str) -> Result<Value> {
-    let mut job = store.get_job(job_id)?;
+pub async fn run_refinement_job(store: &TimelineStore, job_id: &str) -> Result<Value> {
+    let mut job = store.get_job(job_id).await?;
     if job.id.is_empty() {
         anyhow::bail!("unknown refinement job: {job_id}");
     }
@@ -281,13 +281,13 @@ pub fn run_refinement_job(store: &TimelineStore, job_id: &str) -> Result<Value> 
         .ok_or_else(|| anyhow::anyhow!("job {job_id} is not a refinement job"))?;
     let window_id = payload.window_id;
     let publication_id = payload.publication_id;
-    let window = store.get_window(&window_id)?;
+    let window = store.get_window(&window_id).await?;
     if guild_id.is_empty() || channel_id.is_empty() || !window.is_object() {
         anyhow::bail!("refinement job {job_id} is missing guild/channel/window");
     }
     job.mark_running();
     job.attempts += 1;
-    store.update_job(&job)?;
+    store.update_job(&job).await?;
     match run_refinement_job_inner(
         store,
         job,
@@ -296,25 +296,27 @@ pub fn run_refinement_job(store: &TimelineStore, job_id: &str) -> Result<Value> 
         &window_id,
         &publication_id,
         &window,
-    ) {
+    )
+    .await
+    {
         Ok(value) => Ok(value),
         Err(error) => {
-            let mut failed = store.get_job(job_id)?;
+            let mut failed = store.get_job(job_id).await?;
             failed.set_state(JobState::FailedDraftRetained);
             failed.metadata.error = error.to_string();
-            store.update_job(&failed)?;
-            let mut publication = store.get_publication(&publication_id)?;
+            store.update_job(&failed).await?;
+            let mut publication = store.get_publication(&publication_id).await?;
             if publication.is_object() {
                 publication["state"] = Value::String("failed_draft_retained".to_string());
                 publication["last_error"] = Value::String(error.to_string());
-                store.update_publication(&publication)?;
+                store.update_publication(&publication).await?;
             }
             Err(error)
         }
     }
 }
 
-fn run_refinement_job_inner(
+async fn run_refinement_job_inner(
     store: &TimelineStore,
     mut job: Job,
     guild_id: &str,
@@ -323,7 +325,9 @@ fn run_refinement_job_inner(
     publication_id: &str,
     window: &Value,
 ) -> Result<Value> {
-    let sidecar = store.export_mixed_audio(guild_id, channel_id, window_id, &job.id)?;
+    let sidecar = store
+        .export_mixed_audio(guild_id, channel_id, window_id, &job.id)
+        .await?;
     let mixed_path = PathBuf::from(string_field(&sidecar, "mixed_audio_path"));
     let speaker_count = sidecar
         .get("local_speaker_segments")
@@ -372,26 +376,28 @@ fn run_refinement_job_inner(
         .ok_or_else(|| anyhow::anyhow!("window {window_id} has invalid start time"))?;
     let end = parse_instant(&string_field(window, "end_time"))
         .ok_or_else(|| anyhow::anyhow!("window {window_id} has invalid end time"))?;
-    let span = store.create_authoritative_span(
-        guild_id,
-        channel_id,
-        window_id,
-        publication_id,
-        "elevenlabs",
-        start,
-        end,
-        &refined_path,
-        &alignment_path,
-        string_array(window, "capture_run_ids"),
-        string_array(window, "voice_bot_ids"),
-    )?;
-    let mut publication = store.get_publication(publication_id)?;
+    let span = store
+        .create_authoritative_span(
+            guild_id,
+            channel_id,
+            window_id,
+            publication_id,
+            "elevenlabs",
+            start,
+            end,
+            &refined_path,
+            &alignment_path,
+            string_array(window, "capture_run_ids"),
+            string_array(window, "voice_bot_ids"),
+        )
+        .await?;
+    let mut publication = store.get_publication(publication_id).await?;
     if publication.is_object() {
         publication["state"] = Value::String("refined".to_string());
         publication["refined_artifact_path"] = Value::String(refined_path.display().to_string());
         publication["recording_artifact_path"] = Value::String(mixed_path.display().to_string());
         publication["speaker_alignment_path"] = Value::String(alignment_path.display().to_string());
-        store.update_publication(&publication)?;
+        store.update_publication(&publication).await?;
     }
     job.mark_complete();
     let result = serde_json::json!({
@@ -400,7 +406,7 @@ fn run_refinement_job_inner(
         "speaker_alignment_path": alignment_path.display().to_string()
     });
     job.metadata.output = Some(JobOutput::from_boundary_json(&result)?);
-    store.update_job(&job)?;
+    store.update_job(&job).await?;
     Ok(job.to_value())
 }
 

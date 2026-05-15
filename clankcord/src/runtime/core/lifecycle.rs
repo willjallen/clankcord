@@ -13,6 +13,10 @@ use crate::runtime::{AgentRuntime, ControlConfig, GuildConfig, RoomConfig, Runti
 
 impl Runtime {
     pub fn new() -> Result<Self> {
+        Self::from_store(TimelineStore::new(None)?)
+    }
+
+    pub fn from_store(timeline_store: TimelineStore) -> Result<Self> {
         let mut runtime = Self {
             started_at: utc_now(),
             guilds: BTreeMap::new(),
@@ -23,7 +27,7 @@ impl Runtime {
             bots: BTreeMap::new(),
             agents: AgentRuntime::default(),
             automations: BTreeMap::new(),
-            timeline_store: TimelineStore::new(None)?,
+            timeline_store,
             auto_join_enabled: true,
             manual_leave_cooldown_seconds: 20 * 60,
             manual_join_hold_seconds: 60 * 60,
@@ -34,7 +38,8 @@ impl Runtime {
     }
 
     pub async fn start(&mut self) -> Result<()> {
-        self.reload_config()
+        self.reload_config()?;
+        self.load_automation_registry().await
     }
 
     pub async fn stop(&mut self) -> Result<()> {
@@ -145,7 +150,6 @@ impl Runtime {
         self.control_config = ControlConfig::from_json(load_control_config());
         self.load_room_controls();
         self.load_status_snapshot();
-        self.load_automation_registry()?;
         Ok(())
     }
 }

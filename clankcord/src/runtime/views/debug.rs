@@ -1,15 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
+use sqlx::Row;
 
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
 use crate::config::{non_empty, string_field};
+use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::timeline::{
     event_start, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
@@ -46,7 +48,7 @@ impl Default for DebugOverviewRequest {
 }
 
 impl Runtime {
-    pub fn debug_overview(&self, request: DebugOverviewRequest) -> Result<Value> {
+    pub async fn debug_overview(&self, request: DebugOverviewRequest) -> Result<Value> {
         let now = utc_now();
         let timeline_since = resolve_debug_since(&request.timeline_since, "-1h", now)?;
         let transcript_since = resolve_debug_since(&request.transcript_since, "-24h", now)?;
@@ -55,31 +57,41 @@ impl Runtime {
         let timeline_limit = request.timeline_limit.clamp(10, 1000);
         let transcript_limit = request.transcript_limit.clamp(10, 5000);
         let publication_limit = request.publication_limit.clamp(10, 500);
-        let status = self.status_payload(None);
-        let active_job_records = self.timeline_store.list_jobs_by_states(
-            None,
-            &[
-                JobState::Queued,
-                JobState::Running,
-                JobState::Waiting,
-                JobState::CancelRequested,
-                JobState::ConfirmationPending,
-            ],
-        )?;
-        let failed_job_records = self.timeline_store.list_jobs_by_states(
-            None,
-            &[
-                JobState::ApprovalFailed,
-                JobState::Failed,
-                JobState::FailedTimeout,
-                JobState::AgentDispatchFailed,
-                JobState::FailedDraftRetained,
-            ],
-        )?;
-        let recent_job_records = self.timeline_store.list_recent_jobs(None, jobs_limit)?;
+        let status = self.status_payload(None).await;
+        let active_job_records = self
+            .timeline_store
+            .list_jobs_by_states(
+                None,
+                &[
+                    JobState::Queued,
+                    JobState::Running,
+                    JobState::Waiting,
+                    JobState::CancelRequested,
+                    JobState::ConfirmationPending,
+                ],
+            )
+            .await?;
+        let failed_job_records = self
+            .timeline_store
+            .list_jobs_by_states(
+                None,
+                &[
+                    JobState::ApprovalFailed,
+                    JobState::Failed,
+                    JobState::FailedTimeout,
+                    JobState::AgentDispatchFailed,
+                    JobState::FailedDraftRetained,
+                ],
+            )
+            .await?;
+        let recent_job_records = self
+            .timeline_store
+            .list_recent_jobs(None, jobs_limit)
+            .await?;
         let agent_job_records = self
             .timeline_store
-            .list_jobs_by_kind(JobKind::AgentTask, agent_limit)?;
+            .list_jobs_by_kind(JobKind::AgentTask, agent_limit)
+            .await?;
         let summary_jobs = merge_jobs(
             active_job_records
                 .iter()
@@ -97,14 +109,24 @@ impl Runtime {
             .collect::<Vec<_>>();
         let recent_events = self
             .recent_events(timeline_since, timeline_limit)
+            .await
             .context("loading recent timeline events for debug overview")?;
         let transcript_events = self
             .recent_transcript_events(transcript_since, transcript_limit)
+            .await
             .context("loading recent transcript events for debug overview")?;
         let event_kind_counts = event_kind_counts(&recent_events);
         let summary = job_summary(&summary_jobs);
-        let database = database_diagnostics(self);
+        let database = database_diagnostics(self).await;
         let health = runtime_health(self, &summary_jobs, &database);
+        let publications = self
+            .timeline_store
+            .list_publications(None, None, None)
+            .await
+            .context("loading publications for debug overview")?
+            .into_iter()
+            .take(publication_limit)
+            .collect::<Vec<_>>();
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "process": {
@@ -115,7 +137,7 @@ impl Runtime {
             "health": health,
             "database": database,
             "load": load_payload(&active_job_records, now),
-            "agents": agent_dashboard_payload(self, &agent_job_records, agent_limit),
+            "agents": agent_dashboard_payload(&agent_job_records, agent_limit),
             "status": status,
             "jobs": {
                 "summary": summary,
@@ -131,7 +153,7 @@ impl Runtime {
                 "since": debug_since_label(transcript_since),
                 "events": transcript_events,
             },
-            "publications": self.timeline_store.list_publications(None, None, None).context("loading publications for debug overview")?.into_iter().take(publication_limit).collect::<Vec<_>>(),
+            "publications": publications,
             "links": {
                 "json": "/v1/voice/debug/overview",
                 "poolStatus": "/v1/voice/pool/status",
@@ -141,20 +163,24 @@ impl Runtime {
         }))
     }
 
-    pub fn recent_events(&self, since: Option<DateTime<Utc>>, limit: usize) -> Result<Vec<Value>> {
-        self.recent_events_by_kind(since, limit, None)
+    pub async fn recent_events(
+        &self,
+        since: Option<DateTime<Utc>>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        self.recent_events_by_kind(since, limit, None).await
     }
 
-    pub fn recent_transcript_events(
+    pub async fn recent_transcript_events(
         &self,
         since: Option<DateTime<Utc>>,
         limit: usize,
     ) -> Result<Vec<Value>> {
         let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-        self.recent_events_by_kind(since, limit, Some(&kinds))
+        self.recent_events_by_kind(since, limit, Some(&kinds)).await
     }
 
-    fn recent_events_by_kind(
+    async fn recent_events_by_kind(
         &self,
         since: Option<DateTime<Utc>>,
         limit: usize,
@@ -162,15 +188,18 @@ impl Runtime {
     ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
         for room in self.known_rooms() {
-            let mut room_events = self.timeline_store.load_events(
-                &room.guild_id,
-                &room.channel_id,
-                since,
-                None,
-                kinds,
-                None,
-                false,
-            )?;
+            let mut room_events = self
+                .timeline_store
+                .load_events(
+                    &room.guild_id,
+                    &room.channel_id,
+                    since,
+                    None,
+                    kinds,
+                    None,
+                    false,
+                )
+                .await?;
             events.append(&mut room_events);
         }
         events.sort_by_key(|event| event_start(event).unwrap_or_else(utc_now));
@@ -179,12 +208,12 @@ impl Runtime {
         Ok(events)
     }
 
-    pub fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
-        let job = self.timeline_store.get_job(job_id)?;
+    pub async fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
+        let job = self.timeline_store.get_job(job_id).await?;
         if job.kind != JobKind::AgentTask {
             anyhow::bail!("job {job_id} is not an agent task");
         }
-        agent_job_payload(self, &job)
+        agent_job_payload(self, &job).await
     }
 }
 
@@ -254,7 +283,7 @@ struct EventKindSummary {
 }
 
 fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
-    let sqlite_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let failed_jobs = jobs
         .iter()
         .filter(|job| is_failed_state(job.state.as_str()))
@@ -264,8 +293,8 @@ fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
         .filter(|job| job.kind == JobKind::AgentTask && !job.state.is_terminal())
         .count();
     json!({
-        "ok": sqlite_ok,
-        "sqlite": sqlite_ok,
+        "ok": database_ok,
+        "postgres": database_ok,
         "configuredBots": runtime.bots.len(),
         "readyBots": runtime.bots.values().filter(|bot| bot.ready).count(),
         "activeSessions": runtime.sessions.len(),
@@ -276,112 +305,35 @@ fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
     })
 }
 
-fn database_diagnostics(runtime: &Runtime) -> Value {
-    let db_path = runtime.timeline_store.db_path.clone();
-    let files = database_files(&db_path);
-    let main_exists = files
-        .first()
-        .and_then(|file| file.get("exists"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !main_exists {
+async fn database_diagnostics(runtime: &Runtime) -> Value {
+    if let Err(error) = sqlx::query("SELECT 1")
+        .execute(&runtime.timeline_store.pool)
+        .await
+    {
         return json!({
             "ok": false,
-            "path": db_path.display().to_string(),
+            "url": runtime.timeline_store.database_url,
             "root": runtime.timeline_store.root.display().to_string(),
-            "ftsEnabled": runtime.timeline_store.fts_enabled,
-            "error": "sqlite database file is missing",
-            "files": files,
+            "error": error.to_string(),
             "tables": [],
         });
     }
-    let db = match runtime.timeline_store.connect() {
-        Ok(db) => db,
-        Err(error) => {
-            return json!({
-                "ok": false,
-                "path": db_path.display().to_string(),
-                "root": runtime.timeline_store.root.display().to_string(),
-                "ftsEnabled": runtime.timeline_store.fts_enabled,
-                "error": error.to_string(),
-                "files": files,
-                "tables": [],
-            });
-        }
-    };
-    let page_count = pragma_i64(&db, "page_count").unwrap_or(0);
-    let page_size = pragma_i64(&db, "page_size").unwrap_or(0);
-    let freelist_count = pragma_i64(&db, "freelist_count").unwrap_or(0);
-    let journal_mode = pragma_string(&db, "journal_mode").unwrap_or_default();
-    let synchronous = pragma_i64(&db, "synchronous").unwrap_or(0);
-    let table_rows = observed_tables()
-        .iter()
-        .map(|table| {
-            json!({
-                "table": table,
-                "rows": table_count(&db, table).unwrap_or(0),
-            })
-        })
-        .collect::<Vec<_>>();
-    let physical_bytes = files
-        .iter()
-        .filter_map(|file| file.get("bytes").and_then(Value::as_u64))
-        .sum::<u64>();
+    let row = sqlx::query(
+        "SELECT current_database() AS database_name, current_user AS user_name, version() AS version",
+    )
+    .fetch_one(&runtime.timeline_store.pool)
+    .await
+    .ok();
+    let table_rows = table_counts(runtime).await;
     json!({
         "ok": true,
-        "path": db_path.display().to_string(),
+        "url": runtime.timeline_store.database_url,
         "root": runtime.timeline_store.root.display().to_string(),
-        "ftsEnabled": runtime.timeline_store.fts_enabled,
-        "pageCount": page_count,
-        "pageSize": page_size,
-        "freelistCount": freelist_count,
-        "estimatedBytes": page_count.saturating_mul(page_size),
-        "physicalBytes": physical_bytes,
-        "journalMode": journal_mode,
-        "synchronous": synchronous,
-        "files": files,
+        "database": row.as_ref().and_then(|row| row.try_get::<String, _>("database_name").ok()).unwrap_or_default(),
+        "user": row.as_ref().and_then(|row| row.try_get::<String, _>("user_name").ok()).unwrap_or_default(),
+        "version": row.as_ref().and_then(|row| row.try_get::<String, _>("version").ok()).unwrap_or_default(),
         "tables": table_rows,
     })
-}
-
-fn database_files(db_path: &Path) -> Vec<Value> {
-    [
-        db_path.to_path_buf(),
-        sidecar_path(db_path, "wal"),
-        sidecar_path(db_path, "shm"),
-    ]
-    .into_iter()
-    .map(file_payload)
-    .collect()
-}
-
-fn sidecar_path(db_path: &Path, suffix: &str) -> PathBuf {
-    PathBuf::from(format!("{}-{suffix}", db_path.display()))
-}
-
-fn file_payload(path: PathBuf) -> Value {
-    match fs::metadata(&path) {
-        Ok(metadata) => json!({
-            "path": path.display().to_string(),
-            "exists": true,
-            "bytes": metadata.len(),
-            "modified": metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|duration| duration.as_secs()).unwrap_or(0),
-        }),
-        Err(_) => json!({
-            "path": path.display().to_string(),
-            "exists": false,
-            "bytes": 0,
-            "modified": 0,
-        }),
-    }
-}
-
-fn pragma_i64(db: &rusqlite::Connection, name: &str) -> Result<i64> {
-    Ok(db.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))?)
-}
-
-fn pragma_string(db: &rusqlite::Connection, name: &str) -> Result<String> {
-    Ok(db.query_row(&format!("PRAGMA {name}"), [], |row| row.get(0))?)
 }
 
 fn observed_tables() -> &'static [&'static str] {
@@ -403,12 +355,16 @@ fn observed_tables() -> &'static [&'static str] {
     ]
 }
 
-fn table_count(db: &rusqlite::Connection, table: &str) -> Result<i64> {
-    Ok(
-        db.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
-            row.get(0)
-        })?,
-    )
+async fn table_counts(runtime: &Runtime) -> Vec<Value> {
+    let mut rows = Vec::new();
+    for table in observed_tables() {
+        let count = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+            .fetch_one(&runtime.timeline_store.pool)
+            .await
+            .unwrap_or(0);
+        rows.push(json!({"table": table, "rows": count}));
+    }
+    rows
 }
 
 fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
@@ -453,16 +409,14 @@ fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
     })
 }
 
-fn agent_dashboard_payload(runtime: &Runtime, jobs: &[Job], limit: usize) -> Value {
+fn agent_dashboard_payload(jobs: &[Job], limit: usize) -> Value {
     let agent_jobs = jobs
         .iter()
         .filter(|job| job.kind == JobKind::AgentTask)
         .take(limit)
         .map(compact_agent_job_payload)
         .collect::<Vec<_>>();
-    let sessions = runtime
-        .agents
-        .sessions_snapshot()
+    let sessions = agent_sessions_from_jobs(jobs)
         .into_iter()
         .map(|session| session.to_json())
         .collect::<Vec<_>>();
@@ -746,7 +700,52 @@ fn agent_summary(jobs: &[Job]) -> Value {
     })
 }
 
-fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
+fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
+    let mut ordered = jobs
+        .iter()
+        .filter(|job| job.kind == JobKind::AgentTask)
+        .collect::<Vec<_>>();
+    ordered.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut sessions = BTreeMap::<String, AgentSession>::new();
+    for job in ordered {
+        let key = AgentRuntime::task_session_key(&job.guild_id, &job.voice_channel_id);
+        let entry = sessions.entry(key.clone()).or_insert_with(|| AgentSession {
+            key,
+            role: "task".to_string(),
+            guild_id: job.guild_id.clone(),
+            voice_channel_id: job.voice_channel_id.clone(),
+            created_at: job.created_at.clone(),
+            ..AgentSession::default()
+        });
+        entry.invocation_count += 1;
+        entry.last_used_at = job.updated_at.clone();
+        if let Some(task) = job.metadata.agent_task() {
+            if !task.agent.session_id.trim().is_empty() {
+                entry.session_id = task.agent.session_id.clone();
+            }
+            if !task.dispatch_error.trim().is_empty() {
+                entry.last_error = task.dispatch_error.clone();
+            }
+        }
+        if !job.state.is_terminal() {
+            entry.status = AgentSessionStatus::Running;
+            entry.active_job_id = job.id.clone();
+        } else if is_failed_state(job.state.as_str()) {
+            entry.status = AgentSessionStatus::Failed;
+            entry.active_job_id.clear();
+        } else if entry.status != AgentSessionStatus::Running {
+            entry.status = AgentSessionStatus::Idle;
+            entry.active_job_id.clear();
+        }
+    }
+    sessions.into_values().collect()
+}
+
+async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
     let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
     let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
@@ -763,21 +762,24 @@ fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
         "result": read_text_artifact(&metadata.result_path, AGENT_ARTIFACT_MAX_BYTES),
         "raw": raw,
         "codex": codex,
-        "session": agent_session_payload(runtime, job)?,
+        "session": agent_session_payload(runtime, job).await?,
     }))
 }
 
-fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Value> {
+async fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Value> {
     let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.voice_channel_id);
-    let live = runtime
-        .agents
-        .session_snapshot(&key)
+    let mut jobs = runtime
+        .timeline_store
+        .list_jobs_by_scope_kind(
+            &selected.guild_id,
+            &selected.voice_channel_id,
+            JobKind::AgentTask,
+        )
+        .await?;
+    let current = agent_sessions_from_jobs(&jobs)
+        .into_iter()
+        .find(|session| session.key == key)
         .map(|session| session.to_json());
-    let mut jobs = runtime.timeline_store.list_jobs_by_scope_kind(
-        &selected.guild_id,
-        &selected.voice_channel_id,
-        JobKind::AgentTask,
-    )?;
     jobs.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
@@ -810,7 +812,7 @@ fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Value> {
     }
     Ok(json!({
         "key": key,
-        "live": live,
+        "current": current,
         "jobCount": rows.len(),
         "truncated": truncated,
         "jobs": rows,

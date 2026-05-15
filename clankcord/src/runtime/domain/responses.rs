@@ -10,12 +10,12 @@ use crate::runtime::{
 };
 
 impl Runtime {
-    pub(crate) fn response_job_from_value(&self, value: &Value) -> Result<Job> {
+    pub(crate) async fn response_job_from_value(&self, value: &Value) -> Result<Job> {
         let mut payload = ResponsePayload::from_json(value)?;
         let source = if payload.source_job_id.trim().is_empty() {
             None
         } else {
-            Some(self.timeline_store.get_job(&payload.source_job_id)?)
+            Some(self.timeline_store.get_job(&payload.source_job_id).await?)
         };
         let guild_id = first_non_empty([
             crate::config::string_field(value, "guild_id"),
@@ -51,7 +51,7 @@ impl Runtime {
     }
 }
 
-pub(crate) fn execute(
+pub(crate) async fn execute(
     runtime: &Runtime,
     job: &Job,
     payload: &ResponsePayload,
@@ -73,19 +73,22 @@ pub(crate) fn execute(
             }));
         }
     };
-    runtime.timeline_store.append_event(
-        &job.guild_id,
-        &job.voice_channel_id,
-        json!({
-            "event_kind": "response_published",
-            "kind": "response_published",
-            "job_id": job.id.clone(),
-            "source_job_id": payload.source_job_id.clone(),
-            "response_kind": payload.response_kind.as_str(),
-            "sink": payload.sink.to_json(),
-            "discord_post": post.to_json(),
-        }),
-    )?;
+    runtime
+        .timeline_store
+        .append_event(
+            &job.guild_id,
+            &job.voice_channel_id,
+            json!({
+                "event_kind": "response_published",
+                "kind": "response_published",
+                "job_id": job.id.clone(),
+                "source_job_id": payload.source_job_id.clone(),
+                "response_kind": payload.response_kind.as_str(),
+                "sink": payload.sink.to_json(),
+                "discord_post": post.to_json(),
+            }),
+        )
+        .await?;
     Ok(JobOutput::Response(ResponseOutput {
         response_kind: payload.response_kind.as_str().to_string(),
         sink: payload.sink.clone(),

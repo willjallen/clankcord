@@ -30,12 +30,6 @@ struct JobProjection {
 }
 
 #[derive(Debug, Clone)]
-struct DueJobCandidate {
-    job_id: String,
-    ordering_key: String,
-}
-
-#[derive(Debug, Clone)]
 struct JobSummary {
     id: String,
     kind: crate::runtime::JobKind,
@@ -43,66 +37,47 @@ struct JobSummary {
 }
 
 impl TimelineStore {
-    pub fn create_job(&self, job: Job) -> Result<Job> {
-        let mut db = self.connect()?;
-        self.ensure_room(&db, &job.guild_id, &job.voice_channel_id, "", "", "")?;
-        let transaction = db.transaction()?;
-        upsert_job_rows(&transaction, &job)?;
-        transaction.commit()?;
+    pub async fn create_job(&self, job: Job) -> Result<Job> {
+        self.ensure_room(&job.guild_id, &job.voice_channel_id, "", "", "")
+            .await?;
+        let mut transaction = self.pool.begin().await?;
+        upsert_job_rows(&mut transaction, &job).await?;
+        transaction.commit().await?;
         if !job.kind.is_ephemeral() {
             self.append_event(
                 &job.guild_id,
                 &job.voice_channel_id,
-                serde_json::json!({"event_kind": "job_created", "kind": "job_created", "job_id": job.id, "job_kind": job.kind.as_str(), "state": job.state.as_str()}),
-            )?;
+                serde_json::json!({
+                    "event_kind": "job_created",
+                    "kind": "job_created",
+                    "job_id": job.id,
+                    "job_kind": job.kind.as_str(),
+                    "state": job.state.as_str()
+                }),
+            )
+            .await?;
         }
         Ok(job)
     }
 
-    pub fn create_wake_probe_job(&self, job: Job) -> Result<Job> {
-        self.create_job(job)
+    pub async fn create_wake_probe_job(&self, job: Job) -> Result<Job> {
+        self.create_job(job).await
     }
 
-    fn queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            r#"
-            SELECT p.payload_blob
-            FROM jobs j
-            JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = 'wake_probe'
-              AND j.state = 'queued'
-              AND j.stream_id = ?1
-            ORDER BY j.ready_at_ms, j.created_at_ms, j.job_id
-            "#,
-        )?;
-        let rows = statement.query_map(params![stream_id], |row| row.get::<_, Vec<u8>>(0))?;
-        let mut matches = rows
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect::<Result<Vec<_>>>()?;
-        sort_jobs_by_created_at(&mut matches);
-        Ok(matches)
-    }
-
-    pub fn cancel_queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
+    pub async fn cancel_queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
+        let queued = self.queued_wake_probes_for_stream(stream_id).await?;
         let mut cancelled = Vec::new();
-        let queued = self.queued_wake_probes_for_stream(stream_id)?;
         for mut job in queued.into_iter().skip(1) {
-            if job.kind != crate::runtime::JobKind::WakeProbe {
-                continue;
-            }
             job.mark_cancelled();
             job.metadata.error =
                 "duplicate queued wake probe for the same speaker stream".to_string();
-            self.update_job(&job)?;
+            self.update_job(&job).await?;
             cancelled.push(job);
         }
         Ok(cancelled)
     }
 
-    pub fn cancel_stale_wake_probe_jobs(&self, max_age_seconds: i64) -> Result<Vec<Value>> {
+    pub async fn cancel_stale_wake_probe_jobs(&self, max_age_seconds: i64) -> Result<Vec<Value>> {
         let max_age = chrono::Duration::seconds(max_age_seconds.max(1));
         let now = utc_now();
         let mut cancelled = Vec::new();
@@ -111,7 +86,10 @@ impl TimelineStore {
             crate::runtime::JobState::Running,
         ] {
             let cutoff_ms = instant_ms_dt(now - max_age);
-            for mut job in self.list_wake_probe_jobs_stale_in_state(state, cutoff_ms)? {
+            for mut job in self
+                .list_wake_probe_jobs_stale_in_state(state, cutoff_ms)
+                .await?
+            {
                 if state == crate::runtime::JobState::Running {
                     job.set_state(crate::runtime::JobState::FailedTimeout);
                     job.metadata.error = "stale wake probe exceeded queue age limit".to_string();
@@ -120,115 +98,117 @@ impl TimelineStore {
                     job.mark_cancelled();
                     job.metadata.error = "stale queued wake probe was dropped".to_string();
                 }
-                self.update_job(&job)?;
+                self.update_job(&job).await?;
                 cancelled.push(job.to_value());
             }
         }
         Ok(cancelled)
     }
 
-    fn list_wake_probe_jobs_stale_in_state(
-        &self,
-        state: crate::runtime::JobState,
-        cutoff_ms: i64,
-    ) -> Result<Vec<Job>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            r#"
-            SELECT p.payload_blob
-            FROM jobs j
-            JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = 'wake_probe'
-              AND j.state = ?1
-              AND j.updated_at_ms < ?2
-            ORDER BY j.updated_at_ms, j.job_id
-            "#,
-        )?;
-        let rows = statement.query_map(params![state.as_str(), cutoff_ms], |row| {
-            row.get::<_, Vec<u8>>(0)
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
-    }
-
-    pub fn create_child_job(&self, parent: &Job, mut child: Job) -> Result<Job> {
+    pub async fn create_child_job(&self, parent: &Job, mut child: Job) -> Result<Job> {
         child.attach_to_parent(parent)?;
-        self.ensure_dependency_is_acyclic(&parent.id, &child.id)?;
-        let child = self.create_job(child)?;
-        self.create_job_dependency(&parent.id, &child.id)?;
-        let mut waiting_parent = parent.clone();
-        if !waiting_parent.state.is_terminal() {
+        self.ensure_dependency_is_acyclic(&parent.id, &child.id)
+            .await?;
+        self.ensure_room(&child.guild_id, &child.voice_channel_id, "", "", "")
+            .await?;
+        let mut transaction = self.pool.begin().await?;
+        upsert_job_rows(&mut transaction, &child).await?;
+        sqlx::query(
+            r#"
+            INSERT INTO job_dependencies(parent_job_id, child_job_id, dependency_kind, created_at_ms, resolution_policy)
+            VALUES ($1, $2, 'required', $3, 'parent_resumes')
+            ON CONFLICT(parent_job_id, child_job_id) DO NOTHING
+            "#,
+        )
+        .bind(&parent.id)
+        .bind(&child.id)
+        .bind(instant_ms_dt(utc_now()))
+        .execute(transaction.as_mut())
+        .await?;
+        if !parent.state.is_terminal() {
+            let mut waiting_parent = parent.clone();
             waiting_parent.mark_waiting();
-            self.update_job(&waiting_parent)?;
+            upsert_job_rows(&mut transaction, &waiting_parent).await?;
+        }
+        transaction.commit().await?;
+        if !child.kind.is_ephemeral() {
+            self.append_event(
+                &child.guild_id,
+                &child.voice_channel_id,
+                serde_json::json!({
+                    "event_kind": "job_created",
+                    "kind": "job_created",
+                    "job_id": child.id,
+                    "job_kind": child.kind.as_str(),
+                    "state": child.state.as_str()
+                }),
+            )
+            .await?;
         }
         Ok(child)
     }
 
-    fn create_job_dependency(&self, parent_job_id: &str, child_job_id: &str) -> Result<()> {
-        let db = self.connect()?;
-        db.execute(
-            r#"
-            INSERT INTO job_dependencies(parent_job_id, child_job_id, dependency_kind, created_at_ms, resolution_policy)
-            VALUES (?1, ?2, 'required', ?3, 'parent_resumes')
-            ON CONFLICT(parent_job_id, child_job_id) DO NOTHING
-            "#,
-            params![parent_job_id, child_job_id, instant_ms_dt(utc_now())],
-        )?;
-        Ok(())
-    }
-
-    fn ensure_dependency_is_acyclic(&self, parent_job_id: &str, child_job_id: &str) -> Result<()> {
-        if parent_job_id == child_job_id {
-            anyhow::bail!("job dependency cycle rejected: job cannot depend on itself");
-        }
-        if self.job_depends_on(child_job_id, parent_job_id)? {
-            anyhow::bail!(
-                "job dependency cycle rejected: {child_job_id} already depends on {parent_job_id}"
-            );
-        }
-        Ok(())
-    }
-
-    fn job_depends_on(&self, start_job_id: &str, target_job_id: &str) -> Result<bool> {
-        let mut stack = vec![start_job_id.to_string()];
-        let mut seen = BTreeSet::new();
-        while let Some(job_id) = stack.pop() {
-            if !seen.insert(job_id.clone()) {
-                continue;
-            }
-            if job_id == target_job_id {
-                return Ok(true);
-            }
-            stack.extend(self.list_child_job_ids(&job_id)?);
-        }
-        Ok(false)
-    }
-
-    pub fn get_job(&self, job_id: &str) -> Result<Job> {
-        let db = self.connect()?;
-        let payload = db.query_row(
-            "SELECT payload_blob FROM job_payloads WHERE job_id = ?1",
-            params![job_id],
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
+    pub async fn get_job(&self, job_id: &str) -> Result<Job> {
+        let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+            .bind(job_id)
+            .fetch_one(&self.pool)
+            .await?;
+        let payload: Vec<u8> = row.try_get("payload_blob")?;
         Job::decode(&payload)
     }
 
-    pub fn update_job(&self, job: &Job) -> Result<()> {
+    pub async fn update_job(&self, job: &Job) -> Result<()> {
         if job.id.is_empty() || job.guild_id.is_empty() || job.voice_channel_id.is_empty() {
             return Ok(());
         }
         let payload = job.touched();
-        let mut db = self.connect()?;
-        let transaction = db.transaction()?;
-        upsert_job_rows(&transaction, &payload)?;
-        transaction.commit()?;
+        let mut transaction = self.pool.begin().await?;
+        upsert_job_rows(&mut transaction, &payload).await?;
+        transaction.commit().await?;
         Ok(())
     }
 
-    pub fn claim_due_jobs(
+    pub async fn due_job_kinds(&self) -> Result<BTreeSet<crate::runtime::JobKind>> {
+        let now_ms = instant_ms_dt(utc_now());
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT kind
+            FROM jobs
+            WHERE state = 'queued'
+              AND ready_at_ms <= $1
+            "#,
+        )
+        .bind(now_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut kinds = BTreeSet::new();
+        for row in rows {
+            let raw: String = row.try_get("kind")?;
+            if let Ok(kind) = raw.parse::<crate::runtime::JobKind>() {
+                kinds.insert(kind);
+            }
+        }
+        Ok(kinds)
+    }
+
+    pub async fn active_ordering_keys(&self) -> Result<BTreeSet<String>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ordering_key
+            FROM jobs
+            WHERE ordering_key <> ''
+              AND state IN ('running', 'cancel_requested')
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("ordering_key"))
+            .collect::<std::result::Result<BTreeSet<_>, _>>()?)
+    }
+
+    pub async fn claim_due_jobs(
         &self,
         kind: crate::runtime::JobKind,
         limit: usize,
@@ -238,178 +218,410 @@ impl TimelineStore {
             return Ok(Vec::new());
         }
         let now_ms = instant_ms_dt(utc_now());
-        let candidate_limit = limit.saturating_mul(8).clamp(limit, 512);
-        let db = self.connect()?;
-        let mut conditions = vec![
-            "j.state = 'queued'".to_string(),
-            "j.kind = ?".to_string(),
-            "j.ready_at_ms <= ?".to_string(),
-        ];
-        let mut params_values: Vec<Box<dyn ToSql>> =
-            vec![Box::new(kind.as_str().to_string()), Box::new(now_ms)];
+        let candidate_limit = limit.saturating_mul(8).clamp(limit, 512) as i64;
         let blocked = blocked_ordering_keys
             .iter()
             .filter(|key| !key.trim().is_empty())
             .cloned()
             .collect::<Vec<_>>();
-        if !blocked.is_empty() {
-            conditions.push(format!(
-                "(j.ordering_key = '' OR j.ordering_key NOT IN ({}))",
-                placeholders(blocked.len())
-            ));
-            for key in blocked {
-                params_values.push(Box::new(key));
-            }
-        }
-        params_values.push(Box::new(candidate_limit as i64));
-        let sql = format!(
+        let mut transaction = self.pool.begin().await?;
+        let rows = sqlx::query(
             r#"
-            SELECT j.job_id, j.ordering_key
+            SELECT j.job_id, j.ordering_key, p.payload_blob
             FROM jobs j
-            WHERE {}
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.state = 'queued'
+              AND j.kind = $1
+              AND j.ready_at_ms <= $2
+              AND (cardinality($3::text[]) = 0 OR j.ordering_key = '' OR NOT (j.ordering_key = ANY($3)))
             ORDER BY j.ready_at_ms, j.created_at_ms, j.job_id
-            LIMIT ?
+            LIMIT $4
+            FOR UPDATE OF j SKIP LOCKED
             "#,
-            conditions.join(" AND ")
-        );
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| {
-                Ok(DueJobCandidate {
-                    job_id: row.get::<_, String>(0)?,
-                    ordering_key: row.get::<_, String>(1)?,
-                })
-            },
-        )?;
-        let mut candidates = Vec::new();
-        for candidate in rows.collect::<rusqlite::Result<Vec<_>>>()? {
-            if !candidate.ordering_key.trim().is_empty()
-                && blocked_ordering_keys.contains(&candidate.ordering_key)
-            {
-                continue;
-            }
-            if candidate.job_id.trim().is_empty() {
-                continue;
-            }
-            if !candidate.ordering_key.trim().is_empty() {
-                blocked_ordering_keys.insert(candidate.ordering_key.clone());
-            }
-            candidates.push(candidate);
-            if candidates.len() >= limit {
-                break;
-            }
-        }
-        if candidates.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        drop(statement);
-        drop(db);
-        let mut db = self.connect()?;
-        let transaction = db.transaction()?;
+        )
+        .bind(kind.as_str())
+        .bind(now_ms)
+        .bind(&blocked)
+        .bind(candidate_limit)
+        .fetch_all(transaction.as_mut())
+        .await?;
         let mut claimed = Vec::new();
-        for candidate in candidates {
+        for row in rows {
             if claimed.len() >= limit {
                 break;
             }
-            let payload_blob = transaction.query_row(
-                "SELECT payload_blob FROM job_payloads WHERE job_id = ?1",
-                params![candidate.job_id],
-                |row| row.get::<_, Vec<u8>>(0),
-            )?;
+            let ordering_key: String = row.try_get("ordering_key")?;
+            if !ordering_key.trim().is_empty() && blocked_ordering_keys.contains(&ordering_key) {
+                continue;
+            }
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
             let mut job = Job::decode(&payload_blob)?;
             job.mark_running();
             let payload = job.touched();
             let projection = project_job(&payload);
-            let changed = transaction.execute(
+            let changed = sqlx::query(
                 r#"
                 UPDATE jobs
-                SET state = ?1,
-                    updated_at_ms = ?2,
-                    ready_at_ms = ?3,
-                    started_at_ms = ?4,
-                    terminal = ?5,
-                    failed = ?6,
-                    cancellable = ?7,
-                    gc_after_ms = ?8
-                WHERE job_id = ?9 AND state = ?10
+                SET state = $1,
+                    updated_at_ms = $2,
+                    ready_at_ms = $3,
+                    started_at_ms = $4,
+                    terminal = $5,
+                    failed = $6,
+                    cancellable = $7,
+                    gc_after_ms = $8
+                WHERE job_id = $9 AND state = 'queued'
                 "#,
-                params![
-                    payload.state.as_str(),
-                    projection.updated_at_ms,
-                    projection.ready_at_ms,
-                    projection.started_at_ms,
-                    bool_int(projection.terminal),
-                    bool_int(projection.failed),
-                    bool_int(projection.cancellable),
-                    projection.gc_after_ms,
-                    &payload.id,
-                    crate::runtime::JobState::Queued.as_str(),
-                ],
-            )?;
+            )
+            .bind(payload.state.as_str())
+            .bind(projection.updated_at_ms)
+            .bind(projection.ready_at_ms)
+            .bind(projection.started_at_ms)
+            .bind(projection.terminal)
+            .bind(projection.failed)
+            .bind(projection.cancellable)
+            .bind(projection.gc_after_ms)
+            .bind(&payload.id)
+            .execute(transaction.as_mut())
+            .await?
+            .rows_affected();
             if changed == 1 {
-                transaction.execute(
+                sqlx::query(
                     r#"
                     INSERT INTO job_payloads(job_id, payload_blob)
-                    VALUES (?1, ?2)
-                    ON CONFLICT(job_id) DO UPDATE SET payload_blob = excluded.payload_blob
+                    VALUES ($1, $2)
+                    ON CONFLICT(job_id) DO UPDATE SET payload_blob = EXCLUDED.payload_blob
                     "#,
-                    params![&payload.id, payload.encode()?],
-                )?;
+                )
+                .bind(&payload.id)
+                .bind(payload.encode()?)
+                .execute(transaction.as_mut())
+                .await?;
+                if !ordering_key.trim().is_empty() {
+                    blocked_ordering_keys.insert(ordering_key);
+                }
                 claimed.push(payload);
             }
         }
-        transaction.commit()?;
+        transaction.commit().await?;
         Ok(claimed)
     }
 
-    pub fn due_job_kinds(&self) -> Result<BTreeSet<crate::runtime::JobKind>> {
-        let now_ms = instant_ms_dt(utc_now());
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            r#"
-            SELECT DISTINCT kind
-            FROM jobs
-            WHERE state = 'queued'
-              AND ready_at_ms <= ?1
-            "#,
-        )?;
-        let rows = statement.query_map(params![now_ms], |row| row.get::<_, String>(0))?;
-        let mut kinds = BTreeSet::new();
-        for raw in rows.collect::<rusqlite::Result<Vec<_>>>()? {
-            if let Ok(kind) = raw.parse::<crate::runtime::JobKind>() {
-                kinds.insert(kind);
-            }
+    pub async fn list_jobs(
+        &self,
+        guild_id: Option<&str>,
+        state: Option<crate::runtime::JobState>,
+    ) -> Result<Vec<Job>> {
+        self.list_jobs_with_visibility(guild_id, state, JobVisibility::Visible)
+            .await
+    }
+
+    pub async fn list_jobs_with_visibility(
+        &self,
+        guild_id: Option<&str>,
+        state: Option<crate::runtime::JobState>,
+        visibility: JobVisibility,
+    ) -> Result<Vec<Job>> {
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id",
+        );
+        let mut has_where = false;
+        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("j.guild_id = ").push_bind(guild_id);
         }
-        Ok(kinds)
+        if let Some(state) = state {
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("j.state = ").push_bind(state.as_str());
+        }
+        push_visibility_filter(&mut query, &mut has_where, visibility);
+        query.push(" ORDER BY j.created_at_ms DESC, j.job_id DESC");
+        decode_job_rows(query.build().fetch_all(&self.pool).await?)
     }
 
-    pub fn active_ordering_keys(&self) -> Result<BTreeSet<String>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
+    pub async fn list_jobs_by_scope_kind(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        kind: crate::runtime::JobKind,
+    ) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
             r#"
-            SELECT DISTINCT ordering_key
-            FROM jobs
-            WHERE ordering_key <> ''
-              AND state IN ('running', 'cancel_requested')
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.guild_id = $1
+              AND j.voice_channel_id = $2
+              AND j.kind = $3
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
             "#,
-        )?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        Ok(rows
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .collect())
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(kind.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
     }
 
-    pub fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
+    pub async fn list_jobs_by_states(
+        &self,
+        guild_id: Option<&str>,
+        states: &[crate::runtime::JobState],
+    ) -> Result<Vec<Job>> {
+        self.list_jobs_by_states_with_visibility(guild_id, states, JobVisibility::Visible)
+            .await
+    }
+
+    pub async fn list_jobs_by_states_with_visibility(
+        &self,
+        guild_id: Option<&str>,
+        states: &[crate::runtime::JobState],
+        visibility: JobVisibility,
+    ) -> Result<Vec<Job>> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id",
+        );
+        let mut has_where = false;
+        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("j.guild_id = ").push_bind(guild_id);
+        }
+        push_filter_prefix(&mut query, &mut has_where);
+        query.push("j.state IN (");
+        let mut separated = query.separated(", ");
+        for state in states {
+            separated.push_bind(state.as_str());
+        }
+        separated.push_unseparated(")");
+        push_visibility_filter(&mut query, &mut has_where, visibility);
+        query.push(" ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC");
+        decode_job_rows(query.build().fetch_all(&self.pool).await?)
+    }
+
+    pub async fn list_recent_jobs(&self, guild_id: Option<&str>, limit: usize) -> Result<Vec<Job>> {
+        self.list_recent_jobs_with_visibility(guild_id, limit, JobVisibility::Visible)
+            .await
+    }
+
+    pub async fn list_recent_jobs_with_visibility(
+        &self,
+        guild_id: Option<&str>,
+        limit: usize,
+        visibility: JobVisibility,
+    ) -> Result<Vec<Job>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id",
+        );
+        let mut has_where = false;
+        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("j.guild_id = ").push_bind(guild_id);
+        }
+        push_visibility_filter(&mut query, &mut has_where, visibility);
+        query.push(" ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC LIMIT ");
+        query.push_bind(limit);
+        decode_job_rows(query.build().fetch_all(&self.pool).await?)
+    }
+
+    pub async fn list_jobs_by_kind(
+        &self,
+        kind: crate::runtime::JobKind,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.kind = $1
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(kind.as_str())
+        .bind(limit.clamp(1, 500) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
+    pub async fn list_jobs_for_trigger(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        kinds: &[crate::runtime::JobKind],
+        states: &[crate::runtime::JobState],
+        updated_after: Option<DateTime<Utc>>,
+    ) -> Result<Vec<Job>> {
+        if guild_id.trim().is_empty()
+            || voice_channel_id.trim().is_empty()
+            || kinds.is_empty()
+            || states.is_empty()
+        {
+            return Ok(Vec::new());
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id WHERE j.guild_id = ",
+        );
+        query.push_bind(guild_id);
+        query
+            .push(" AND j.voice_channel_id = ")
+            .push_bind(voice_channel_id);
+        query.push(" AND j.kind IN (");
+        let mut kind_sep = query.separated(", ");
+        for kind in kinds {
+            kind_sep.push_bind(kind.as_str());
+        }
+        kind_sep.push_unseparated(") AND j.state IN (");
+        let mut state_sep = query.separated(", ");
+        for state in states {
+            state_sep.push_bind(state.as_str());
+        }
+        state_sep.push_unseparated(")");
+        if let Some(updated_after) = updated_after {
+            query
+                .push(" AND j.updated_at_ms > ")
+                .push_bind(instant_ms_dt(updated_after));
+        }
+        query.push(" ORDER BY j.updated_at_ms, j.created_at_ms, j.job_id");
+        decode_job_rows(query.build().fetch_all(&self.pool).await?)
+    }
+
+    pub async fn list_response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
+        if source_job_id.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.kind = 'response'
+              AND j.source_job_id = $1
+            ORDER BY j.updated_at_ms DESC, j.job_id DESC
+            "#,
+        )
+        .bind(source_job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
+    pub async fn garbage_collect_ephemeral_jobs(&self, limit: usize) -> Result<Value> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let now_ms = instant_ms_dt(utc_now());
+        let rows = sqlx::query(
+            r#"
+            WITH doomed AS (
+              SELECT j.job_id
+              FROM jobs j
+              WHERE j.ephemeral = TRUE
+                AND j.terminal = TRUE
+                AND j.gc_after_ms IS NOT NULL
+                AND j.gc_after_ms <= $1
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM job_dependencies d
+                  JOIN jobs parent ON parent.job_id = d.parent_job_id
+                  WHERE d.child_job_id = j.job_id
+                    AND parent.terminal = FALSE
+                )
+              ORDER BY j.gc_after_ms, j.job_id
+              LIMIT $2
+            )
+            DELETE FROM jobs
+            WHERE job_id IN (SELECT job_id FROM doomed)
+            RETURNING job_id
+            "#,
+        )
+        .bind(now_ms)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(serde_json::json!({"deleted": rows.len(), "limit": limit}))
+    }
+
+    pub async fn list_child_jobs(&self, parent_job_id: &str) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM job_dependencies d
+            JOIN job_payloads p ON p.job_id = d.child_job_id
+            JOIN jobs j ON j.job_id = d.child_job_id
+            WHERE d.parent_job_id = $1
+            ORDER BY d.created_at_ms, d.child_job_id
+            "#,
+        )
+        .bind(parent_job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
+    pub async fn has_child_jobs(&self, parent_job_id: &str) -> Result<bool> {
+        let row = sqlx::query(
+            "SELECT EXISTS(SELECT 1 FROM job_dependencies WHERE parent_job_id = $1) AS exists",
+        )
+        .bind(parent_job_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<bool, _>("exists")?)
+    }
+
+    pub async fn has_pending_audio_segment_for_speaker(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        speaker_user_id: &str,
+        segment_end_at_or_after: DateTime<Utc>,
+    ) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT EXISTS(
+              SELECT 1
+              FROM jobs
+              WHERE guild_id = $1
+                AND voice_channel_id = $2
+                AND speaker_user_id = $3
+                AND segment_end_ms >= $4
+                AND kind = 'audio_segment'
+                AND state IN ('queued', 'running', 'waiting', 'cancel_requested')
+            ) AS exists
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(speaker_user_id)
+        .bind(instant_ms_dt(segment_end_at_or_after))
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get::<bool, _>("exists")?)
+    }
+
+    pub async fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
+        let parent_rows = sqlx::query(
+            r#"
+            SELECT job_id, kind, state
+            FROM jobs
+            WHERE state = 'waiting'
+            ORDER BY updated_at_ms, created_at_ms, job_id
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
         let mut resolved = Vec::new();
-        for parent_summary in self.list_waiting_job_summaries()? {
-            let children = self.list_child_job_summaries(&parent_summary.id)?;
+        for row in parent_rows {
+            let parent_summary = job_summary_from_row(&row)?;
+            let children = self.list_child_job_summaries(&parent_summary.id).await?;
             if children.is_empty() || children.iter().any(|job| !job.state.is_terminal()) {
                 continue;
             }
-            let mut parent = self.get_job(&parent_summary.id)?;
+            let mut parent = self.get_job(&parent_summary.id).await?;
             if matches!(
                 parent_summary.kind,
                 crate::runtime::JobKind::RoomAgentPlacement
@@ -442,479 +654,177 @@ impl TimelineStore {
                     .collect::<Vec<_>>()
                     .join("; ");
             }
-            self.update_job(&parent)?;
+            self.update_job(&parent).await?;
             resolved.push(parent.to_value());
         }
         Ok(resolved)
     }
 
-    fn list_waiting_job_summaries(&self) -> Result<Vec<JobSummary>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            r#"
-            SELECT job_id, kind, state
-            FROM jobs
-            WHERE state = 'waiting'
-            ORDER BY updated_at_ms, created_at_ms, job_id
-            "#,
-        )?;
-        let rows = statement.query_map([], job_summary_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
-    }
-
-    pub fn list_jobs(
-        &self,
-        guild_id: Option<&str>,
-        state: Option<crate::runtime::JobState>,
-    ) -> Result<Vec<Job>> {
-        self.list_jobs_with_visibility(guild_id, state, JobVisibility::Visible)
-    }
-
-    pub fn list_jobs_with_visibility(
-        &self,
-        guild_id: Option<&str>,
-        state: Option<crate::runtime::JobState>,
-        visibility: JobVisibility,
-    ) -> Result<Vec<Job>> {
-        let mut conditions = Vec::new();
-        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
-        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
-            conditions.push("j.guild_id = ?".to_string());
-            params_values.push(Box::new(guild_id.to_string()));
-        }
-        if let Some(state) = state {
-            conditions.push("j.state = ?".to_string());
-            params_values.push(Box::new(state.as_str().to_string()));
-        }
-        push_visibility_condition(&mut conditions, visibility);
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", conditions.join(" AND "))
-        };
-        let sql = format!(
-            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id{where_clause} ORDER BY j.created_at_ms DESC, j.job_id DESC"
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
-    }
-
-    pub fn list_jobs_by_scope_kind(
-        &self,
-        guild_id: &str,
-        voice_channel_id: &str,
-        kind: crate::runtime::JobKind,
-    ) -> Result<Vec<Job>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
+    async fn queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
             r#"
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.guild_id = ?1
-              AND j.voice_channel_id = ?2
-              AND j.kind = ?3
-            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
+            WHERE j.kind = 'wake_probe'
+              AND j.state = 'queued'
+              AND j.stream_id = $1
+            ORDER BY j.ready_at_ms, j.created_at_ms, j.job_id
             "#,
-        )?;
-        let rows = statement
-            .query_map(params![guild_id, voice_channel_id, kind.as_str()], |row| {
-                row.get::<_, Vec<u8>>(0)
-            })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
+        )
+        .bind(stream_id)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut jobs = decode_job_rows(rows)?;
+        sort_jobs_by_created_at(&mut jobs);
+        Ok(jobs)
     }
 
-    pub fn list_jobs_by_states(
+    async fn list_wake_probe_jobs_stale_in_state(
         &self,
-        guild_id: Option<&str>,
-        states: &[crate::runtime::JobState],
+        state: crate::runtime::JobState,
+        cutoff_ms: i64,
     ) -> Result<Vec<Job>> {
-        self.list_jobs_by_states_with_visibility(guild_id, states, JobVisibility::Visible)
-    }
-
-    pub fn list_jobs_by_states_with_visibility(
-        &self,
-        guild_id: Option<&str>,
-        states: &[crate::runtime::JobState],
-        visibility: JobVisibility,
-    ) -> Result<Vec<Job>> {
-        if states.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut conditions = Vec::new();
-        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
-        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
-            conditions.push("j.guild_id = ?".to_string());
-            params_values.push(Box::new(guild_id.to_string()));
-        }
-        conditions.push(format!("j.state IN ({})", placeholders(states.len())));
-        for state in states {
-            params_values.push(Box::new(state.as_str().to_string()));
-        }
-        push_visibility_condition(&mut conditions, visibility);
-        let sql = format!(
-            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id WHERE {} ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC",
-            conditions.join(" AND ")
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
-    }
-
-    pub fn list_recent_jobs(&self, guild_id: Option<&str>, limit: usize) -> Result<Vec<Job>> {
-        self.list_recent_jobs_with_visibility(guild_id, limit, JobVisibility::Visible)
-    }
-
-    pub fn list_recent_jobs_with_visibility(
-        &self,
-        guild_id: Option<&str>,
-        limit: usize,
-        visibility: JobVisibility,
-    ) -> Result<Vec<Job>> {
-        let limit = limit.clamp(1, 500);
-        let mut conditions = Vec::new();
-        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
-        if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
-            conditions.push("j.guild_id = ?".to_string());
-            params_values.push(Box::new(guild_id.to_string()));
-        }
-        push_visibility_condition(&mut conditions, visibility);
-        params_values.push(Box::new(limit as i64));
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", conditions.join(" AND "))
-        };
-        let sql = format!(
-            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id{where_clause} ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC LIMIT ?"
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
-    }
-
-    pub fn list_jobs_by_kind(
-        &self,
-        kind: crate::runtime::JobKind,
-        limit: usize,
-    ) -> Result<Vec<Job>> {
-        let limit = limit.clamp(1, 500);
-        let db = self.connect()?;
-        let mut statement = db.prepare(
+        let rows = sqlx::query(
             r#"
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = ?1
-            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
-            LIMIT ?2
+            WHERE j.kind = 'wake_probe'
+              AND j.state = $1
+              AND j.updated_at_ms < $2
+            ORDER BY j.updated_at_ms, j.job_id
             "#,
-        )?;
-        let rows = statement.query_map(params![kind.as_str(), limit as i64], |row| {
-            row.get::<_, Vec<u8>>(0)
-        })?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
+        )
+        .bind(state.as_str())
+        .bind(cutoff_ms)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
     }
 
-    pub fn list_jobs_for_trigger(
+    async fn ensure_dependency_is_acyclic(
         &self,
-        guild_id: &str,
-        voice_channel_id: &str,
-        kinds: &[crate::runtime::JobKind],
-        states: &[crate::runtime::JobState],
-        updated_after: Option<DateTime<Utc>>,
-    ) -> Result<Vec<Job>> {
-        if guild_id.trim().is_empty()
-            || voice_channel_id.trim().is_empty()
-            || kinds.is_empty()
-            || states.is_empty()
-        {
-            return Ok(Vec::new());
+        parent_job_id: &str,
+        child_job_id: &str,
+    ) -> Result<()> {
+        if parent_job_id == child_job_id {
+            anyhow::bail!("job dependency cycle rejected: job cannot depend on itself");
         }
-        let mut conditions = vec![
-            "j.guild_id = ?".to_string(),
-            "j.voice_channel_id = ?".to_string(),
-            format!("j.kind IN ({})", placeholders(kinds.len())),
-            format!("j.state IN ({})", placeholders(states.len())),
-        ];
-        let mut params_values: Vec<Box<dyn ToSql>> = vec![
-            Box::new(guild_id.to_string()),
-            Box::new(voice_channel_id.to_string()),
-        ];
-        for kind in kinds {
-            params_values.push(Box::new(kind.as_str().to_string()));
+        if self.job_depends_on(child_job_id, parent_job_id).await? {
+            anyhow::bail!(
+                "job dependency cycle rejected: {child_job_id} already depends on {parent_job_id}"
+            );
         }
-        for state in states {
-            params_values.push(Box::new(state.as_str().to_string()));
-        }
-        if let Some(updated_after) = updated_after {
-            conditions.push("j.updated_at_ms > ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(updated_after)));
-        }
-        let sql = format!(
-            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id WHERE {} ORDER BY j.updated_at_ms, j.created_at_ms, j.job_id",
-            conditions.join(" AND ")
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
+        Ok(())
     }
 
-    pub fn list_response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
-        if source_job_id.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            r#"
-            SELECT p.payload_blob
-            FROM jobs j
-            JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = 'response'
-              AND j.source_job_id = ?1
-            ORDER BY j.updated_at_ms DESC, j.job_id DESC
-            "#,
-        )?;
-        let rows = statement.query_map(params![source_job_id], |row| row.get::<_, Vec<u8>>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()?
-            .into_iter()
-            .map(|payload| Job::decode(&payload))
-            .collect()
-    }
-
-    pub fn garbage_collect_ephemeral_jobs(&self, limit: usize) -> Result<Value> {
-        let limit = limit.clamp(1, 1000);
-        let now_ms = instant_ms_dt(utc_now());
-        match self.garbage_collect_ephemeral_jobs_inner(now_ms, limit) {
-            Ok(value) => Ok(value),
-            Err(error) if sqlite_busy_or_locked(&error) => {
-                Ok(serde_json::json!({"deleted": 0, "limit": limit, "skipped": "sqlite_busy"}))
+    async fn job_depends_on(&self, start_job_id: &str, target_job_id: &str) -> Result<bool> {
+        let mut stack = vec![start_job_id.to_string()];
+        let mut seen = BTreeSet::new();
+        while let Some(job_id) = stack.pop() {
+            if !seen.insert(job_id.clone()) {
+                continue;
             }
-            Err(error) => Err(error.into()),
-        }
-    }
-
-    fn garbage_collect_ephemeral_jobs_inner(
-        &self,
-        now_ms: i64,
-        limit: usize,
-    ) -> rusqlite::Result<Value> {
-        let mut db = self
-            .connect_with_busy_timeout(1)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(error.into()))?;
-        let job_ids = {
-            let mut statement = db.prepare(
-                r#"
-                SELECT j.job_id
-                FROM jobs j
-                WHERE j.ephemeral = 1
-                  AND j.terminal = 1
-                  AND j.gc_after_ms IS NOT NULL
-                  AND j.gc_after_ms <= ?1
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM job_dependencies d
-                    JOIN jobs parent ON parent.job_id = d.parent_job_id
-                    WHERE d.child_job_id = j.job_id
-                      AND parent.terminal = 0
-                  )
-                ORDER BY j.gc_after_ms, j.job_id
-                LIMIT ?2
-                "#,
-            )?;
-            let rows = statement
-                .query_map(params![now_ms, limit as i64], |row| row.get::<_, String>(0))?;
-            rows.collect::<rusqlite::Result<Vec<_>>>()?
-        };
-        if job_ids.is_empty() {
-            return Ok(serde_json::json!({"deleted": 0, "limit": limit}));
-        }
-        let transaction = db.transaction()?;
-        let placeholders = placeholders(job_ids.len());
-        transaction.execute(
-            &format!("DELETE FROM jobs WHERE job_id IN ({placeholders})"),
-            params_from_iter(job_ids.iter()),
-        )?;
-        transaction.commit()?;
-        Ok(serde_json::json!({"deleted": job_ids.len(), "limit": limit}))
-    }
-
-    pub fn list_child_jobs(&self, parent_job_id: &str) -> Result<Vec<Job>> {
-        let child_ids = self.list_child_job_ids(parent_job_id)?;
-        let mut children = Vec::new();
-        for child_id in child_ids {
-            if let Ok(child) = self.get_job(&child_id) {
-                children.push(child);
+            if job_id == target_job_id {
+                return Ok(true);
             }
+            stack.extend(self.list_child_job_ids(&job_id).await?);
         }
-        children.sort_by(|left, right| left.created_at.cmp(&right.created_at));
-        Ok(children)
+        Ok(false)
     }
 
-    pub fn has_child_jobs(&self, parent_job_id: &str) -> Result<bool> {
-        let db = self.connect()?;
-        let exists = db.query_row(
-            "SELECT EXISTS(SELECT 1 FROM job_dependencies WHERE parent_job_id = ?1)",
-            params![parent_job_id],
-            |row| row.get::<_, i64>(0),
-        )?;
-        Ok(exists != 0)
-    }
-
-    pub fn has_pending_audio_segment_for_speaker(
-        &self,
-        guild_id: &str,
-        voice_channel_id: &str,
-        speaker_user_id: &str,
-        segment_end_at_or_after: DateTime<Utc>,
-    ) -> Result<bool> {
-        let states = [
-            crate::runtime::JobState::Queued,
-            crate::runtime::JobState::Running,
-            crate::runtime::JobState::Waiting,
-            crate::runtime::JobState::CancelRequested,
-        ];
-        let mut params_values: Vec<Box<dyn ToSql>> = vec![
-            Box::new(guild_id.to_string()),
-            Box::new(voice_channel_id.to_string()),
-            Box::new(speaker_user_id.to_string()),
-            Box::new(instant_ms_dt(segment_end_at_or_after)),
-        ];
-        for state in states {
-            params_values.push(Box::new(state.as_str().to_string()));
-        }
-        let sql = format!(
-            r#"
-            SELECT 1
-            FROM jobs
-            WHERE guild_id = ?
-              AND voice_channel_id = ?
-              AND speaker_user_id = ?
-              AND segment_end_ms >= ?
-              AND kind = 'audio_segment'
-              AND state IN ({})
-            LIMIT 1
-            "#,
-            placeholders(states.len())
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let mut rows =
-            statement.query(params_from_iter(params_values.iter().map(|value| &**value)))?;
-        Ok(rows.next()?.is_some())
-    }
-
-    fn list_child_job_summaries(&self, parent_job_id: &str) -> Result<Vec<JobSummary>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
+    async fn list_child_job_summaries(&self, parent_job_id: &str) -> Result<Vec<JobSummary>> {
+        let rows = sqlx::query(
             r#"
             SELECT j.job_id, j.kind, j.state
             FROM job_dependencies d
             JOIN jobs j ON j.job_id = d.child_job_id
-            WHERE d.parent_job_id = ?1
+            WHERE d.parent_job_id = $1
             ORDER BY d.created_at_ms, d.child_job_id
             "#,
-        )?;
-        let rows = statement.query_map(params![parent_job_id], job_summary_from_row)?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        )
+        .bind(parent_job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(job_summary_from_row).collect()
     }
 
-    fn list_child_job_ids(&self, parent_job_id: &str) -> Result<Vec<String>> {
-        let db = self.connect()?;
-        let mut statement = db.prepare(
-            "SELECT child_job_id FROM job_dependencies WHERE parent_job_id = ?1 ORDER BY created_at_ms, child_job_id",
-        )?;
-        let rows = statement.query_map(params![parent_job_id], |row| row.get::<_, String>(0))?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
-    }
-}
-
-fn wake_probe_stream_id(job: &Job) -> Option<&str> {
-    match &job.payload {
-        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
-        _ => None,
-    }
-}
-
-fn placeholders(count: usize) -> String {
-    (0..count).map(|_| "?").collect::<Vec<_>>().join(", ")
-}
-
-fn sort_jobs_by_created_at(jobs: &mut [Job]) {
-    jobs.sort_by(|left, right| {
-        job_order_time(left)
-            .cmp(&job_order_time(right))
-            .then_with(|| left.id.cmp(&right.id))
-    });
-}
-
-fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
-    match &job.payload {
-        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
-        _ => parse_instant(&job.created_at),
+    async fn list_child_job_ids(&self, parent_job_id: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT child_job_id
+            FROM job_dependencies
+            WHERE parent_job_id = $1
+            ORDER BY created_at_ms, child_job_id
+            "#,
+        )
+        .bind(parent_job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("child_job_id"))
+            .collect::<std::result::Result<Vec<_>, _>>()?)
     }
 }
 
-fn job_summary_from_row(row: &Row<'_>) -> rusqlite::Result<JobSummary> {
+fn push_filter_prefix(query: &mut QueryBuilder<'_, Postgres>, has_where: &mut bool) {
+    if *has_where {
+        query.push(" AND ");
+    } else {
+        query.push(" WHERE ");
+        *has_where = true;
+    }
+}
+
+fn push_visibility_filter(
+    query: &mut QueryBuilder<'_, Postgres>,
+    has_where: &mut bool,
+    visibility: JobVisibility,
+) {
+    match visibility {
+        JobVisibility::Visible => {
+            push_filter_prefix(query, has_where);
+            query.push("j.ephemeral = FALSE");
+        }
+        JobVisibility::IncludeEphemeral => {}
+        JobVisibility::OnlyEphemeral => {
+            push_filter_prefix(query, has_where);
+            query.push("j.ephemeral = TRUE");
+        }
+    }
+}
+
+fn decode_job_rows(rows: Vec<PgRow>) -> Result<Vec<Job>> {
+    rows.into_iter()
+        .map(|row| {
+            let payload: Vec<u8> = row.try_get("payload_blob")?;
+            Job::decode(&payload)
+        })
+        .collect()
+}
+
+fn job_summary_from_row(row: &PgRow) -> Result<JobSummary> {
     let kind = row
-        .get::<_, String>(1)?
-        .parse::<crate::runtime::JobKind>()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Text, error.into())
-        })?;
+        .try_get::<String, _>("kind")?
+        .parse::<crate::runtime::JobKind>()?;
     let state = row
-        .get::<_, String>(2)?
-        .parse::<crate::runtime::JobState>()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, error.into())
-        })?;
+        .try_get::<String, _>("state")?
+        .parse::<crate::runtime::JobState>()?;
     Ok(JobSummary {
-        id: row.get::<_, String>(0)?,
+        id: row.try_get("job_id")?,
         kind,
         state,
     })
 }
 
-fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result<()> {
+async fn upsert_job_rows(
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
+    job: &Job,
+) -> Result<()> {
     let projection = project_job(job);
-    transaction.execute(
+    sqlx::query(
         r#"
         INSERT INTO jobs(
           job_id,
@@ -945,73 +855,76 @@ fn upsert_job_rows(transaction: &rusqlite::Transaction<'_>, job: &Job) -> Result
           speaker_user_id,
           segment_end_ms
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
         ON CONFLICT(job_id) DO UPDATE SET
-          guild_id = excluded.guild_id,
-          voice_channel_id = excluded.voice_channel_id,
-          kind = excluded.kind,
-          state = excluded.state,
-          terminal = excluded.terminal,
-          failed = excluded.failed,
-          ephemeral = excluded.ephemeral,
-          cancellable = excluded.cancellable,
-          lane = excluded.lane,
-          ordering_key = excluded.ordering_key,
-          ready_at_ms = excluded.ready_at_ms,
-          created_at_ms = excluded.created_at_ms,
-          updated_at_ms = excluded.updated_at_ms,
-          started_at_ms = excluded.started_at_ms,
-          completed_at_ms = excluded.completed_at_ms,
-          gc_after_ms = excluded.gc_after_ms,
-          root_job_id = excluded.root_job_id,
-          parent_job_id = excluded.parent_job_id,
-          lineage_depth = excluded.lineage_depth,
-          requested_by_user_id = excluded.requested_by_user_id,
-          command_kind = excluded.command_kind,
-          source_job_id = excluded.source_job_id,
-          stream_id = excluded.stream_id,
-          target_job_id = excluded.target_job_id,
-          speaker_user_id = excluded.speaker_user_id,
-          segment_end_ms = excluded.segment_end_ms
+          guild_id = EXCLUDED.guild_id,
+          voice_channel_id = EXCLUDED.voice_channel_id,
+          kind = EXCLUDED.kind,
+          state = EXCLUDED.state,
+          terminal = EXCLUDED.terminal,
+          failed = EXCLUDED.failed,
+          ephemeral = EXCLUDED.ephemeral,
+          cancellable = EXCLUDED.cancellable,
+          lane = EXCLUDED.lane,
+          ordering_key = EXCLUDED.ordering_key,
+          ready_at_ms = EXCLUDED.ready_at_ms,
+          created_at_ms = EXCLUDED.created_at_ms,
+          updated_at_ms = EXCLUDED.updated_at_ms,
+          started_at_ms = EXCLUDED.started_at_ms,
+          completed_at_ms = EXCLUDED.completed_at_ms,
+          gc_after_ms = EXCLUDED.gc_after_ms,
+          root_job_id = EXCLUDED.root_job_id,
+          parent_job_id = EXCLUDED.parent_job_id,
+          lineage_depth = EXCLUDED.lineage_depth,
+          requested_by_user_id = EXCLUDED.requested_by_user_id,
+          command_kind = EXCLUDED.command_kind,
+          source_job_id = EXCLUDED.source_job_id,
+          stream_id = EXCLUDED.stream_id,
+          target_job_id = EXCLUDED.target_job_id,
+          speaker_user_id = EXCLUDED.speaker_user_id,
+          segment_end_ms = EXCLUDED.segment_end_ms
         "#,
-        params![
-            &job.id,
-            &job.guild_id,
-            &job.voice_channel_id,
-            job.kind.as_str(),
-            job.state.as_str(),
-            bool_int(projection.terminal),
-            bool_int(projection.failed),
-            bool_int(projection.ephemeral),
-            bool_int(projection.cancellable),
-            projection.lane,
-            &projection.ordering_key,
-            projection.ready_at_ms,
-            projection.created_at_ms,
-            projection.updated_at_ms,
-            projection.started_at_ms,
-            projection.completed_at_ms,
-            projection.gc_after_ms,
-            &job.root_job_id,
-            job.parent_job_id.as_deref(),
-            job.lineage_depth as i64,
-            &job.requested_by_user_id,
-            &projection.command_kind,
-            &projection.source_job_id,
-            &projection.stream_id,
-            &projection.target_job_id,
-            &projection.speaker_user_id,
-            projection.segment_end_ms,
-        ],
-    )?;
-    transaction.execute(
+    )
+    .bind(&job.id)
+    .bind(&job.guild_id)
+    .bind(&job.voice_channel_id)
+    .bind(job.kind.as_str())
+    .bind(job.state.as_str())
+    .bind(projection.terminal)
+    .bind(projection.failed)
+    .bind(projection.ephemeral)
+    .bind(projection.cancellable)
+    .bind(projection.lane)
+    .bind(&projection.ordering_key)
+    .bind(projection.ready_at_ms)
+    .bind(projection.created_at_ms)
+    .bind(projection.updated_at_ms)
+    .bind(projection.started_at_ms)
+    .bind(projection.completed_at_ms)
+    .bind(projection.gc_after_ms)
+    .bind(&job.root_job_id)
+    .bind(job.parent_job_id.as_deref())
+    .bind(job.lineage_depth as i64)
+    .bind(&job.requested_by_user_id)
+    .bind(&projection.command_kind)
+    .bind(&projection.source_job_id)
+    .bind(&projection.stream_id)
+    .bind(&projection.target_job_id)
+    .bind(&projection.speaker_user_id)
+    .bind(projection.segment_end_ms)
+    .execute(transaction.as_mut())
+    .await?;
+    sqlx::query(
         r#"
         INSERT INTO job_payloads(job_id, payload_blob)
-        VALUES (?1, ?2)
-        ON CONFLICT(job_id) DO UPDATE SET payload_blob = excluded.payload_blob
+        VALUES ($1, $2)
+        ON CONFLICT(job_id) DO UPDATE SET payload_blob = EXCLUDED.payload_blob
         "#,
-        params![&job.id, job.encode()?],
-    )?;
+    )
+    .bind(&job.id)
+    .bind(job.encode()?)
+    .execute(transaction.as_mut())
+    .await?;
     Ok(())
 }
 
@@ -1054,16 +967,26 @@ fn project_job(job: &Job) -> JobProjection {
     }
 }
 
-fn push_visibility_condition(conditions: &mut Vec<String>, visibility: JobVisibility) {
-    match visibility {
-        JobVisibility::Visible => conditions.push("j.ephemeral = 0".to_string()),
-        JobVisibility::IncludeEphemeral => {}
-        JobVisibility::OnlyEphemeral => conditions.push("j.ephemeral = 1".to_string()),
+fn wake_probe_stream_id(job: &Job) -> Option<&str> {
+    match &job.payload {
+        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
+        _ => None,
     }
 }
 
-fn bool_int(value: bool) -> i64 {
-    if value { 1 } else { 0 }
+fn sort_jobs_by_created_at(jobs: &mut [Job]) {
+    jobs.sort_by(|left, right| {
+        job_order_time(left)
+            .cmp(&job_order_time(right))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+}
+
+fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
+    match &job.payload {
+        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
+        _ => parse_instant(&job.created_at),
+    }
 }
 
 fn is_failed_job_state(state: crate::runtime::JobState) -> bool {
@@ -1212,15 +1135,4 @@ fn normalize_key_part(value: &str) -> String {
     } else {
         normalized
     }
-}
-
-fn sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
-    matches!(
-        error,
-        rusqlite::Error::SqliteFailure(failure, _)
-            if matches!(
-                failure.code,
-                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-            )
-    )
 }

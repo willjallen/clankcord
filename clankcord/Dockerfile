@@ -20,7 +20,7 @@ RUN cargo build --release --bin clankcord
 FROM node:24-bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl jq libopus0 ripgrep sqlite3 \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl jq libopus0 postgresql-client ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex@0.130.0 \
     && mkdir -p /clankcord/durable /clankcord/state /codex /workspace \

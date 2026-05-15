@@ -10,8 +10,8 @@ use clankcord::adapters::discord::voice::session::{
 
 use common::test_voice_session;
 
-#[test]
-fn capture_sink_translates_voice_packets_to_pipeline_actions() {
+#[tokio::test(flavor = "current_thread")]
+async fn capture_sink_translates_voice_packets_to_pipeline_actions() {
     let user = CaptureUser {
         id: "user-a".to_string(),
         display_name: "Will".to_string(),
@@ -57,8 +57,8 @@ fn capture_sink_translates_voice_packets_to_pipeline_actions() {
     ));
 }
 
-#[test]
-fn voice_segmenter_buffers_pcm_and_drops_short_segments() {
+#[tokio::test(flavor = "current_thread")]
+async fn voice_segmenter_buffers_pcm_and_drops_short_segments() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1_000);
     let mut session = test_voice_session(raw.path());
@@ -85,8 +85,8 @@ fn voice_segmenter_buffers_pcm_and_drops_short_segments() {
     assert!(session.buffers["user-a"].pcm.is_empty());
 }
 
-#[test]
-fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
+#[tokio::test(flavor = "current_thread")]
+async fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
     let mut session = test_voice_session(raw.path());
@@ -119,8 +119,8 @@ fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
     assert!(payload.audio_checksum.starts_with("sha256:"));
 }
 
-#[test]
-fn voice_segmenter_emits_ordered_streaming_wake_probe_chunks_without_closing_segment() {
+#[tokio::test(flavor = "current_thread")]
+async fn voice_segmenter_emits_ordered_streaming_wake_probe_chunks_without_closing_segment() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
     let mut session = test_voice_session(raw.path());

@@ -4,8 +4,8 @@ use clankcord::runtime::domain::interactions::{
     build_agent_task_message, build_agent_task_message_for_session,
 };
 
-#[test]
-fn agent_task_message_embeds_packet_source_of_truth() {
+#[tokio::test(flavor = "current_thread")]
+async fn agent_task_message_embeds_packet_source_of_truth() {
     let raw = tempfile::tempdir().unwrap();
     let packet_path = raw.path().join("job.packet.json");
     let packet = json!({
@@ -29,8 +29,8 @@ fn agent_task_message_embeds_packet_source_of_truth() {
     assert!(message.contains("JOB_PACKET_JSON:"));
 }
 
-#[test]
-fn resumed_agent_task_message_omits_large_session_instructions() {
+#[tokio::test(flavor = "current_thread")]
+async fn resumed_agent_task_message_omits_large_session_instructions() {
     let raw = tempfile::tempdir().unwrap();
     let packet_path = raw.path().join("job.packet.json");
     let packet = json!({

@@ -16,7 +16,7 @@ use crate::runtime::{RoomConfig, Runtime};
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
 
 impl Runtime {
-    pub(crate) fn publish_materialized_transcript(
+    pub(crate) async fn publish_materialized_transcript(
         &self,
         result: &mut Value,
         live: bool,
@@ -34,7 +34,10 @@ impl Runtime {
         let room = self.room_for_channel_ids(&guild_id, &channel_id, None);
         let draft_path = PathBuf::from(string_field(&publication, "draft_artifact_path"));
         let content = fs::read_to_string(&draft_path).unwrap_or_default();
-        match self.create_publication_thread(&room, &publication, &content, live, refined_queued) {
+        match self
+            .create_publication_thread(&room, &publication, &content, live, refined_queued)
+            .await
+        {
             Ok((thread_id, message_ids)) => {
                 update_object_fields(
                     &mut publication,
@@ -63,14 +66,14 @@ impl Runtime {
                 )?;
             }
         }
-        self.timeline_store.update_publication(&publication)?;
+        self.timeline_store.update_publication(&publication).await?;
         if let Some(map) = result.as_object_mut() {
             map.insert("publication".to_string(), publication);
         }
         Ok(())
     }
 
-    pub fn create_publication_thread(
+    pub async fn create_publication_thread(
         &self,
         room: &RoomConfig,
         publication: &Value,
@@ -84,7 +87,8 @@ impl Runtime {
         }
         let window = self
             .timeline_store
-            .get_window(&string_field(publication, "window_id"))?;
+            .get_window(&string_field(publication, "window_id"))
+            .await?;
         let start = string_field(&window, "start_time");
         let end = string_field(&window, "end_time");
         let name_base = first_non_empty([

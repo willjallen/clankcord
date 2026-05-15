@@ -13,7 +13,7 @@ use crate::runtime::{
 };
 
 impl Runtime {
-    pub fn assign_room(
+    pub async fn assign_room(
         &mut self,
         room_identifier: Option<&str>,
         guild_id: Option<&str>,
@@ -34,8 +34,9 @@ impl Runtime {
             self.manual_join_hold_seconds,
             reason,
             user_id.unwrap_or(""),
-        )?;
-        self.persist_status_snapshot()?;
+        )
+        .await?;
+        self.persist_status_snapshot().await?;
         Ok(json!({
             "action": "join",
             "status": "state-recorded",
@@ -46,7 +47,7 @@ impl Runtime {
         }))
     }
 
-    pub fn leave_room(
+    pub async fn leave_room(
         &mut self,
         room_identifier: Option<&str>,
         cooldown_seconds: Option<i64>,
@@ -62,7 +63,8 @@ impl Runtime {
                 "manual_leave",
                 requested_by_user_id.unwrap_or(""),
                 true,
-            )?;
+            )
+            .await?;
             let session_id = self.active_session_id_for_room(&room);
             if let Some(session_id) = session_id {
                 if let Some(mut session) = self.sessions.remove(&session_id) {
@@ -70,7 +72,7 @@ impl Runtime {
                     results.push(session.to_json());
                 }
             }
-            self.persist_status_snapshot()?;
+            self.persist_status_snapshot().await?;
             return Ok(
                 json!({"action": "leave", "status": "ok", "roomId": room.room_id, "results": results}),
             );
@@ -80,22 +82,24 @@ impl Runtime {
             results.push(session.to_json());
         }
         self.sessions.clear();
-        self.persist_status_snapshot()?;
+        self.persist_status_snapshot().await?;
         Ok(json!({"action": "leave", "status": "ok", "results": results}))
     }
 
-    pub fn move_bot(
+    pub async fn move_bot(
         &mut self,
         bot_id: &str,
         to_channel: &str,
         reason: Option<&str>,
     ) -> Result<Value> {
-        let assigned = self.assign_room(
-            Some(to_channel),
-            None,
-            None,
-            reason.or(Some("admin_force_move")),
-        )?;
+        let assigned = self
+            .assign_room(
+                Some(to_channel),
+                None,
+                None,
+                reason.or(Some("admin_force_move")),
+            )
+            .await?;
         Ok(json!({
             "action": "move",
             "status": "state-recorded",
@@ -105,7 +109,7 @@ impl Runtime {
         }))
     }
 
-    pub(crate) fn prepare_join_room_jobs(
+    pub(crate) async fn prepare_join_room_jobs(
         &mut self,
         room: RoomConfig,
         requested_by_user_id: &str,
@@ -145,7 +149,7 @@ impl Runtime {
                 },
             )));
         }
-        if let Some(join) = self.active_voice_join_for_room(&room)? {
+        if let Some(join) = self.active_voice_join_for_room(&room).await? {
             let payload = join.discord_voice_join_payload().ok_or_else(|| {
                 anyhow::anyhow!("active discord voice join {} has no join payload", join.id)
             })?;
@@ -172,7 +176,8 @@ impl Runtime {
                 self.manual_join_hold_seconds,
                 reason,
                 requested_by_user_id,
-            )?;
+            )
+            .await?;
         }
 
         let Some(bot) = self.available_voice_bot() else {
@@ -194,22 +199,26 @@ impl Runtime {
         };
 
         let started_at = utc_now();
-        let run = self.timeline_store.create_capture_run(CaptureRunInput {
-            guild_id: room.guild_id.clone(),
-            guild_slug: room.guild_slug.clone(),
-            voice_channel_id: room.channel_id.clone(),
-            voice_channel_name: room.channel_name.clone(),
-            voice_channel_slug: room.channel_slug.clone(),
-            voice_bot_id: bot.bot_id.clone(),
-            voice_bot_discord_user_id: bot.user_id.clone(),
-            started_at: Some(started_at),
-            mode: "local_buffering".to_string(),
-            reason: reason.to_string(),
-            retention_policy: None,
-        })?;
+        let run = self
+            .timeline_store
+            .create_capture_run(CaptureRunInput {
+                guild_id: room.guild_id.clone(),
+                guild_slug: room.guild_slug.clone(),
+                voice_channel_id: room.channel_id.clone(),
+                voice_channel_name: room.channel_name.clone(),
+                voice_channel_slug: room.channel_slug.clone(),
+                voice_bot_id: bot.bot_id.clone(),
+                voice_bot_discord_user_id: bot.user_id.clone(),
+                started_at: Some(started_at),
+                mode: "local_buffering".to_string(),
+                reason: reason.to_string(),
+                retention_policy: None,
+            })
+            .await?;
         let capture_run_id = first_value_string(&run, &["capture_run_id", "captureRunId"]);
         let assignment_id = first_value_string(&run, &["assignment_id", "assignmentId"]);
-        self.mark_bot_joining(&bot.bot_id, &capture_run_id, "")?;
+        self.mark_bot_joining(&bot.bot_id, &capture_run_id, "")
+            .await?;
         let session_dir = session_directory(self, &room, started_at, &capture_run_id);
 
         Ok(JobDecision::WaitFor(vec![Job::discord_voice_join(
@@ -226,7 +235,7 @@ impl Runtime {
         )]))
     }
 
-    pub(crate) fn commit_join_room_job(
+    pub(crate) async fn commit_join_room_job(
         &mut self,
         request: &DiscordVoiceJoinPayload,
         result: DiscordVoiceJoinOutput,
@@ -238,16 +247,18 @@ impl Runtime {
         if let Some(session) = result.session {
             self.sessions
                 .insert(session.session_id.clone(), session.clone());
-            self.timeline_store.set_occupancy(json!({
-                "guild_id": room.guild_id,
-                "guildId": room.guild_id,
-                "voice_channel_id": room.channel_id,
-                "channelId": room.channel_id,
-                "voice_channel_name": room.channel_name,
-                "channelName": room.channel_name,
-                "updated_at": isoformat_z(None),
-            }))?;
-            self.persist_status_snapshot()?;
+            self.timeline_store
+                .set_occupancy(json!({
+                    "guild_id": room.guild_id,
+                    "guildId": room.guild_id,
+                    "voice_channel_id": room.channel_id,
+                    "channelId": room.channel_id,
+                    "voice_channel_name": room.channel_name,
+                    "channelName": room.channel_name,
+                    "updated_at": isoformat_z(None),
+                }))
+                .await?;
+            self.persist_status_snapshot().await?;
             Ok(JobOutput::RoomAgentPlacement(RoomAgentPlacementOutput {
                 action: RoomAgentPlacementAction::Join,
                 status: result.status,
@@ -262,7 +273,7 @@ impl Runtime {
                 message: String::new(),
             }))
         } else {
-            self.persist_status_snapshot()?;
+            self.persist_status_snapshot().await?;
             Ok(JobOutput::RoomAgentPlacement(RoomAgentPlacementOutput {
                 action: RoomAgentPlacementAction::Join,
                 status: result.status,
@@ -279,31 +290,36 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn fail_join_room_job(
+    pub(crate) async fn fail_join_room_job(
         &mut self,
         request: &DiscordVoiceJoinPayload,
         error: &str,
     ) -> Result<()> {
-        self.mark_bot_join_failed(&request.bot_id, error)?;
-        let _ = self.suppress_room_auto_join(
-            &request.room,
-            self.manual_leave_cooldown_seconds,
-            "join_failed",
-            &request.requested_by_user_id,
-            true,
-        );
-        let _ = self.timeline_store.close_capture_run(
-            &request.room.guild_id,
-            &request.room.channel_id,
-            &request.capture_run_id,
-            Some(utc_now()),
-            "join_failed",
-            "failed",
-        );
+        self.mark_bot_join_failed(&request.bot_id, error).await?;
+        let _ = self
+            .suppress_room_auto_join(
+                &request.room,
+                self.manual_leave_cooldown_seconds,
+                "join_failed",
+                &request.requested_by_user_id,
+                true,
+            )
+            .await;
+        let _ = self
+            .timeline_store
+            .close_capture_run(
+                &request.room.guild_id,
+                &request.room.channel_id,
+                &request.capture_run_id,
+                Some(utc_now()),
+                "join_failed",
+                "failed",
+            )
+            .await;
         Ok(())
     }
 
-    pub(crate) fn prepare_leave_room_jobs(
+    pub(crate) async fn prepare_leave_room_jobs(
         &mut self,
         room_identifier: Option<&str>,
         cooldown_seconds: i64,
@@ -318,7 +334,8 @@ impl Runtime {
                 "manual_leave",
                 requested_by_user_id,
                 true,
-            )?;
+            )
+            .await?;
             if let Some(session_id) = self.active_session_id_for_room(&room) {
                 let Some(session) = self.sessions.get(&session_id).cloned() else {
                     anyhow::bail!("active room session {session_id} is missing from runtime state");
@@ -333,7 +350,7 @@ impl Runtime {
                     ),
                 ]));
             }
-            self.persist_status_snapshot()?;
+            self.persist_status_snapshot().await?;
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                 RoomAgentPlacementOutput {
                     action: RoomAgentPlacementAction::Leave,
@@ -366,7 +383,7 @@ impl Runtime {
             })
             .collect::<Vec<_>>();
         if requests.is_empty() {
-            self.persist_status_snapshot()?;
+            self.persist_status_snapshot().await?;
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                 RoomAgentPlacementOutput {
                     action: RoomAgentPlacementAction::Leave,
@@ -386,12 +403,12 @@ impl Runtime {
         Ok(JobDecision::WaitFor(requests))
     }
 
-    pub(crate) fn resume_room_agent_placement_job(
+    pub(crate) async fn resume_room_agent_placement_job(
         &mut self,
         job: &Job,
         payload: &RoomAgentPlacementPayload,
     ) -> Result<JobDecision> {
-        let children = self.timeline_store.list_child_jobs(&job.id)?;
+        let children = self.timeline_store.list_child_jobs(&job.id).await?;
         if children.iter().any(|child| !child.state.is_terminal()) {
             return Ok(JobDecision::Wait);
         }
@@ -399,7 +416,8 @@ impl Runtime {
             child.kind != JobKind::DiscordVoicePlayback && child.state != JobState::Complete
         }) {
             if let Some(join_payload) = failed.discord_voice_join_payload() {
-                self.fail_join_room_job(join_payload, &failed.metadata.error)?;
+                self.fail_join_room_job(join_payload, &failed.metadata.error)
+                    .await?;
             }
             return Ok(JobDecision::fail(format!(
                 "room placement dependency {} ended as {}: {}",
@@ -414,7 +432,7 @@ impl Runtime {
                 })?;
                 match child.metadata.output.clone() {
                     Some(JobOutput::DiscordVoiceJoin(output)) => {
-                        let placement_output = self.commit_join_room_job(request, output)?;
+                        let placement_output = self.commit_join_room_job(request, output).await?;
                         if !has_playback_child(&children, DiscordVoicePlaybackCue::Join) {
                             if let JobOutput::RoomAgentPlacement(output) = &placement_output {
                                 if let Some(session) = &output.session {
@@ -483,7 +501,7 @@ impl Runtime {
                     match child.metadata.output.clone() {
                         Some(JobOutput::DiscordVoiceLeave(output)) => {
                             if let Some(session) =
-                                self.commit_finished_room_session(output, &reason)?
+                                self.commit_finished_room_session(output, &reason).await?
                             {
                                 sessions.push(session);
                             }
@@ -502,7 +520,7 @@ impl Runtime {
                         }
                     }
                 }
-                self.persist_status_snapshot()?;
+                self.persist_status_snapshot().await?;
                 Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                     RoomAgentPlacementOutput {
                         action: RoomAgentPlacementAction::Leave,
@@ -522,7 +540,7 @@ impl Runtime {
         }
     }
 
-    pub(crate) fn sync_voice_adapter_status(
+    pub(crate) async fn sync_voice_adapter_status(
         &mut self,
         bots: Vec<RuntimeBotStatus>,
         sessions: Vec<crate::runtime::RuntimeSessionStatus>,
@@ -548,14 +566,17 @@ impl Runtime {
                 &["capture_run_id", "captureRunId", "session_id", "sessionId"],
             );
             if !capture_run_id.trim().is_empty() {
-                let _ = self.timeline_store.close_capture_run(
-                    &session.guild_id,
-                    &session.voice_channel_id,
-                    &capture_run_id,
-                    Some(utc_now()),
-                    "adapter_sync_missing",
-                    "ended",
-                );
+                let _ = self
+                    .timeline_store
+                    .close_capture_run(
+                        &session.guild_id,
+                        &session.voice_channel_id,
+                        &capture_run_id,
+                        Some(utc_now()),
+                        "adapter_sync_missing",
+                        "ended",
+                    )
+                    .await;
             }
         }
         self.sessions.retain(|_, session| {
@@ -572,7 +593,7 @@ impl Runtime {
                 self.sessions.insert(session.session_id.clone(), session);
             }
         }
-        self.persist_status_snapshot()
+        self.persist_status_snapshot().await
     }
 
     fn available_voice_bot(&self) -> Option<RuntimeBotStatus> {
@@ -586,47 +607,55 @@ impl Runtime {
             .cloned()
     }
 
-    fn active_voice_join_for_room(&self, room: &RoomConfig) -> Result<Option<Job>> {
+    async fn active_voice_join_for_room(&self, room: &RoomConfig) -> Result<Option<Job>> {
         Ok(self
             .timeline_store
-            .list_jobs_by_scope_kind(&room.guild_id, &room.channel_id, JobKind::DiscordVoiceJoin)?
+            .list_jobs_by_scope_kind(&room.guild_id, &room.channel_id, JobKind::DiscordVoiceJoin)
+            .await?
             .into_iter()
             .find(|job| !job.state.is_terminal()))
     }
 
-    fn mark_bot_joining(&mut self, bot_id: &str, session_id: &str, error: &str) -> Result<()> {
+    async fn mark_bot_joining(
+        &mut self,
+        bot_id: &str,
+        session_id: &str,
+        error: &str,
+    ) -> Result<()> {
         if let Some(status) = self.bots.get_mut(bot_id) {
             status.joining_session_id = session_id.to_string();
             status.last_error = error.to_string();
         }
-        self.persist_status_snapshot()
+        self.persist_status_snapshot().await
     }
 
-    fn mark_bot_join_failed(&mut self, bot_id: &str, error: &str) -> Result<()> {
+    async fn mark_bot_join_failed(&mut self, bot_id: &str, error: &str) -> Result<()> {
         if let Some(status) = self.bots.get_mut(bot_id) {
             status.joining_session_id.clear();
             status.last_error = error.to_string();
         }
-        self.persist_status_snapshot()
+        self.persist_status_snapshot().await
     }
 
-    fn commit_finished_room_session(
+    async fn commit_finished_room_session(
         &mut self,
         result: DiscordVoiceLeaveOutput,
         reason: &str,
     ) -> Result<Option<RuntimeSessionStatus>> {
         for job in result.audio_jobs {
-            self.timeline_store.create_job(job)?;
+            self.timeline_store.create_job(job).await?;
         }
         if !result.capture_run_id.trim().is_empty() {
-            self.timeline_store.close_capture_run(
-                &result.guild_id,
-                &result.voice_channel_id,
-                &result.capture_run_id,
-                Some(utc_now()),
-                reason,
-                "ended",
-            )?;
+            self.timeline_store
+                .close_capture_run(
+                    &result.guild_id,
+                    &result.voice_channel_id,
+                    &result.capture_run_id,
+                    Some(utc_now()),
+                    reason,
+                    "ended",
+                )
+                .await?;
         }
         if let Some(status) = result.bot_status {
             self.bots.insert(status.bot_id.clone(), status);
@@ -686,23 +715,23 @@ fn should_record_manual_hold_for_join(reason: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::{Mutex as StdMutex, MutexGuard};
+    use std::sync::OnceLock;
 
     use super::*;
     use crate::runtime::{AgentRuntime, ControlConfig, RuntimeSessionStatus};
 
-    #[test]
-    fn join_room_placement_creates_discord_voice_join_child_job() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn join_room_placement_creates_discord_voice_join_child_job() {
         let raw = tempfile::tempdir().unwrap();
-        let _env = test_state_dir(raw.path());
-        let store =
-            crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+        let _env = test_state_dir(raw.path()).await;
+        let store = test_store(raw.path()).await;
         let room = test_room();
         let mut runtime = test_runtime(store);
         runtime.bots.insert("clanky-vc1".to_string(), ready_bot());
 
         let decision = runtime
             .prepare_join_room_jobs(room.clone(), "user-a", "auto_join")
+            .await
             .unwrap();
 
         let JobDecision::WaitFor(children) = decision else {
@@ -721,12 +750,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn join_room_placement_treats_pending_voice_join_as_channel_reservation() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() {
         let raw = tempfile::tempdir().unwrap();
-        let _env = test_state_dir(raw.path());
-        let store =
-            crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+        let _env = test_state_dir(raw.path()).await;
+        let store = test_store(raw.path()).await;
         let room = test_room();
         let pending = Job::discord_voice_join(DiscordVoiceJoinPayload {
             room: room.clone(),
@@ -738,7 +766,7 @@ mod tests {
             requested_by_user_id: "user-a".to_string(),
             reason: "explicit_request".to_string(),
         });
-        store.create_job(pending).unwrap();
+        store.create_job(pending).await.unwrap();
         let mut runtime = test_runtime(store);
         runtime.bots.insert(
             "clanky-vc2".to_string(),
@@ -747,6 +775,7 @@ mod tests {
 
         let decision = runtime
             .prepare_join_room_jobs(room, "user-b", "explicit_request")
+            .await
             .unwrap();
 
         let JobDecision::Complete(JobOutput::RoomAgentPlacement(output)) = decision else {
@@ -758,10 +787,10 @@ mod tests {
         assert!(runtime.bots["clanky-vc2"].joining_session_id.is_empty());
     }
 
-    #[test]
-    fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() {
         let raw = tempfile::tempdir().unwrap();
-        let _env = test_state_dir(raw.path());
+        let _env = test_state_dir(raw.path()).await;
         let store =
             crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
         let room = test_room();
@@ -801,12 +830,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn room_placement_resume_commits_discord_voice_join_output() {
+    #[tokio::test(flavor = "current_thread")]
+    async fn room_placement_resume_commits_discord_voice_join_output() {
         let raw = tempfile::tempdir().unwrap();
-        let _env = test_state_dir(raw.path());
-        let store =
-            crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+        let _env = test_state_dir(raw.path()).await;
+        let store = test_store(raw.path()).await;
         let room = test_room();
         let mut runtime = test_runtime(store.clone());
         let parent = store
@@ -819,6 +847,7 @@ mod tests {
                 "test-placement",
                 None,
             ))
+            .await
             .unwrap();
         let join_payload = DiscordVoiceJoinPayload {
             room: room.clone(),
@@ -832,8 +861,9 @@ mod tests {
         };
         let child = store
             .create_child_job(&parent, Job::discord_voice_join(join_payload))
+            .await
             .unwrap();
-        let mut completed_child = store.get_job(&child.id).unwrap();
+        let mut completed_child = store.get_job(&child.id).await.unwrap();
         completed_child.mark_complete();
         completed_child.metadata.output =
             Some(JobOutput::DiscordVoiceJoin(DiscordVoiceJoinOutput {
@@ -859,11 +889,12 @@ mod tests {
                 }),
                 message: String::new(),
             }));
-        store.update_job(&completed_child).unwrap();
+        store.update_job(&completed_child).await.unwrap();
 
         let payload = parent.room_agent_placement_payload().unwrap();
         let decision = runtime
             .resume_room_agent_placement_job(&parent, payload)
+            .await
             .unwrap();
 
         let JobDecision::WaitFor(playback_jobs) = decision else {
@@ -880,14 +911,16 @@ mod tests {
         );
         let playback_child = store
             .create_child_job(&parent, playback_jobs.into_iter().next().unwrap())
+            .await
             .unwrap();
-        let mut completed_playback = store.get_job(&playback_child.id).unwrap();
+        let mut completed_playback = store.get_job(&playback_child.id).await.unwrap();
         completed_playback.set_state(JobState::Failed);
         completed_playback.metadata.error = "missing cue asset".to_string();
-        store.update_job(&completed_playback).unwrap();
+        store.update_job(&completed_playback).await.unwrap();
 
         let decision = runtime
             .resume_room_agent_placement_job(&parent, payload)
+            .await
             .unwrap();
         let JobDecision::Complete(JobOutput::RoomAgentPlacement(output)) = decision else {
             panic!("expected completed room placement output after playback");
@@ -942,9 +975,42 @@ mod tests {
         }
     }
 
-    fn test_state_dir(root: &std::path::Path) -> MutexGuard<'static, ()> {
-        static ENV_LOCK: StdMutex<()> = StdMutex::new(());
-        let guard = ENV_LOCK.lock().unwrap();
+    async fn test_store(root: &std::path::Path) -> crate::runtime::timeline::TimelineStore {
+        let store = crate::runtime::timeline::TimelineStore::new(Some(root.join("voice"))).unwrap();
+        store.initialize().await.unwrap();
+        sqlx::query(
+            "TRUNCATE TABLE
+                job_dependencies,
+                job_payloads,
+                jobs,
+                automations,
+                authoritative_spans,
+                publications,
+                windows,
+                conversations,
+                timeline_events,
+                capture_runs,
+                occupancy,
+                assignments,
+                sessions,
+                bot_states,
+                runtime_status,
+                runtime_metadata,
+                voice_rooms
+            RESTART IDENTITY CASCADE",
+        )
+        .execute(&store.pool)
+        .await
+        .unwrap();
+        store
+    }
+
+    async fn test_state_dir(root: &std::path::Path) -> tokio::sync::MutexGuard<'static, ()> {
+        static ENV_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+        let guard = ENV_LOCK
+            .get_or_init(|| tokio::sync::Mutex::new(()))
+            .lock()
+            .await;
         // Environment mutation is process-global; this test module serializes it.
         unsafe {
             std::env::set_var("CLANKCORD_STATE_DIR", root.join("state"));

@@ -313,29 +313,26 @@ pub fn event_speaker(event: &Value) -> String {
     )
 }
 
-pub(crate) fn timeline_event_payload(row: &Row<'_>) -> rusqlite::Result<Value> {
-    let payload_json: String = row.get("payload_json")?;
-    let mut payload = serde_json::from_str::<Value>(&payload_json)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let event_id: String = row.get("event_id")?;
-    let kind: String = row.get("event_kind")?;
-    let guild_id: String = row.get("guild_id")?;
-    let channel_id: String = row.get("voice_channel_id")?;
-    let capture_run_id: String = row.get("capture_run_id")?;
-    let conversation_id: String = row.get("conversation_id")?;
-    let speaker_user_id: String = row.get("speaker_user_id")?;
-    let speaker_label: String = row.get("speaker_label")?;
-    let text: String = row.get("text")?;
+pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
+    let payload_json: Value = row.try_get("payload_json")?;
+    let mut payload = payload_json.as_object().cloned().unwrap_or_default();
+    let event_id: String = row.try_get("event_id")?;
+    let kind: String = row.try_get("event_kind")?;
+    let guild_id: String = row.try_get("guild_id")?;
+    let channel_id: String = row.try_get("voice_channel_id")?;
+    let capture_run_id: String = row.try_get("capture_run_id")?;
+    let conversation_id: String = row.try_get("conversation_id")?;
+    let speaker_user_id: String = row.try_get("speaker_user_id")?;
+    let speaker_label: String = row.try_get("speaker_label")?;
+    let text: String = row.try_get("text")?;
     let started = row
-        .get::<_, Option<i64>>("started_at_ms")?
+        .try_get::<Option<i64>, _>("started_at_ms")?
         .and_then(ms_to_datetime);
     let ended = row
-        .get::<_, Option<i64>>("ended_at_ms")?
+        .try_get::<Option<i64>, _>("ended_at_ms")?
         .and_then(ms_to_datetime);
     let created = row
-        .get::<_, Option<i64>>("created_at_ms")?
+        .try_get::<Option<i64>, _>("created_at_ms")?
         .and_then(ms_to_datetime);
     set_default_string(&mut payload, "event_id", &event_id);
     set_default_string(&mut payload, "eventId", &event_id);
@@ -345,19 +342,19 @@ pub(crate) fn timeline_event_payload(row: &Row<'_>) -> rusqlite::Result<Value> {
     set_default_string(&mut payload, "guildId", &guild_id);
     set_default_string(&mut payload, "voice_channel_id", &channel_id);
     set_default_string(&mut payload, "channelId", &channel_id);
-    if let Ok(value) = row.get::<_, String>("room_guild_slug") {
+    if let Ok(value) = row.try_get::<String, _>("room_guild_slug") {
         if !value.is_empty() {
             set_default_string(&mut payload, "guild_slug", &value);
             set_default_string(&mut payload, "guildSlug", &value);
         }
     }
-    if let Ok(value) = row.get::<_, String>("room_voice_channel_name") {
+    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_name") {
         if !value.is_empty() {
             set_default_string(&mut payload, "voice_channel_name", &value);
             set_default_string(&mut payload, "channelName", &value);
         }
     }
-    if let Ok(value) = row.get::<_, String>("room_voice_channel_slug") {
+    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_slug") {
         if !value.is_empty() {
             set_default_string(&mut payload, "voice_channel_slug", &value);
             set_default_string(&mut payload, "channelSlug", &value);
@@ -419,16 +416,15 @@ pub(crate) fn timeline_event_payload(row: &Row<'_>) -> rusqlite::Result<Value> {
             payload.entry(alias.to_string()).or_insert(value);
         }
     }
-    let forgotten: i64 = row.get("forgotten")?;
-    if forgotten != 0 {
+    let forgotten: bool = row.try_get("forgotten")?;
+    if forgotten {
         payload.insert("_forgotten".to_string(), Value::Bool(true));
     }
     Ok(Value::Object(payload))
 }
 
-pub(crate) fn payload_from_row(row: &Row<'_>, index: usize) -> rusqlite::Result<Value> {
-    let raw: String = row.get(index)?;
-    Ok(serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({})))
+pub(crate) fn json_value(row: &PgRow, column: &str) -> Result<Value> {
+    Ok(row.try_get::<Value, _>(column)?)
 }
 
 pub(crate) fn compact_timeline_payload(payload: &Value, kind: &str) -> Value {

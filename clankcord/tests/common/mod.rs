@@ -1,9 +1,12 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
+use sqlx::postgres::PgPoolOptions;
 
 use clankcord::adapters::discord::voice::types::VoiceSession;
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
@@ -21,7 +24,7 @@ pub(crate) fn dt(
         .unwrap()
 }
 
-pub(crate) fn append_speech(
+pub(crate) async fn append_speech(
     store: &TimelineStore,
     raw_root: &Path,
     start: chrono::DateTime<Utc>,
@@ -53,7 +56,59 @@ pub(crate) fn append_speech(
             duration_ms: (end - start).num_milliseconds(),
             ..Default::default()
         })
+        .await
         .unwrap()
+}
+
+pub(crate) async fn test_store(root: &Path) -> TimelineStore {
+    let schema = test_schema_name();
+    let database_url = std::env::var("CLANKCORD_POSTGRES_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgres://clankcord:clankcord@127.0.0.1:54329/clankcord".to_string());
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&database_url)
+        .await
+        .unwrap();
+    sqlx::query(&format!("CREATE SCHEMA {}", quote_identifier(&schema)))
+        .execute(&admin_pool)
+        .await
+        .unwrap();
+    admin_pool.close().await;
+    let _guard = schema_env_lock().lock().unwrap();
+    let previous = std::env::var("CLANKCORD_POSTGRES_SCHEMA").ok();
+    unsafe {
+        std::env::set_var("CLANKCORD_POSTGRES_SCHEMA", &schema);
+    }
+    let store = TimelineStore::new(Some(root.to_path_buf())).unwrap();
+    match previous {
+        Some(previous) => unsafe {
+            std::env::set_var("CLANKCORD_POSTGRES_SCHEMA", previous);
+        },
+        None => unsafe {
+            std::env::remove_var("CLANKCORD_POSTGRES_SCHEMA");
+        },
+    }
+    store.initialize().await.unwrap();
+    store
+}
+
+fn test_schema_name() -> String {
+    static NEXT_SCHEMA: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "clankcord_test_{}_{}",
+        std::process::id(),
+        NEXT_SCHEMA.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn schema_env_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }
 
 pub(crate) fn test_voice_session(raw_root: &Path) -> VoiceSession {

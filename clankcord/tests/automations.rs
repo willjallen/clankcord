@@ -13,10 +13,10 @@ use clankcord::runtime::{
 };
 
 mod common;
-use common::dt;
+use common::{dt, test_store};
 
-#[test]
-fn automation_spec_lowers_boundary_json_to_typed_structs() {
+#[tokio::test(flavor = "current_thread")]
+async fn automation_spec_lowers_boundary_json_to_typed_structs() {
     let spec = AutomationSpec::from_json(&json!({
         "schema": "clankcord.automation.v0",
         "name": "alarm",
@@ -42,8 +42,8 @@ fn automation_spec_lowers_boundary_json_to_typed_structs() {
     assert_eq!(content, "Timer done.");
 }
 
-#[test]
-fn automation_job_trigger_accepts_runtime_job_names() {
+#[tokio::test(flavor = "current_thread")]
+async fn automation_job_trigger_accepts_runtime_job_names() {
     let spec = AutomationSpec::from_json(&json!({
         "schema": "clankcord.automation.v0",
         "name": "job watcher",
@@ -68,8 +68,8 @@ fn automation_job_trigger_accepts_runtime_job_names() {
     assert_eq!(states, vec![JobState::Complete, JobState::Failed]);
 }
 
-#[test]
-fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
+#[tokio::test(flavor = "current_thread")]
+async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
     let spec = AutomationSpec::from_json(&json!({
         "schema": "clankcord.automation.v0",
         "name": "camel case reminder",
@@ -105,8 +105,8 @@ fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
     assert_eq!(sink.id, "agent-thread");
 }
 
-#[test]
-fn invalid_automation_specs_return_actionable_errors() {
+#[tokio::test(flavor = "current_thread")]
+async fn invalid_automation_specs_return_actionable_errors() {
     let cases = [
         (
             "root array",
@@ -303,10 +303,10 @@ fn invalid_automation_specs_return_actionable_errors() {
     }
 }
 
-#[test]
-fn automation_store_is_binary_idempotent_and_cancellable() {
+#[tokio::test(flavor = "current_thread")]
+async fn automation_store_is_binary_idempotent_and_cancellable() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let spec = AutomationSpec::from_json(&json!({
         "schema": "clankcord.automation.v0",
         "name": "remind blake",
@@ -328,45 +328,49 @@ fn automation_store_is_binary_idempotent_and_cancellable() {
     }))
     .unwrap();
 
-    let first = store.create_automation(spec.clone()).unwrap();
-    let second = store.create_automation(spec).unwrap();
+    let first = store.create_automation(spec.clone()).await.unwrap();
+    let second = store.create_automation(spec).await.unwrap();
     assert_eq!(first.automation_id, second.automation_id);
 
     let active = store
         .list_automations(Some("guild"), Some("code"), Some(AutomationState::Active))
+        .await
         .unwrap();
     assert_eq!(active.len(), 1);
 
-    let cancelled = store.cancel_automation(&first.automation_id).unwrap();
+    let cancelled = store.cancel_automation(&first.automation_id).await.unwrap();
     assert_eq!(cancelled.state, AutomationState::Cancelled);
     assert!(
         store
             .list_automations(Some("guild"), Some("code"), Some(AutomationState::Active))
+            .await
             .unwrap()
             .is_empty()
     );
 }
 
-#[test]
-fn runtime_loads_active_automations_from_sqlite_after_restart() {
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_loads_active_automations_after_restart() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let record = store
         .create_automation(reminder_spec("job_1:restart"))
+        .await
         .unwrap();
 
     let mut restarted = test_runtime(store);
-    restarted.load_automation_registry().unwrap();
+    restarted.load_automation_registry().await.unwrap();
 
     assert!(restarted.automations.contains_key(&record.automation_id));
 }
 
-#[test]
-fn stored_event_automation_emits_response_job_once_and_expires() {
+#[tokio::test(flavor = "current_thread")]
+async fn stored_event_automation_emits_response_job_once_and_expires() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let record = store
         .create_automation(reminder_spec("job_1:event-fire"))
+        .await
         .unwrap();
     append_speech(
         &store,
@@ -374,16 +378,17 @@ fn stored_event_automation_emits_response_job_once_and_expires() {
         "blake",
         "Blake joined the room",
         1,
-    );
+    )
+    .await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().unwrap();
+    runtime.load_automation_registry().await.unwrap();
 
-    let result = runtime.run_automations().unwrap().to_json();
+    let result = runtime.run_automations().await.unwrap().to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
     let payload = job.response_payload().unwrap();
     assert_eq!(payload.sink.kind, ResponseSinkKind::AgentChat);
     assert_eq!(payload.content, "Blake joined.");
@@ -393,16 +398,17 @@ fn stored_event_automation_emits_response_job_once_and_expires() {
         runtime
             .timeline_store
             .get_automation(&record.automation_id)
+            .await
             .unwrap()
             .state,
         AutomationState::Expired
     );
 }
 
-#[test]
-fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
+#[tokio::test(flavor = "current_thread")]
+async fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "compound reminder",
         "idempotency_key": "job_1:compound",
@@ -426,12 +432,12 @@ fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
         "expiry": {"max_fires": 2}
     })))
     .unwrap();
-    let record = store.create_automation(spec).unwrap();
-    append_speech(&store, "room.member_joined", "vince", "Vince joined", 1);
+    let record = store.create_automation(spec).await.unwrap();
+    append_speech(&store, "room.member_joined", "vince", "Vince joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().unwrap();
+    runtime.load_automation_registry().await.unwrap();
 
-    let first = runtime.run_automations().unwrap().to_json();
+    let first = runtime.run_automations().await.unwrap().to_json();
     assert!(first["createdJobs"].as_array().unwrap().is_empty());
     assert!(runtime.automations.contains_key(&record.automation_id));
 
@@ -441,28 +447,29 @@ fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
         "blake",
         "Blake joined",
         2,
-    );
-    let second = runtime.run_automations().unwrap().to_json();
+    )
+    .await;
+    let second = runtime.run_automations().await.unwrap().to_json();
     assert_eq!(second["createdJobs"].as_array().unwrap().len(), 1);
 }
 
-#[test]
-fn stored_event_automation_does_not_replay_same_event_when_max_fires_allows_more() {
+#[tokio::test(flavor = "current_thread")]
+async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allows_more() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "two fire reminder",
         "idempotency_key": "job_1:two-fire",
         "expiry": {"max_fires": 2}
     })))
     .unwrap();
-    let record = store.create_automation(spec).unwrap();
-    append_speech(&store, "room.member_joined", "blake", "Blake joined", 1);
+    let record = store.create_automation(spec).await.unwrap();
+    append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().unwrap();
+    runtime.load_automation_registry().await.unwrap();
 
-    let first = runtime.run_automations().unwrap().to_json();
-    let second = runtime.run_automations().unwrap().to_json();
+    let first = runtime.run_automations().await.unwrap().to_json();
+    let second = runtime.run_automations().await.unwrap().to_json();
 
     assert_eq!(first["createdJobs"].as_array().unwrap().len(), 1);
     assert!(second["createdJobs"].as_array().unwrap().is_empty());
@@ -474,23 +481,25 @@ fn stored_event_automation_does_not_replay_same_event_when_max_fires_allows_more
         "blake",
         "Blake joined again",
         2,
-    );
-    let third = runtime.run_automations().unwrap().to_json();
+    )
+    .await;
+    let third = runtime.run_automations().await.unwrap().to_json();
     assert_eq!(third["createdJobs"].as_array().unwrap().len(), 1);
     assert_eq!(
         runtime
             .timeline_store
             .get_automation(&record.automation_id)
+            .await
             .unwrap()
             .state,
         AutomationState::Expired
     );
 }
 
-#[test]
-fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
+#[tokio::test(flavor = "current_thread")]
+async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "job follow-up",
         "idempotency_key": "job_1:job-followup",
@@ -506,7 +515,7 @@ fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
         }]
     })))
     .unwrap();
-    store.create_automation(spec).unwrap();
+    store.create_automation(spec).await.unwrap();
     let mut completed_response = Job::response(
         "guild",
         "code",
@@ -520,18 +529,18 @@ fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
             false,
         ),
     );
-    completed_response = store.create_job(completed_response).unwrap();
+    completed_response = store.create_job(completed_response).await.unwrap();
     completed_response.mark_complete();
-    store.update_job(&completed_response).unwrap();
+    store.update_job(&completed_response).await.unwrap();
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().unwrap();
+    runtime.load_automation_registry().await.unwrap();
 
-    let result = runtime.run_automations().unwrap().to_json();
+    let result = runtime.run_automations().await.unwrap().to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
     assert_eq!(job.kind, JobKind::AgentTask);
     assert_eq!(
         job.command().unwrap().arguments.request,
@@ -539,10 +548,10 @@ fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
     );
 }
 
-#[test]
-fn automation_action_failures_are_audited_without_crashing_runner() {
+#[tokio::test(flavor = "current_thread")]
+async fn automation_action_failures_are_audited_without_crashing_runner() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let spec = AutomationSpec::from_json(&spec_value(json!({
         "name": "sound request",
         "idempotency_key": "job_1:sound",
@@ -552,17 +561,18 @@ fn automation_action_failures_are_audited_without_crashing_runner() {
         }]
     })))
     .unwrap();
-    store.create_automation(spec).unwrap();
-    append_speech(&store, "room.member_joined", "blake", "Blake joined", 1);
+    store.create_automation(spec).await.unwrap();
+    append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().unwrap();
+    runtime.load_automation_registry().await.unwrap();
 
-    let result = runtime.run_automations().unwrap().to_json();
+    let result = runtime.run_automations().await.unwrap().to_json();
 
     assert!(result["createdJobs"].as_array().unwrap().is_empty());
     let failures = runtime
         .timeline_store
         .load_events("guild", "code", None, None, None, None, false)
+        .await
         .unwrap()
         .into_iter()
         .filter(|event| event["event_kind"] == json!("automation_action_failed"))
@@ -658,7 +668,7 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
     }
 }
 
-fn append_speech(
+async fn append_speech(
     store: &TimelineStore,
     event_kind: &str,
     user_id: &str,
@@ -676,5 +686,6 @@ fn append_speech(
                 "text": text,
             }),
         )
+        .await
         .unwrap();
 }

@@ -1,9 +1,8 @@
 use super::*;
 
 impl TimelineStore {
-    pub fn ensure_room(
+    pub async fn ensure_room(
         &self,
-        db: &Connection,
         guild_id: &str,
         voice_channel_id: &str,
         guild_slug: &str,
@@ -14,23 +13,30 @@ impl TimelineStore {
             return Ok(());
         }
         let now_ms = instant_ms_dt(utc_now());
-        db.execute(
+        sqlx::query(
             r#"
             INSERT INTO voice_rooms(guild_id, voice_channel_id, guild_slug, voice_channel_name, voice_channel_slug, updated_at_ms)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT(guild_id, voice_channel_id) DO UPDATE SET
-              guild_slug = COALESCE(NULLIF(excluded.guild_slug, ''), voice_rooms.guild_slug),
-              voice_channel_name = COALESCE(NULLIF(excluded.voice_channel_name, ''), voice_rooms.voice_channel_name),
-              voice_channel_slug = COALESCE(NULLIF(excluded.voice_channel_slug, ''), voice_rooms.voice_channel_slug),
-              updated_at_ms = excluded.updated_at_ms
+              guild_slug = COALESCE(NULLIF(EXCLUDED.guild_slug, ''), voice_rooms.guild_slug),
+              voice_channel_name = COALESCE(NULLIF(EXCLUDED.voice_channel_name, ''), voice_rooms.voice_channel_name),
+              voice_channel_slug = COALESCE(NULLIF(EXCLUDED.voice_channel_slug, ''), voice_rooms.voice_channel_slug),
+              updated_at_ms = EXCLUDED.updated_at_ms
             "#,
-            params![guild_id, voice_channel_id, guild_slug, voice_channel_name, voice_channel_slug, now_ms],
-        )?;
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(guild_slug)
+        .bind(voice_channel_name)
+        .bind(voice_channel_slug)
+        .bind(now_ms)
+        .execute(&self.pool)
+        .await?;
         fs::create_dir_all(self.channel_dir(guild_id, voice_channel_id))?;
         Ok(())
     }
 
-    pub fn append_event(
+    pub async fn append_event(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -76,58 +82,51 @@ impl TimelineStore {
             ],
         );
         let capture_run_id = first_string(&payload, &["capture_run_id", "captureRunId"]);
-        let db = self.connect()?;
         self.ensure_room(
-            &db,
             guild_id,
             voice_channel_id,
             &first_string(&payload, &["guild_slug", "guildSlug"]),
             &first_string(&payload, &["voice_channel_name", "channelName"]),
             &first_string(&payload, &["voice_channel_slug", "channelSlug"]),
-        )?;
-        db.execute(
+        )
+        .await?;
+        sqlx::query(
             r#"
             INSERT INTO timeline_events(
               event_id, guild_id, voice_channel_id, event_kind, started_at_ms, ended_at_ms,
               created_at_ms, capture_run_id, conversation_id, speaker_user_id, speaker_label, text, payload_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
-            params![
-                event_id,
-                guild_id,
-                voice_channel_id,
-                kind,
-                started_ms,
-                ended_ms,
-                created_ms,
-                capture_run_id,
-                conversation_id,
-                speaker,
-                speaker_label,
-                text,
-                json_dumps(&compact_timeline_payload(&Value::Object(payload.clone()), &kind))?
-            ],
-        )?;
-        if self.fts_enabled && SPEECH_KINDS.contains(&kind.as_str()) && !text.is_empty() {
-            let _ = db.execute(
-                "INSERT INTO transcript_events_fts(event_id, guild_id, voice_channel_id, speaker_label, text) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![event_id, guild_id, voice_channel_id, speaker_label, text],
-            );
-        }
+        )
+        .bind(event_id)
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(kind.clone())
+        .bind(started_ms)
+        .bind(ended_ms)
+        .bind(created_ms)
+        .bind(capture_run_id)
+        .bind(conversation_id)
+        .bind(speaker)
+        .bind(speaker_label)
+        .bind(text)
+        .bind(compact_timeline_payload(&Value::Object(payload.clone()), &kind))
+        .execute(&self.pool)
+        .await?;
         Ok(Value::Object(payload))
     }
 
-    pub fn append_participant_event(
+    pub async fn append_participant_event(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
         event: Value,
     ) -> Result<Value> {
-        self.append_event(guild_id, voice_channel_id, event)
+        self.append_event(guild_id, voice_channel_id, event).await
     }
 
-    pub fn load_events(
+    pub async fn load_events(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -137,46 +136,58 @@ impl TimelineStore {
         capture_run_id: Option<&str>,
         include_forgotten: bool,
     ) -> Result<Vec<Value>> {
-        let mut conditions = vec![
-            "e.guild_id = ?".to_string(),
-            "e.voice_channel_id = ?".to_string(),
-        ];
-        let mut params_values: Vec<Box<dyn ToSql>> = vec![
-            Box::new(guild_id.to_string()),
-            Box::new(voice_channel_id.to_string()),
-        ];
+        if kinds.is_some_and(BTreeSet::is_empty) {
+            return Ok(Vec::new());
+        }
+        let mut query = QueryBuilder::<Postgres>::new(
+            r#"
+            SELECT e.*,
+                   r.guild_slug AS room_guild_slug,
+                   r.voice_channel_name AS room_voice_channel_name,
+                   r.voice_channel_slug AS room_voice_channel_slug
+            FROM timeline_events e
+            LEFT JOIN voice_rooms r
+              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
+            WHERE e.guild_id =
+            "#,
+        );
+        query.push_bind(guild_id);
+        query
+            .push(" AND e.voice_channel_id = ")
+            .push_bind(voice_channel_id);
         if let Some(kinds) = kinds {
-            if kinds.is_empty() {
-                return Ok(Vec::new());
-            }
-            conditions.push(format!(
-                "e.event_kind IN ({})",
-                std::iter::repeat("?")
-                    .take(kinds.len())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            ));
+            query.push(" AND e.event_kind IN (");
+            let mut separated = query.separated(", ");
             for kind in kinds {
-                params_values.push(Box::new(kind.clone()));
+                separated.push_bind(kind);
             }
+            separated.push_unseparated(")");
         }
         if let Some(capture_run_id) = capture_run_id.filter(|value| !value.is_empty()) {
-            conditions.push("e.capture_run_id = ?".to_string());
-            params_values.push(Box::new(capture_run_id.to_string()));
+            query
+                .push(" AND e.capture_run_id = ")
+                .push_bind(capture_run_id);
         }
         if let Some(start) = start {
-            conditions
-                .push("COALESCE(e.ended_at_ms, e.started_at_ms, e.created_at_ms) > ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(start)));
+            query
+                .push(" AND COALESCE(e.ended_at_ms, e.started_at_ms, e.created_at_ms) > ")
+                .push_bind(instant_ms_dt(start));
         }
         if let Some(end) = end {
-            conditions.push("COALESCE(e.started_at_ms, e.created_at_ms) < ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(end)));
+            query
+                .push(" AND COALESCE(e.started_at_ms, e.created_at_ms) < ")
+                .push_bind(instant_ms_dt(end));
         }
         if !include_forgotten {
-            conditions.push("e.forgotten = 0".to_string());
+            query.push(" AND e.forgotten = FALSE");
         }
-        let sql = format!(
+        query.push(" ORDER BY COALESCE(e.started_at_ms, e.created_at_ms), e.sequence, e.event_id");
+        let rows = query.build().fetch_all(&self.pool).await?;
+        rows.iter().map(timeline_event_payload).collect()
+    }
+
+    pub async fn get_event(&self, event_id: &str) -> Result<Value> {
+        let row = sqlx::query(
             r#"
             SELECT e.*,
                    r.guild_slug AS room_guild_slug,
@@ -185,41 +196,16 @@ impl TimelineStore {
             FROM timeline_events e
             LEFT JOIN voice_rooms r
               ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
-            WHERE {}
-            ORDER BY COALESCE(e.started_at_ms, e.created_at_ms), e.sequence, e.event_id
+            WHERE e.event_id = $1
             "#,
-            conditions.join(" AND ")
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| timeline_event_payload(row),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        )
+        .bind(event_id)
+        .fetch_one(&self.pool)
+        .await?;
+        timeline_event_payload(&row)
     }
 
-    pub fn get_event(&self, event_id: &str) -> Result<Value> {
-        let db = self.connect()?;
-        let payload = db.query_row(
-            r#"
-            SELECT e.*,
-                   r.guild_slug AS room_guild_slug,
-                   r.voice_channel_name AS room_voice_channel_name,
-                   r.voice_channel_slug AS room_voice_channel_slug
-            FROM timeline_events e
-            LEFT JOIN voice_rooms r
-              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
-            WHERE e.event_id = ?1
-            "#,
-            params![event_id],
-            timeline_event_payload,
-        )?;
-        Ok(payload)
-    }
-
-    pub fn speech_event_for_segment(
+    pub async fn speech_event_for_segment(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -237,7 +223,8 @@ impl TimelineStore {
                 Some(&kinds),
                 Some(capture_run_id),
                 false,
-            )?
+            )
+            .await?
             .into_iter()
             .find(|event| {
                 first_value_string(event, &["speaker_user_id", "speakerId"]) == speaker_user_id
@@ -248,46 +235,50 @@ impl TimelineStore {
             }))
     }
 
-    pub fn speech_stats_for_capture_run(
+    pub async fn speech_stats_for_capture_run(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
         capture_run_id: &str,
     ) -> Result<(i64, Option<DateTime<Utc>>)> {
         let kinds = set(["speech_segment"]);
-        let events = self.load_events(
-            guild_id,
-            voice_channel_id,
-            None,
-            None,
-            Some(&kinds),
-            Some(capture_run_id),
-            false,
-        )?;
+        let events = self
+            .load_events(
+                guild_id,
+                voice_channel_id,
+                None,
+                None,
+                Some(&kinds),
+                Some(capture_run_id),
+                false,
+            )
+            .await?;
         let last = events.iter().filter_map(event_end).max();
         Ok((events.len() as i64, last))
     }
 
-    pub fn append_speech_event(&self, input: SpeechEventInput) -> Result<Value> {
+    pub async fn append_speech_event(&self, input: SpeechEventInput) -> Result<Value> {
         let event_id = new_id("evt");
         let mut source_path = input.source_audio_path.display().to_string();
         if source_path == "." {
             source_path.clear();
         }
-        let (conversation_id, gap_ms) = self.conversation_for_speech(
-            &input.guild_id,
-            &input.voice_channel_id,
-            &event_id,
-            input.segment_start_time,
-            input.segment_end_time,
-            &input.speaker_user_id,
-            &input.speaker_label,
-            &input.text_draft,
-        )?;
+        let (conversation_id, gap_ms) = self
+            .conversation_for_speech(
+                &input.guild_id,
+                &input.voice_channel_id,
+                &event_id,
+                input.segment_start_time,
+                input.segment_end_time,
+                &input.speaker_user_id,
+                &input.speaker_label,
+                &input.text_draft,
+            )
+            .await?;
         let stt_model = if input.stt_model.is_empty() {
             string_field(&input.stt_metadata, "model")
         } else {
-            input.stt_model
+            input.stt_model.clone()
         };
         let payload = serde_json::json!({
             "event_id": event_id,
@@ -341,11 +332,21 @@ impl TimelineStore {
             "created_at": isoformat_z(None)
         });
         self.append_event(&input.guild_id, &input.voice_channel_id, payload)
+            .await
     }
 }
 
 impl TimelineStore {
-    pub fn create_capture_run(&self, input: CaptureRunInput) -> Result<Value> {
+    pub async fn create_capture_run(&self, input: CaptureRunInput) -> Result<Value> {
+        let guild_id = input.guild_id.clone();
+        let guild_slug = input.guild_slug.clone();
+        let voice_channel_id = input.voice_channel_id.clone();
+        let voice_channel_name = input.voice_channel_name.clone();
+        let voice_channel_slug = input.voice_channel_slug.clone();
+        let voice_bot_id = input.voice_bot_id.clone();
+        let voice_bot_discord_user_id = input.voice_bot_discord_user_id.clone();
+        let mode = input.mode.clone();
+        let reason = input.reason.clone();
         let started = input.started_at.unwrap_or_else(utc_now);
         let capture_run_id = new_id("cap");
         let assignment_id = new_id("assign");
@@ -361,113 +362,115 @@ impl TimelineStore {
             "captureRunId": capture_run_id,
             "assignment_id": assignment_id,
             "assignmentId": assignment_id,
-            "guild_id": input.guild_id,
-            "guildId": input.guild_id,
-            "guild_slug": input.guild_slug,
-            "guildSlug": input.guild_slug,
-            "voice_channel_id": input.voice_channel_id,
-            "channelId": input.voice_channel_id,
-            "voice_channel_name": input.voice_channel_name,
-            "channelName": input.voice_channel_name,
-            "voice_channel_slug": input.voice_channel_slug,
-            "channelSlug": input.voice_channel_slug,
-            "voice_bot_id": input.voice_bot_id,
-            "botId": input.voice_bot_id,
-            "voice_bot_discord_user_id": input.voice_bot_discord_user_id,
-            "botUserId": input.voice_bot_discord_user_id,
+            "guild_id": guild_id,
+            "guildId": guild_id,
+            "guild_slug": guild_slug,
+            "guildSlug": guild_slug,
+            "voice_channel_id": voice_channel_id,
+            "channelId": voice_channel_id,
+            "voice_channel_name": voice_channel_name,
+            "channelName": voice_channel_name,
+            "voice_channel_slug": voice_channel_slug,
+            "channelSlug": voice_channel_slug,
+            "voice_bot_id": voice_bot_id,
+            "botId": voice_bot_id,
+            "voice_bot_discord_user_id": voice_bot_discord_user_id,
+            "botUserId": voice_bot_discord_user_id,
             "started_at": isoformat_z(Some(started)),
             "startedAt": isoformat_z(Some(started)),
             "ended_at": Value::Null,
             "endedAt": "",
             "state": "active",
-            "mode": input.mode,
+            "mode": mode,
             "retention_policy": policy,
             "retentionPolicy": policy
         });
         let assignment = serde_json::json!({
             "assignment_id": assignment_id,
-            "guild_id": input.guild_id,
-            "voice_channel_id": input.voice_channel_id,
-            "voice_channel_name": input.voice_channel_name,
-            "voice_bot_id": input.voice_bot_id,
-            "voice_bot_discord_user_id": input.voice_bot_discord_user_id,
+            "guild_id": guild_id,
+            "voice_channel_id": voice_channel_id,
+            "voice_channel_name": voice_channel_name,
+            "voice_bot_id": voice_bot_id,
+            "voice_bot_discord_user_id": voice_bot_discord_user_id,
             "capture_run_id": capture_run_id,
             "state": "capturing",
-            "mode": input.mode,
+            "mode": mode,
             "assigned_at": isoformat_z(Some(started)),
             "released_at": Value::Null,
-            "assignment_reason": input.reason
+            "assignment_reason": reason
         });
         let now_ms = instant_ms_dt(started);
-        let db = self.connect()?;
         self.ensure_room(
-            &db,
-            &input.guild_id,
-            &input.voice_channel_id,
-            &input.guild_slug,
-            &input.voice_channel_name,
-            &input.voice_channel_slug,
-        )?;
-        db.execute(
+            &guild_id,
+            &voice_channel_id,
+            &guild_slug,
+            &voice_channel_name,
+            &voice_channel_slug,
+        )
+        .await?;
+        let mut transaction = self.pool.begin().await?;
+        sqlx::query(
             r#"
             INSERT INTO capture_runs(
               capture_run_id, guild_id, voice_channel_id, voice_bot_id, started_at_ms,
               ended_at_ms, state, mode, updated_at_ms, payload_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?8, ?9)
+            VALUES ($1, $2, $3, $4, $5, NULL, $6, $7, $8, $9)
             "#,
-            params![
-                capture_run_id,
-                input.guild_id,
-                input.voice_channel_id,
-                input.voice_bot_id,
-                now_ms,
-                "active",
-                input.mode,
-                now_ms,
-                json_dumps(&run)?
-            ],
-        )?;
-        db.execute(
+        )
+        .bind(&capture_run_id)
+        .bind(&guild_id)
+        .bind(&voice_channel_id)
+        .bind(&voice_bot_id)
+        .bind(now_ms)
+        .bind("active")
+        .bind(&mode)
+        .bind(now_ms)
+        .bind(&run)
+        .execute(transaction.as_mut())
+        .await?;
+        sqlx::query(
             r#"
             INSERT INTO assignments(
               assignment_id, guild_id, voice_channel_id, voice_bot_id, capture_run_id,
               state, assigned_at_ms, released_at_ms, updated_at_ms, payload_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, $8, $9)
             "#,
-            params![
-                assignment_id,
-                input.guild_id,
-                input.voice_channel_id,
-                input.voice_bot_id,
-                capture_run_id,
-                "capturing",
-                now_ms,
-                now_ms,
-                json_dumps(&assignment)?
-            ],
-        )?;
+        )
+        .bind(&assignment_id)
+        .bind(&guild_id)
+        .bind(&voice_channel_id)
+        .bind(&voice_bot_id)
+        .bind(&capture_run_id)
+        .bind("capturing")
+        .bind(now_ms)
+        .bind(now_ms)
+        .bind(&assignment)
+        .execute(transaction.as_mut())
+        .await?;
+        transaction.commit().await?;
         self.append_event(
-            &input.guild_id,
-            &input.voice_channel_id,
+            &guild_id,
+            &voice_channel_id,
             serde_json::json!({
                 "event_kind": "voice_bot_assigned",
                 "kind": "voice_bot_assigned",
                 "assignment_id": assignment_id,
                 "capture_run_id": capture_run_id,
-                "voice_bot_id": input.voice_bot_id,
-                "voice_bot_discord_user_id": input.voice_bot_discord_user_id,
-                "voice_channel_name": input.voice_channel_name,
+                "voice_bot_id": voice_bot_id,
+                "voice_bot_discord_user_id": voice_bot_discord_user_id,
+                "voice_channel_name": voice_channel_name,
                 "assigned_at": isoformat_z(Some(started)),
-                "mode": input.mode,
-                "assignment_reason": input.reason
+                "mode": mode,
+                "assignment_reason": reason
             }),
-        )?;
+        )
+        .await?;
         Ok(run)
     }
 
-    pub fn close_capture_run(
+    pub async fn close_capture_run(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -479,18 +482,14 @@ impl TimelineStore {
         if capture_run_id.trim().is_empty() {
             return Ok(serde_json::json!({}));
         }
-        let db = self.connect()?;
-        let raw: Option<String> = db
-            .query_row(
-                "SELECT payload_json FROM capture_runs WHERE capture_run_id = ?1",
-                params![capture_run_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(raw) = raw else {
+        let row = sqlx::query("SELECT payload_json FROM capture_runs WHERE capture_run_id = $1")
+            .bind(capture_run_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
             return Ok(serde_json::json!({}));
         };
-        let mut run = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({}));
+        let mut run = json_value(&row, "payload_json")?;
         let ended = ended_at.unwrap_or_else(utc_now);
         update_value_object(
             &mut run,
@@ -502,16 +501,23 @@ impl TimelineStore {
             ],
         );
         let ended_ms = instant_ms_dt(ended);
-        db.execute(
+        sqlx::query(
             r#"
             UPDATE capture_runs
-            SET ended_at_ms = ?1, state = ?2, updated_at_ms = ?3, payload_json = ?4
-            WHERE capture_run_id = ?5
+            SET ended_at_ms = $1, state = $2, updated_at_ms = $3, payload_json = $4
+            WHERE capture_run_id = $5
             "#,
-            params![ended_ms, state, ended_ms, json_dumps(&run)?, capture_run_id],
-        )?;
+        )
+        .bind(ended_ms)
+        .bind(state)
+        .bind(ended_ms)
+        .bind(&run)
+        .bind(capture_run_id)
+        .execute(&self.pool)
+        .await?;
         let assignment_id = first_value_string(&run, &["assignment_id", "assignmentId"]);
-        self.release_assignment(&assignment_id, Some(ended), reason)?;
+        self.release_assignment(&assignment_id, Some(ended), reason)
+            .await?;
         self.append_event(
             &non_empty(string_field(&run, "guild_id"), guild_id.to_string()),
             &non_empty(
@@ -528,11 +534,12 @@ impl TimelineStore {
                 "release_reason": reason,
                 "state": state,
             }),
-        )?;
+        )
+        .await?;
         Ok(run)
     }
 
-    fn release_assignment(
+    async fn release_assignment(
         &self,
         assignment_id: &str,
         released_at: Option<DateTime<Utc>>,
@@ -541,19 +548,14 @@ impl TimelineStore {
         if assignment_id.trim().is_empty() {
             return Ok(());
         }
-        let db = self.connect()?;
-        let raw: Option<String> = db
-            .query_row(
-                "SELECT payload_json FROM assignments WHERE assignment_id = ?1",
-                params![assignment_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(raw) = raw else {
+        let row = sqlx::query("SELECT payload_json FROM assignments WHERE assignment_id = $1")
+            .bind(assignment_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some(row) = row else {
             return Ok(());
         };
-        let mut assignment =
-            serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| serde_json::json!({}));
+        let mut assignment = json_value(&row, "payload_json")?;
         let released = released_at.unwrap_or_else(utc_now);
         update_value_object(
             &mut assignment,
@@ -566,43 +568,43 @@ impl TimelineStore {
         let updated_ms = instant_ms_dt(released);
         let assigned_ms = instant_ms_str(Some(&string_field(&assignment, "assigned_at")));
         let released_ms = instant_ms_str(Some(&string_field(&assignment, "released_at")));
-        db.execute(
+        sqlx::query(
             r#"
             INSERT INTO assignments(
               assignment_id, guild_id, voice_channel_id, voice_bot_id, capture_run_id,
               state, assigned_at_ms, released_at_ms, updated_at_ms, payload_json
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT(assignment_id) DO UPDATE SET
-              guild_id = excluded.guild_id,
-              voice_channel_id = excluded.voice_channel_id,
-              voice_bot_id = excluded.voice_bot_id,
-              capture_run_id = excluded.capture_run_id,
-              state = excluded.state,
-              assigned_at_ms = excluded.assigned_at_ms,
-              released_at_ms = excluded.released_at_ms,
-              updated_at_ms = excluded.updated_at_ms,
-              payload_json = excluded.payload_json
+              guild_id = EXCLUDED.guild_id,
+              voice_channel_id = EXCLUDED.voice_channel_id,
+              voice_bot_id = EXCLUDED.voice_bot_id,
+              capture_run_id = EXCLUDED.capture_run_id,
+              state = EXCLUDED.state,
+              assigned_at_ms = EXCLUDED.assigned_at_ms,
+              released_at_ms = EXCLUDED.released_at_ms,
+              updated_at_ms = EXCLUDED.updated_at_ms,
+              payload_json = EXCLUDED.payload_json
             "#,
-            params![
-                assignment_id,
-                string_field(&assignment, "guild_id"),
-                string_field(&assignment, "voice_channel_id"),
-                string_field(&assignment, "voice_bot_id"),
-                string_field(&assignment, "capture_run_id"),
-                string_field(&assignment, "state"),
-                assigned_ms,
-                released_ms,
-                updated_ms,
-                json_dumps(&assignment)?
-            ],
-        )?;
+        )
+        .bind(assignment_id)
+        .bind(string_field(&assignment, "guild_id"))
+        .bind(string_field(&assignment, "voice_channel_id"))
+        .bind(string_field(&assignment, "voice_bot_id"))
+        .bind(string_field(&assignment, "capture_run_id"))
+        .bind(string_field(&assignment, "state"))
+        .bind(assigned_ms)
+        .bind(released_ms)
+        .bind(updated_ms)
+        .bind(&assignment)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
 
 impl TimelineStore {
-    pub fn conversation_for_speech(
+    pub async fn conversation_for_speech(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -613,21 +615,21 @@ impl TimelineStore {
         speaker_label: &str,
         text: &str,
     ) -> Result<(String, Option<i64>)> {
-        let db = self.connect()?;
-        let row: Option<String> = db
-            .query_row(
-                r#"
-                SELECT payload_json FROM conversations
-                WHERE guild_id = ?1 AND voice_channel_id = ?2 AND state = 'ephemeral'
-                ORDER BY COALESCE(last_speech_at_ms, end_ms, start_ms) DESC
-                LIMIT 1
-                "#,
-                params![guild_id, voice_channel_id],
-                |row| row.get(0),
-            )
-            .optional()?;
+        let row = sqlx::query(
+            r#"
+            SELECT payload_json FROM conversations
+            WHERE guild_id = $1 AND voice_channel_id = $2 AND state = 'ephemeral'
+            ORDER BY COALESCE(last_speech_at_ms, end_ms, start_ms) DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
         let mut conversation = row
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+            .as_ref()
+            .and_then(|row| json_value(row, "payload_json").ok())
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
         let mut active_id = string_field_map(&conversation, "conversation_id");
@@ -659,7 +661,8 @@ impl TimelineStore {
             .as_object()
             .cloned()
             .unwrap();
-            self.store_conversation(&Value::Object(conversation.clone()))?;
+            self.store_conversation(&Value::Object(conversation.clone()))
+                .await?;
             self.append_event(
                 guild_id,
                 voice_channel_id,
@@ -671,7 +674,8 @@ impl TimelineStore {
                     "reason": if gap_ms.is_none() { "initial_speech" } else { "speech_gap" },
                     "gap_since_previous_speech_ms": gap_ms
                 }),
-            )?;
+            )
+            .await?;
         }
         let mut participants = conversation
             .get("participants")
@@ -719,11 +723,12 @@ impl TimelineStore {
             "last_speech_at".to_string(),
             Value::String(isoformat_z(Some(ended_at))),
         );
-        self.store_conversation(&Value::Object(conversation))?;
+        self.store_conversation(&Value::Object(conversation))
+            .await?;
         Ok((active_id, gap_ms))
     }
 
-    pub fn store_conversation(&self, conversation: &Value) -> Result<()> {
+    pub async fn store_conversation(&self, conversation: &Value) -> Result<()> {
         let conversation_id = string_field(conversation, "conversation_id");
         let guild_id = string_field(conversation, "guild_id");
         let channel_id = string_field(conversation, "voice_channel_id");
@@ -734,75 +739,68 @@ impl TimelineStore {
         let end_ms = instant_ms_str(Some(&string_field(conversation, "end_time")));
         let last_ms =
             instant_ms_str(Some(&string_field(conversation, "last_speech_at"))).or(end_ms);
-        let db = self.connect()?;
-        self.ensure_room(&db, &guild_id, &channel_id, "", "", "")?;
-        db.execute(
+        self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
+        sqlx::query(
             r#"
             INSERT INTO conversations(conversation_id, guild_id, voice_channel_id, start_ms, end_ms, last_speech_at_ms, state, payload_json)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT(conversation_id) DO UPDATE SET
-              start_ms = excluded.start_ms,
-              end_ms = excluded.end_ms,
-              last_speech_at_ms = excluded.last_speech_at_ms,
-              state = excluded.state,
-              payload_json = excluded.payload_json
+              start_ms = EXCLUDED.start_ms,
+              end_ms = EXCLUDED.end_ms,
+              last_speech_at_ms = EXCLUDED.last_speech_at_ms,
+              state = EXCLUDED.state,
+              payload_json = EXCLUDED.payload_json
             "#,
-            params![
-                conversation_id,
-                guild_id,
-                channel_id,
-                start_ms,
-                end_ms,
-                last_ms,
-                string_field(conversation, "state"),
-                json_dumps(conversation)?
-            ],
-        )?;
+        )
+        .bind(conversation_id)
+        .bind(guild_id)
+        .bind(channel_id)
+        .bind(start_ms)
+        .bind(end_ms)
+        .bind(last_ms)
+        .bind(string_field(conversation, "state"))
+        .bind(conversation)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
-}
 
-impl TimelineStore {
-    pub fn list_conversations(
+    pub async fn list_conversations(
         &self,
         guild_id: &str,
         voice_channel_id: Option<&str>,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<Value>> {
-        let mut conditions = vec!["guild_id = ?".to_string()];
-        let mut params_values: Vec<Box<dyn ToSql>> = vec![Box::new(guild_id.to_string())];
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT payload_json FROM conversations WHERE guild_id = ",
+        );
+        query.push_bind(guild_id);
         if let Some(channel_id) = voice_channel_id.filter(|value| !value.is_empty()) {
-            conditions.push("voice_channel_id = ?".to_string());
-            params_values.push(Box::new(channel_id.to_string()));
+            query.push(" AND voice_channel_id = ").push_bind(channel_id);
         }
         if let Some(since) = since {
-            conditions.push("COALESCE(end_ms, start_ms) >= ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(since)));
+            query
+                .push(" AND COALESCE(end_ms, start_ms) >= ")
+                .push_bind(instant_ms_dt(since));
         }
-        let sql = format!(
-            "SELECT payload_json FROM conversations WHERE {} ORDER BY COALESCE(start_ms, 0) DESC",
-            conditions.join(" AND ")
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| payload_from_row(row, 0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        query.push(" ORDER BY COALESCE(start_ms, 0) DESC");
+        let rows = query.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|row| json_value(row, "payload_json"))
+            .collect()
     }
 }
 
 impl TimelineStore {
-    pub fn set_occupancy(&self, snapshot: Value) -> Result<Value> {
+    pub async fn set_occupancy(&self, snapshot: Value) -> Result<Value> {
         let guild_id = first_value_string(&snapshot, &["guild_id", "guildId"]);
         let channel_id = first_value_string(&snapshot, &["voice_channel_id", "channelId"]);
         if guild_id.is_empty() || channel_id.is_empty() {
             return Ok(snapshot);
         }
         let mut payload = self
-            .get_occupancy(&guild_id, &channel_id)?
+            .get_occupancy(&guild_id, &channel_id)
+            .await?
             .as_object()
             .cloned()
             .unwrap_or_default();
@@ -815,44 +813,43 @@ impl TimelineStore {
         let payload_value = Value::Object(payload);
         let updated_ms =
             instant_ms_str(Some(&string_field(&payload_value, "updated_at"))).unwrap_or(0);
-        let db = self.connect()?;
         self.ensure_room(
-            &db,
             &guild_id,
             &channel_id,
             "",
             &first_value_string(&payload_value, &["voice_channel_name", "channelName"]),
             "",
-        )?;
-        db.execute(
+        )
+        .await?;
+        sqlx::query(
             r#"
             INSERT INTO occupancy(guild_id, voice_channel_id, updated_at_ms, payload_json)
-            VALUES (?1, ?2, ?3, ?4)
+            VALUES ($1, $2, $3, $4)
             ON CONFLICT(guild_id, voice_channel_id) DO UPDATE SET
-              updated_at_ms = excluded.updated_at_ms,
-              payload_json = excluded.payload_json
+              updated_at_ms = EXCLUDED.updated_at_ms,
+              payload_json = EXCLUDED.payload_json
             "#,
-            params![
-                guild_id,
-                channel_id,
-                updated_ms,
-                json_dumps(&payload_value)?
-            ],
-        )?;
+        )
+        .bind(guild_id)
+        .bind(channel_id)
+        .bind(updated_ms)
+        .bind(&payload_value)
+        .execute(&self.pool)
+        .await?;
         Ok(payload_value)
     }
 
-    pub fn get_occupancy(&self, guild_id: &str, voice_channel_id: &str) -> Result<Value> {
-        let db = self.connect()?;
-        let row: Option<String> = db
-            .query_row(
-                "SELECT payload_json FROM occupancy WHERE guild_id = ?1 AND voice_channel_id = ?2",
-                params![guild_id, voice_channel_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        Ok(row
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .unwrap_or_else(|| serde_json::json!({})))
+    pub async fn get_occupancy(&self, guild_id: &str, voice_channel_id: &str) -> Result<Value> {
+        let row = sqlx::query(
+            "SELECT payload_json FROM occupancy WHERE guild_id = $1 AND voice_channel_id = $2",
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(match row {
+            Some(row) => json_value(&row, "payload_json")?,
+            None => serde_json::json!({}),
+        })
     }
 }

@@ -1,9 +1,8 @@
 use super::*;
 
 use serde::{Deserialize, Serialize};
-
-const BINARY_RECORD_SCHEMA_KEY: &str = "binary_record_schema";
-const BINARY_RECORD_SCHEMA_VERSION: &str = "job-projection-2026-05-15-speaker-segment";
+use sqlx::PgPool;
+use sqlx::postgres::PgPoolOptions;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedTranscript {
@@ -104,8 +103,8 @@ impl Default for CaptureRunInput {
 #[derive(Debug, Clone)]
 pub struct TimelineStore {
     pub root: PathBuf,
-    pub db_path: PathBuf,
-    pub fts_enabled: bool,
+    pub database_url: String,
+    pub pool: PgPool,
 }
 
 impl TimelineStore {
@@ -121,42 +120,60 @@ impl TimelineStore {
             }
         });
         fs::create_dir_all(&root)?;
-        let db_path = std::env::var("CLANKCORD_VOICE_SQLITE_PATH")
-            .or_else(|_| std::env::var("VOICE_MEMORY_SQLITE_PATH"))
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from)
-            .unwrap_or_else(|| root.join("voice.sqlite3"));
-        if let Some(parent) = db_path.parent() {
-            fs::create_dir_all(parent)?;
+        let database_url = database_url();
+        let database_schema = database_schema();
+        let mut pool_options = PgPoolOptions::new().max_connections(database_pool_size());
+        if !database_schema.trim().is_empty() && database_schema != "public" {
+            let schema = quote_identifier(&database_schema);
+            pool_options = pool_options.after_connect(move |connection, _metadata| {
+                let statement = format!("SET search_path TO {schema}");
+                Box::pin(async move {
+                    sqlx::query(&statement).execute(connection).await?;
+                    Ok(())
+                })
+            });
         }
-        let mut store = Self {
+        let store = Self {
             root,
-            db_path,
-            fts_enabled: false,
+            database_url: database_url.clone(),
+            pool: pool_options.connect_lazy(&database_url)?,
         };
-        store.initialize_database()?;
         Ok(store)
     }
 
-    pub fn connect(&self) -> Result<Connection> {
-        self.connect_with_busy_timeout(5000)
-    }
-
-    pub fn connect_with_busy_timeout(&self, busy_timeout_ms: u64) -> Result<Connection> {
-        let db = Connection::open(&self.db_path)?;
-        db.execute_batch(&format!(
-            "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = {busy_timeout_ms};"
-        ))?;
-        Ok(db)
+    pub async fn initialize(&self) -> Result<()> {
+        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        self.create_tables().await?;
+        self.create_indexes().await?;
+        Ok(())
     }
 }
 
+fn database_url() -> String {
+    std::env::var("CLANKCORD_POSTGRES_URL")
+        .or_else(|_| std::env::var("DATABASE_URL"))
+        .unwrap_or_else(|_| "postgres://clankcord:clankcord@127.0.0.1:54329/clankcord".to_string())
+}
+
+fn database_schema() -> String {
+    std::env::var("CLANKCORD_POSTGRES_SCHEMA").unwrap_or_else(|_| "public".to_string())
+}
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn database_pool_size() -> u32 {
+    std::env::var("CLANKCORD_POSTGRES_POOL_SIZE")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(32)
+        .clamp(4, 128)
+}
+
 impl TimelineStore {
-    pub fn initialize_database(&mut self) -> Result<()> {
-        let db = self.connect()?;
-        db.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
-        db.execute_batch(
+    async fn create_tables(&self) -> Result<()> {
+        sqlx::raw_sql(
             r#"
             CREATE TABLE IF NOT EXISTS voice_rooms (
               guild_id TEXT NOT NULL,
@@ -164,14 +181,33 @@ impl TimelineStore {
               guild_slug TEXT NOT NULL DEFAULT '',
               voice_channel_name TEXT NOT NULL DEFAULT '',
               voice_channel_slug TEXT NOT NULL DEFAULT '',
-              updated_at_ms INTEGER NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
               PRIMARY KEY (guild_id, voice_channel_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS runtime_status (
+              status_key TEXT PRIMARY KEY,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS bot_states (
               bot_id TEXT PRIMARY KEY,
-              updated_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+              session_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL DEFAULT '',
+              voice_channel_id TEXT NOT NULL DEFAULT '',
+              bot_id TEXT NOT NULL DEFAULT '',
+              capture_run_id TEXT NOT NULL DEFAULT '',
+              active BOOLEAN NOT NULL DEFAULT FALSE,
+              started_at_ms BIGINT,
+              ended_at_ms BIGINT,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS assignments (
@@ -181,17 +217,17 @@ impl TimelineStore {
               voice_bot_id TEXT NOT NULL DEFAULT '',
               capture_run_id TEXT NOT NULL DEFAULT '',
               state TEXT NOT NULL DEFAULT '',
-              assigned_at_ms INTEGER,
-              released_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL
+              assigned_at_ms BIGINT,
+              released_at_ms BIGINT,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS occupancy (
               guild_id TEXT NOT NULL,
               voice_channel_id TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL,
               PRIMARY KEY (guild_id, voice_channel_id)
             );
 
@@ -200,50 +236,50 @@ impl TimelineStore {
               guild_id TEXT NOT NULL,
               voice_channel_id TEXT NOT NULL,
               voice_bot_id TEXT NOT NULL DEFAULT '',
-              started_at_ms INTEGER,
-              ended_at_ms INTEGER,
+              started_at_ms BIGINT,
+              ended_at_ms BIGINT,
               state TEXT NOT NULL DEFAULT '',
               mode TEXT NOT NULL DEFAULT '',
-              updated_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS timeline_events (
-              sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+              sequence BIGSERIAL PRIMARY KEY,
               event_id TEXT NOT NULL UNIQUE,
               guild_id TEXT NOT NULL,
               voice_channel_id TEXT NOT NULL,
               event_kind TEXT NOT NULL,
-              started_at_ms INTEGER,
-              ended_at_ms INTEGER,
-              created_at_ms INTEGER NOT NULL,
+              started_at_ms BIGINT,
+              ended_at_ms BIGINT,
+              created_at_ms BIGINT NOT NULL,
               capture_run_id TEXT NOT NULL DEFAULT '',
               conversation_id TEXT NOT NULL DEFAULT '',
               speaker_user_id TEXT NOT NULL DEFAULT '',
               speaker_label TEXT NOT NULL DEFAULT '',
               text TEXT NOT NULL DEFAULT '',
-              forgotten INTEGER NOT NULL DEFAULT 0,
-              payload_json TEXT NOT NULL
+              forgotten BOOLEAN NOT NULL DEFAULT FALSE,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS conversations (
               conversation_id TEXT PRIMARY KEY,
               guild_id TEXT NOT NULL,
               voice_channel_id TEXT NOT NULL,
-              start_ms INTEGER,
-              end_ms INTEGER,
-              last_speech_at_ms INTEGER,
+              start_ms BIGINT,
+              end_ms BIGINT,
+              last_speech_at_ms BIGINT,
               state TEXT NOT NULL DEFAULT '',
-              payload_json TEXT NOT NULL
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS windows (
               window_id TEXT PRIMARY KEY,
               guild_id TEXT NOT NULL,
               voice_channel_id TEXT NOT NULL,
-              start_ms INTEGER,
-              end_ms INTEGER,
-              payload_json TEXT NOT NULL
+              start_ms BIGINT,
+              end_ms BIGINT,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS publications (
@@ -252,9 +288,9 @@ impl TimelineStore {
               voice_channel_id TEXT NOT NULL,
               window_id TEXT NOT NULL DEFAULT '',
               state TEXT NOT NULL DEFAULT '',
-              created_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL
+              created_at_ms BIGINT,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS authoritative_spans (
@@ -263,18 +299,85 @@ impl TimelineStore {
               voice_channel_id TEXT NOT NULL,
               window_id TEXT NOT NULL DEFAULT '',
               publication_id TEXT NOT NULL DEFAULT '',
-              start_ms INTEGER,
-              end_ms INTEGER,
-              created_at_ms INTEGER NOT NULL,
-              payload_json TEXT NOT NULL
+              start_ms BIGINT,
+              end_ms BIGINT,
+              created_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS runtime_metadata (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL,
-              updated_at_ms INTEGER NOT NULL
+              updated_at_ms BIGINT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS jobs (
+              job_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT '',
+              state TEXT NOT NULL DEFAULT '',
+              terminal BOOLEAN NOT NULL DEFAULT FALSE,
+              failed BOOLEAN NOT NULL DEFAULT FALSE,
+              ephemeral BOOLEAN NOT NULL DEFAULT FALSE,
+              cancellable BOOLEAN NOT NULL DEFAULT FALSE,
+              lane TEXT NOT NULL DEFAULT '',
+              ordering_key TEXT NOT NULL DEFAULT '',
+              ready_at_ms BIGINT NOT NULL,
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
+              started_at_ms BIGINT,
+              completed_at_ms BIGINT,
+              gc_after_ms BIGINT,
+              root_job_id TEXT NOT NULL DEFAULT '',
+              parent_job_id TEXT,
+              lineage_depth BIGINT NOT NULL DEFAULT 0,
+              requested_by_user_id TEXT NOT NULL DEFAULT '',
+              command_kind TEXT NOT NULL DEFAULT '',
+              source_job_id TEXT NOT NULL DEFAULT '',
+              stream_id TEXT NOT NULL DEFAULT '',
+              target_job_id TEXT NOT NULL DEFAULT '',
+              speaker_user_id TEXT NOT NULL DEFAULT '',
+              segment_end_ms BIGINT
+            );
+
+            CREATE TABLE IF NOT EXISTS job_payloads (
+              job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+              payload_blob BYTEA NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS job_dependencies (
+              parent_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+              child_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+              dependency_kind TEXT NOT NULL DEFAULT 'required',
+              created_at_ms BIGINT NOT NULL,
+              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
+              PRIMARY KEY (parent_job_id, child_job_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS automations (
+              automation_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT '',
+              idempotency_key TEXT NOT NULL DEFAULT '',
+              created_at_ms BIGINT,
+              updated_at_ms BIGINT NOT NULL,
+              expires_at_ms BIGINT,
+              fire_count BIGINT NOT NULL DEFAULT 0,
+              max_fires BIGINT,
+              payload_blob BYTEA NOT NULL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn create_indexes(&self) -> Result<()> {
+        sqlx::raw_sql(
+            r#"
             CREATE INDEX IF NOT EXISTS idx_timeline_room_time
               ON timeline_events(guild_id, voice_channel_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_room_kind_time
@@ -295,107 +398,23 @@ impl TimelineStore {
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
               ON publications(guild_id, voice_channel_id, state, created_at_ms);
-            "#,
-        )?;
-        self.create_binary_record_tables(&db)?;
-        self.apply_binary_record_hard_cut(&db)?;
-        self.create_binary_record_indexes(&db)?;
-        self.fts_enabled = db
-            .execute_batch(
-                "CREATE VIRTUAL TABLE IF NOT EXISTS transcript_events_fts \
-                 USING fts5(event_id UNINDEXED, guild_id UNINDEXED, voice_channel_id UNINDEXED, speaker_label, text);",
-            )
-            .is_ok();
-        Ok(())
-    }
-
-    fn create_binary_record_tables(&self, db: &Connection) -> Result<()> {
-        db.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS jobs (
-              job_id TEXT PRIMARY KEY,
-              guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
-              kind TEXT NOT NULL DEFAULT '',
-              state TEXT NOT NULL DEFAULT '',
-              terminal INTEGER NOT NULL DEFAULT 0,
-              failed INTEGER NOT NULL DEFAULT 0,
-              ephemeral INTEGER NOT NULL DEFAULT 0,
-              cancellable INTEGER NOT NULL DEFAULT 0,
-              lane TEXT NOT NULL DEFAULT '',
-              ordering_key TEXT NOT NULL DEFAULT '',
-              ready_at_ms INTEGER NOT NULL,
-              created_at_ms INTEGER NOT NULL,
-              updated_at_ms INTEGER NOT NULL,
-              started_at_ms INTEGER,
-              completed_at_ms INTEGER,
-              gc_after_ms INTEGER,
-              root_job_id TEXT NOT NULL DEFAULT '',
-              parent_job_id TEXT,
-              lineage_depth INTEGER NOT NULL DEFAULT 0,
-              requested_by_user_id TEXT NOT NULL DEFAULT '',
-              command_kind TEXT NOT NULL DEFAULT '',
-              source_job_id TEXT NOT NULL DEFAULT '',
-              stream_id TEXT NOT NULL DEFAULT '',
-              target_job_id TEXT NOT NULL DEFAULT '',
-              speaker_user_id TEXT NOT NULL DEFAULT '',
-              segment_end_ms INTEGER
-            );
-
-            CREATE TABLE IF NOT EXISTS job_payloads (
-              job_id TEXT PRIMARY KEY,
-              payload_blob BLOB NOT NULL,
-              FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS job_dependencies (
-              parent_job_id TEXT NOT NULL,
-              child_job_id TEXT NOT NULL,
-              dependency_kind TEXT NOT NULL DEFAULT 'required',
-              created_at_ms INTEGER NOT NULL,
-              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
-              PRIMARY KEY (parent_job_id, child_job_id),
-              FOREIGN KEY(parent_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
-              FOREIGN KEY(child_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS automations (
-              automation_id TEXT PRIMARY KEY,
-              guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
-              state TEXT NOT NULL DEFAULT '',
-              idempotency_key TEXT NOT NULL DEFAULT '',
-              created_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL,
-              expires_at_ms INTEGER,
-              fire_count INTEGER NOT NULL DEFAULT 0,
-              max_fires INTEGER,
-              payload_blob BLOB NOT NULL
-            );
-
-            "#,
-        )?;
-        Ok(())
-    }
-
-    fn create_binary_record_indexes(&self, db: &Connection) -> Result<()> {
-        db.execute_batch(
-            r#"
+            CREATE INDEX IF NOT EXISTS idx_sessions_active_room
+              ON sessions(guild_id, voice_channel_id, active, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
               ON jobs(kind, ready_at_ms, created_at_ms, job_id)
               WHERE state = 'queued';
             CREATE INDEX IF NOT EXISTS idx_jobs_active_ordering
               ON jobs(ordering_key)
-              WHERE terminal = 0 AND ordering_key <> '';
+              WHERE terminal = FALSE AND ordering_key <> '';
             CREATE INDEX IF NOT EXISTS idx_jobs_active_visible_scope
               ON jobs(guild_id, voice_channel_id, updated_at_ms DESC, job_id)
-              WHERE terminal = 0 AND ephemeral = 0;
+              WHERE terminal = FALSE AND ephemeral = FALSE;
             CREATE INDEX IF NOT EXISTS idx_jobs_recent_visible
               ON jobs(updated_at_ms DESC, job_id)
-              WHERE ephemeral = 0;
+              WHERE ephemeral = FALSE;
             CREATE INDEX IF NOT EXISTS idx_jobs_failed_visible
               ON jobs(updated_at_ms DESC, job_id)
-              WHERE failed = 1 AND ephemeral = 0;
+              WHERE failed = TRUE AND ephemeral = FALSE;
             CREATE INDEX IF NOT EXISTS idx_jobs_scope_state_kind_updated
               ON jobs(guild_id, voice_channel_id, state, kind, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_scope_kind_updated
@@ -406,7 +425,7 @@ impl TimelineStore {
               ON jobs(state, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_ephemeral_gc
               ON jobs(gc_after_ms, job_id)
-              WHERE ephemeral = 1 AND terminal = 1;
+              WHERE ephemeral = TRUE AND terminal = TRUE;
             CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
               ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
               WHERE kind = 'wake_probe' AND state = 'queued';
@@ -415,7 +434,7 @@ impl TimelineStore {
               WHERE kind = 'response';
             CREATE INDEX IF NOT EXISTS idx_jobs_audio_segment_pending_speaker
               ON jobs(guild_id, voice_channel_id, speaker_user_id, segment_end_ms, job_id)
-              WHERE kind = 'audio_segment' AND terminal = 0;
+              WHERE kind = 'audio_segment' AND terminal = FALSE;
             CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
               ON job_dependencies(child_job_id, parent_job_id);
             CREATE INDEX IF NOT EXISTS idx_automations_scope_state
@@ -423,47 +442,9 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_automations_idempotency
               ON automations(guild_id, voice_channel_id, idempotency_key, state);
             "#,
-        )?;
-        Ok(())
-    }
-
-    fn apply_binary_record_hard_cut(&self, db: &Connection) -> Result<()> {
-        let current = db
-            .query_row(
-                "SELECT value FROM runtime_metadata WHERE key = ?1",
-                params![BINARY_RECORD_SCHEMA_KEY],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if current.as_deref() == Some(BINARY_RECORD_SCHEMA_VERSION) {
-            return Ok(());
-        }
-
-        db.execute_batch(
-            r#"
-            DROP TABLE IF EXISTS job_dependencies;
-            DROP TABLE IF EXISTS job_payloads;
-            DROP TABLE IF EXISTS jobs;
-            DROP TABLE IF EXISTS transcript_jobs;
-            DROP TABLE IF EXISTS automations;
-            "#,
-        )?;
-        self.create_binary_record_tables(db)?;
-        db.execute(
-            r#"
-            INSERT INTO runtime_metadata(key, value, updated_at_ms)
-            VALUES (?1, ?2, ?3)
-            ON CONFLICT(key) DO UPDATE SET
-              value = excluded.value,
-              updated_at_ms = excluded.updated_at_ms
-            "#,
-            params![
-                BINARY_RECORD_SCHEMA_KEY,
-                BINARY_RECORD_SCHEMA_VERSION,
-                instant_ms_dt(utc_now())
-            ],
-        )?;
-        crate::runtime::log("runtime job projection schema hard cut applied");
+        )
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
@@ -516,7 +497,7 @@ impl TimelineStore {
 }
 
 impl TimelineStore {
-    pub(crate) fn get_payload_by_id(
+    pub(crate) async fn get_payload_by_id(
         &self,
         table: &str,
         id_column: &str,
@@ -525,13 +506,14 @@ impl TimelineStore {
         if id_value.is_empty() {
             return Ok(serde_json::json!({}));
         }
-        let db = self.connect()?;
-        let sql = format!("SELECT payload_json FROM {table} WHERE {id_column} = ?1");
-        let row: Option<String> = db
-            .query_row(&sql, params![id_value], |row| row.get(0))
-            .optional()?;
-        Ok(row
-            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-            .unwrap_or_else(|| serde_json::json!({})))
+        let sql = format!("SELECT payload_json FROM {table} WHERE {id_column} = $1");
+        let row = sqlx::query(&sql)
+            .bind(id_value)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(match row {
+            Some(row) => json_value(&row, "payload_json")?,
+            None => serde_json::json!({}),
+        })
     }
 }

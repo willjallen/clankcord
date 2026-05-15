@@ -21,9 +21,10 @@ pub(crate) use std::path::{Path, PathBuf};
 pub(crate) use anyhow::Context;
 pub(crate) use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 pub(crate) use regex::Regex;
-pub(crate) use rusqlite::{Connection, OptionalExtension, Row, ToSql, params, params_from_iter};
 pub(crate) use serde_json::{Map, Value};
 pub(crate) use sha2::{Digest, Sha256};
+pub(crate) use sqlx::postgres::PgRow;
+pub(crate) use sqlx::{Postgres, QueryBuilder, Row as SqlxRow};
 pub(crate) use uuid::Uuid;
 
 pub(crate) use crate::Result;
@@ -32,6 +33,6 @@ pub(crate) use crate::runtime::Job;
 
 pub(crate) use util::{
     SPEECH_KINDS, compact_timeline_payload, event_ended_ms, event_started_ms, excerpt,
-    first_string, non_empty, payload_from_row, round3, set, set_default_string, sorted_unique,
+    first_string, json_value, non_empty, round3, set, set_default_string, sorted_unique,
     string_field_map, timeline_event_payload, update_value_object,
 };

@@ -19,15 +19,8 @@ impl Runtime {
         command: CommandRequest,
         parent_job: Option<&Job>,
     ) -> Result<Value> {
-        self.create_command_job_sync(command, parent_job)
-    }
-
-    pub(crate) fn create_command_job_sync(
-        &self,
-        mut command: CommandRequest,
-        parent_job: Option<&Job>,
-    ) -> Result<Value> {
-        let (guild_id, channel_id, _) = self.command_scope(&command)?;
+        let mut command = command;
+        let (guild_id, channel_id, _) = self.command_scope(&command).await?;
         command.guild_id = guild_id.clone();
         command.voice_channel_id = channel_id.clone();
         if requires_confirmation(command.command_kind.as_str())
@@ -36,7 +29,7 @@ impl Runtime {
             command.requires_confirmation = true;
         }
         if command.requires_confirmation {
-            let confirmation_context = self.confirmation_context_for_command(&command)?;
+            let confirmation_context = self.confirmation_context_for_command(&command).await?;
             let job = Job::confirmation_required(
                 &guild_id,
                 &channel_id,
@@ -45,11 +38,13 @@ impl Runtime {
                 confirmation_context,
             );
             let mut job = if let Some(parent_job) = parent_job {
-                self.timeline_store.create_child_job(parent_job, job)?
+                self.timeline_store
+                    .create_child_job(parent_job, job)
+                    .await?
             } else {
-                self.timeline_store.create_job(job)?
+                self.timeline_store.create_job(job).await?
             };
-            self.post_confirmation_card(&mut job)?;
+            self.post_confirmation_card(&mut job).await?;
             return Ok(json!({
                 "kind": "confirmation_required",
                 "job_ids": [job.id.clone()],
@@ -64,9 +59,11 @@ impl Runtime {
             command,
         );
         let job = if let Some(parent_job) = parent_job {
-            self.timeline_store.create_child_job(parent_job, job)?
+            self.timeline_store
+                .create_child_job(parent_job, job)
+                .await?
         } else {
-            self.timeline_store.create_job(job)?
+            self.timeline_store.create_job(job).await?
         };
         Ok(json!({
             "kind": "command_created",
@@ -75,7 +72,7 @@ impl Runtime {
         }))
     }
 
-    pub(crate) fn prepare_command_job(&mut self, job: &Job) -> Result<JobDecision> {
+    pub(crate) async fn prepare_command_job(&mut self, job: &Job) -> Result<JobDecision> {
         if job.kind != JobKind::Command {
             anyhow::bail!("job {} is not a command", job.id);
         }
@@ -83,44 +80,46 @@ impl Runtime {
             .command()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("command job {} has no command payload", job.id))?;
-        self.prepare_command(command, job)
+        self.prepare_command(command, job).await
     }
 
-    fn prepare_command(
+    async fn prepare_command(
         &mut self,
         command: CommandRequest,
         parent_job: &Job,
     ) -> Result<JobDecision> {
         let command_kind = command.command_kind;
         let job_kind = command_kind.job_kind();
-        let (guild_id, channel_id, target_room_identifier) = self.command_scope(&command)?;
+        let (guild_id, channel_id, target_room_identifier) = self.command_scope(&command).await?;
         match job_kind {
             "materialize_transcript" => {
                 let (start, end) = command.window_times(None);
-                let materialized = self.materialize_transcript(MaterializeTranscriptRequest {
-                    guild_id: guild_id.clone(),
-                    channel_id: channel_id.clone(),
-                    from: if command.arguments.from.trim().is_empty() {
-                        isoformat_z(Some(start))
-                    } else {
-                        command.arguments.from.clone()
-                    },
-                    to: if command.arguments.to.trim().is_empty() {
-                        isoformat_z(Some(end))
-                    } else {
-                        command.arguments.to.clone()
-                    },
-                    publish: if command.arguments.publish.trim().is_empty() {
-                        "discord".to_string()
-                    } else {
-                        command.arguments.publish.clone()
-                    },
-                    live: command_kind == CommandKind::StartLiveTranscript,
-                    refine: command.arguments.refine.unwrap_or(false),
-                    created_by_user_id: command.requested_by_user_id.clone(),
-                    parent_job_id: parent_job.id.clone(),
-                    ..MaterializeTranscriptRequest::default()
-                })?;
+                let materialized = self
+                    .materialize_transcript(MaterializeTranscriptRequest {
+                        guild_id: guild_id.clone(),
+                        channel_id: channel_id.clone(),
+                        from: if command.arguments.from.trim().is_empty() {
+                            isoformat_z(Some(start))
+                        } else {
+                            command.arguments.from.clone()
+                        },
+                        to: if command.arguments.to.trim().is_empty() {
+                            isoformat_z(Some(end))
+                        } else {
+                            command.arguments.to.clone()
+                        },
+                        publish: if command.arguments.publish.trim().is_empty() {
+                            "discord".to_string()
+                        } else {
+                            command.arguments.publish.clone()
+                        },
+                        live: command_kind == CommandKind::StartLiveTranscript,
+                        refine: command.arguments.refine.unwrap_or(false),
+                        created_by_user_id: command.requested_by_user_id.clone(),
+                        parent_job_id: parent_job.id.clone(),
+                        ..MaterializeTranscriptRequest::default()
+                    })
+                    .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "materialize_transcript", "job_ids": [], "materialized": materialized}),
                 )?))
@@ -128,17 +127,19 @@ impl Runtime {
             "make_permanent" => {
                 let end = utc_now();
                 let start = end - chrono::Duration::minutes(30);
-                let materialized = self.materialize_transcript(MaterializeTranscriptRequest {
-                    guild_id: guild_id.clone(),
-                    channel_id: channel_id.clone(),
-                    from: isoformat_z(Some(start)),
-                    to: isoformat_z(Some(end)),
-                    publish: "discord".to_string(),
-                    refine: true,
-                    created_by_user_id: command.requested_by_user_id.clone(),
-                    parent_job_id: parent_job.id.clone(),
-                    ..MaterializeTranscriptRequest::default()
-                })?;
+                let materialized = self
+                    .materialize_transcript(MaterializeTranscriptRequest {
+                        guild_id: guild_id.clone(),
+                        channel_id: channel_id.clone(),
+                        from: isoformat_z(Some(start)),
+                        to: isoformat_z(Some(end)),
+                        publish: "discord".to_string(),
+                        refine: true,
+                        created_by_user_id: command.requested_by_user_id.clone(),
+                        parent_job_id: parent_job.id.clone(),
+                        ..MaterializeTranscriptRequest::default()
+                    })
+                    .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "make_permanent", "job_ids": [], "materialized": materialized}),
                 )?))
@@ -149,39 +150,46 @@ impl Runtime {
                     &room,
                     command.arguments.duration_seconds.unwrap_or(20 * 60),
                     &command.requested_by_user_id,
-                )?;
+                )
+                .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "pause_listening", "job_ids": []}),
                 )?))
             }
             "resume_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
-                self.resume_room(&room, &command.requested_by_user_id)?;
-                let _ = self.create_voice_playback_job_for_room(
-                    &room,
-                    &command.requested_by_user_id,
-                    DiscordVoicePlaybackCue::Undeafen,
-                    "resume_listening",
-                    &parent_job.id,
-                )?;
+                self.resume_room(&room, &command.requested_by_user_id)
+                    .await?;
+                let _ = self
+                    .create_voice_playback_job_for_room(
+                        &room,
+                        &command.requested_by_user_id,
+                        DiscordVoicePlaybackCue::Undeafen,
+                        "resume_listening",
+                        &parent_job.id,
+                    )
+                    .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "resume_listening", "job_ids": []}),
                 )?))
             }
             "deafen_listening" => {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
-                let _ = self.create_voice_playback_job_for_room(
-                    &room,
-                    &command.requested_by_user_id,
-                    DiscordVoicePlaybackCue::Deafen,
-                    "deafen_listening",
-                    &parent_job.id,
-                )?;
+                let _ = self
+                    .create_voice_playback_job_for_room(
+                        &room,
+                        &command.requested_by_user_id,
+                        DiscordVoicePlaybackCue::Deafen,
+                        "deafen_listening",
+                        &parent_job.id,
+                    )
+                    .await?;
                 self.pause_room(
                     &room,
                     self.manual_leave_cooldown_seconds,
                     &command.requested_by_user_id,
-                )?;
+                )
+                .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "deafen_listening", "job_ids": []}),
                 )?))
@@ -270,24 +278,26 @@ impl Runtime {
             }
             "forget_window" => {
                 let (start, end) = command.window_times(None);
-                let result = self.forget(ForgetRequest {
-                    window_id: command.arguments.window_id.clone(),
-                    guild_id: guild_id.clone(),
-                    channel_id: channel_id.clone(),
-                    since: if command.arguments.from.trim().is_empty() {
-                        isoformat_z(Some(start))
-                    } else {
-                        command.arguments.from.clone()
-                    },
-                    to: if command.arguments.to.trim().is_empty() {
-                        isoformat_z(Some(end))
-                    } else {
-                        command.arguments.to.clone()
-                    },
-                    requested_by_user_id: command.requested_by_user_id.clone(),
-                    unpublished_only: command.arguments.unpublished_only.unwrap_or(true),
-                    ..ForgetRequest::default()
-                })?;
+                let result = self
+                    .forget(ForgetRequest {
+                        window_id: command.arguments.window_id.clone(),
+                        guild_id: guild_id.clone(),
+                        channel_id: channel_id.clone(),
+                        since: if command.arguments.from.trim().is_empty() {
+                            isoformat_z(Some(start))
+                        } else {
+                            command.arguments.from.clone()
+                        },
+                        to: if command.arguments.to.trim().is_empty() {
+                            isoformat_z(Some(end))
+                        } else {
+                            command.arguments.to.clone()
+                        },
+                        requested_by_user_id: command.requested_by_user_id.clone(),
+                        unpublished_only: command.arguments.unpublished_only.unwrap_or(true),
+                        ..ForgetRequest::default()
+                    })
+                    .await?;
                 Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                     &json!({"kind": "forget_window", "job_ids": [], "result": result}),
                 )?))
@@ -308,7 +318,7 @@ impl Runtime {
         }
     }
 
-    fn command_scope(&self, command: &CommandRequest) -> Result<(String, String, String)> {
+    async fn command_scope(&self, command: &CommandRequest) -> Result<(String, String, String)> {
         let mut guild_id = command.guild_id.trim().to_string();
         let mut channel_id = command.voice_channel_id.trim().to_string();
         let target_room_identifier = command.target_room_identifier(&channel_id);
@@ -316,7 +326,8 @@ impl Runtime {
         {
             let window = self
                 .timeline_store
-                .get_window(&command.arguments.window_id)?;
+                .get_window(&command.arguments.window_id)
+                .await?;
             if guild_id.is_empty() {
                 guild_id = string_field(&window, "guild_id");
             }

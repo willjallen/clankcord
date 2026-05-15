@@ -1,7 +1,7 @@
 use super::*;
 
 impl TimelineStore {
-    pub fn create_window(
+    pub async fn create_window(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -12,15 +12,17 @@ impl TimelineStore {
         scope: &str,
     ) -> Result<Value> {
         let kinds = set(["speech_segment", "transcript"]);
-        let events = self.load_events(
-            guild_id,
-            voice_channel_id,
-            Some(start),
-            Some(end),
-            Some(&kinds),
-            None,
-            false,
-        )?;
+        let events = self
+            .load_events(
+                guild_id,
+                voice_channel_id,
+                Some(start),
+                Some(end),
+                Some(&kinds),
+                None,
+                false,
+            )
+            .await?;
         let window_id = new_id("win");
         let capture_runs = sorted_unique(
             events
@@ -49,20 +51,28 @@ impl TimelineStore {
             "requires_refinement_for_permanent": true,
             "created_at": isoformat_z(None)
         });
-        let db = self.connect()?;
-        self.ensure_room(&db, guild_id, voice_channel_id, "", "", "")?;
-        db.execute(
-            "INSERT INTO windows(window_id, guild_id, voice_channel_id, start_ms, end_ms, payload_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![window_id, guild_id, voice_channel_id, instant_ms_dt(start), instant_ms_dt(end), json_dumps(&window)?],
-        )?;
+        self.ensure_room(guild_id, voice_channel_id, "", "", "")
+            .await?;
+        sqlx::query(
+            "INSERT INTO windows(window_id, guild_id, voice_channel_id, start_ms, end_ms, payload_json) VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(&window_id)
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(instant_ms_dt(start))
+        .bind(instant_ms_dt(end))
+        .bind(&window)
+        .execute(&self.pool)
+        .await?;
         Ok(window)
     }
 
-    pub fn get_window(&self, window_id: &str) -> Result<Value> {
+    pub async fn get_window(&self, window_id: &str) -> Result<Value> {
         self.get_payload_by_id("windows", "window_id", window_id)
+            .await
     }
 
-    pub fn render_transcript(
+    pub async fn render_transcript(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -73,17 +83,20 @@ impl TimelineStore {
         format: &str,
     ) -> Result<RenderedTranscript> {
         let kinds = set(["speech_segment", "transcript"]);
-        let events = self.load_events(
-            guild_id,
-            voice_channel_id,
-            Some(start),
-            Some(end),
-            Some(&kinds),
-            None,
-            false,
-        )?;
+        let events = self
+            .load_events(
+                guild_id,
+                voice_channel_id,
+                Some(start),
+                Some(end),
+                Some(&kinds),
+                None,
+                false,
+            )
+            .await?;
         let spans = if prefer_refined {
-            self.list_spans(guild_id, voice_channel_id, Some(start), Some(end))?
+            self.list_spans(guild_id, voice_channel_id, Some(start), Some(end))
+                .await?
         } else {
             Vec::new()
         };
@@ -159,7 +172,7 @@ impl TimelineStore {
         })
     }
 
-    pub fn materialize(
+    pub async fn materialize(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -174,24 +187,28 @@ impl TimelineStore {
         prefer_refined: bool,
         parent_job_id: Option<&str>,
     ) -> Result<Value> {
-        let window = self.create_window(
-            guild_id,
-            voice_channel_id,
-            start,
-            end,
-            selection_kind,
-            selection_reference,
-            "single_channel",
-        )?;
-        let rendered = self.render_transcript(
-            guild_id,
-            voice_channel_id,
-            start,
-            end,
-            &string_field(&window, "window_id"),
-            prefer_refined,
-            "markdown",
-        )?;
+        let window = self
+            .create_window(
+                guild_id,
+                voice_channel_id,
+                start,
+                end,
+                selection_kind,
+                selection_reference,
+                "single_channel",
+            )
+            .await?;
+        let rendered = self
+            .render_transcript(
+                guild_id,
+                voice_channel_id,
+                start,
+                end,
+                &string_field(&window, "window_id"),
+                prefer_refined,
+                "markdown",
+            )
+            .await?;
         let publication_id = new_id("pub");
         let artifact_dir = self.durable_publications_dir().join(&publication_id);
         fs::create_dir_all(&artifact_dir)?;
@@ -225,7 +242,7 @@ impl TimelineStore {
             &artifact_dir.join("metadata.json"),
             &serde_json::json!({"window": window, "publication": publication}),
         )?;
-        self.update_publication(&publication)?;
+        self.update_publication(&publication).await?;
         self.append_event(
             guild_id,
             voice_channel_id,
@@ -240,7 +257,8 @@ impl TimelineStore {
                 "publish": publish,
                 "refine_requested": refine
             }),
-        )?;
+        )
+        .await?;
         let mut job = Value::Null;
         if refine {
             let refinement_job = Job::refine_transcript(
@@ -253,16 +271,16 @@ impl TimelineStore {
             let refinement_job = if let Some(parent_job_id) =
                 parent_job_id.filter(|value| !value.trim().is_empty())
             {
-                let parent = self.get_job(parent_job_id)?;
-                self.create_child_job(&parent, refinement_job)?
+                let parent = self.get_job(parent_job_id).await?;
+                self.create_child_job(&parent, refinement_job).await?
             } else {
-                self.create_job(refinement_job)?
+                self.create_job(refinement_job).await?
             };
             publication.as_object_mut().unwrap().insert(
                 "refinement_job_id".to_string(),
                 Value::String(refinement_job.id.clone()),
             );
-            self.update_publication(&publication)?;
+            self.update_publication(&publication).await?;
             job = refinement_job.to_value();
         }
         Ok(serde_json::json!({"window": window, "publication": publication, "job": job}))
@@ -270,49 +288,39 @@ impl TimelineStore {
 }
 
 impl TimelineStore {
-    pub fn get_publication(&self, publication_id: &str) -> Result<Value> {
+    pub async fn get_publication(&self, publication_id: &str) -> Result<Value> {
         self.get_payload_by_id("publications", "publication_id", publication_id)
+            .await
     }
 
-    pub fn list_publications(
+    pub async fn list_publications(
         &self,
         guild_id: Option<&str>,
         voice_channel_id: Option<&str>,
         state: Option<&str>,
     ) -> Result<Vec<Value>> {
-        let mut conditions = Vec::new();
-        let mut params_values: Vec<Box<dyn ToSql>> = Vec::new();
+        let mut query = QueryBuilder::<Postgres>::new("SELECT payload_json FROM publications");
+        let mut has_where = false;
         if let Some(guild_id) = guild_id.filter(|value| !value.is_empty()) {
-            conditions.push("guild_id = ?".to_string());
-            params_values.push(Box::new(guild_id.to_string()));
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("guild_id = ").push_bind(guild_id);
         }
         if let Some(channel_id) = voice_channel_id.filter(|value| !value.is_empty()) {
-            conditions.push("voice_channel_id = ?".to_string());
-            params_values.push(Box::new(channel_id.to_string()));
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("voice_channel_id = ").push_bind(channel_id);
         }
         if let Some(state) = state.filter(|value| !value.is_empty()) {
-            conditions.push("state = ?".to_string());
-            params_values.push(Box::new(state.to_string()));
+            push_filter_prefix(&mut query, &mut has_where);
+            query.push("state = ").push_bind(state);
         }
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", conditions.join(" AND "))
-        };
-        let sql = format!(
-            "SELECT payload_json FROM publications{where_clause} ORDER BY COALESCE(created_at_ms, updated_at_ms) DESC"
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| payload_from_row(row, 0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        query.push(" ORDER BY COALESCE(created_at_ms, updated_at_ms) DESC");
+        let rows = query.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|row| json_value(row, "payload_json"))
+            .collect()
     }
 
-    pub fn update_publication(&self, publication: &Value) -> Result<()> {
+    pub async fn update_publication(&self, publication: &Value) -> Result<()> {
         let publication_id = string_field(publication, "publication_id");
         let guild_id = string_field(publication, "guild_id");
         let channel_id = string_field(publication, "voice_channel_id");
@@ -322,29 +330,28 @@ impl TimelineStore {
         let now_ms = instant_ms_dt(utc_now());
         let created_ms =
             instant_ms_str(Some(&string_field(publication, "created_at"))).unwrap_or(now_ms);
-        let db = self.connect()?;
-        self.ensure_room(&db, &guild_id, &channel_id, "", "", "")?;
-        db.execute(
+        self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
+        sqlx::query(
             r#"
             INSERT INTO publications(publication_id, guild_id, voice_channel_id, window_id, state, created_at_ms, updated_at_ms, payload_json)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             ON CONFLICT(publication_id) DO UPDATE SET
-              window_id = excluded.window_id,
-              state = excluded.state,
-              updated_at_ms = excluded.updated_at_ms,
-              payload_json = excluded.payload_json
+              window_id = EXCLUDED.window_id,
+              state = EXCLUDED.state,
+              updated_at_ms = EXCLUDED.updated_at_ms,
+              payload_json = EXCLUDED.payload_json
             "#,
-            params![
-                publication_id,
-                guild_id,
-                channel_id,
-                string_field(publication, "window_id"),
-                string_field(publication, "state"),
-                created_ms,
-                now_ms,
-                json_dumps(publication)?
-            ],
-        )?;
+        )
+        .bind(&publication_id)
+        .bind(&guild_id)
+        .bind(&channel_id)
+        .bind(string_field(publication, "window_id"))
+        .bind(string_field(publication, "state"))
+        .bind(created_ms)
+        .bind(now_ms)
+        .bind(publication)
+        .execute(&self.pool)
+        .await?;
         let artifact_dir = self.durable_publications_dir().join(&publication_id);
         let metadata_path = artifact_dir.join("metadata.json");
         let mut metadata = read_json_file(&metadata_path, serde_json::json!({}));
@@ -359,7 +366,7 @@ impl TimelineStore {
         Ok(())
     }
 
-    pub fn create_authoritative_span(
+    pub async fn create_authoritative_span(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -393,25 +400,25 @@ impl TimelineStore {
             "created_at": isoformat_z(None)
         });
         let created_ms = instant_ms_str(Some(&string_field(&span, "created_at"))).unwrap_or(0);
-        let db = self.connect()?;
-        self.ensure_room(&db, guild_id, voice_channel_id, "", "", "")?;
-        db.execute(
+        self.ensure_room(guild_id, voice_channel_id, "", "", "")
+            .await?;
+        sqlx::query(
             r#"
             INSERT INTO authoritative_spans(span_id, guild_id, voice_channel_id, window_id, publication_id, start_ms, end_ms, created_at_ms, payload_json)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             "#,
-            params![
-                span_id,
-                guild_id,
-                voice_channel_id,
-                window_id,
-                publication_id,
-                instant_ms_dt(start),
-                instant_ms_dt(end),
-                created_ms,
-                json_dumps(&span)?
-            ],
-        )?;
+        )
+        .bind(&span_id)
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(window_id)
+        .bind(publication_id)
+        .bind(instant_ms_dt(start))
+        .bind(instant_ms_dt(end))
+        .bind(created_ms)
+        .bind(&span)
+        .execute(&self.pool)
+        .await?;
         self.append_event(
             guild_id,
             voice_channel_id,
@@ -425,45 +432,38 @@ impl TimelineStore {
                 "start_time": isoformat_z(Some(start)),
                 "end_time": isoformat_z(Some(end))
             }),
-        )?;
+        )
+        .await?;
         Ok(span)
     }
 
-    pub fn list_spans(
+    pub async fn list_spans(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
     ) -> Result<Vec<Value>> {
-        let mut conditions = vec![
-            "guild_id = ?".to_string(),
-            "voice_channel_id = ?".to_string(),
-        ];
-        let mut params_values: Vec<Box<dyn ToSql>> = vec![
-            Box::new(guild_id.to_string()),
-            Box::new(voice_channel_id.to_string()),
-        ];
+        let mut query = QueryBuilder::<Postgres>::new(
+            "SELECT payload_json FROM authoritative_spans WHERE guild_id = ",
+        );
+        query.push_bind(guild_id);
+        query
+            .push(" AND voice_channel_id = ")
+            .push_bind(voice_channel_id);
         if let Some(start) = start {
-            conditions.push("COALESCE(end_ms, start_ms) > ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(start)));
+            query
+                .push(" AND COALESCE(end_ms, start_ms) > ")
+                .push_bind(instant_ms_dt(start));
         }
         if let Some(end) = end {
-            conditions.push("start_ms < ?".to_string());
-            params_values.push(Box::new(instant_ms_dt(end)));
+            query.push(" AND start_ms < ").push_bind(instant_ms_dt(end));
         }
-        let sql = format!(
-            "SELECT payload_json FROM authoritative_spans WHERE {} ORDER BY start_ms, span_id",
-            conditions.join(" AND ")
-        );
-        let db = self.connect()?;
-        let mut statement = db.prepare(&sql)?;
-        let rows = statement.query_map(
-            params_from_iter(params_values.iter().map(|value| &**value)),
-            |row| payload_from_row(row, 0),
-        )?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(Into::into)
+        query.push(" ORDER BY start_ms, span_id");
+        let rows = query.build().fetch_all(&self.pool).await?;
+        rows.iter()
+            .map(|row| json_value(row, "payload_json"))
+            .collect()
     }
 
     pub fn event_covered_by_span(&self, event: &Value, spans: &[Value]) -> bool {
@@ -480,28 +480,30 @@ impl TimelineStore {
 }
 
 impl TimelineStore {
-    pub fn export_mixed_audio(
+    pub async fn export_mixed_audio(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
         window_id: &str,
         job_id: &str,
     ) -> Result<Value> {
-        let window = self.get_window(window_id)?;
+        let window = self.get_window(window_id).await?;
         let start = parse_instant(&string_field(&window, "start_time"))
             .with_context(|| format!("window {window_id} has invalid start time"))?;
         let end = parse_instant(&string_field(&window, "end_time"))
             .with_context(|| format!("window {window_id} has invalid end time"))?;
         let kinds = set(["speech_segment", "transcript"]);
-        let events = self.load_events(
-            guild_id,
-            voice_channel_id,
-            Some(start),
-            Some(end),
-            Some(&kinds),
-            None,
-            false,
-        )?;
+        let events = self
+            .load_events(
+                guild_id,
+                voice_channel_id,
+                Some(start),
+                Some(end),
+                Some(&kinds),
+                None,
+                false,
+            )
+            .await?;
         let sample_rate = 48_000u32;
         let total_frames = (((end - start).num_milliseconds() as f64 / 1000.0) * sample_rate as f64)
             .max(1.0) as usize;
@@ -582,5 +584,14 @@ impl TimelineStore {
         });
         write_json_file(&output_dir.join("mixed.sidecar.json"), &sidecar)?;
         Ok(sidecar)
+    }
+}
+
+fn push_filter_prefix(query: &mut QueryBuilder<'_, Postgres>, has_where: &mut bool) {
+    if *has_where {
+        query.push(" AND ");
+    } else {
+        query.push(" WHERE ");
+        *has_where = true;
     }
 }

@@ -33,8 +33,8 @@ fn wake_metadata() -> Value {
     })
 }
 
-#[test]
-fn wake_word_dispatches_general_agent_task_without_agent_classifier() {
+#[tokio::test(flavor = "current_thread")]
+async fn wake_word_dispatches_general_agent_task_without_agent_classifier() {
     let event = merge_json(
         &base_event(),
         json!({
@@ -58,8 +58,8 @@ fn wake_word_dispatches_general_agent_task_without_agent_classifier() {
     );
 }
 
-#[test]
-fn voice_text_without_wake_does_not_dispatch() {
+#[tokio::test(flavor = "current_thread")]
+async fn voice_text_without_wake_does_not_dispatch() {
     let event = merge_json(
         &base_event(),
         json!({
@@ -75,8 +75,8 @@ fn voice_text_without_wake_does_not_dispatch() {
     assert_eq!(result["wake_detected"], json!(false));
 }
 
-#[test]
-fn wake_word_dispatches_builtin_room_commands() {
+#[tokio::test(flavor = "current_thread")]
+async fn wake_word_dispatches_builtin_room_commands() {
     let leave = merge_json(
         &base_event(),
         json!({
@@ -104,8 +104,8 @@ fn wake_word_dispatches_builtin_room_commands() {
     assert_eq!(join_result["arguments"]["target_room"], json!("art lounge"));
 }
 
-#[test]
-fn prior_wake_activates_same_speaker_followup() {
+#[tokio::test(flavor = "current_thread")]
+async fn prior_wake_activates_same_speaker_followup() {
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = merge_json(
         &base_event(),
@@ -149,8 +149,8 @@ fn prior_wake_activates_same_speaker_followup() {
     );
 }
 
-#[test]
-fn wake_only_segment_is_not_an_actionable_command() {
+#[tokio::test(flavor = "current_thread")]
+async fn wake_only_segment_is_not_an_actionable_command() {
     let event = merge_json(
         &base_event(),
         json!({

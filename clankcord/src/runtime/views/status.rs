@@ -9,66 +9,118 @@ use crate::runtime::util::first_non_empty;
 use crate::runtime::{JobState, RoomConfig, Runtime, RuntimeBotStatus, RuntimeSessionStatus};
 
 impl Runtime {
-    pub fn status_for_room(&self, room: &RoomConfig) -> Value {
+    pub async fn status_for_room(&self, room: &RoomConfig) -> Value {
         let session_id = self.active_session_id_for_room(room);
-        let session = session_id
+        let session = match session_id
             .as_ref()
             .and_then(|id| self.sessions.get(id))
             .cloned()
-            .map(|session| self.enrich_session_status(session));
+        {
+            Some(session) => Some(self.enrich_session_status(session).await),
+            None => None,
+        };
+        let occupancy = self
+            .timeline_store
+            .get_occupancy(&room.guild_id, &room.channel_id)
+            .await
+            .unwrap_or_else(|_| json!({}));
+        let retention_policy = occupancy
+            .get("retention_policy")
+            .cloned()
+            .unwrap_or_else(|| json!({"draftTranscriptEvents": "7d", "sourceAudio": "7d"}));
+        let live_publications = self
+            .timeline_store
+            .list_publications(
+                Some(&room.guild_id),
+                Some(&room.channel_id),
+                Some("live_draft_published"),
+            )
+            .await
+            .unwrap_or_default();
+        let active_jobs = self
+            .timeline_store
+            .list_jobs_by_states(
+                Some(&room.guild_id),
+                &[
+                    JobState::Queued,
+                    JobState::Running,
+                    JobState::Waiting,
+                    JobState::CancelRequested,
+                    JobState::ConfirmationPending,
+                ],
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|job| job.voice_channel_id == room.channel_id && !job.state.is_terminal())
+            .map(|job| Self::public_job_view(&job))
+            .collect::<Vec<_>>();
         json!({
             "room": room.to_json(),
             "mode": session.as_ref().map(|value| value.mode.as_str()).unwrap_or("absent"),
             "assignedVoiceBotId": session.as_ref().map(|value| value.bot_id.as_str()).unwrap_or(""),
             "captureRunId": session.as_ref().map(|value| value.capture_run_id.as_str()).unwrap_or(""),
-            "retentionPolicy": self.timeline_store.get_occupancy(&room.guild_id, &room.channel_id).ok().and_then(|value| value.get("retention_policy").cloned()).unwrap_or_else(|| json!({"draftTranscriptEvents": "7d", "sourceAudio": "7d"})),
+            "retentionPolicy": retention_policy,
             "control": self.room_control_status(room),
-            "occupancy": self.timeline_store.get_occupancy(&room.guild_id, &room.channel_id).unwrap_or_else(|_| json!({})),
-            "livePublications": self.timeline_store.list_publications(Some(&room.guild_id), Some(&room.channel_id), Some("live_draft_published")).unwrap_or_default(),
-            "activeJobs": self.timeline_store.list_jobs_by_states(Some(&room.guild_id), &[JobState::Queued, JobState::Running, JobState::Waiting, JobState::CancelRequested, JobState::ConfirmationPending]).unwrap_or_default().into_iter().filter(|job| {
-                job.voice_channel_id == room.channel_id && !job.state.is_terminal()
-            }).map(|job| Self::public_job_view(&job)).collect::<Vec<_>>(),
+            "occupancy": occupancy,
+            "livePublications": live_publications,
+            "activeJobs": active_jobs,
             "session": session.map(|value| value.to_json()),
             "bots": self.bots.values().map(RuntimeBotStatus::to_json).collect::<Vec<_>>(),
         })
     }
 
-    pub fn status_payload(&self, room_identifier: Option<&str>) -> Value {
+    pub async fn status_payload(&self, room_identifier: Option<&str>) -> Value {
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
             return match self.room_for_identifier(Some(identifier)) {
-                Ok(room) => self.status_for_room(&room),
+                Ok(room) => self.status_for_room(&room).await,
                 Err(error) => json!({"ok": false, "error": error.to_string()}),
             };
         }
+        let mut sessions = Vec::new();
+        for session in self.sessions.values().cloned() {
+            sessions.push(self.enrich_session_status(session).await.to_json());
+        }
+        let mut rooms = Vec::new();
+        for room in self.known_rooms() {
+            let occupancy = self
+                .timeline_store
+                .get_occupancy(&room.guild_id, &room.channel_id)
+                .await
+                .unwrap_or_else(|_| json!({}));
+            rooms.push(json!({
+                "roomId": room.room_id,
+                "guildId": room.guild_id,
+                "channelId": room.channel_id,
+                "channelName": room.channel_name,
+                "channelSlug": room.channel_slug,
+                "autoJoin": room.auto_join,
+                "activeSessionId": self.active_session_id_for_room(&room).unwrap_or_default(),
+                "control": self.room_control_status(&room),
+                "occupancy": occupancy,
+            }));
+        }
         json!({
             "bots": self.bots.values().map(RuntimeBotStatus::to_json).collect::<Vec<_>>(),
-            "pool": self.capacity_payload(),
-            "sessions": self.sessions.values().cloned().map(|session| self.enrich_session_status(session).to_json()).collect::<Vec<_>>(),
-            "rooms": self.known_rooms().into_iter().map(|room| {
-                json!({
-                    "roomId": room.room_id,
-                    "guildId": room.guild_id,
-                    "channelId": room.channel_id,
-                    "channelName": room.channel_name,
-                    "channelSlug": room.channel_slug,
-                    "autoJoin": room.auto_join,
-                    "activeSessionId": self.active_session_id_for_room(&room).unwrap_or_default(),
-                    "control": self.room_control_status(&room),
-                    "occupancy": self.timeline_store.get_occupancy(&room.guild_id, &room.channel_id).unwrap_or_else(|_| json!({})),
-                })
-            }).collect::<Vec<_>>(),
+            "pool": self.capacity_payload().await,
+            "sessions": sessions,
+            "rooms": rooms,
             "roomControls": self.room_controls_json(),
         })
     }
 
-    pub fn capacity_payload(&self) -> Value {
+    pub async fn capacity_payload(&self) -> Value {
         let configured = self.bots.len();
         let active = self.sessions.len();
+        let mut assignments = Vec::new();
+        for session in self.sessions.values().cloned() {
+            assignments.push(self.enrich_session_status(session).await.to_json());
+        }
         json!({
             "configuredBots": configured,
             "activeAssignments": active,
             "availableBots": configured.saturating_sub(active),
-            "assignments": self.sessions.values().cloned().map(|session| self.enrich_session_status(session).to_json()).collect::<Vec<_>>(),
+            "assignments": assignments,
         })
     }
 
@@ -128,7 +180,10 @@ impl Runtime {
             || self.voice_bot_currently_in_room(room).is_some()
     }
 
-    fn enrich_session_status(&self, mut session: RuntimeSessionStatus) -> RuntimeSessionStatus {
+    async fn enrich_session_status(
+        &self,
+        mut session: RuntimeSessionStatus,
+    ) -> RuntimeSessionStatus {
         let capture_run_id = first_non_empty([
             session.capture_run_id.clone(),
             session.session_id.clone(),
@@ -140,12 +195,14 @@ impl Runtime {
         {
             return session;
         }
-        let Ok((event_count, last_transcript_at)) =
-            self.timeline_store.speech_stats_for_capture_run(
+        let Ok((event_count, last_transcript_at)) = self
+            .timeline_store
+            .speech_stats_for_capture_run(
                 &session.guild_id,
                 &session.voice_channel_id,
                 &capture_run_id,
             )
+            .await
         else {
             return session;
         };
@@ -161,9 +218,12 @@ impl Runtime {
         session
     }
 
-    pub fn persist_status_snapshot(&self) -> Result<()> {
+    pub async fn persist_status_snapshot(&self) -> Result<()> {
         fs::create_dir_all(state_dir())?;
-        write_json(&state_dir().join("status.json"), &self.status_payload(None))
+        write_json(
+            &state_dir().join("status.json"),
+            &self.status_payload(None).await,
+        )
     }
 
     pub(crate) fn load_status_snapshot(&mut self) {

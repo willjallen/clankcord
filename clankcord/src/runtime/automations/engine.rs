@@ -110,7 +110,7 @@ impl AutomationRunner {
         }
     }
 
-    fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
+    async fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
         runtime.prune_expired_room_controls(true);
 
         let mut active_jobs = runtime
@@ -119,6 +119,7 @@ impl AutomationRunner {
                 None,
                 &[JobState::Queued, JobState::Running, JobState::Waiting],
             )
+            .await
             .context("loading active jobs for automation evaluation")?;
         let mut created = Vec::new();
         for automation in &self.automations {
@@ -131,9 +132,13 @@ impl AutomationRunner {
                     .into_jobs()
             };
             for job in jobs {
-                let job = runtime.timeline_store.create_job(job).with_context(|| {
-                    format!("creating job emitted by automation {automation_name}")
-                })?;
+                let job = runtime
+                    .timeline_store
+                    .create_job(job)
+                    .await
+                    .with_context(|| {
+                        format!("creating job emitted by automation {automation_name}")
+                    })?;
                 active_jobs.push(job.clone());
                 created.push(AutomationJob {
                     automation: automation_name.to_string(),
@@ -142,6 +147,7 @@ impl AutomationRunner {
             }
         }
         for job in run_stored_automations(runtime, &mut active_jobs)
+            .await
             .context("running stored automations")?
         {
             created.push(job);
@@ -151,10 +157,10 @@ impl AutomationRunner {
 }
 
 impl Runtime {
-    pub fn run_automations(&mut self) -> Result<AutomationRun> {
+    pub async fn run_automations(&mut self) -> Result<AutomationRun> {
         self.load_room_controls();
-        self.load_automation_registry()?;
-        AutomationRunner::runtime_default().run(self)
+        self.load_automation_registry().await?;
+        AutomationRunner::runtime_default().run(self).await
     }
 }
 
@@ -165,7 +171,7 @@ fn is_active_job_state(state: JobState) -> bool {
     )
 }
 
-fn run_stored_automations(
+async fn run_stored_automations(
     runtime: &mut Runtime,
     active_jobs: &mut Vec<Job>,
 ) -> Result<Vec<AutomationJob>> {
@@ -179,11 +185,14 @@ fn run_stored_automations(
             let mut expired = record;
             expired.state = AutomationState::Expired;
             expired.mark_evaluated();
-            runtime.timeline_store.save_automation_record(&expired)?;
+            runtime
+                .timeline_store
+                .save_automation_record(&expired)
+                .await?;
             runtime.automations.remove(&automation_id);
             continue;
         }
-        let outcome = evaluate_stored_automation(runtime, &record)?;
+        let outcome = evaluate_stored_automation(runtime, &record).await?;
         let mut updated = record.clone();
         if outcome.evaluated {
             if outcome.jobs.is_empty() {
@@ -191,7 +200,10 @@ fn run_stored_automations(
             } else {
                 updated.mark_fired();
             }
-            runtime.timeline_store.save_automation_record(&updated)?;
+            runtime
+                .timeline_store
+                .save_automation_record(&updated)
+                .await?;
             if updated.state == AutomationState::Active {
                 runtime.automations.insert(automation_id.clone(), updated);
             } else {
@@ -199,18 +211,21 @@ fn run_stored_automations(
             }
         }
         for job in outcome.jobs {
-            let job = runtime.timeline_store.create_job(job)?;
-            runtime.timeline_store.append_event(
-                &job.guild_id,
-                &job.voice_channel_id,
-                json!({
-                    "event_kind": "automation_fired",
-                    "kind": "automation_fired",
-                    "automation_id": automation_id,
-                    "job_id": job.id,
-                    "job_kind": job.kind.as_str(),
-                }),
-            )?;
+            let job = runtime.timeline_store.create_job(job).await?;
+            runtime
+                .timeline_store
+                .append_event(
+                    &job.guild_id,
+                    &job.voice_channel_id,
+                    json!({
+                        "event_kind": "automation_fired",
+                        "kind": "automation_fired",
+                        "automation_id": automation_id,
+                        "job_id": job.id,
+                        "job_kind": job.kind.as_str(),
+                    }),
+                )
+                .await?;
             active_jobs.push(job.clone());
             created.push(AutomationJob {
                 automation: automation_id.clone(),
@@ -227,7 +242,7 @@ struct StoredAutomationOutcome {
     jobs: Vec<Job>,
 }
 
-fn evaluate_stored_automation(
+async fn evaluate_stored_automation(
     runtime: &Runtime,
     record: &AutomationRecord,
 ) -> Result<StoredAutomationOutcome> {
@@ -235,7 +250,7 @@ fn evaluate_stored_automation(
         return Ok(StoredAutomationOutcome::default());
     }
 
-    let contexts = trigger_contexts(runtime, record)?;
+    let contexts = trigger_contexts(runtime, record).await?;
     if contexts.is_empty() {
         return Ok(StoredAutomationOutcome::default());
     }
@@ -249,17 +264,20 @@ fn evaluate_stored_automation(
             match job_for_action(record, action) {
                 Ok(job) => jobs.push(job),
                 Err(error) => {
-                    runtime.timeline_store.append_event(
-                        &record.spec.scope.guild_id,
-                        &record.spec.scope.voice_channel_id,
-                        json!({
-                            "event_kind": "automation_action_failed",
-                            "kind": "automation_action_failed",
-                            "automation_id": record.automation_id,
-                            "action": format!("{action:?}"),
-                            "error": error.to_string(),
-                        }),
-                    )?;
+                    runtime
+                        .timeline_store
+                        .append_event(
+                            &record.spec.scope.guild_id,
+                            &record.spec.scope.voice_channel_id,
+                            json!({
+                                "event_kind": "automation_action_failed",
+                                "kind": "automation_action_failed",
+                                "automation_id": record.automation_id,
+                                "action": format!("{action:?}"),
+                                "error": error.to_string(),
+                            }),
+                        )
+                        .await?;
                 }
             }
         }
@@ -271,71 +289,78 @@ fn evaluate_stored_automation(
     })
 }
 
-fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Value>> {
+async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Value>> {
     match &record.spec.trigger {
         AutomationTrigger::Tick { interval_seconds } => {
             if !tick_due(record, *interval_seconds) {
                 return Ok(Vec::new());
             }
-            Ok(vec![base_context(runtime, record, None, None)])
+            Ok(vec![base_context(runtime, record, None, None).await])
         }
-        AutomationTrigger::Event { event_kinds } => event_contexts(runtime, record, event_kinds),
+        AutomationTrigger::Event { event_kinds } => {
+            event_contexts(runtime, record, event_kinds).await
+        }
         AutomationTrigger::Job { job_kinds, states } => {
-            job_contexts(runtime, record, job_kinds, states)
+            job_contexts(runtime, record, job_kinds, states).await
         }
-        AutomationTrigger::RoomStateChanged => event_contexts(
-            runtime,
-            record,
-            &[
-                "room_state_changed".to_string(),
-                "occupancy_updated".to_string(),
-                "participant_joined".to_string(),
-                "participant_left".to_string(),
-            ],
-        ),
+        AutomationTrigger::RoomStateChanged => {
+            event_contexts(
+                runtime,
+                record,
+                &[
+                    "room_state_changed".to_string(),
+                    "occupancy_updated".to_string(),
+                    "participant_joined".to_string(),
+                    "participant_left".to_string(),
+                ],
+            )
+            .await
+        }
     }
 }
 
-fn event_contexts(
+async fn event_contexts(
     runtime: &Runtime,
     record: &AutomationRecord,
     event_kinds: &[String],
 ) -> Result<Vec<Value>> {
     let kinds = event_kinds.iter().cloned().collect::<BTreeSet<_>>();
     let start = parse_instant(&record.cursor_at()).or_else(|| parse_instant(&record.created_at));
-    let events = runtime.timeline_store.load_events(
-        &record.spec.scope.guild_id,
-        &record.spec.scope.voice_channel_id,
-        start,
-        None,
-        Some(&kinds),
-        None,
-        false,
-    )?;
-    Ok(events
-        .into_iter()
-        .filter(|event| {
-            let created = event_start(event).or_else(|| {
-                parse_instant(&first_value_string(event, &["created_at", "timestamp"]))
-            });
-            let cursor = parse_instant(&record.cursor_at());
-            match (created, cursor) {
-                (Some(created), Some(cursor)) => created > cursor,
-                _ => true,
-            }
-        })
-        .map(|event| base_context(runtime, record, Some(event), None))
-        .collect())
+    let events = runtime
+        .timeline_store
+        .load_events(
+            &record.spec.scope.guild_id,
+            &record.spec.scope.voice_channel_id,
+            start,
+            None,
+            Some(&kinds),
+            None,
+            false,
+        )
+        .await?;
+    let mut contexts = Vec::new();
+    for event in events.into_iter().filter(|event| {
+        let created = event_start(event)
+            .or_else(|| parse_instant(&first_value_string(event, &["created_at", "timestamp"])));
+        let cursor = parse_instant(&record.cursor_at());
+        match (created, cursor) {
+            (Some(created), Some(cursor)) => created > cursor,
+            _ => true,
+        }
+    }) {
+        contexts.push(base_context(runtime, record, Some(event), None).await);
+    }
+    Ok(contexts)
 }
 
-fn job_contexts(
+async fn job_contexts(
     runtime: &Runtime,
     record: &AutomationRecord,
     job_kinds: &[JobKind],
     states: &[JobState],
 ) -> Result<Vec<Value>> {
     let cursor = parse_instant(&record.cursor_at());
-    Ok(runtime
+    let jobs = runtime
         .timeline_store
         .list_jobs_for_trigger(
             &record.spec.scope.guild_id,
@@ -343,7 +368,8 @@ fn job_contexts(
             job_kinds,
             states,
             cursor,
-        )?
+        )
+        .await?
         .into_iter()
         .filter(|job| job.guild_id == record.spec.scope.guild_id)
         .filter(|job| job.voice_channel_id == record.spec.scope.voice_channel_id)
@@ -355,11 +381,15 @@ fn job_contexts(
                 _ => true,
             }
         })
-        .map(|job| base_context(runtime, record, None, Some(job.to_value())))
-        .collect())
+        .collect::<Vec<_>>();
+    let mut contexts = Vec::new();
+    for job in jobs {
+        contexts.push(base_context(runtime, record, None, Some(job.to_value())).await);
+    }
+    Ok(contexts)
 }
 
-fn base_context(
+async fn base_context(
     runtime: &Runtime,
     record: &AutomationRecord,
     event: Option<Value>,
@@ -375,7 +405,7 @@ fn base_context(
         "runtime": {
             "now": isoformat_z(None),
         },
-        "room": runtime.status_for_room(&room),
+        "room": runtime.status_for_room(&room).await,
         "event": event.unwrap_or(Value::Null),
         "job": job.unwrap_or(Value::Null),
     })

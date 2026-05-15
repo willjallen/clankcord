@@ -1,17 +1,17 @@
 use std::collections::BTreeSet;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 mod common;
 
-use clankcord::runtime::timeline::{CaptureRunInput, TimelineStore, string_field};
+use clankcord::runtime::timeline::{CaptureRunInput, string_field};
 
-use common::{append_speech, dt};
+use common::{append_speech, dt, test_store};
 
-#[test]
-fn refined_span_overlays_draft_render_and_search() {
+#[tokio::test(flavor = "current_thread")]
+async fn refined_span_overlays_draft_render_and_search() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let end = start + chrono::Duration::seconds(4);
     store
@@ -26,6 +26,7 @@ fn refined_span_overlays_draft_render_and_search() {
             started_at: Some(start),
             ..Default::default()
         })
+        .await
         .unwrap();
     append_speech(
         &store,
@@ -35,7 +36,8 @@ fn refined_span_overlays_draft_render_and_search() {
         "draft fixed piont words",
         1,
         None,
-    );
+    )
+    .await;
     let materialized = store
         .materialize(
             "guild",
@@ -51,6 +53,7 @@ fn refined_span_overlays_draft_render_and_search() {
             true,
             None,
         )
+        .await
         .unwrap();
     let pub_id = string_field(&materialized["publication"], "publication_id");
     let refined_path = store
@@ -77,10 +80,12 @@ fn refined_span_overlays_draft_render_and_search() {
             vec!["cap_test".to_string()],
             vec!["clanky-vc1".to_string()],
         )
+        .await
         .unwrap();
 
     let rendered = store
         .render_transcript("guild", "code", start, end, "", true, "markdown")
+        .await
         .unwrap();
     assert!(rendered.content.contains("refined fixed point"));
     assert!(!rendered.content.contains("draft fixed piont"));
@@ -88,6 +93,7 @@ fn refined_span_overlays_draft_render_and_search() {
         string_field(
             &store
                 .search("guild", Some("code"), "fixed point", None, true, 10)
+                .await
                 .unwrap()[0],
             "kind"
         ),
@@ -95,10 +101,10 @@ fn refined_span_overlays_draft_render_and_search() {
     );
 }
 
-#[test]
-fn timeline_finds_existing_speech_segment_for_audio_retry() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_finds_existing_speech_segment_for_audio_retry() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let event = append_speech(
         &store,
@@ -108,23 +114,26 @@ fn timeline_finds_existing_speech_segment_for_audio_retry() {
         "retry-safe words",
         4,
         None,
-    );
+    )
+    .await;
     let found = store
         .speech_event_for_segment("guild", "code", "cap_test", "user-a", 4)
+        .await
         .unwrap()
         .unwrap();
     assert_eq!(found["event_id"], event["event_id"]);
     let (count, last) = store
         .speech_stats_for_capture_run("guild", "code", "cap_test")
+        .await
         .unwrap();
     assert_eq!(count, 1);
     assert_eq!(last.unwrap(), start + chrono::Duration::seconds(2));
 }
 
-#[test]
-fn forget_tombstone_filters_unpublished_speech() {
+#[tokio::test(flavor = "current_thread")]
+async fn forget_tombstone_filters_unpublished_speech() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let source = raw.path().join("source.wav");
     std::fs::write(&source, b"audio").unwrap();
@@ -136,7 +145,8 @@ fn forget_tombstone_filters_unpublished_speech() {
         "forget this",
         1,
         Some(source.clone()),
-    );
+    )
+    .await;
     let result = store
         .apply_forget(
             "guild",
@@ -146,6 +156,7 @@ fn forget_tombstone_filters_unpublished_speech() {
             "",
             true,
         )
+        .await
         .unwrap();
     assert_eq!(result["forgotten_event_count"], json!(1));
     assert!(!source.exists());
@@ -153,26 +164,27 @@ fn forget_tombstone_filters_unpublished_speech() {
     assert!(
         store
             .load_events("guild", "code", None, None, Some(&kinds), None, false)
+            .await
             .unwrap()
             .is_empty()
     );
 }
 
-#[test]
-fn timeline_primary_store_is_sqlite_and_payload_stays_compact() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_primary_store_keeps_payload_compact() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     append_speech(
         &store,
         raw.path(),
         start,
         start + chrono::Duration::seconds(1),
-        "sqlite indexed compact words",
+        "postgres indexed compact words",
         1,
         None,
-    );
-    assert!(raw.path().join("voice.sqlite3").is_file());
+    )
+    .await;
     assert!(
         !raw.path()
             .join("ephemeral/guild-guild/channel-code/timeline.jsonl")
@@ -182,21 +194,20 @@ fn timeline_primary_store_is_sqlite_and_payload_stays_compact() {
         string_field(
             &store
                 .search("guild", Some("code"), "indexed", None, true, 10)
+                .await
                 .unwrap()[0],
             "kind"
         ),
         "draft_event"
     );
 
-    let db = store.connect().unwrap();
-    let payload_json: String = db
-        .query_row(
-            "SELECT payload_json FROM timeline_events WHERE event_kind = 'speech_segment'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap();
-    let payload: Value = serde_json::from_str(&payload_json).unwrap();
+    let payload_json: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json FROM timeline_events WHERE event_kind = 'speech_segment'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    let payload = payload_json;
     assert!(payload.get("text").is_none());
     assert!(payload.get("text_draft").is_none());
     assert!(payload.get("guildId").is_none());
@@ -205,17 +216,18 @@ fn timeline_primary_store_is_sqlite_and_payload_stays_compact() {
     let kinds = BTreeSet::from(["speech_segment".to_string()]);
     let event = store
         .load_events("guild", "code", None, None, Some(&kinds), None, false)
+        .await
         .unwrap()[0]
         .clone();
-    assert_eq!(event["text"], json!("sqlite indexed compact words"));
+    assert_eq!(event["text"], json!("postgres indexed compact words"));
     assert_eq!(event["channelName"], json!("Code Lounge"));
     assert_eq!(event["speakerLabel"], json!("Will"));
 }
 
-#[test]
-fn window_end_boundary_excludes_next_segment() {
+#[tokio::test(flavor = "current_thread")]
+async fn window_end_boundary_excludes_next_segment() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let window_end = start + chrono::Duration::seconds(10);
     let inside = append_speech(
@@ -226,7 +238,8 @@ fn window_end_boundary_excludes_next_segment() {
         "inside final words",
         1,
         None,
-    );
+    )
+    .await;
     append_speech(
         &store,
         raw.path(),
@@ -235,7 +248,8 @@ fn window_end_boundary_excludes_next_segment() {
         "outside next words",
         2,
         None,
-    );
+    )
+    .await;
     let window = store
         .create_window(
             "guild",
@@ -246,19 +260,21 @@ fn window_end_boundary_excludes_next_segment() {
             "2026-05-12T16:00:00Z/2026-05-12T16:00:10Z",
             "single_channel",
         )
+        .await
         .unwrap();
     let rendered = store
         .render_transcript("guild", "code", start, window_end, "", false, "markdown")
+        .await
         .unwrap();
     assert_eq!(window["event_id_end"], inside["event_id"]);
     assert!(rendered.content.contains("inside final words"));
     assert!(!rendered.content.contains("outside next words"));
 }
 
-#[test]
-fn retention_sweep_dry_run_and_idempotence() {
+#[tokio::test(flavor = "current_thread")]
+async fn retention_sweep_dry_run_and_idempotence() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().to_path_buf())).unwrap();
+    let store = test_store(raw.path()).await;
     let start = dt(2026, 4, 1, 16, 0, 0);
     let source = raw.path().join("old-source.wav");
     std::fs::write(&source, b"audio").unwrap();
@@ -270,9 +286,11 @@ fn retention_sweep_dry_run_and_idempotence() {
         "old draft words",
         1,
         Some(source.clone()),
-    );
+    )
+    .await;
     let dry = store
         .retention_sweep(Some(start + chrono::Duration::days(8)), true)
+        .await
         .unwrap();
     assert_eq!(dry["retired_events"], json!(1));
     assert!(source.exists());
@@ -280,6 +298,7 @@ fn retention_sweep_dry_run_and_idempotence() {
     assert_eq!(
         store
             .load_events("guild", "code", None, None, Some(&kinds), None, false)
+            .await
             .unwrap()
             .len(),
         1
@@ -287,15 +306,18 @@ fn retention_sweep_dry_run_and_idempotence() {
 
     let first = store
         .retention_sweep(Some(start + chrono::Duration::days(8)), false)
+        .await
         .unwrap();
     let second = store
         .retention_sweep(Some(start + chrono::Duration::days(8)), false)
+        .await
         .unwrap();
     assert_eq!(first["retired_events"], json!(1));
     assert!(!source.exists());
     assert!(
         store
             .load_events("guild", "code", None, None, Some(&kinds), None, false)
+            .await
             .unwrap()
             .is_empty()
     );

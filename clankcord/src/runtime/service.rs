@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use serde_json::{Map, Value, json};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::Result;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
@@ -20,7 +20,6 @@ type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
-    runtime_cache_lock: Arc<Mutex<Runtime>>,
     live_voice: Arc<LiveVoiceAdapter>,
     timeline_store: TimelineStore,
     executor: ServiceRuntimeExecutor,
@@ -29,8 +28,8 @@ pub struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub(crate) fn runtime_cache_lock(&self) -> Arc<Mutex<Runtime>> {
-        self.runtime_cache_lock.clone()
+    pub(crate) fn runtime_context(&self) -> Result<Runtime> {
+        Runtime::from_store(self.timeline_store.clone())
     }
 
     pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
@@ -86,7 +85,7 @@ impl RuntimeHandle {
         action: RuntimeControlAction,
         actor_user_id: String,
     ) -> Result<Value> {
-        let target = self.timeline_store.get_job(&target_job_id)?;
+        let target = self.timeline_store.get_job(&target_job_id).await?;
         let job = Job::runtime_control(
             target.guild_id,
             target.voice_channel_id,
@@ -99,7 +98,7 @@ impl RuntimeHandle {
 
     pub async fn run_maintenance_once(&self) -> Result<Value> {
         run_maintainer_cycle(
-            self.runtime_cache_lock.clone(),
+            self.timeline_store.clone(),
             self.live_voice.clone(),
             self.executor.clone(),
         )
@@ -157,22 +156,17 @@ pub struct RuntimeService {
 impl RuntimeService {
     pub async fn new() -> Result<Self> {
         let mut runtime = Runtime::new()?;
-        runtime.start().await?;
         let timeline_store = runtime.timeline_store.clone();
-        let runtime_cache_lock = Arc::new(Mutex::new(runtime));
+        timeline_store.initialize().await?;
+        runtime.start().await?;
         let (intake, intake_receiver) = mpsc::channel(DEFAULT_INTAKE_QUEUE_DEPTH);
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),
         };
         let live_voice = Arc::new(LiveVoiceAdapter::new(job_sink.clone()));
-        let executor = RuntimeExecutor::new(
-            runtime_cache_lock.clone(),
-            live_voice.clone(),
-            timeline_store.clone(),
-        );
+        let executor = RuntimeExecutor::new(live_voice.clone(), timeline_store.clone());
         Ok(Self {
             handle: RuntimeHandle {
-                runtime_cache_lock,
                 live_voice,
                 timeline_store,
                 executor,
@@ -231,9 +225,9 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
         while let Some(submission) = intake.recv().await {
             match submission {
                 RuntimeSubmission::Command { command, reply } => {
-                    let result = {
-                        let runtime_cache = handle.runtime_cache_lock.lock().await;
-                        runtime_cache.create_command_job_sync(command, None)
+                    let result = match handle.runtime_context() {
+                        Ok(mut runtime) => runtime.create_command_job(command, None).await,
+                        Err(error) => Err(error),
                     };
                     if result.is_ok() {
                         handle.executor.wake();
@@ -242,9 +236,9 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
                 }
                 RuntimeSubmission::Job { job, reply } => {
                     let result = if job.kind == crate::runtime::JobKind::WakeProbe {
-                        handle.timeline_store.create_wake_probe_job(job)
+                        handle.timeline_store.create_wake_probe_job(job).await
                     } else {
-                        handle.timeline_store.create_job(job)
+                        handle.timeline_store.create_job(job).await
                     }
                     .map(job_created_payload);
                     if result.is_ok() {
@@ -258,19 +252,23 @@ fn spawn_intake_loop(handle: RuntimeHandle, mut intake: mpsc::Receiver<RuntimeSu
                     actor_user_id,
                     reply,
                 } => {
+                    let result = match handle.timeline_store.get_job(&target_job_id).await {
+                        Ok(target) => Job::runtime_control(
+                            target.guild_id,
+                            target.voice_channel_id,
+                            actor_user_id,
+                            action,
+                            target_job_id,
+                        ),
+                        Err(error) => {
+                            let _ = reply.send(Err(error));
+                            continue;
+                        }
+                    };
                     let result = handle
                         .timeline_store
-                        .get_job(&target_job_id)
-                        .map(|target| {
-                            Job::runtime_control(
-                                target.guild_id,
-                                target.voice_channel_id,
-                                actor_user_id,
-                                action,
-                                target_job_id,
-                            )
-                        })
-                        .and_then(|job| handle.timeline_store.create_job(job))
+                        .create_job(result)
+                        .await
                         .map(job_created_payload);
                     if result.is_ok() {
                         handle.executor.wake();
@@ -341,20 +339,18 @@ fn job_created_payload(job: Job) -> Value {
 }
 
 async fn run_maintainer_cycle(
-    runtime_cache_lock: Arc<Mutex<Runtime>>,
+    timeline_store: TimelineStore,
     live_voice: Arc<LiveVoiceAdapter>,
     executor: ServiceRuntimeExecutor,
 ) -> Result<Value> {
-    sync_voice_adapter_state(runtime_cache_lock.clone(), live_voice)
+    sync_voice_adapter_state(timeline_store.clone(), live_voice)
         .await
         .context("syncing voice adapter state")?;
     let automation = {
-        let mut runtime_snapshot = {
-            let runtime_cache = runtime_cache_lock.lock().await;
-            runtime_cache.clone()
-        };
-        runtime_snapshot
+        let mut runtime = Runtime::from_store(timeline_store.clone())?;
+        runtime
             .run_automations()
+            .await
             .context("running runtime automations")?
             .to_json()
     };
@@ -372,13 +368,14 @@ async fn run_maintainer_cycle(
 }
 
 async fn sync_voice_adapter_state(
-    runtime_cache_lock: Arc<Mutex<Runtime>>,
+    timeline_store: TimelineStore,
     live_voice: Arc<LiveVoiceAdapter>,
 ) -> Result<()> {
     let bots = live_voice.bot_statuses().await;
     let sessions = live_voice.session_statuses().await;
-    let mut runtime_cache = runtime_cache_lock.lock().await;
-    runtime_cache.sync_voice_adapter_status(bots, sessions)
+    Runtime::from_store(timeline_store)?
+        .sync_voice_adapter_status(bots, sessions)
+        .await
 }
 
 fn maintainer_interval() -> Duration {

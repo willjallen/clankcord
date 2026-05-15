@@ -9,15 +9,17 @@ use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 use super::routes;
 
 impl Runtime {
-    pub(crate) fn run_blocking_maintenance(&self) -> Result<Value> {
+    pub(crate) async fn run_blocking_maintenance(&self) -> Result<Value> {
         let stale_wake_probes = self
             .timeline_store
-            .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())?;
-        let timed_out = self.fail_stale_running_jobs()?;
-        let resolved_waiting = self.resolve_waiting_jobs()?;
+            .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())
+            .await?;
+        let timed_out = self.fail_stale_running_jobs().await?;
+        let resolved_waiting = self.resolve_waiting_jobs().await?;
         let ephemeral_gc = self
             .timeline_store
-            .garbage_collect_ephemeral_jobs(ephemeral_job_gc_batch_limit())?;
+            .garbage_collect_ephemeral_jobs(ephemeral_job_gc_batch_limit())
+            .await?;
         Ok(json!({
             "staleWakeProbes": stale_wake_probes,
             "timedOutJobs": timed_out,
@@ -26,39 +28,41 @@ impl Runtime {
         }))
     }
 
-    pub(crate) fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
+    pub(crate) async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
-        match routes::execute_runtime_async(self, &running) {
-            Ok(decision) => self.apply_job_decision(&job_id, running, decision),
-            Err(error) => self.fail_dispatched_job(&job_id, running, error),
+        match routes::execute_runtime_async(self, &running).await {
+            Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,
+            Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
         }
     }
 
-    pub(crate) fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
+    pub(crate) async fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match running.kind {
-            JobKind::WakeProbe => match routes::execute_wake_probe(self, &running) {
-                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            JobKind::WakeProbe => match routes::execute_wake_probe(self, &running).await {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
+                Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
             },
-            JobKind::AudioSegment => match routes::execute_audio_segment(self, &running) {
-                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            JobKind::AudioSegment => match routes::execute_audio_segment(self, &running).await {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
+                Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
             },
-            JobKind::RefineTranscript => match routes::execute_refine_transcript(self, &running) {
-                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-                Err(error) => self.fail_dispatched_job(&job_id, running, error),
-            },
-            JobKind::AgentTask => self.dispatch_claimed_agent_task_job(running),
-            JobKind::Response => match routes::execute_response(self, &running) {
-                Ok(result) => self.complete_dispatched_job(&job_id, running, result),
-                Err(error) => self.fail_dispatched_job(&job_id, running, error),
+            JobKind::RefineTranscript => {
+                match routes::execute_refine_transcript(self, &running).await {
+                    Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
+                    Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
+                }
+            }
+            JobKind::AgentTask => self.dispatch_claimed_agent_task_job(running).await,
+            JobKind::Response => match routes::execute_response(self, &running).await {
+                Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
+                Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
             },
             kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
         }
     }
 
-    pub(crate) fn apply_job_decision(
+    pub(crate) async fn apply_job_decision(
         &self,
         job_id: &str,
         fallback_job: Job,
@@ -67,55 +71,61 @@ impl Runtime {
         match decision {
             JobDecision::Complete(output) => {
                 self.complete_dispatched_job(job_id, fallback_job, output)
+                    .await
             }
             JobDecision::Fail(failure) => {
                 self.fail_dispatched_job(job_id, fallback_job, anyhow::anyhow!(failure.message))
+                    .await
             }
-            JobDecision::Wait => self.wait_dispatched_job(job_id, fallback_job, Vec::new()),
+            JobDecision::Wait => {
+                self.wait_dispatched_job(job_id, fallback_job, Vec::new())
+                    .await
+            }
             JobDecision::WaitFor(children) => {
                 self.wait_dispatched_job(job_id, fallback_job, children)
+                    .await
             }
         }
     }
 
-    pub(crate) fn complete_dispatched_job(
+    pub(crate) async fn complete_dispatched_job(
         &self,
         job_id: &str,
         fallback_job: Job,
         output: JobOutput,
     ) -> Result<Value> {
-        let mut latest = self
-            .timeline_store
-            .get_job(job_id)
-            .unwrap_or_else(|_| fallback_job.clone());
+        let mut latest = match self.timeline_store.get_job(job_id).await {
+            Ok(job) => job,
+            Err(_) => fallback_job.clone(),
+        };
         latest.metadata.output = Some(output.clone());
         if latest.state != JobState::Waiting && latest.state != JobState::Queued {
             latest.mark_complete();
         }
-        self.timeline_store.update_job(&latest)?;
+        self.timeline_store.update_job(&latest).await?;
         Ok(json!({"dispatched": true, "job": latest.to_value(), "result": output.to_json()}))
     }
 
-    pub(crate) fn wait_dispatched_job(
+    pub(crate) async fn wait_dispatched_job(
         &self,
         job_id: &str,
         fallback_job: Job,
         children: Vec<Job>,
     ) -> Result<Value> {
-        let latest = self
-            .timeline_store
-            .get_job(job_id)
-            .unwrap_or_else(|_| fallback_job.clone());
+        let latest = match self.timeline_store.get_job(job_id).await {
+            Ok(job) => job,
+            Err(_) => fallback_job.clone(),
+        };
         let mut child_ids = Vec::new();
         if children.is_empty() {
             let mut waiting = latest.clone();
             if !waiting.state.is_terminal() {
                 waiting.mark_waiting();
-                self.timeline_store.update_job(&waiting)?;
+                self.timeline_store.update_job(&waiting).await?;
             }
         } else {
             for child in children {
-                let child = self.timeline_store.create_child_job(&latest, child)?;
+                let child = self.timeline_store.create_child_job(&latest, child).await?;
                 child_ids.push(child.id);
             }
         }
@@ -124,32 +134,36 @@ impl Runtime {
         )
     }
 
-    pub(crate) fn fail_dispatched_job(
+    pub(crate) async fn fail_dispatched_job(
         &self,
         job_id: &str,
         fallback_job: Job,
         error: anyhow::Error,
     ) -> Result<Value> {
         let error_text = error.to_string();
-        let mut latest = self
-            .timeline_store
-            .get_job(job_id)
-            .unwrap_or_else(|_| fallback_job.clone());
+        let mut latest = match self.timeline_store.get_job(job_id).await {
+            Ok(job) => job,
+            Err(_) => fallback_job.clone(),
+        };
         latest.set_state(JobState::Failed);
         latest.metadata.error = error_text.clone();
-        self.timeline_store.update_job(&latest)?;
+        self.timeline_store.update_job(&latest).await?;
         crate::runtime::log(&format!("job dispatch failed {job_id}: {error_text}"));
         Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
     }
 
-    fn fail_stale_running_jobs(&self) -> Result<Vec<Value>> {
+    async fn fail_stale_running_jobs(&self) -> Result<Vec<Value>> {
         let now = utc_now();
         let mut timed_out = Vec::new();
-        for mut job in self.timeline_store.list_jobs_with_visibility(
-            None,
-            Some(JobState::Running),
-            JobVisibility::IncludeEphemeral,
-        )? {
+        for mut job in self
+            .timeline_store
+            .list_jobs_with_visibility(
+                None,
+                Some(JobState::Running),
+                JobVisibility::IncludeEphemeral,
+            )
+            .await?
+        {
             let updated_at = parse_instant(&job.updated_at);
             if updated_at
                 .map(|value| (now - value).num_minutes() < 30)
@@ -160,14 +174,14 @@ impl Runtime {
             job.set_state(JobState::FailedTimeout);
             job.metadata.error = "job exceeded maintainer timeout".to_string();
             job.metadata.timed_out_at = crate::runtime::timeline::isoformat_z(None);
-            self.timeline_store.update_job(&job)?;
+            self.timeline_store.update_job(&job).await?;
             timed_out.push(job.to_value());
         }
         Ok(timed_out)
     }
 
-    pub(crate) fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
-        self.timeline_store.resolve_waiting_jobs()
+    pub(crate) async fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
+        self.timeline_store.resolve_waiting_jobs().await
     }
 }
 

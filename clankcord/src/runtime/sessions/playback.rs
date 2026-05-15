@@ -7,12 +7,12 @@ use crate::runtime::{
 };
 
 impl Runtime {
-    pub(crate) fn prepare_voice_playback_job(
+    pub(crate) async fn prepare_voice_playback_job(
         &mut self,
         job: &Job,
         payload: &DiscordVoicePlaybackPayload,
     ) -> Result<JobDecision> {
-        let children = self.timeline_store.list_child_jobs(&job.id)?;
+        let children = self.timeline_store.list_child_jobs(&job.id).await?;
         if children.iter().any(|child| !child.state.is_terminal()) {
             return Ok(JobDecision::Wait);
         }
@@ -104,7 +104,7 @@ impl Runtime {
         )
     }
 
-    pub(crate) fn create_voice_playback_job_for_channel(
+    pub(crate) async fn create_voice_playback_job_for_channel(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -123,10 +123,10 @@ impl Runtime {
             reason,
             source_job_id,
         );
-        Ok(Some(self.timeline_store.create_job(job)?))
+        Ok(Some(self.timeline_store.create_job(job).await?))
     }
 
-    pub(crate) fn create_voice_playback_job_for_room(
+    pub(crate) async fn create_voice_playback_job_for_room(
         &self,
         room: &RoomConfig,
         requested_by_user_id: &str,
@@ -142,6 +142,7 @@ impl Runtime {
             reason,
             source_job_id,
         )
+        .await
     }
 
     pub(crate) fn active_session_for_channel(

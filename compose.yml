@@ -1,0 +1,85 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      POSTGRES_DB: clankcord
+      POSTGRES_USER: clankcord
+      POSTGRES_PASSWORD: clankcord
+    command:
+      - postgres
+      - -c
+      - port=54329
+    volumes:
+      - clankcord-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 54329 -U clankcord -d clankcord"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  clankcord:
+    build:
+      context: .
+      dockerfile: clankcord/Dockerfile
+    restart: unless-stopped
+    user: "${CLANKCORD_UID:-1000}:${CLANKCORD_GID:-1000}"
+    env_file:
+      - .env
+    network_mode: host
+    environment:
+      CLANKCORD_POSTGRES_URL: postgres://clankcord:clankcord@127.0.0.1:54329/clankcord
+      CLANKCORD_DURABLE_DIR: /clankcord/durable
+      CLANKCORD_STATE_DIR: /clankcord/state
+      CLANKCORD_CONFIG_PATH: /clankcord/durable/config/clankcord.json
+      CLANKCORD_CODEX_AUTH_PROFILES_PATH: /workspace/tokens/new-codex-token.txt
+      CLANKCORD_BOT_TOKENS_PATH: /run/secrets/clankcord_discord_voice_bot_tokens
+      CLANKCORD_DISCORD_BOT_TOKEN_FILE: /run/secrets/clankcord_discord_bot_token
+      CLANKCORD_DISCORD_PUBLISH_STATE_PATH: /clankcord/state/discord-sync/state.json
+      CLANKCORD_ROOM_CONTROLS_PATH: /clankcord/state/room-controls.json
+      CLANKCORD_VOICE_MEMORY_ROOT: /clankcord/durable/clankcord/voice
+      CLANKCORD_API_HOST: 0.0.0.0
+      CLANKCORD_API_PORT: 8091
+      CLANKCORD_API_BASE_URL: http://127.0.0.1:8091
+      CLANKCORD_CODEX_WORKDIR: /workspace/clankcord
+      CODEX_HOME: /codex
+      HOME: /codex
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint:
+      - /bin/bash
+      - -lc
+    command:
+      - |
+        set -euo pipefail
+        if [ -n "$${CLANKCORD_CODEX_AUTH_PROFILES_PATH:-}" ] && [ -f "$$CLANKCORD_CODEX_AUTH_PROFILES_PATH" ]; then
+          jq '.profiles | to_entries | map(select(.key | startswith("openai-codex:"))) | .[0].value | {OPENAI_API_KEY:null,tokens:{id_token:.access,access_token:.access,refresh_token:.refresh,account_id:(.accountId // "")},last_refresh:"1970-01-01T00:00:00.000Z"}' "$$CLANKCORD_CODEX_AUTH_PROFILES_PATH" > /codex/auth.json
+          chmod 600 /codex/auth.json || true
+        fi
+        exec clankcord start
+    volumes:
+      - ./clankcord/runtime-data/durable:/clankcord/durable
+      - ./clankcord/runtime-data/state:/clankcord/state
+      - ./clankcord/runtime-data/codex-home:/codex
+      - ./:/workspace:ro
+    secrets:
+      - clankcord_discord_bot_token
+      - clankcord_discord_voice_bot_tokens
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+secrets:
+  clankcord_discord_bot_token:
+    file: ${CLANKCORD_DISCORD_BOT_TOKEN_SECRET_FILE:-./clankcord/runtime-data/secrets/discord_bot_token.txt}
+  clankcord_discord_voice_bot_tokens:
+    file: ./tokens/openclaw_discord_voice_bot_tokens.txt
+
+volumes:
+  clankcord-postgres-data:

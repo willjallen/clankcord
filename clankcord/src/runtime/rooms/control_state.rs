@@ -10,7 +10,7 @@ use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::{RoomConfig, RoomControl, Runtime};
 
 impl Runtime {
-    pub fn pause_room(
+    pub async fn pause_room(
         &mut self,
         room: &RoomConfig,
         duration_seconds: i64,
@@ -22,30 +22,40 @@ impl Runtime {
             "manual_pause",
             requested_by_user_id,
         )?;
-        let event = self.timeline_store.append_event(
-            &room.guild_id,
-            &room.channel_id,
-            json!({
-                "event_kind": "listening_paused",
-                "kind": "listening_paused",
-                "duration_seconds": duration_seconds,
-                "requested_by_user_id": requested_by_user_id,
-            }),
-        )?;
+        let event = self
+            .timeline_store
+            .append_event(
+                &room.guild_id,
+                &room.channel_id,
+                json!({
+                    "event_kind": "listening_paused",
+                    "kind": "listening_paused",
+                    "duration_seconds": duration_seconds,
+                    "requested_by_user_id": requested_by_user_id,
+                }),
+            )
+            .await?;
         Ok(json!({"action": "pause", "status": "paused", "roomId": room.room_id, "event": event}))
     }
 
-    pub fn resume_room(&mut self, room: &RoomConfig, requested_by_user_id: &str) -> Result<Value> {
+    pub async fn resume_room(
+        &mut self,
+        room: &RoomConfig,
+        requested_by_user_id: &str,
+    ) -> Result<Value> {
         self.clear_room_controls(room, &["listening_paused_until"])?;
-        let event = self.timeline_store.append_event(
-            &room.guild_id,
-            &room.channel_id,
-            json!({
-                "event_kind": "listening_resumed",
-                "kind": "listening_resumed",
-                "requested_by_user_id": requested_by_user_id,
-            }),
-        )?;
+        let event = self
+            .timeline_store
+            .append_event(
+                &room.guild_id,
+                &room.channel_id,
+                json!({
+                    "event_kind": "listening_resumed",
+                    "kind": "listening_resumed",
+                    "requested_by_user_id": requested_by_user_id,
+                }),
+            )
+            .await?;
         Ok(json!({"action": "resume", "status": "resumed", "roomId": room.room_id, "event": event}))
     }
 
@@ -152,7 +162,7 @@ impl Runtime {
         Ok(control)
     }
 
-    pub fn suppress_room_auto_join(
+    pub async fn suppress_room_auto_join(
         &mut self,
         room: &RoomConfig,
         duration_seconds: i64,
@@ -171,22 +181,25 @@ impl Runtime {
             control.auto_join_suppression_reason = Some(reason.to_string());
             control.auto_join_suppressed_by_user_id = Some(requested_by_user_id.to_string());
         })?;
-        let _ = self.timeline_store.append_event(
-            &room.guild_id,
-            &room.channel_id,
-            json!({
-                "event_kind": "room_auto_join_suppressed",
-                "kind": "room_auto_join_suppressed",
-                "duration_seconds": duration_seconds.max(0),
-                "until": control.auto_join_suppressed_until.clone().unwrap_or_default(),
-                "reason": reason,
-                "requested_by_user_id": requested_by_user_id,
-            }),
-        );
+        let _ = self
+            .timeline_store
+            .append_event(
+                &room.guild_id,
+                &room.channel_id,
+                json!({
+                    "event_kind": "room_auto_join_suppressed",
+                    "kind": "room_auto_join_suppressed",
+                    "duration_seconds": duration_seconds.max(0),
+                    "until": control.auto_join_suppressed_until.clone().unwrap_or_default(),
+                    "reason": reason,
+                    "requested_by_user_id": requested_by_user_id,
+                }),
+            )
+            .await;
         Ok(control)
     }
 
-    pub fn set_room_manual_hold(
+    pub async fn set_room_manual_hold(
         &mut self,
         room: &RoomConfig,
         duration_seconds: i64,
@@ -203,18 +216,21 @@ impl Runtime {
                 control.manual_hold_by_user_id = Some(requested_by_user_id.to_string());
             },
         )?;
-        let _ = self.timeline_store.append_event(
-            &room.guild_id,
-            &room.channel_id,
-            json!({
-                "event_kind": "room_manual_hold_set",
-                "kind": "room_manual_hold_set",
-                "duration_seconds": duration_seconds.max(0),
-                "until": control.manual_hold_until.clone().unwrap_or_default(),
-                "reason": reason,
-                "requested_by_user_id": requested_by_user_id,
-            }),
-        );
+        let _ = self
+            .timeline_store
+            .append_event(
+                &room.guild_id,
+                &room.channel_id,
+                json!({
+                    "event_kind": "room_manual_hold_set",
+                    "kind": "room_manual_hold_set",
+                    "duration_seconds": duration_seconds.max(0),
+                    "until": control.manual_hold_until.clone().unwrap_or_default(),
+                    "reason": reason,
+                    "requested_by_user_id": requested_by_user_id,
+                }),
+            )
+            .await;
         Ok(control)
     }
 

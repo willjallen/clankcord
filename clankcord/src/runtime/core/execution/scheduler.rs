@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use anyhow::Context;
 use serde_json::{Map, Value, json};
-use tokio::sync::{Mutex, Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
 #[cfg(test)]
@@ -158,7 +157,6 @@ pub(crate) struct RuntimeExecutor<E>
 where
     E: RuntimeAdapterJobs + Clone + Send + Sync + 'static,
 {
-    runtime_cache_lock: Arc<Mutex<Runtime>>,
     adapter_jobs: E,
     timeline_store: TimelineStore,
     lanes: Arc<JobLanes>,
@@ -179,13 +177,8 @@ impl<E> RuntimeExecutor<E>
 where
     E: RuntimeAdapterJobs + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(
-        runtime_cache_lock: Arc<Mutex<Runtime>>,
-        adapter_jobs: E,
-        timeline_store: TimelineStore,
-    ) -> Self {
+    pub(crate) fn new(adapter_jobs: E, timeline_store: TimelineStore) -> Self {
         Self {
-            runtime_cache_lock,
             adapter_jobs,
             timeline_store,
             lanes: Arc::new(JobLanes::from_env()),
@@ -201,9 +194,9 @@ where
         self.notify.notify_one();
     }
 
-    pub(crate) fn schedule_due_jobs(&self) -> Result<Value> {
+    pub(crate) async fn schedule_due_jobs(&self) -> Result<Value> {
         let mut scheduled = Map::new();
-        let due_kinds = self.timeline_store.due_job_kinds()?;
+        let due_kinds = self.timeline_store.due_job_kinds().await?;
         for policy in JOB_EXECUTION_POLICIES {
             if !due_kinds.contains(&policy.kind) {
                 scheduled.insert(policy.kind.as_str().to_string(), idle_policy_report(policy));
@@ -211,7 +204,7 @@ where
             }
             scheduled.insert(
                 policy.kind.as_str().to_string(),
-                self.schedule_policy(policy)?,
+                self.schedule_policy(policy).await?,
             );
         }
         let total_scheduled = scheduled
@@ -230,8 +223,8 @@ where
         let mut exhausted = false;
 
         for pass in 0..max_passes {
-            let resolved_waiting = self.timeline_store.resolve_waiting_jobs()?;
-            let scheduled = self.schedule_due_jobs()?;
+            let resolved_waiting = self.timeline_store.resolve_waiting_jobs().await?;
+            let scheduled = self.schedule_due_jobs().await?;
             let scheduled_count = scheduled_job_count(&scheduled);
             let resolved_count = resolved_waiting.len();
             total_resolved += resolved_count;
@@ -258,23 +251,19 @@ where
     }
 
     pub(crate) async fn run_maintenance(&self) -> Result<Value> {
-        let snapshot = {
-            let runtime_cache = self.runtime_cache_lock.lock().await;
-            runtime_cache.clone()
-        };
-        tokio::task::spawn_blocking(move || snapshot.run_blocking_maintenance())
-            .await
-            .context("joining blocking maintenance task")?
+        let snapshot = Runtime::from_store(self.timeline_store.clone())?;
+        snapshot.run_blocking_maintenance().await
     }
 
-    fn schedule_policy(&self, policy: JobExecutionPolicy) -> Result<Value> {
+    async fn schedule_policy(&self, policy: JobExecutionPolicy) -> Result<Value> {
         let lane = self.lanes.semaphore(policy.lane);
         let permits = take_permits(&lane, dispatch_batch_limit(policy));
         let permit_count = permits.len();
-        let mut blocked_keys = self.timeline_store.active_ordering_keys()?;
-        let jobs =
-            self.timeline_store
-                .claim_due_jobs(policy.kind, permit_count, &mut blocked_keys)?;
+        let mut blocked_keys = self.timeline_store.active_ordering_keys().await?;
+        let jobs = self
+            .timeline_store
+            .claim_due_jobs(policy.kind, permit_count, &mut blocked_keys)
+            .await?;
         let count = jobs.len();
         for (permit, job) in permits.into_iter().zip(jobs) {
             match policy.executor {
@@ -293,14 +282,16 @@ where
     }
 
     fn spawn_runtime_exclusive_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let runtime_cache_lock = self.runtime_cache_lock.clone();
+        let timeline_store = self.timeline_store.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = {
-                let mut runtime_cache = runtime_cache_lock.lock().await;
-                runtime_cache.dispatch_claimed_runtime_job(job)
+                match Runtime::from_store(timeline_store) {
+                    Ok(mut runtime) => runtime.dispatch_claimed_runtime_job(job).await,
+                    Err(error) => Err(error),
+                }
             };
             if let Err(error) = result {
                 log(&format!(
@@ -314,17 +305,16 @@ where
     }
 
     fn spawn_runtime_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let runtime_cache_lock = self.runtime_cache_lock.clone();
+        let timeline_store = self.timeline_store.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = {
-                let mut runtime_snapshot = {
-                    let runtime_cache = runtime_cache_lock.lock().await;
-                    runtime_cache.clone()
-                };
-                runtime_snapshot.dispatch_claimed_runtime_job(job)
+                match Runtime::from_store(timeline_store) {
+                    Ok(mut runtime) => runtime.dispatch_claimed_runtime_job(job).await,
+                    Err(error) => Err(error),
+                }
             };
             if let Err(error) = result {
                 log(&format!(
@@ -338,20 +328,22 @@ where
     }
 
     fn spawn_adapter_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let runtime_cache_lock = self.runtime_cache_lock.clone();
+        let timeline_store = self.timeline_store.clone();
         let adapter = self.adapter_jobs.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = adapter.execute_adapter_job(job.clone()).await;
-            let runtime_snapshot = {
-                let runtime_cache = runtime_cache_lock.lock().await;
-                runtime_cache.clone()
-            };
             let update = match result {
-                Ok(output) => runtime_snapshot.complete_dispatched_job(&job_id, job, output),
-                Err(error) => runtime_snapshot.fail_dispatched_job(&job_id, job, error),
+                Ok(output) => match Runtime::from_store(timeline_store.clone()) {
+                    Ok(runtime) => runtime.complete_dispatched_job(&job_id, job, output).await,
+                    Err(error) => Err(error),
+                },
+                Err(error) => match Runtime::from_store(timeline_store.clone()) {
+                    Ok(runtime) => runtime.fail_dispatched_job(&job_id, job, error).await,
+                    Err(error) => Err(error),
+                },
             };
             if let Err(error) = update {
                 log(&format!(
@@ -365,27 +357,28 @@ where
     }
 
     fn spawn_blocking_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let runtime_cache_lock = self.runtime_cache_lock.clone();
+        let timeline_store = self.timeline_store.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
-            let result = {
-                let snapshot = {
-                    let runtime_cache = runtime_cache_lock.lock().await;
-                    runtime_cache.clone()
-                };
-                tokio::task::spawn_blocking(move || snapshot.dispatch_claimed_blocking_job(job))
-                    .await
+            let result = match Runtime::from_store(timeline_store) {
+                Ok(snapshot) => snapshot.dispatch_claimed_blocking_job(job).await,
+                Err(error) => {
+                    log(&format!(
+                        "blocking job worker failed {job_id} ({kind}) before dispatch: {}",
+                        error_chain(&error)
+                    ));
+                    drop(permit);
+                    notify.notify_one();
+                    return;
+                }
             };
             match result {
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => log(&format!(
+                Ok(_) => {}
+                Err(error) => log(&format!(
                     "blocking job worker failed {job_id} ({kind}): {}",
                     error_chain(&error)
-                )),
-                Err(error) => log(&format!(
-                    "blocking job worker panicked {job_id} ({kind}): {error}"
                 )),
             }
             drop(permit);
@@ -623,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_owned_orchestration_uses_snapshot_execution() {
+    fn store_owned_orchestration_uses_snapshot_execution() {
         let policy = |kind| {
             JOB_EXECUTION_POLICIES
                 .iter()

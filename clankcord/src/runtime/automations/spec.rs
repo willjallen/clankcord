@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use anyhow::Context;
-use rusqlite::OptionalExtension;
+use sqlx::Row;
 
 use crate::runtime::timeline::{TimelineStore, instant_ms_str, isoformat_z, new_id, parse_instant};
 use crate::runtime::{JobKind, JobState, Runtime};
@@ -475,18 +475,21 @@ impl std::str::FromStr for AutomationState {
 }
 
 impl TimelineStore {
-    pub fn create_automation(&self, spec: AutomationSpec) -> Result<AutomationRecord> {
+    pub async fn create_automation(&self, spec: AutomationSpec) -> Result<AutomationRecord> {
         spec.validate()?;
-        if let Some(existing) = self.find_active_automation_by_idempotency_key(
-            &spec.scope.guild_id,
-            &spec.scope.voice_channel_id,
-            &spec.idempotency_key,
-        )? {
+        if let Some(existing) = self
+            .find_active_automation_by_idempotency_key(
+                &spec.scope.guild_id,
+                &spec.scope.voice_channel_id,
+                &spec.idempotency_key,
+            )
+            .await?
+        {
             return Ok(existing);
         }
 
         let record = AutomationRecord::new(spec);
-        self.upsert_automation_record(&record)?;
+        self.upsert_automation_record(&record).await?;
         self.append_event(
             &record.spec.scope.guild_id,
             &record.spec.scope.voice_channel_id,
@@ -496,32 +499,33 @@ impl TimelineStore {
                 "automation_id": record.automation_id,
                 "name": record.spec.name,
             }),
-        )?;
+        )
+        .await?;
         Ok(record)
     }
 
-    pub(crate) fn save_automation_record(&self, record: &AutomationRecord) -> Result<()> {
-        self.upsert_automation_record(record)
+    pub(crate) async fn save_automation_record(&self, record: &AutomationRecord) -> Result<()> {
+        self.upsert_automation_record(record).await
     }
 
-    pub fn get_automation(&self, automation_id: &str) -> Result<AutomationRecord> {
-        let db = self.connect()?;
-        let payload = db.query_row(
-            "SELECT payload_blob FROM automations WHERE automation_id = ?1",
-            rusqlite::params![automation_id],
-            |row| row.get::<_, Vec<u8>>(0),
-        )?;
+    pub async fn get_automation(&self, automation_id: &str) -> Result<AutomationRecord> {
+        let row = sqlx::query("SELECT payload_blob FROM automations WHERE automation_id = $1")
+            .bind(automation_id)
+            .fetch_one(&self.pool)
+            .await?;
+        let payload: Vec<u8> = row.try_get("payload_blob")?;
         AutomationRecord::decode(&payload)
     }
 
-    pub fn list_automations(
+    pub async fn list_automations(
         &self,
         guild_id: Option<&str>,
         voice_channel_id: Option<&str>,
         state: Option<AutomationState>,
     ) -> Result<Vec<AutomationRecord>> {
         let records = self
-            .automation_rows()?
+            .automation_rows()
+            .await?
             .into_iter()
             .filter(|record| {
                 guild_id
@@ -538,11 +542,11 @@ impl TimelineStore {
         Ok(records)
     }
 
-    pub fn cancel_automation(&self, automation_id: &str) -> Result<AutomationRecord> {
-        let mut record = self.get_automation(automation_id)?;
+    pub async fn cancel_automation(&self, automation_id: &str) -> Result<AutomationRecord> {
+        let mut record = self.get_automation(automation_id).await?;
         record.state = AutomationState::Cancelled;
         record.updated_at = isoformat_z(None);
-        self.upsert_automation_record(&record)?;
+        self.upsert_automation_record(&record).await?;
         self.append_event(
             &record.spec.scope.guild_id,
             &record.spec.scope.voice_channel_id,
@@ -552,11 +556,12 @@ impl TimelineStore {
                 "automation_id": record.automation_id,
                 "name": record.spec.name,
             }),
-        )?;
+        )
+        .await?;
         Ok(record)
     }
 
-    fn find_active_automation_by_idempotency_key(
+    async fn find_active_automation_by_idempotency_key(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -565,26 +570,29 @@ impl TimelineStore {
         if idempotency_key.trim().is_empty() {
             return Ok(None);
         }
-        let db = self.connect()?;
-        let payload = db
-            .query_row(
-                "SELECT payload_blob FROM automations WHERE guild_id = ?1 AND voice_channel_id = ?2 AND idempotency_key = ?3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
-                rusqlite::params![guild_id, voice_channel_id, idempotency_key],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()?;
-        payload.as_deref().map(AutomationRecord::decode).transpose()
+        let row = sqlx::query(
+            "SELECT payload_blob FROM automations WHERE guild_id = $1 AND voice_channel_id = $2 AND idempotency_key = $3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(idempotency_key)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| -> Result<AutomationRecord> {
+            let payload: Vec<u8> = row.try_get("payload_blob")?;
+            AutomationRecord::decode(&payload)
+        })
+        .transpose()
     }
 
-    fn upsert_automation_record(&self, record: &AutomationRecord) -> Result<()> {
-        let db = self.connect()?;
+    async fn upsert_automation_record(&self, record: &AutomationRecord) -> Result<()> {
         let created_ms = instant_ms_str(Some(&record.created_at)).unwrap_or(0);
         let updated_ms = instant_ms_str(Some(&record.updated_at)).unwrap_or(created_ms);
         let expires_at_ms = record.spec.expiry.expires_at.as_deref().and_then(|value| {
             parse_instant(value)
                 .and_then(|expires_at| instant_ms_str(Some(&isoformat_z(Some(expires_at)))))
         });
-        db.execute(
+        sqlx::query(
             r#"
             INSERT INTO automations(
               automation_id,
@@ -599,53 +607,54 @@ impl TimelineStore {
               max_fires,
               payload_blob
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT(automation_id) DO UPDATE SET
-              guild_id = excluded.guild_id,
-              voice_channel_id = excluded.voice_channel_id,
-              state = excluded.state,
-              idempotency_key = excluded.idempotency_key,
-              updated_at_ms = excluded.updated_at_ms,
-              expires_at_ms = excluded.expires_at_ms,
-              fire_count = excluded.fire_count,
-              max_fires = excluded.max_fires,
-              payload_blob = excluded.payload_blob
+              guild_id = EXCLUDED.guild_id,
+              voice_channel_id = EXCLUDED.voice_channel_id,
+              state = EXCLUDED.state,
+              idempotency_key = EXCLUDED.idempotency_key,
+              updated_at_ms = EXCLUDED.updated_at_ms,
+              expires_at_ms = EXCLUDED.expires_at_ms,
+              fire_count = EXCLUDED.fire_count,
+              max_fires = EXCLUDED.max_fires,
+              payload_blob = EXCLUDED.payload_blob
             "#,
-            rusqlite::params![
-                record.automation_id,
-                record.spec.scope.guild_id,
-                record.spec.scope.voice_channel_id,
-                record.state.as_str(),
-                record.spec.idempotency_key,
-                created_ms,
-                updated_ms,
-                expires_at_ms,
-                record.fire_count as i64,
-                record.spec.expiry.max_fires.map(|value| value as i64),
-                record.encode()?,
-            ],
-        )?;
+        )
+        .bind(&record.automation_id)
+        .bind(&record.spec.scope.guild_id)
+        .bind(&record.spec.scope.voice_channel_id)
+        .bind(record.state.as_str())
+        .bind(&record.spec.idempotency_key)
+        .bind(created_ms)
+        .bind(updated_ms)
+        .bind(expires_at_ms)
+        .bind(record.fire_count as i64)
+        .bind(record.spec.expiry.max_fires.map(|value| value as i64))
+        .bind(record.encode()?)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
-    fn automation_rows(&self) -> Result<Vec<AutomationRecord>> {
-        let db = self.connect()?;
-        let mut statement =
-            db.prepare("SELECT payload_blob FROM automations ORDER BY created_at_ms DESC")?;
-        let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+    async fn automation_rows(&self) -> Result<Vec<AutomationRecord>> {
+        let rows = sqlx::query("SELECT payload_blob FROM automations ORDER BY created_at_ms DESC")
+            .fetch_all(&self.pool)
+            .await?;
         let mut records = Vec::new();
         for row in rows {
-            records.push(AutomationRecord::decode(&row?)?);
+            let payload: Vec<u8> = row.try_get("payload_blob")?;
+            records.push(AutomationRecord::decode(&payload)?);
         }
         Ok(records)
     }
 }
 
 impl Runtime {
-    pub fn load_automation_registry(&mut self) -> Result<()> {
+    pub async fn load_automation_registry(&mut self) -> Result<()> {
         self.automations = self
             .timeline_store
-            .list_automations(None, None, Some(AutomationState::Active))?
+            .list_automations(None, None, Some(AutomationState::Active))
+            .await?
             .into_iter()
             .map(|record| (record.automation_id.clone(), record))
             .collect();
@@ -657,9 +666,9 @@ impl Runtime {
         Ok(json!({"valid": true, "automation": spec.to_json()}))
     }
 
-    pub fn create_automation_from_value(&mut self, value: &Value) -> Result<Value> {
+    pub async fn create_automation_from_value(&mut self, value: &Value) -> Result<Value> {
         let spec = AutomationSpec::from_json(value)?;
-        let record = self.timeline_store.create_automation(spec)?;
+        let record = self.timeline_store.create_automation(spec).await?;
         if record.state == AutomationState::Active {
             self.automations
                 .insert(record.automation_id.clone(), record.clone());
@@ -667,7 +676,7 @@ impl Runtime {
         Ok(json!({"created": true, "automation": record.to_json()}))
     }
 
-    pub fn list_automation_records(
+    pub async fn list_automation_records(
         &self,
         guild_id: Option<&str>,
         voice_channel_id: Option<&str>,
@@ -675,18 +684,23 @@ impl Runtime {
     ) -> Result<Value> {
         let records = self
             .timeline_store
-            .list_automations(guild_id, voice_channel_id, state)?;
+            .list_automations(guild_id, voice_channel_id, state)
+            .await?;
         Ok(json!({
             "automations": records.iter().map(AutomationRecord::to_json).collect::<Vec<_>>(),
         }))
     }
 
-    pub fn get_automation_record(&self, automation_id: &str) -> Result<Value> {
-        Ok(self.timeline_store.get_automation(automation_id)?.to_json())
+    pub async fn get_automation_record(&self, automation_id: &str) -> Result<Value> {
+        Ok(self
+            .timeline_store
+            .get_automation(automation_id)
+            .await?
+            .to_json())
     }
 
-    pub fn cancel_automation_record(&mut self, automation_id: &str) -> Result<Value> {
-        let record = self.timeline_store.cancel_automation(automation_id)?;
+    pub async fn cancel_automation_record(&mut self, automation_id: &str) -> Result<Value> {
+        let record = self.timeline_store.cancel_automation(automation_id).await?;
         self.automations.remove(automation_id);
         Ok(record.to_json())
     }

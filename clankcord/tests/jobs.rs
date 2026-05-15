@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
-use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
     AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordVoiceJoinPayload,
     DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
@@ -13,8 +12,11 @@ use clankcord::runtime::{
     WakeActivationPayload, WakeProbePayload,
 };
 
-#[test]
-fn job_round_trips_as_binary_record() {
+mod common;
+use common::test_store;
+
+#[tokio::test(flavor = "current_thread")]
+async fn job_round_trips_as_binary_record() {
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
@@ -37,8 +39,8 @@ fn job_round_trips_as_binary_record() {
     );
 }
 
-#[test]
-fn audio_segment_payload_references_ready_audio_artifact() {
+#[tokio::test(flavor = "current_thread")]
+async fn audio_segment_payload_references_ready_audio_artifact() {
     let start = chrono::Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap();
     let source_audio_path = std::path::PathBuf::from("/tmp/clankcord/segment.wav");
     let job = Job::audio_segment(AudioSegmentPayload {
@@ -81,8 +83,8 @@ fn audio_segment_payload_references_ready_audio_artifact() {
     assert!(payload.get("pcm").is_none());
 }
 
-#[test]
-fn wake_probe_payload_references_ready_audio_artifact() {
+#[tokio::test(flavor = "current_thread")]
+async fn wake_probe_payload_references_ready_audio_artifact() {
     let start = chrono::Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap();
     let source_audio_path = std::path::PathBuf::from("/tmp/clankcord/wake-probe.wav");
     let job = Job::wake_probe(WakeProbePayload {
@@ -127,15 +129,15 @@ fn wake_probe_payload_references_ready_audio_artifact() {
     assert_eq!(payload["reset_stream"], json!(false));
 }
 
-#[test]
-fn opaque_json_lowers_to_binary_payload() {
+#[tokio::test(flavor = "current_thread")]
+async fn opaque_json_lowers_to_binary_payload() {
     let payload = BinaryPayload::from_json(&json!({"nested": ["value", 1]})).unwrap();
     assert!(!payload.as_bytes().is_empty());
     assert_eq!(payload.to_json(), json!({"nested": ["value", 1]}));
 }
 
-#[test]
-fn job_lineage_allows_arbitrary_dag_depth_metadata() {
+#[tokio::test(flavor = "current_thread")]
+async fn job_lineage_allows_arbitrary_dag_depth_metadata() {
     let root = Job::new(
         "guild",
         "channel",
@@ -168,8 +170,8 @@ fn job_lineage_allows_arbitrary_dag_depth_metadata() {
     assert_eq!(too_deep.lineage_depth, 3);
 }
 
-#[test]
-fn response_payload_is_a_first_class_binary_job() {
+#[tokio::test(flavor = "current_thread")]
+async fn response_payload_is_a_first_class_binary_job() {
     let payload = ResponsePayload::from_json(&json!({
         "response_kind": "question",
         "sink": "agent-chat",
@@ -193,8 +195,8 @@ fn response_payload_is_a_first_class_binary_job() {
     );
 }
 
-#[test]
-fn wake_activation_payload_is_a_first_class_binary_job() {
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_payload_is_a_first_class_binary_job() {
     let payload = WakeActivationPayload {
         activation_id: "act_1".to_string(),
         guild_id: "guild".to_string(),
@@ -227,10 +229,10 @@ fn wake_activation_payload_is_a_first_class_binary_job() {
     );
 }
 
-#[test]
-fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let due = Job::response("guild", "code", "user-a", response_payload("due"));
     let due_id = due.id.clone();
     let mut future = Job::response("guild", "code", "user-a", response_payload("future"));
@@ -238,31 +240,39 @@ fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     future.next_run_at =
         Some((Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true));
 
-    store.create_job(future).unwrap();
-    store.create_job(due).unwrap();
+    store.create_job(future).await.unwrap();
+    store.create_job(due).await.unwrap();
 
     let mut blocked = BTreeSet::new();
     let claimed = store
         .claim_due_jobs(JobKind::Response, 8, &mut blocked)
+        .await
         .unwrap();
 
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, due_id);
     assert_eq!(claimed[0].state, JobState::Running);
-    assert_eq!(store.get_job(&due_id).unwrap().state, JobState::Running);
-    assert_eq!(store.get_job(&future_id).unwrap().state, JobState::Queued);
+    assert_eq!(
+        store.get_job(&due_id).await.unwrap().state,
+        JobState::Running
+    );
+    assert_eq!(
+        store.get_job(&future_id).await.unwrap().state,
+        JobState::Queued
+    );
     assert!(
         store
             .claim_due_jobs(JobKind::Response, 8, &mut BTreeSet::new())
+            .await
             .unwrap()
             .is_empty()
     );
 }
 
-#[test]
-fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
@@ -273,28 +283,36 @@ fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     .unwrap();
     let job = Job::agent_task("guild", "code", "user-a", command);
     let job_id = job.id.clone();
-    store.create_job(job).unwrap();
+    store.create_job(job).await.unwrap();
 
     let mut blocked = BTreeSet::from(["agent:task:guild:code".to_string()]);
     let skipped = store
         .claim_due_jobs(JobKind::AgentTask, 4, &mut blocked)
+        .await
         .unwrap();
 
     assert!(skipped.is_empty());
-    assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Queued);
+    assert_eq!(
+        store.get_job(&job_id).await.unwrap().state,
+        JobState::Queued
+    );
 
     let claimed = store
         .claim_due_jobs(JobKind::AgentTask, 4, &mut BTreeSet::new())
+        .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, job_id);
-    assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Running);
+    assert_eq!(
+        store.get_job(&job_id).await.unwrap().state,
+        JobState::Running
+    );
 }
 
-#[test]
-fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
@@ -317,23 +335,30 @@ fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
         .to_rfc3339_opts(SecondsFormat::Millis, true);
     second.updated_at = second.created_at.clone();
     let second_id = second.id.clone();
-    store.create_job(first).unwrap();
-    store.create_job(second).unwrap();
+    store.create_job(first).await.unwrap();
+    store.create_job(second).await.unwrap();
 
     let claimed = store
         .claim_due_jobs(JobKind::AgentTask, 4, &mut BTreeSet::new())
+        .await
         .unwrap();
 
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, first_id);
-    assert_eq!(store.get_job(&first_id).unwrap().state, JobState::Running);
-    assert_eq!(store.get_job(&second_id).unwrap().state, JobState::Queued);
+    assert_eq!(
+        store.get_job(&first_id).await.unwrap().state,
+        JobState::Running
+    );
+    assert_eq!(
+        store.get_job(&second_id).await.unwrap().state,
+        JobState::Queued
+    );
 }
 
-#[test]
-fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let first = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 0));
     let first_id = first.id.clone();
     let second = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 1));
@@ -343,14 +368,15 @@ fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
     let fourth = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 3));
     let fourth_id = fourth.id.clone();
 
-    store.create_wake_probe_job(first).unwrap();
-    store.create_wake_probe_job(second).unwrap();
-    store.create_wake_probe_job(third).unwrap();
-    store.create_wake_probe_job(fourth).unwrap();
+    store.create_wake_probe_job(first).await.unwrap();
+    store.create_wake_probe_job(second).await.unwrap();
+    store.create_wake_probe_job(third).await.unwrap();
+    store.create_wake_probe_job(fourth).await.unwrap();
 
     assert_eq!(
         store
             .get_job(&first_id)
+            .await
             .unwrap()
             .wake_probe_payload()
             .unwrap()
@@ -360,24 +386,25 @@ fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
     assert_eq!(
         store
             .get_job(&second_id)
+            .await
             .unwrap()
             .wake_probe_payload()
             .unwrap()
             .probe_index,
         1
     );
-    let stored_third = store.get_job(&third_id).unwrap();
+    let stored_third = store.get_job(&third_id).await.unwrap();
     assert_eq!(stored_third.state, JobState::Queued);
     assert_eq!(stored_third.wake_probe_payload().unwrap().probe_index, 2);
-    let stored_fourth = store.get_job(&fourth_id).unwrap();
+    let stored_fourth = store.get_job(&fourth_id).await.unwrap();
     assert_eq!(stored_fourth.state, JobState::Queued);
     assert_eq!(stored_fourth.wake_probe_payload().unwrap().probe_index, 3);
 }
 
-#[test]
-fn timeline_cancels_stale_wake_probe_backlog() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_cancels_stale_wake_probe_backlog() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let old_at = Utc
         .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
         .unwrap()
@@ -386,18 +413,21 @@ fn timeline_cancels_stale_wake_probe_backlog() {
     old.created_at = old_at.clone();
     old.updated_at = old_at;
     let old_id = old.id.clone();
-    store.create_job(old).unwrap();
+    store.create_job(old).await.unwrap();
 
-    let cancelled = store.cancel_stale_wake_probe_jobs(1).unwrap();
+    let cancelled = store.cancel_stale_wake_probe_jobs(1).await.unwrap();
 
     assert_eq!(cancelled.len(), 1);
-    assert_eq!(store.get_job(&old_id).unwrap().state, JobState::Cancelled);
+    assert_eq!(
+        store.get_job(&old_id).await.unwrap().state,
+        JobState::Cancelled
+    );
 }
 
-#[test]
-fn timeline_child_jobs_are_stored_as_dependency_edges() {
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_child_jobs_are_stored_as_dependency_edges() {
     let raw = tempfile::tempdir().unwrap();
-    let store = TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
     let parent = store
         .create_job(Job::response(
             "guild",
@@ -405,15 +435,16 @@ fn timeline_child_jobs_are_stored_as_dependency_edges() {
             "user-a",
             response_payload("parent"),
         ))
+        .await
         .unwrap();
     let child = Job::response("guild", "code", "user-a", response_payload("child"));
     let child_id = child.id.clone();
 
-    store.create_child_job(&parent, child).unwrap();
+    store.create_child_job(&parent, child).await.unwrap();
 
-    let parent = store.get_job(&parent.id).unwrap();
+    let parent = store.get_job(&parent.id).await.unwrap();
     assert_eq!(parent.state, JobState::Waiting);
-    let children = store.list_child_jobs(&parent.id).unwrap();
+    let children = store.list_child_jobs(&parent.id).await.unwrap();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].id, child_id);
     assert_eq!(
@@ -422,8 +453,8 @@ fn timeline_child_jobs_are_stored_as_dependency_edges() {
     );
 }
 
-#[test]
-fn discord_voice_jobs_are_first_class_binary_jobs() {
+#[tokio::test(flavor = "current_thread")]
+async fn discord_voice_jobs_are_first_class_binary_jobs() {
     let room = RoomConfig {
         room_id: "code-lounge".to_string(),
         guild_id: "guild".to_string(),

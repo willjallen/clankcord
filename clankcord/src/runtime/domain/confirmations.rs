@@ -14,7 +14,7 @@ use crate::runtime::Runtime;
 use crate::runtime::util::{first_non_empty, preview, require_confirmation_actor};
 
 impl Runtime {
-    pub fn confirmation_context_for_command(
+    pub async fn confirmation_context_for_command(
         &self,
         command: &CommandRequest,
     ) -> Result<ConfirmationContext> {
@@ -35,6 +35,7 @@ impl Runtime {
                     None,
                     false,
                 )
+                .await
                 .unwrap_or_default()
         };
         let mut source_lines = Vec::new();
@@ -72,7 +73,7 @@ impl Runtime {
         })
     }
 
-    pub fn post_confirmation_card(&self, job: &mut Job) -> Result<()> {
+    pub async fn post_confirmation_card(&self, job: &mut Job) -> Result<()> {
         let command = job
             .command()
             .cloned()
@@ -89,7 +90,7 @@ impl Runtime {
                 confirmation.delivery = delivery.to_string();
                 confirmation.post_error =
                     "sensitive confirmation is missing requester user id".to_string();
-                self.timeline_store.update_job(job)?;
+                self.timeline_store.update_job(job).await?;
                 return Ok(());
             }
             let dm = discord_request(
@@ -106,7 +107,7 @@ impl Runtime {
                     let confirmation = job.metadata.confirmation_mut();
                     confirmation.delivery = delivery.to_string();
                     confirmation.post_error = error.to_string();
-                    self.timeline_store.update_job(job)?;
+                    self.timeline_store.update_job(job).await?;
                     return Ok(());
                 }
             }
@@ -117,7 +118,7 @@ impl Runtime {
             let confirmation = job.metadata.confirmation_mut();
             confirmation.delivery = delivery.to_string();
             confirmation.post_error = "botsChannelId is not configured".to_string();
-            self.timeline_store.update_job(job)?;
+            self.timeline_store.update_job(job).await?;
             return Ok(());
         }
         let content = self.confirmation_card_content(job, &command);
@@ -163,7 +164,7 @@ impl Runtime {
                 confirmation.post_error = error.to_string();
             }
         }
-        self.timeline_store.update_job(job)?;
+        self.timeline_store.update_job(job).await?;
         Ok(())
     }
 
@@ -203,8 +204,12 @@ impl Runtime {
         }
         preview(&lines.join("\n"), 1900)
     }
-    pub fn approve_confirmation(&mut self, job_id: &str, actor_user_id: String) -> Result<Value> {
-        let mut job = self.timeline_store.get_job(job_id)?;
+    pub async fn approve_confirmation(
+        &mut self,
+        job_id: &str,
+        actor_user_id: String,
+    ) -> Result<Value> {
+        let mut job = self.timeline_store.get_job(job_id).await?;
         if job.kind != JobKind::ConfirmationRequired {
             return Err(discord_tool_error(format!(
                 "job {job_id} is not a pending confirmation"
@@ -228,25 +233,32 @@ impl Runtime {
             confirmation.approved_by_user_id = actor_user_id;
             confirmation.approved_at = isoformat_z(None);
         }
-        self.timeline_store.update_job(&job)?;
-        let dispatch_result = match self.create_command_job_sync(command.clone(), Some(&job)) {
+        self.timeline_store.update_job(&job).await?;
+        let dispatch_result = match self.create_command_job(command.clone(), Some(&job)).await {
             Ok(result) => result,
             Err(error) => {
-                let mut latest = self.timeline_store.get_job(job_id).unwrap_or(job.clone());
+                let mut latest = match self.timeline_store.get_job(job_id).await {
+                    Ok(latest) => latest,
+                    Err(_) => job.clone(),
+                };
                 latest.set_state(JobState::ApprovalFailed);
                 latest.metadata.confirmation_mut().approval_error = error.to_string();
-                self.timeline_store.update_job(&latest)?;
+                self.timeline_store.update_job(&latest).await?;
                 return Err(error);
             }
         };
-        let mut latest = self.timeline_store.get_job(job_id).unwrap_or(job);
+        let mut latest = match self.timeline_store.get_job(job_id).await {
+            Ok(latest) => latest,
+            Err(_) => job,
+        };
         if latest.state != JobState::Waiting {
             latest.mark_complete();
-            self.timeline_store.update_job(&latest)?;
+            self.timeline_store.update_job(&latest).await?;
         }
         let children = self
             .timeline_store
-            .list_child_jobs(job_id)?
+            .list_child_jobs(job_id)
+            .await?
             .into_iter()
             .map(|job| job.to_value())
             .collect::<Vec<_>>();
@@ -257,8 +269,8 @@ impl Runtime {
             "dispatch_result": dispatch_result
         }))
     }
-    pub fn cancel_confirmation(&self, job_id: &str, actor_user_id: String) -> Result<Value> {
-        let mut job = self.timeline_store.get_job(job_id)?;
+    pub async fn cancel_confirmation(&self, job_id: &str, actor_user_id: String) -> Result<Value> {
+        let mut job = self.timeline_store.get_job(job_id).await?;
         if job.kind != JobKind::ConfirmationRequired {
             return Err(discord_tool_error(format!(
                 "job {job_id} is not a pending confirmation"
@@ -273,7 +285,7 @@ impl Runtime {
         require_confirmation_actor(&job, &actor_user_id)?;
         job.mark_cancelled();
         job.metadata.cancelled_by_user_id = actor_user_id;
-        self.timeline_store.update_job(&job)?;
+        self.timeline_store.update_job(&job).await?;
         Ok(job.to_value())
     }
 }

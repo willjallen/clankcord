@@ -37,7 +37,7 @@ pub fn event_has_wake(event: &Value) -> bool {
         || event.get("wake_detected").and_then(Value::as_bool) == Some(true)
 }
 
-pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Value> {
+pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Value> {
     if !event_has_wake(event) {
         return Ok(Value::Null);
     }
@@ -53,7 +53,7 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
         anyhow::bail!("wake event is missing event_id");
     }
     if let Some(existing) =
-        activation_for_wake_event(runtime, &guild_id, &voice_channel_id, &wake_event_id)?
+        activation_for_wake_event(runtime, &guild_id, &voice_channel_id, &wake_event_id).await?
     {
         return Ok(json!({
             "status": "duplicate",
@@ -67,9 +67,9 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
     );
 
     if let Some(existing) =
-        activation_followup_target(runtime, &guild_id, &voice_channel_id, wake_started_at)?
+        activation_followup_target(runtime, &guild_id, &voice_channel_id, wake_started_at).await?
     {
-        let descendants = descendant_jobs(runtime, &existing.id)?;
+        let descendants = descendant_jobs(runtime, &existing.id).await?;
         if descendants.is_empty() {
             let existing = amend_activation_job(
                 runtime,
@@ -79,21 +79,24 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
                 wake_ended_at,
                 speaker_user_id,
                 speaker_label,
-            )?;
-            let _ = runtime.create_voice_playback_job_for_channel(
-                &guild_id,
-                &voice_channel_id,
-                &existing.requested_by_user_id,
-                DiscordVoicePlaybackCue::Preempt,
-                "wake_activation_amended",
-                &existing.id,
-            )?;
+            )
+            .await?;
+            let _ = runtime
+                .create_voice_playback_job_for_channel(
+                    &guild_id,
+                    &voice_channel_id,
+                    &existing.requested_by_user_id,
+                    DiscordVoicePlaybackCue::Preempt,
+                    "wake_activation_amended",
+                    &existing.id,
+                )
+                .await?;
             return Ok(json!({
                 "status": "amended",
                 "job": existing.to_value(),
             }));
         }
-        let cancelled = cancel_job_tree(runtime, &existing)?;
+        let cancelled = cancel_job_tree(runtime, &existing).await?;
         let replacement = replacement_activation_job(
             runtime,
             &existing,
@@ -102,15 +105,18 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
             wake_ended_at,
             speaker_user_id,
             speaker_label,
-        )?;
-        let _ = runtime.create_voice_playback_job_for_channel(
-            &guild_id,
-            &voice_channel_id,
-            &replacement.requested_by_user_id,
-            DiscordVoicePlaybackCue::Preempt,
-            "wake_activation_replaced",
-            &replacement.id,
-        )?;
+        )
+        .await?;
+        let _ = runtime
+            .create_voice_playback_job_for_channel(
+                &guild_id,
+                &voice_channel_id,
+                &replacement.requested_by_user_id,
+                DiscordVoicePlaybackCue::Preempt,
+                "wake_activation_replaced",
+                &replacement.id,
+            )
+            .await?;
         runtime.timeline_store.append_event(
             &guild_id,
             &voice_channel_id,
@@ -123,7 +129,8 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
                 "wake_event_id": wake_event_id,
                 "cancelled_job_ids": cancelled,
             }),
-        )?;
+        )
+        .await?;
         return Ok(json!({
             "status": "replaced",
             "job": replacement.to_value(),
@@ -183,56 +190,67 @@ pub fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Result<Valu
         payload.speaker_idle_seconds,
         payload.stt_flush_grace_seconds,
     ));
-    let job = runtime.timeline_store.create_job(job)?;
-    let _ = runtime.create_voice_playback_job_for_channel(
-        &guild_id,
-        &voice_channel_id,
-        &job.requested_by_user_id,
-        DiscordVoicePlaybackCue::Wake,
-        "wake_detected",
-        &job.id,
-    )?;
+    let job = runtime.timeline_store.create_job(job).await?;
+    let _ = runtime
+        .create_voice_playback_job_for_channel(
+            &guild_id,
+            &voice_channel_id,
+            &job.requested_by_user_id,
+            DiscordVoicePlaybackCue::Wake,
+            "wake_detected",
+            &job.id,
+        )
+        .await?;
     Ok(json!({
         "status": "scheduled",
         "job": job.to_value(),
     }))
 }
 
-pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload) -> Result<Value> {
+pub async fn execute(
+    runtime: &mut Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+) -> Result<Value> {
     let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
     let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
     let window_start = original_wake_at - chrono::Duration::seconds(payload.lookback_seconds);
     let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
     let now = utc_now();
     let window_end = if now < hard_cap { now } else { hard_cap };
-    let events = runtime.timeline_store.load_events(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        Some(window_start),
-        Some(window_end + chrono::Duration::milliseconds(1)),
-        None,
-        None,
-        false,
-    )?;
-    let latest_wake_event = events
+    let events = runtime
+        .timeline_store
+        .load_events(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            Some(window_start),
+            Some(window_end + chrono::Duration::milliseconds(1)),
+            None,
+            None,
+            false,
+        )
+        .await?;
+    let latest_wake_event = if let Some(event) = events
         .iter()
         .find(|event| {
             first_value_string(event, &["event_id", "eventId"]) == payload.latest_wake_event_id
         })
         .cloned()
-        .or_else(|| {
-            runtime
-                .timeline_store
-                .get_event(&payload.latest_wake_event_id)
-                .ok()
-        })
-        .unwrap_or_else(|| json!({}));
+    {
+        event
+    } else {
+        runtime
+            .timeline_store
+            .get_event(&payload.latest_wake_event_id)
+            .await
+            .unwrap_or_else(|_| json!({}))
+    };
     if !has_post_wake_speech(payload, &events, latest_wake_at) && now < hard_cap {
         let next_run_at = std::cmp::min(now + chrono::Duration::milliseconds(500), hard_cap);
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
-        runtime.timeline_store.update_job(&deferred)?;
+        runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
@@ -245,20 +263,21 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(due_at)));
-        runtime.timeline_store.update_job(&deferred)?;
+        runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
             "next_run_at": deferred.next_run_at,
         }));
     }
-    if let Some(hold) = activation_capture_hold(runtime, payload, latest_wake_at, now, hard_cap)?
+    if let Some(hold) =
+        activation_capture_hold(runtime, payload, latest_wake_at, now, hard_cap).await?
         && now < hard_cap
     {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(hold.next_run_at, hard_cap))));
-        runtime.timeline_store.update_job(&deferred)?;
+        runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
@@ -272,32 +291,37 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
         &payload.voice_channel_id,
         Some(&payload.voice_channel_name),
     );
-    let room_status = runtime.status_for_room(&room);
+    let room_status = runtime.status_for_room(&room).await;
     let candidate = candidate_event(payload, &events, &latest_wake_event);
     let mut result = evaluate_voice_command(&candidate, &events, &room_status);
     attach_activation_bundle(&mut result, payload, &events, &room_status)?;
     let (valid, reason) = validate_voice_command_result(&result);
     if !valid || voice_command_action(&result) != "dispatch_now" {
-        let _ = runtime.create_voice_playback_job_for_channel(
-            &payload.guild_id,
-            &payload.voice_channel_id,
-            &payload.speaker_user_id,
-            DiscordVoicePlaybackCue::Ack,
-            "wake_activation_window_closed",
-            &job.id,
-        )?;
-        runtime.timeline_store.append_event(
-            &payload.guild_id,
-            &payload.voice_channel_id,
-            json!({
-                "event_kind": "wake_activation_ignored",
-                "kind": "wake_activation_ignored",
-                "job_id": job.id,
-                "activation_id": payload.activation_id,
-                "reason": reason,
-                "result": result,
-            }),
-        )?;
+        let _ = runtime
+            .create_voice_playback_job_for_channel(
+                &payload.guild_id,
+                &payload.voice_channel_id,
+                &payload.speaker_user_id,
+                DiscordVoicePlaybackCue::Ack,
+                "wake_activation_window_closed",
+                &job.id,
+            )
+            .await?;
+        runtime
+            .timeline_store
+            .append_event(
+                &payload.guild_id,
+                &payload.voice_channel_id,
+                json!({
+                    "event_kind": "wake_activation_ignored",
+                    "kind": "wake_activation_ignored",
+                    "job_id": job.id,
+                    "activation_id": payload.activation_id,
+                    "reason": reason,
+                    "result": result,
+                }),
+            )
+            .await?;
         return Ok(json!({
             "kind": "wake_activation",
             "status": "ignored",
@@ -307,26 +331,31 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
         }));
     }
     let command = crate::runtime::CommandRequest::from_json(&result)?;
-    let _ = runtime.create_voice_playback_job_for_channel(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        &payload.speaker_user_id,
-        DiscordVoicePlaybackCue::Ack,
-        "wake_activation_window_closed",
-        &job.id,
-    )?;
-    let created = runtime.create_command_job_sync(command, Some(job))?;
-    runtime.timeline_store.append_event(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        json!({
-            "event_kind": "wake_activation_dispatched",
-            "kind": "wake_activation_dispatched",
-            "job_id": job.id,
-            "activation_id": payload.activation_id,
-            "created": created,
-        }),
-    )?;
+    let _ = runtime
+        .create_voice_playback_job_for_channel(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.speaker_user_id,
+            DiscordVoicePlaybackCue::Ack,
+            "wake_activation_window_closed",
+            &job.id,
+        )
+        .await?;
+    let created = runtime.create_command_job(command, Some(job)).await?;
+    runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_dispatched",
+                "kind": "wake_activation_dispatched",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "created": created,
+            }),
+        )
+        .await?;
     Ok(json!({
         "kind": "wake_activation",
         "status": "dispatched",
@@ -335,46 +364,50 @@ pub fn execute(runtime: &mut Runtime, job: &Job, payload: &WakeActivationPayload
     }))
 }
 
-fn activation_followup_target(
+async fn activation_followup_target(
     runtime: &Runtime,
     guild_id: &str,
     voice_channel_id: &str,
     wake_started_at: DateTime<Utc>,
 ) -> Result<Option<Job>> {
-    Ok(runtime
+    let jobs = runtime
         .timeline_store
-        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)?
+        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
+        .await?;
+    let mut candidates = Vec::new();
+    for job in jobs.into_iter().filter(|job| !job.state.is_terminal()) {
+        let Some(payload) = job.wake_activation_payload() else {
+            continue;
+        };
+        let latest_wake_at = payload.latest_wake_at.clone();
+        let additive_preempt_seconds = payload.additive_preempt_seconds;
+        let independent_after_seconds = payload.independent_after_seconds;
+        let latest = parse_instant(&latest_wake_at).unwrap_or(wake_started_at);
+        let seconds_since_latest = (wake_started_at - latest).num_seconds().abs();
+        if seconds_since_latest <= additive_preempt_seconds {
+            candidates.push(job);
+            continue;
+        }
+        if seconds_since_latest <= independent_after_seconds
+            && activation_can_be_rewritten(runtime, &job).await?
+        {
+            candidates.push(job);
+        }
+    }
+    Ok(candidates
         .into_iter()
-        .filter(|job| !job.state.is_terminal())
-        .filter_map(|job| {
-            let payload = job.wake_activation_payload()?;
-            let latest_wake_at = payload.latest_wake_at.clone();
-            let additive_preempt_seconds = payload.additive_preempt_seconds;
-            let independent_after_seconds = payload.independent_after_seconds;
-            let latest = parse_instant(&latest_wake_at).unwrap_or(wake_started_at);
-            let seconds_since_latest = (wake_started_at - latest).num_seconds().abs();
-            if seconds_since_latest <= additive_preempt_seconds {
-                return Some(job);
-            }
-            if seconds_since_latest <= independent_after_seconds
-                && activation_can_be_rewritten(runtime, &job).unwrap_or(false)
-            {
-                return Some(job);
-            }
-            None
-        })
         .min_by(|left, right| right.created_at.cmp(&left.created_at)))
 }
 
-fn activation_can_be_rewritten(runtime: &Runtime, activation: &Job) -> Result<bool> {
+async fn activation_can_be_rewritten(runtime: &Runtime, activation: &Job) -> Result<bool> {
     if activation.state == JobState::Queued {
         return Ok(true);
     }
-    let descendants = descendant_jobs(runtime, &activation.id)?;
+    let descendants = descendant_jobs(runtime, &activation.id).await?;
     Ok(descendants.is_empty())
 }
 
-fn activation_for_wake_event(
+async fn activation_for_wake_event(
     runtime: &Runtime,
     guild_id: &str,
     voice_channel_id: &str,
@@ -382,7 +415,8 @@ fn activation_for_wake_event(
 ) -> Result<Option<Job>> {
     Ok(runtime
         .timeline_store
-        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)?
+        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
+        .await?
         .into_iter()
         .find(|job| {
             let Some(payload) = job.wake_activation_payload() else {
@@ -397,7 +431,7 @@ fn activation_for_wake_event(
         }))
 }
 
-fn amend_activation_job(
+async fn amend_activation_job(
     runtime: &Runtime,
     mut activation: Job,
     wake_event_id: &str,
@@ -432,22 +466,25 @@ fn amend_activation_job(
         idle_seconds,
         flush_grace_seconds,
     ));
-    runtime.timeline_store.update_job(&activation)?;
-    runtime.timeline_store.append_event(
-        &activation.guild_id,
-        &activation.voice_channel_id,
-        json!({
-            "event_kind": "wake_activation_amended",
-            "kind": "wake_activation_amended",
-            "activation_id": activation_id,
-            "job_id": activation.id.clone(),
-            "wake_event_id": wake_event_id,
-        }),
-    )?;
+    runtime.timeline_store.update_job(&activation).await?;
+    runtime
+        .timeline_store
+        .append_event(
+            &activation.guild_id,
+            &activation.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_amended",
+                "kind": "wake_activation_amended",
+                "activation_id": activation_id,
+                "job_id": activation.id.clone(),
+                "wake_event_id": wake_event_id,
+            }),
+        )
+        .await?;
     Ok(activation)
 }
 
-fn replacement_activation_job(
+async fn replacement_activation_job(
     runtime: &Runtime,
     replaced: &Job,
     wake_event_id: &str,
@@ -478,7 +515,7 @@ fn replacement_activation_job(
         payload.speaker_idle_seconds,
         payload.stt_flush_grace_seconds,
     ));
-    runtime.timeline_store.create_job(job)
+    runtime.timeline_store.create_job(job).await
 }
 
 fn amend_payload(
@@ -504,8 +541,8 @@ fn amend_payload(
     }
 }
 
-fn cancel_job_tree(runtime: &Runtime, root: &Job) -> Result<Vec<String>> {
-    let mut jobs = descendant_jobs(runtime, &root.id)?;
+async fn cancel_job_tree(runtime: &Runtime, root: &Job) -> Result<Vec<String>> {
+    let mut jobs = descendant_jobs(runtime, &root.id).await?;
     jobs.sort_by(|left, right| right.lineage_depth.cmp(&left.lineage_depth));
     jobs.push(root.clone());
     let mut cancelled = Vec::new();
@@ -519,16 +556,16 @@ fn cancel_job_tree(runtime: &Runtime, root: &Job) -> Result<Vec<String>> {
             job.mark_cancelled();
         }
         cancelled.push(job.id.clone());
-        runtime.timeline_store.update_job(&job)?;
+        runtime.timeline_store.update_job(&job).await?;
     }
     Ok(cancelled)
 }
 
-fn descendant_jobs(runtime: &Runtime, root_job_id: &str) -> Result<Vec<Job>> {
+async fn descendant_jobs(runtime: &Runtime, root_job_id: &str) -> Result<Vec<Job>> {
     let mut descendants = Vec::new();
-    let children = runtime.timeline_store.list_child_jobs(root_job_id)?;
+    let children = runtime.timeline_store.list_child_jobs(root_job_id).await?;
     for child in children {
-        descendants.extend(runtime.timeline_store.list_child_jobs(&child.id)?);
+        descendants.extend(runtime.timeline_store.list_child_jobs(&child.id).await?);
         descendants.push(child);
     }
     Ok(descendants)
@@ -559,7 +596,7 @@ fn latest_speaker_event_end(
         .max()
 }
 
-fn activation_capture_hold(
+async fn activation_capture_hold(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
@@ -572,7 +609,7 @@ fn activation_capture_hold(
     if let Some(hold) = live_speaker_capture_hold(runtime, payload, latest_wake_at, now) {
         return Ok(Some(hold));
     }
-    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at)? {
+    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at).await? {
         return Ok(Some(CaptureHold {
             reason: "waiting_for_audio_segment_transcription",
             next_run_at: now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS),
@@ -620,7 +657,7 @@ fn live_speaker_capture_hold(
     })
 }
 
-fn has_pending_speaker_audio_segment(
+async fn has_pending_speaker_audio_segment(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
@@ -633,6 +670,7 @@ fn has_pending_speaker_audio_segment(
             &payload.speaker_user_id,
             latest_wake_at,
         )
+        .await
 }
 
 fn has_post_wake_speech(

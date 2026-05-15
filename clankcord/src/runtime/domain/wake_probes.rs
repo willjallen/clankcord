@@ -12,7 +12,7 @@ use crate::runtime::{Job, Runtime, WakeProbePayload};
 
 const DUPLICATE_OVERLAP_GRACE_MS: i64 = 750;
 
-pub(crate) fn execute_probe_job(
+pub(crate) async fn execute_probe_job(
     runtime: &Runtime,
     job: &Job,
     payload: &WakeProbePayload,
@@ -50,7 +50,7 @@ pub(crate) fn execute_probe_job(
     if !wake.wake {
         return Ok(result);
     }
-    if let Some(existing) = overlapping_wake_event(runtime, payload)? {
+    if let Some(existing) = overlapping_wake_event(runtime, payload).await? {
         merge_object(
             &mut result,
             json!({
@@ -61,60 +61,63 @@ pub(crate) fn execute_probe_job(
         return Ok(result);
     }
 
-    let event = runtime.timeline_store.append_event(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        json!({
-            "event_kind": "wake_detected",
-            "kind": "wake_detected",
-            "job_id": job.id,
-            "capture_run_id": payload.capture_run_id,
-            "captureRunId": payload.capture_run_id,
-            "guild_id": payload.guild_id,
-            "guildId": payload.guild_id,
-            "guild_slug": payload.guild_slug,
-            "guildSlug": payload.guild_slug,
-            "voice_channel_id": payload.voice_channel_id,
-            "channelId": payload.voice_channel_id,
-            "voice_channel_name": payload.voice_channel_name,
-            "channelName": payload.voice_channel_name,
-            "voice_channel_slug": payload.voice_channel_slug,
-            "channelSlug": payload.voice_channel_slug,
-            "voice_bot_id": payload.voice_bot_id,
-            "botId": payload.voice_bot_id,
-            "voice_bot_discord_user_id": payload.voice_bot_discord_user_id,
-            "botUserId": payload.voice_bot_discord_user_id,
-            "speaker_user_id": payload.speaker_user_id,
-            "speakerId": payload.speaker_user_id,
-            "speaker_label": payload.speaker_label,
-            "speakerLabel": payload.speaker_label,
-            "speaker_username": payload.speaker_username,
-            "speakerUsername": payload.speaker_username,
-            "probe_start_time": isoformat_z(Some(payload.probe_start_time)),
-            "startedAt": isoformat_z(Some(payload.probe_start_time)),
-            "probe_end_time": isoformat_z(Some(payload.probe_end_time)),
-            "endedAt": isoformat_z(Some(payload.probe_end_time)),
-            "probe_index": payload.probe_index,
-            "probeIndex": payload.probe_index,
-            "duration_ms": payload.duration_ms,
-            "durationMs": payload.duration_ms,
-            "source_audio_path": wav_path.display().to_string(),
-            "sourceAudioPath": wav_path.display().to_string(),
-            "audio_checksum": audio_checksum.clone(),
-            "audioChecksum": audio_checksum,
-            "audio_bytes": audio_bytes,
-            "audioBytes": audio_bytes,
-            "audio_format": payload.audio_format,
-            "sample_rate_hz": payload.sample_rate_hz,
-            "channels": payload.channels,
-            "sample_width_bits": payload.sample_width_bits,
-            "post_processing": payload.post_processing,
-            "stream_id": payload.stream_id,
-            "wake": wake_metadata,
-            "wake_detected": true,
-        }),
-    )?;
-    let route = schedule_from_wake_event(runtime, &event)?;
+    let event = runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_detected",
+                "kind": "wake_detected",
+                "job_id": job.id,
+                "capture_run_id": payload.capture_run_id,
+                "captureRunId": payload.capture_run_id,
+                "guild_id": payload.guild_id,
+                "guildId": payload.guild_id,
+                "guild_slug": payload.guild_slug,
+                "guildSlug": payload.guild_slug,
+                "voice_channel_id": payload.voice_channel_id,
+                "channelId": payload.voice_channel_id,
+                "voice_channel_name": payload.voice_channel_name,
+                "channelName": payload.voice_channel_name,
+                "voice_channel_slug": payload.voice_channel_slug,
+                "channelSlug": payload.voice_channel_slug,
+                "voice_bot_id": payload.voice_bot_id,
+                "botId": payload.voice_bot_id,
+                "voice_bot_discord_user_id": payload.voice_bot_discord_user_id,
+                "botUserId": payload.voice_bot_discord_user_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speakerId": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "speakerLabel": payload.speaker_label,
+                "speaker_username": payload.speaker_username,
+                "speakerUsername": payload.speaker_username,
+                "probe_start_time": isoformat_z(Some(payload.probe_start_time)),
+                "startedAt": isoformat_z(Some(payload.probe_start_time)),
+                "probe_end_time": isoformat_z(Some(payload.probe_end_time)),
+                "endedAt": isoformat_z(Some(payload.probe_end_time)),
+                "probe_index": payload.probe_index,
+                "probeIndex": payload.probe_index,
+                "duration_ms": payload.duration_ms,
+                "durationMs": payload.duration_ms,
+                "source_audio_path": wav_path.display().to_string(),
+                "sourceAudioPath": wav_path.display().to_string(),
+                "audio_checksum": audio_checksum.clone(),
+                "audioChecksum": audio_checksum,
+                "audio_bytes": audio_bytes,
+                "audioBytes": audio_bytes,
+                "audio_format": payload.audio_format,
+                "sample_rate_hz": payload.sample_rate_hz,
+                "channels": payload.channels,
+                "sample_width_bits": payload.sample_width_bits,
+                "post_processing": payload.post_processing,
+                "stream_id": payload.stream_id,
+                "wake": wake_metadata,
+                "wake_detected": true,
+            }),
+        )
+        .await?;
+    let route = schedule_from_wake_event(runtime, &event).await?;
     merge_object(
         &mut result,
         json!({
@@ -125,7 +128,10 @@ pub(crate) fn execute_probe_job(
     Ok(result)
 }
 
-fn overlapping_wake_event(runtime: &Runtime, payload: &WakeProbePayload) -> Result<Option<Value>> {
+async fn overlapping_wake_event(
+    runtime: &Runtime,
+    payload: &WakeProbePayload,
+) -> Result<Option<Value>> {
     let mut kinds = BTreeSet::new();
     kinds.insert("wake_detected".to_string());
     let start =
@@ -141,7 +147,8 @@ fn overlapping_wake_event(runtime: &Runtime, payload: &WakeProbePayload) -> Resu
             Some(&kinds),
             Some(&payload.capture_run_id),
             false,
-        )?
+        )
+        .await?
         .into_iter()
         .find(|event| {
             first_value_string(event, &["speaker_user_id", "speakerId"]) == payload.speaker_user_id

@@ -2,8 +2,8 @@ use serde_json::json;
 
 use clankcord::adapters::wakeword::parse_wake_payload;
 
-#[test]
-fn wakeword_payload_parser_preserves_detector_metadata() {
+#[tokio::test(flavor = "current_thread")]
+async fn wakeword_payload_parser_preserves_detector_metadata() {
     let result = parse_wake_payload(&json!({
         "wake": true,
         "score": 0.73,

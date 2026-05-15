@@ -5,8 +5,8 @@ use clankcord::adapters::stt::{
     stt_drop_decision, stt_no_speech_probability,
 };
 
-#[test]
-fn stt_payload_parser_preserves_quality_metadata() {
+#[tokio::test(flavor = "current_thread")]
+async fn stt_payload_parser_preserves_quality_metadata() {
     let result = parse_stt_payload(&json!({
         "text": "Clanky",
         "logprobs": [
@@ -29,8 +29,8 @@ fn stt_payload_parser_preserves_quality_metadata() {
     assert_eq!(result.metadata["token_logprobs"][0]["token"], json!("Cl"));
 }
 
-#[test]
-fn low_confidence_filter_uses_no_speech_or_token_average() {
+#[tokio::test(flavor = "current_thread")]
+async fn low_confidence_filter_uses_no_speech_or_token_average() {
     let result = parse_stt_payload(&json!({
         "text": "Clanky",
         "segments": [{"no_speech_prob": 0.4}],

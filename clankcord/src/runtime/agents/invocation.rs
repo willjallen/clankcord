@@ -27,6 +27,7 @@ pub(crate) struct AgentInvocationRequest {
     pub job_id: String,
     pub guild_id: String,
     pub voice_channel_id: String,
+    pub prior_session_id: String,
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
@@ -55,19 +56,21 @@ impl AgentRuntime {
         if let Some(parent) = request.raw_result_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let started_session = Some(self.begin_invocation(
+        let started_session = AgentSession::running(
             request.role,
             &request.session_key,
             &request.guild_id,
             &request.voice_channel_id,
             &request.job_id,
-        ));
+            request.prior_session_id.clone(),
+        );
         let codex_result = match self.codex().run(CodexRunRequest {
             prompt: request.prompt,
-            session_id: started_session
-                .as_ref()
-                .map(|session| session.session_id.clone())
-                .filter(|session_id| !session_id.trim().is_empty()),
+            session_id: if request.prior_session_id.trim().is_empty() {
+                None
+            } else {
+                Some(request.prior_session_id)
+            },
             cwd: request.cwd,
             model: request.model,
             timeout: request.timeout,
@@ -77,9 +80,6 @@ impl AgentRuntime {
         }) {
             Ok(result) => result,
             Err(error) => {
-                if let Some(session) = started_session.as_ref() {
-                    self.fail_invocation(&session.key, error.to_string());
-                }
                 return Err(AgentInfrastructureError::new(format!(
                     "codex {} invocation failed: {error}",
                     request.role.as_str()
@@ -88,7 +88,7 @@ impl AgentRuntime {
             }
         };
         let completed_session =
-            complete_session(self, started_session, &codex_result, request.role.as_str());
+            complete_session(started_session, &codex_result, request.role.as_str());
         Ok(AgentInvocationResult {
             stdout: codex_result.stdout,
             stderr: codex_result.stderr,
@@ -99,29 +99,23 @@ impl AgentRuntime {
             model: codex_result.model,
             final_message: codex_result.final_message,
             command_display: codex_result.command_display,
-            session: completed_session,
+            session: Some(completed_session),
         })
     }
 }
 
 fn complete_session(
-    agents: &AgentRuntime,
-    started_session: Option<AgentSession>,
+    started_session: AgentSession,
     result: &CodexRunResult,
     role: &str,
-) -> Option<AgentSession> {
-    started_session.map(|session| {
-        if result.success {
-            agents.complete_invocation(&session.key, result.session_id.clone())
+) -> AgentSession {
+    if result.success {
+        started_session.complete(result.session_id.clone())
+    } else {
+        started_session.fail(if result.stderr.trim().is_empty() {
+            format!("{role} invocation failed")
         } else {
-            agents.fail_invocation(
-                &session.key,
-                if result.stderr.trim().is_empty() {
-                    format!("{role} invocation failed")
-                } else {
-                    result.stderr.clone()
-                },
-            )
-        }
-    })
+            result.stderr.clone()
+        })
+    }
 }

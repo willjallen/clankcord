@@ -140,7 +140,7 @@ impl Default for ForgetRequest {
 }
 
 impl Runtime {
-    pub fn timeline_tail(&self, request: TimelineTailRequest) -> Result<Value> {
+    pub async fn timeline_tail(&self, request: TimelineTailRequest) -> Result<Value> {
         let guild_id = request.guild_id;
         let channel_id = request.channel_id;
         let room = if guild_id.is_empty() || channel_id.is_empty() {
@@ -155,21 +155,24 @@ impl Runtime {
         let now = utc_now();
         let start = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
             .unwrap_or_else(|| now - chrono::Duration::hours(1));
-        let events = self.timeline_store.load_events(
-            &room.guild_id,
-            &room.channel_id,
-            Some(start),
-            None,
-            None,
-            None,
-            false,
-        )?;
+        let events = self
+            .timeline_store
+            .load_events(
+                &room.guild_id,
+                &room.channel_id,
+                Some(start),
+                None,
+                None,
+                None,
+                false,
+            )
+            .await?;
         Ok(
             json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(Some(start)), "events": events}),
         )
     }
 
-    pub fn timeline_range(&self, request: TimelineRangeRequest) -> Result<Value> {
+    pub async fn timeline_range(&self, request: TimelineRangeRequest) -> Result<Value> {
         let guild_id = request.guild_id;
         let start = resolve_time_reference(&request.from, None)
             .ok_or_else(|| discord_tool_error("guild and from are required"))?;
@@ -180,24 +183,31 @@ impl Runtime {
         let channel_id = request.channel_id;
         let all_channels = request.all_channels;
         let mut channels = Vec::new();
-        for dir in self.timeline_store.channel_dirs(
-            &guild_id,
-            if all_channels {
-                None
-            } else {
-                Some(&channel_id)
-            },
-        )? {
-            let current_channel_id = TimelineStore::channel_id_from_dir(&dir);
-            let events = self.timeline_store.load_events(
+        for dir in self
+            .timeline_store
+            .channel_dirs(
                 &guild_id,
-                &current_channel_id,
-                Some(start),
-                Some(end),
-                None,
-                None,
-                false,
-            )?;
+                if all_channels {
+                    None
+                } else {
+                    Some(&channel_id)
+                },
+            )
+            .await?
+        {
+            let current_channel_id = TimelineStore::channel_id_from_dir(&dir);
+            let events = self
+                .timeline_store
+                .load_events(
+                    &guild_id,
+                    &current_channel_id,
+                    Some(start),
+                    Some(end),
+                    None,
+                    None,
+                    false,
+                )
+                .await?;
             channels.push(json!({"voice_channel_id": current_channel_id, "events": events}));
         }
         Ok(
@@ -205,7 +215,10 @@ impl Runtime {
         )
     }
 
-    pub fn materialize_transcript(&self, request: MaterializeTranscriptRequest) -> Result<Value> {
+    pub async fn materialize_transcript(
+        &self,
+        request: MaterializeTranscriptRequest,
+    ) -> Result<Value> {
         let mut guild_id = request.guild_id;
         let mut channel_id = request.channel_id;
         if !guild_id.is_empty() && !channel_id.is_empty() {
@@ -228,37 +241,41 @@ impl Runtime {
             .unwrap_or_else(|| now - chrono::Duration::minutes(10));
         let end = resolve_time_reference(&request.to, Some(now)).unwrap_or(now);
         let publish = non_empty(request.publish, "local".to_string());
-        let mut result = self.timeline_store.materialize(
-            &guild_id,
-            &channel_id,
-            start,
-            end,
-            if has_since {
-                "relative_time"
-            } else {
-                "absolute_time_range"
-            },
-            &non_empty(start_raw, "last 10 minutes".to_string()),
-            &request.created_by_user_id,
-            &publish,
-            request.live,
-            request.refine,
-            true,
-            if request.parent_job_id.trim().is_empty() {
-                None
-            } else {
-                Some(request.parent_job_id.as_str())
-            },
-        )?;
+        let mut result = self
+            .timeline_store
+            .materialize(
+                &guild_id,
+                &channel_id,
+                start,
+                end,
+                if has_since {
+                    "relative_time"
+                } else {
+                    "absolute_time_range"
+                },
+                &non_empty(start_raw, "last 10 minutes".to_string()),
+                &request.created_by_user_id,
+                &publish,
+                request.live,
+                request.refine,
+                true,
+                if request.parent_job_id.trim().is_empty() {
+                    None
+                } else {
+                    Some(request.parent_job_id.as_str())
+                },
+            )
+            .await?;
         if publish == "discord" {
-            self.publish_materialized_transcript(&mut result, request.live, request.refine)?;
+            self.publish_materialized_transcript(&mut result, request.live, request.refine)
+                .await?;
         }
         Ok(result)
     }
-    pub fn render_transcript(&self, request: RenderTranscriptRequest) -> Result<Value> {
+    pub async fn render_transcript(&self, request: RenderTranscriptRequest) -> Result<Value> {
         let window_id = request.window_id;
         let (window, guild_id, channel_id, start, end) = if !window_id.is_empty() {
-            let window = self.timeline_store.get_window(&window_id)?;
+            let window = self.timeline_store.get_window(&window_id).await?;
             let guild_id = string_field(&window, "guild_id");
             let channel_id = string_field(&window, "voice_channel_id");
             let start = parse_instant(&string_field(&window, "start_time"))
@@ -285,15 +302,18 @@ impl Runtime {
                 end,
             )
         };
-        let rendered = self.timeline_store.render_transcript(
-            &guild_id,
-            &channel_id,
-            start,
-            end,
-            &window_id,
-            request.prefer_refined,
-            &non_empty(request.format, "markdown".to_string()),
-        )?;
+        let rendered = self
+            .timeline_store
+            .render_transcript(
+                &guild_id,
+                &channel_id,
+                start,
+                end,
+                &window_id,
+                request.prefer_refined,
+                &non_empty(request.format, "markdown".to_string()),
+            )
+            .await?;
         Ok(json!({
             "window": if window.is_object() && window.as_object().is_some_and(|map| map.is_empty()) { rendered.window } else { window },
             "content": rendered.content,
@@ -302,7 +322,7 @@ impl Runtime {
         }))
     }
 
-    pub fn search_transcripts(&self, request: SearchTranscriptsRequest) -> Result<Value> {
+    pub async fn search_transcripts(&self, request: SearchTranscriptsRequest) -> Result<Value> {
         let mut guild_id = request.guild_id;
         let mut channel_id = request.channel_id;
         let all_channels = request.all_channels;
@@ -322,22 +342,25 @@ impl Runtime {
         let query = request.query;
         let since = resolve_time_reference(&non_empty(request.since, "-7d".to_string()), None);
         let limit = request.limit;
-        let hits = self.timeline_store.search(
-            &guild_id,
-            if all_channels || channel_id.is_empty() {
-                None
-            } else {
-                Some(&channel_id)
-            },
-            &query,
-            since,
-            request.prefer_refined,
-            limit,
-        )?;
+        let hits = self
+            .timeline_store
+            .search(
+                &guild_id,
+                if all_channels || channel_id.is_empty() {
+                    None
+                } else {
+                    Some(&channel_id)
+                },
+                &query,
+                since,
+                request.prefer_refined,
+                limit,
+            )
+            .await?;
         Ok(json!({"guildId": guild_id, "query": query, "count": hits.len(), "hits": hits}))
     }
 
-    pub fn list_conversations(&self, request: ListConversationsRequest) -> Result<Value> {
+    pub async fn list_conversations(&self, request: ListConversationsRequest) -> Result<Value> {
         let mut guild_id = request.guild_id;
         let mut channel_id = request.channel_id;
         let all_channels = request.all_channels;
@@ -350,21 +373,24 @@ impl Runtime {
             return Err(discord_tool_error("guild is required"));
         }
         let since = resolve_time_reference(&non_empty(request.since, "-2d".to_string()), None);
-        let conversations = self.timeline_store.list_conversations(
-            &guild_id,
-            if all_channels || channel_id.is_empty() {
-                None
-            } else {
-                Some(&channel_id)
-            },
-            since,
-        )?;
+        let conversations = self
+            .timeline_store
+            .list_conversations(
+                &guild_id,
+                if all_channels || channel_id.is_empty() {
+                    None
+                } else {
+                    Some(&channel_id)
+                },
+                since,
+            )
+            .await?;
         Ok(
             json!({"guildId": guild_id, "count": conversations.len(), "conversations": conversations}),
         )
     }
 
-    pub fn participant_trace(&self, request: ParticipantTraceRequest) -> Result<Value> {
+    pub async fn participant_trace(&self, request: ParticipantTraceRequest) -> Result<Value> {
         let guild_id = request.guild_id;
         let user_id = request.user_id;
         let start = resolve_time_reference(&request.from, None)
@@ -373,17 +399,20 @@ impl Runtime {
         if guild_id.is_empty() || user_id.is_empty() {
             return Err(discord_tool_error("guild, user, and from are required"));
         }
-        let trace = self.timeline_store.participant_trace(
-            &guild_id,
-            &user_id,
-            start,
-            end,
-            request.include_speech_snippets,
-        )?;
+        let trace = self
+            .timeline_store
+            .participant_trace(
+                &guild_id,
+                &user_id,
+                start,
+                end,
+                request.include_speech_snippets,
+            )
+            .await?;
         Ok(json!({"guildId": guild_id, "userId": user_id, "count": trace.len(), "trace": trace}))
     }
 
-    pub fn context_resolve(&self, request: ContextResolveRequest) -> Result<Value> {
+    pub async fn context_resolve(&self, request: ContextResolveRequest) -> Result<Value> {
         let guild_id = request.guild_id;
         let channel_id = request.channel_id;
         let reference = request.reference;
@@ -397,15 +426,18 @@ impl Runtime {
         let lowered = reference.to_lowercase();
         if lowered.contains("just said") || lowered.contains("last thing") {
             let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-            let events = self.timeline_store.load_events(
-                &room.guild_id,
-                &room.channel_id,
-                Some(now - chrono::Duration::minutes(5)),
-                None,
-                Some(&kinds),
-                None,
-                false,
-            )?;
+            let events = self
+                .timeline_store
+                .load_events(
+                    &room.guild_id,
+                    &room.channel_id,
+                    Some(now - chrono::Duration::minutes(5)),
+                    None,
+                    Some(&kinds),
+                    None,
+                    false,
+                )
+                .await?;
             if let Some(event) = events.last() {
                 return Ok(
                     json!({"resolution": "recent_speaker_turn", "confidence": 0.78, "event": event, "reference": reference}),
@@ -417,23 +449,26 @@ impl Runtime {
         } else {
             (now - chrono::Duration::minutes(10), 0.35)
         };
-        let window = self.timeline_store.create_window(
-            &room.guild_id,
-            &room.channel_id,
-            start,
-            now,
-            "context_reference",
-            &reference,
-            "single_channel",
-        )?;
+        let window = self
+            .timeline_store
+            .create_window(
+                &room.guild_id,
+                &room.channel_id,
+                start,
+                now,
+                "context_reference",
+                &reference,
+                "single_channel",
+            )
+            .await?;
         Ok(
             json!({"resolution": "fallback_window", "confidence": confidence, "window": window, "reference": reference}),
         )
     }
-    pub fn forget(&self, request: ForgetRequest) -> Result<Value> {
+    pub async fn forget(&self, request: ForgetRequest) -> Result<Value> {
         let window_id = request.window_id;
         let (guild_id, channel_id, start, end) = if !window_id.is_empty() {
-            let window = self.timeline_store.get_window(&window_id)?;
+            let window = self.timeline_store.get_window(&window_id).await?;
             (
                 string_field(&window, "guild_id"),
                 string_field(&window, "voice_channel_id"),
@@ -457,13 +492,15 @@ impl Runtime {
         if guild_id.is_empty() || channel_id.is_empty() {
             return Err(discord_tool_error("invalid forget window"));
         }
-        self.timeline_store.apply_forget(
-            &guild_id,
-            &channel_id,
-            start,
-            end,
-            &request.requested_by_user_id,
-            request.unpublished_only,
-        )
+        self.timeline_store
+            .apply_forget(
+                &guild_id,
+                &channel_id,
+                start,
+                end,
+                &request.requested_by_user_id,
+                request.unpublished_only,
+            )
+            .await
     }
 }
