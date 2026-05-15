@@ -12,8 +12,9 @@ use crate::dashboard::{ALPINE_JS, APP_JS, INDEX_HTML, STYLES_CSS};
 use crate::runtime::automations::AutomationState;
 use crate::runtime::{
     CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
-    ListConversationsRequest, ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle,
-    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    ListConversationsRequest, MemberGetRequest, MemberResolveRequest, MemberSearchRequest,
+    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle, SearchTranscriptsRequest,
+    TimelineRangeRequest, TimelineTailRequest,
 };
 
 #[derive(Clone)]
@@ -52,6 +53,7 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/status", get(status))
         .route("/v1/voice/pool/status", get(pool_status))
         .route("/v1/voice/status", get(voice_status))
+        .route("/v1/voice/rooms/occupants", get(room_occupants))
         .route("/v1/voice/commands", post(command_submit))
         .route("/v1/voice/responses", post(response_submit))
         .route(
@@ -72,6 +74,9 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/voice/conversations/list", get(conversations_list))
         .route("/v1/voice/context/resolve", get(context_resolve))
         .route("/v1/voice/participant/trace", get(participant_trace))
+        .route("/v1/voice/members/search", get(members_search))
+        .route("/v1/voice/members/resolve", get(members_resolve))
+        .route("/v1/voice/members/{user_id}", get(members_get))
         .route("/v1/voice/jobs", get(jobs_list))
         .route("/v1/voice/jobs/run-due", post(jobs_run_due))
         .route("/v1/voice/jobs/{job_id}", get(jobs_get))
@@ -145,13 +150,52 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
     let channel = query_str(&query, &["channel"]);
     if !guild.is_empty() && !channel.is_empty() {
         match runtime.resolve_room_scope(&guild, Some(&channel)) {
-            Ok(room) => ok(runtime.status_for_room(&room).await),
+            Ok(room) => {
+                let mut payload = runtime.status_for_room(&room).await;
+                if let Value::Object(object) = &mut payload {
+                    object.insert(
+                        "liveOccupants".to_string(),
+                        json!(
+                            state
+                                .handle
+                                .room_occupants(&room.guild_id, &room.channel_id)
+                                .await
+                        ),
+                    );
+                }
+                ok(payload)
+            }
             Err(error) => err(error),
         }
     } else {
-        ok(runtime
+        let mut payload = runtime
             .status_payload(non_empty_string(channel).as_deref())
-            .await)
+            .await;
+        if let Value::Object(object) = &mut payload {
+            object.insert(
+                "liveVoiceOccupancy".to_string(),
+                state.handle.voice_occupancy_snapshot().await,
+            );
+        }
+        ok(payload)
+    }
+}
+
+async fn room_occupants(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
+    let runtime = runtime_context!(state);
+    let guild = query_str(&query, &["guild", "guildId"]);
+    let channel = query_str(&query, &["channel", "channelId", "room"]);
+    if guild.is_empty() || channel.is_empty() {
+        return err(crate::errors::discord_tool_error("guild and room/channel are required"));
+    }
+    match runtime.resolve_room_scope(&guild, Some(&channel)) {
+        Ok(room) => ok(json!({
+            "guildId": room.guild_id,
+            "channelId": room.channel_id,
+            "room": room.to_json(),
+            "occupants": state.handle.room_occupants(&room.guild_id, &room.channel_id).await,
+        })),
+        Err(error) => err(error),
     }
 }
 
@@ -247,6 +291,9 @@ async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQ
                 guild_id: query_str(&query, &["guild", "guildId", "guild_id"]),
                 channel_id: query_str(&query, &["channel", "channelId", "voice_channel_id"]),
                 since: query_str(&query, &["since"]),
+                limit: query_usize(&query, &["limit"], 200),
+                include_ephemeral: query_bool(&query, &["ephemeral"], false),
+                verbose: query_bool(&query, &["verbose"], false),
             })
             .await,
     )
@@ -265,6 +312,9 @@ async fn timeline_range(
                 from: query_str(&query, &["from", "from_time"]),
                 to: query_str(&query, &["to"]),
                 all_channels: query_bool(&query, &["allChannels", "all_channels"], false),
+                limit: query_usize(&query, &["limit"], 500),
+                include_ephemeral: query_bool(&query, &["ephemeral"], false),
+                verbose: query_bool(&query, &["verbose"], false),
             })
             .await,
     )
@@ -286,6 +336,7 @@ async fn transcript_render(
                 to: query_str(&query, &["to"]),
                 prefer_refined: query_bool(&query, &["preferRefined", "prefer_refined"], true),
                 format: query_str(&query, &["format"]),
+                verbose: query_bool(&query, &["verbose"], false),
             })
             .await,
     )
@@ -366,6 +417,50 @@ async fn participant_trace(
     )
 }
 
+async fn members_search(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .members_search(MemberSearchRequest {
+                guild_id: query_str(&query, &["guild", "guildId"]),
+                query: query_str(&query, &["query"]),
+                limit: query_usize(&query, &["limit"], 10),
+            })
+            .await,
+    )
+}
+
+async fn members_resolve(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .members_resolve(MemberResolveRequest {
+                guild_id: query_str(&query, &["guild", "guildId"]),
+                query: query_str(&query, &["query"]),
+            })
+            .await,
+    )
+}
+
+async fn members_get(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .members_get(MemberGetRequest {
+                guild_id: query_str(&query, &["guild", "guildId"]),
+                user_id,
+            })
+            .await,
+    )
+}
+
 async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
     let runtime = runtime_context!(state);
     result(
@@ -373,7 +468,8 @@ async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery
             .jobs(JobsRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
                 state: query_str(&query, &["state"]),
-                include_ephemeral: query_bool(&query, &["verbose"], false),
+                include_ephemeral: query_bool(&query, &["ephemeral"], false),
+                verbose: query_bool(&query, &["verbose"], false),
             })
             .await,
     )
@@ -383,9 +479,13 @@ async fn jobs_run_due(State(state): State<AppState>) -> Response {
     result(state.handle.drain_ready_jobs().await)
 }
 
-async fn jobs_get(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {
+async fn jobs_get(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
     let runtime = runtime_context!(state);
-    result(runtime.get_job_payload(&job_id).await)
+    result(runtime.get_job_payload(&job_id, query_bool(&query, &["verbose"], false)).await)
 }
 
 async fn jobs_retry(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {

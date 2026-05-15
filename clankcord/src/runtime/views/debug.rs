@@ -15,7 +15,7 @@ use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::timeline::{
     event_start, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
-use crate::runtime::util::first_non_empty;
+use crate::runtime::util::{first_non_empty, preview};
 use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -342,6 +342,8 @@ fn observed_tables() -> &'static [&'static str] {
         "bot_states",
         "assignments",
         "occupancy",
+        "discord_member_cache_refreshes",
+        "discord_members",
         "capture_runs",
         "timeline_events",
         "conversations",
@@ -752,12 +754,12 @@ async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
     Ok(json!({
         "job": job.to_value(),
         "paths": {
-            "packet": metadata.packet_path,
+            "workdir": metadata.workdir_path,
             "prompt": metadata.prompt_path,
             "result": metadata.result_path,
             "raw": metadata.raw_result_path,
         },
-        "packet": read_json_artifact(&metadata.packet_path, AGENT_ARTIFACT_MAX_BYTES),
+        "workdir": workspace_artifact(&metadata.workdir_path),
         "prompt": read_text_artifact(&metadata.prompt_path, AGENT_ARTIFACT_MAX_BYTES),
         "result": read_text_artifact(&metadata.result_path, AGENT_ARTIFACT_MAX_BYTES),
         "raw": raw,
@@ -919,12 +921,12 @@ fn compact_agent_job_payload(job: &Job) -> Value {
     json!({
         "job": job_value,
         "paths": {
-            "packet": metadata.packet_path,
+            "workdir": metadata.workdir_path,
             "prompt": metadata.prompt_path,
             "result": metadata.result_path,
             "raw": metadata.raw_result_path,
         },
-        "packet": artifact_stub(&metadata.packet_path),
+        "workdir": workspace_artifact(&metadata.workdir_path),
         "prompt": artifact_stub(&metadata.prompt_path),
         "result": artifact_stub(&metadata.result_path),
         "raw": artifact_stub(&metadata.raw_result_path),
@@ -970,6 +972,37 @@ fn artifact_stub(path: &str) -> Value {
     }
 }
 
+fn workspace_artifact(path: &str) -> Value {
+    let path = path.trim();
+    if path.is_empty() {
+        return json!({"path": "", "exists": false, "files": []});
+    }
+    let entries = match fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(_) => return json!({"path": path, "exists": false, "files": []}),
+    };
+    let mut files = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            let mut object = serde_json::Map::new();
+            object.insert("name".to_string(), json!(name));
+            object.insert("path".to_string(), json!(entry.path().display().to_string()));
+            object.insert("is_dir".to_string(), json!(metadata.is_dir()));
+            object.insert("bytes".to_string(), json!(metadata.len()));
+            if metadata.is_file() && metadata.len() <= 4096 {
+                if let Ok(text) = fs::read_to_string(entry.path()) {
+                    object.insert("preview".to_string(), json!(preview(&text, 1200)));
+                }
+            }
+            Some(Value::Object(object))
+        })
+        .collect::<Vec<_>>();
+    files.sort_by(|left, right| string_field(left, "name").cmp(&string_field(right, "name")));
+    json!({"path": path, "exists": true, "files": files})
+}
+
 fn read_text_artifact(path: &str, max_bytes: usize) -> Value {
     let path = path.trim();
     if path.is_empty() {
@@ -993,23 +1026,6 @@ fn read_text_artifact(path: &str, max_bytes: usize) -> Value {
         "bytes": bytes.len(),
         "truncated": truncated,
         "content": String::from_utf8_lossy(visible).to_string(),
-    })
-}
-
-fn read_json_artifact(path: &str, max_bytes: usize) -> Value {
-    let artifact = read_text_artifact(path, max_bytes);
-    let parsed = artifact
-        .get("content")
-        .and_then(Value::as_str)
-        .and_then(|content| serde_json::from_str::<Value>(content).ok())
-        .unwrap_or_else(|| json!({}));
-    json!({
-        "path": artifact.get("path").cloned().unwrap_or_else(|| json!("")),
-        "exists": artifact.get("exists").cloned().unwrap_or_else(|| json!(false)),
-        "bytes": artifact.get("bytes").cloned().unwrap_or_else(|| json!(0)),
-        "truncated": artifact.get("truncated").cloned().unwrap_or_else(|| json!(false)),
-        "value": parsed,
-        "content": artifact.get("content").cloned().unwrap_or_else(|| json!("")),
     })
 }
 

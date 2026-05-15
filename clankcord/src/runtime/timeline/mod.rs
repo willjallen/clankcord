@@ -1,6 +1,7 @@
 mod events;
 mod jobs;
 mod maintenance;
+mod members;
 mod store;
 mod transcripts;
 mod util;

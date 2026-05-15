@@ -51,6 +51,7 @@ pub struct LiveVoiceAdapter {
     voice_clients_lock: Mutex<BTreeMap<String, DiscordVoiceClient>>,
     capture_sessions_lock: Mutex<BTreeMap<String, LiveCaptureSessionLock>>,
     speaker_profiles_lock: Mutex<BTreeMap<String, CaptureUser>>,
+    voice_states_lock: Mutex<BTreeMap<String, Value>>,
     flush_interval: Duration,
     silence_ms: i64,
     max_segment_ms: i64,
@@ -152,6 +153,7 @@ impl LiveVoiceAdapter {
             voice_clients_lock: Mutex::new(BTreeMap::new()),
             capture_sessions_lock: Mutex::new(BTreeMap::new()),
             speaker_profiles_lock: Mutex::new(BTreeMap::new()),
+            voice_states_lock: Mutex::new(BTreeMap::new()),
             flush_interval: Duration::from_millis((DEFAULT_FLUSH_INTERVAL_SECONDS * 1000.0) as u64),
             silence_ms: silence_ms.max(0),
             max_segment_ms: max_segment_ms.max(250),
@@ -497,6 +499,52 @@ impl LiveVoiceAdapter {
         statuses
     }
 
+    pub async fn room_occupants(&self, guild_id: &str, channel_id: &str) -> Vec<Value> {
+        let states = self.voice_states_lock.lock().await;
+        let mut occupants = states
+            .values()
+            .filter(|state| {
+                state.get("guild_id").and_then(Value::as_str) == Some(guild_id)
+                    && state.get("voice_channel_id").and_then(Value::as_str) == Some(channel_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        occupants.sort_by(|left, right| {
+            string_from_value(left, "display_name").cmp(&string_from_value(right, "display_name"))
+        });
+        occupants
+    }
+
+    pub async fn voice_occupancy_snapshot(&self) -> Value {
+        let states = self.voice_states_lock.lock().await;
+        let mut rooms = BTreeMap::<String, Vec<Value>>::new();
+        for state in states.values() {
+            let guild_id = string_from_value(state, "guild_id");
+            let channel_id = string_from_value(state, "voice_channel_id");
+            if guild_id.is_empty() || channel_id.is_empty() {
+                continue;
+            }
+            rooms
+                .entry(format!("{guild_id}:{channel_id}"))
+                .or_default()
+                .push(state.clone());
+        }
+        let mut values = Vec::new();
+        for (_, mut occupants) in rooms {
+            occupants.sort_by(|left, right| {
+                string_from_value(left, "display_name")
+                    .cmp(&string_from_value(right, "display_name"))
+            });
+            let first = occupants.first().cloned().unwrap_or_else(|| json!({}));
+            values.push(json!({
+                "guild_id": string_from_value(&first, "guild_id"),
+                "voice_channel_id": string_from_value(&first, "voice_channel_id"),
+                "occupants": occupants,
+            }));
+        }
+        json!({"rooms": values})
+    }
+
     pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
         {
             let mut clients = self.voice_clients_lock.lock().await;
@@ -515,22 +563,45 @@ impl LiveVoiceAdapter {
             self.cache_speaker_profile(capture_user_from_member(member))
                 .await;
         }
+        let user_id = state.user_id.get().to_string();
+        let guild_id = state
+            .guild_id
+            .map(|value| value.get().to_string())
+            .unwrap_or_default();
+        let channel_id = state
+            .channel_id
+            .map(|value| value.get().to_string())
+            .unwrap_or_default();
+        let bot_user_ids = {
+            let clients = self.voice_clients_lock.lock().await;
+            clients
+                .values()
+                .map(|client| client.user_id.clone())
+                .filter(|value| !value.is_empty())
+                .collect::<Vec<_>>()
+        };
+        if !guild_id.is_empty() {
+            let key = format!("{guild_id}:{user_id}");
+            let mut states = self.voice_states_lock.lock().await;
+            if channel_id.is_empty() || bot_user_ids.iter().any(|bot_id| bot_id == &user_id) {
+                states.remove(&key);
+            } else {
+                states.insert(
+                    key,
+                    voice_state_payload(&guild_id, &channel_id, &user_id, state.member.as_ref()),
+                );
+            }
+        }
 
         let mut clients = self.voice_clients_lock.lock().await;
         let Some(client) = clients.get_mut(bot_id) else {
             return;
         };
-        if client.user_id.is_empty() || client.user_id != state.user_id.get().to_string() {
+        if client.user_id.is_empty() || client.user_id != user_id {
             return;
         }
-        client.current_guild_id = state
-            .guild_id
-            .map(|value| value.get().to_string())
-            .unwrap_or_default();
-        client.current_channel_id = state
-            .channel_id
-            .map(|value| value.get().to_string())
-            .unwrap_or_default();
+        client.current_guild_id = guild_id;
+        client.current_channel_id = channel_id;
     }
 
     pub(super) async fn note_client_error(&self, bot_id: &str, error: &str) {
@@ -746,6 +817,42 @@ fn capture_user_from_member(member: &Member) -> CaptureUser {
         global_name: member.user.global_name.clone().unwrap_or_default(),
         name: member.user.name.clone(),
     }
+}
+
+fn voice_state_payload(
+    guild_id: &str,
+    channel_id: &str,
+    user_id: &str,
+    member: Option<&Member>,
+) -> Value {
+    let display_name = member
+        .map(|member| member.display_name().to_string())
+        .unwrap_or_else(|| user_id.to_string());
+    let username = member
+        .map(|member| member.user.name.clone())
+        .unwrap_or_default();
+    let global_name = member
+        .and_then(|member| member.user.global_name.clone())
+        .unwrap_or_default();
+    let nick = member.and_then(|member| member.nick.clone()).unwrap_or_default();
+    json!({
+        "guild_id": guild_id,
+        "voice_channel_id": channel_id,
+        "user_id": user_id,
+        "username": username,
+        "global_name": global_name,
+        "nick": if nick.is_empty() { Value::Null } else { Value::String(nick) },
+        "display_name": display_name,
+    })
+}
+
+fn string_from_value(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string()
 }
 
 fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {

@@ -12,6 +12,10 @@ pub struct Args {
     pub limit: usize,
     #[arg(long)]
     pub json: bool,
+    #[arg(long, default_value = "json")]
+    pub format: String,
+    #[arg(long)]
+    pub file: Option<String>,
 }
 
 pub fn parse_target(raw: &str) -> Result<String> {
@@ -79,21 +83,40 @@ pub fn run(args: Args) -> Result<i32> {
     let limit = if args.limit > 0 { args.limit } else { 50 };
     messages.truncate(limit);
     messages.reverse();
-    if args.json {
+    let payload = serde_json::json!({
+        "ok": true,
+        "target": args.target,
+        "channel": channel,
+        "count": messages.len(),
+        "messages": messages
+    });
+    if args.json || args.file.is_some() || args.format == "json" {
+        emit_json(payload, &args.format, args.file.as_deref())?;
+    } else {
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "ok": true,
-                "target": args.target,
-                "channel": channel,
-                "count": messages.len(),
-                "messages": messages
-            }))?
+            format_text(
+                payload.get("channel").unwrap(),
+                payload.get("messages").and_then(Value::as_array).unwrap()
+            )
         );
-    } else {
-        println!("{}", format_text(&channel, &messages));
     }
     Ok(0)
+}
+
+fn emit_json(payload: Value, format: &str, file: Option<&str>) -> Result<()> {
+    if format.trim() != "json" {
+        return Err(discord_tool_error("--format json is the only supported format"));
+    }
+    let rendered = serde_json::to_string_pretty(&payload)?;
+    if let Some(path) = file.map(str::trim).filter(|value| !value.is_empty()) {
+        std::fs::write(path, format!("{rendered}\n"))?;
+        println!("Wrote JSON to {path}");
+        println!("Records: {}", payload.get("count").and_then(Value::as_u64).unwrap_or(0));
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
 }
 
 fn first_non_empty<const N: usize>(values: [String; N]) -> String {

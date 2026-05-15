@@ -15,6 +15,7 @@ pub struct JobsRequest {
     pub guild_id: String,
     pub state: String,
     pub include_ephemeral: bool,
+    pub verbose: bool,
 }
 
 impl Runtime {
@@ -38,12 +39,26 @@ impl Runtime {
             .timeline_store
             .list_jobs_with_visibility(guild_id, state_filter, visibility)
             .await?;
-        let payloads = jobs.iter().map(Job::to_value).collect::<Vec<_>>();
+        let payloads = jobs
+            .iter()
+            .map(|job| {
+                if request.verbose {
+                    job.to_value()
+                } else {
+                    Self::public_interaction_job_context(job)
+                }
+            })
+            .collect::<Vec<_>>();
         Ok(json!({"jobs": payloads, "count": jobs.len()}))
     }
 
-    pub async fn get_job_payload(&self, job_id: &str) -> Result<Value> {
-        Ok(self.timeline_store.get_job(job_id).await?.to_value())
+    pub async fn get_job_payload(&self, job_id: &str, verbose: bool) -> Result<Value> {
+        let job = self.timeline_store.get_job(job_id).await?;
+        Ok(if verbose {
+            job.to_value()
+        } else {
+            Self::public_interaction_job_context(&job)
+        })
     }
 
     pub fn public_job_view(job: &Job) -> Value {

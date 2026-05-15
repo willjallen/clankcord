@@ -313,6 +313,43 @@ pub fn list_guild_channels(guild_id: &str) -> Result<Vec<Value>> {
         .collect())
 }
 
+pub fn list_guild_members(guild_id: &str) -> Result<Vec<Value>> {
+    let mut members = Vec::new();
+    let mut after = String::from("0");
+    loop {
+        let mut params = BTreeMap::from([("limit".to_string(), "1000".to_string())]);
+        params.insert("after".to_string(), after.clone());
+        let payload = discord_request(
+            "GET",
+            &format!("/guilds/{guild_id}/members"),
+            None,
+            Some(&params),
+            None,
+            60,
+        )?;
+        let batch = payload
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(Value::is_object)
+            .collect::<Vec<_>>();
+        if batch.is_empty() {
+            break;
+        }
+        after = batch
+            .last()
+            .and_then(|member| member.get("user"))
+            .map(|user| string_field(user, "id"))
+            .unwrap_or_default();
+        members.extend(batch.iter().cloned());
+        if batch.len() < 1000 || after.is_empty() {
+            break;
+        }
+    }
+    Ok(members)
+}
+
 pub fn iter_channel_messages(channel_id: &str, page_limit: usize) -> Result<Vec<Value>> {
     let mut messages = Vec::new();
     let mut before = String::new();

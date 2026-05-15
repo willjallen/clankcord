@@ -29,6 +29,10 @@ pub struct Args {
     pub limit: Option<usize>,
     #[arg(long)]
     pub json: bool,
+    #[arg(long, default_value = "json")]
+    pub format: String,
+    #[arg(long)]
+    pub file: Option<String>,
 }
 
 pub fn normalize_queries(values: &[String]) -> Vec<String> {
@@ -370,22 +374,20 @@ pub fn run(args: Args) -> Result<i32> {
     let hits = display_limit
         .map(|limit| all_hits[..all_hits.len().min(limit)].to_vec())
         .unwrap_or(all_hits);
-    if args.json {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "ok": true,
-                "queries": queries,
-                "authorIds": author_ids.into_iter().collect::<Vec<_>>(),
-                "author": args.author.unwrap_or_default(),
-                "count": hits.len(),
-                "totalMatches": total_matches,
-                "targetsScanned": targets.len(),
-                "messagesScanned": messages_scanned,
-                "displayLimit": display_limit.unwrap_or(0),
-                "hits": hits
-            }))?
-        );
+    let payload = serde_json::json!({
+        "ok": true,
+        "queries": queries.clone(),
+        "authorIds": author_ids.clone().into_iter().collect::<Vec<_>>(),
+        "author": args.author.clone().unwrap_or_default(),
+        "count": hits.len(),
+        "totalMatches": total_matches,
+        "targetsScanned": targets.len(),
+        "messagesScanned": messages_scanned,
+        "displayLimit": display_limit.unwrap_or(0),
+        "hits": hits.clone()
+    });
+    if args.json || args.file.is_some() || args.format == "json" {
+        emit_json(payload, &args.format, args.file.as_deref())?;
     } else {
         println!(
             "{}",
@@ -400,6 +402,21 @@ pub fn run(args: Args) -> Result<i32> {
         );
     }
     Ok(0)
+}
+
+fn emit_json(payload: Value, format: &str, file: Option<&str>) -> Result<()> {
+    if format.trim() != "json" {
+        return Err(discord_tool_error("--format json is the only supported format"));
+    }
+    let rendered = serde_json::to_string_pretty(&payload)?;
+    if let Some(path) = file.map(str::trim).filter(|value| !value.is_empty()) {
+        std::fs::write(path, format!("{rendered}\n"))?;
+        println!("Wrote JSON to {path}");
+        println!("Records: {}", payload.get("count").and_then(Value::as_u64).unwrap_or(0));
+    } else {
+        println!("{rendered}");
+    }
+    Ok(())
 }
 
 fn dedupe_targets(targets: Vec<Value>) -> Vec<Value> {

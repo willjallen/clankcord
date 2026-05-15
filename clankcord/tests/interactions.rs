@@ -1,48 +1,57 @@
-use serde_json::json;
-
 use clankcord::runtime::domain::interactions::{
-    build_agent_task_message, build_agent_task_message_for_session,
+    AgentTaskPromptContext, build_agent_task_message, build_agent_task_message_for_session,
 };
 
-#[tokio::test(flavor = "current_thread")]
-async fn agent_task_message_embeds_packet_source_of_truth() {
-    let raw = tempfile::tempdir().unwrap();
-    let packet_path = raw.path().join("job.packet.json");
-    let packet = json!({
-        "job_id": "job_test",
-        "guild_id": "guild",
-        "voice_channel_id": "code",
-        "request": {"command_kind": "agent_task", "text": "summarize this"}
-    });
-    let message = build_agent_task_message(&packet_path, &packet);
+#[test]
+fn agent_task_message_uses_compact_transcript_context() {
+    let context = prompt_context();
+    let message = build_agent_task_message(&context);
 
     assert!(message.contains("You are Clanky, a helpful and rigorous Discord server assistant"));
-    assert!(message.contains("clankcord responses submit"));
+    assert!(message.contains("clankcord --help"));
+    assert!(message.contains("clankcord responses submit --help"));
     assert!(message.contains("RESPONSE_SUBMITTED"));
-    assert!(message.contains("Do not use final text as a publication channel"));
-    assert!(!message.contains("response command is unavailable"));
+    assert!(message.contains("NO_RESPONSE_NEEDED"));
+    assert!(message.contains("Final text is not a publication path"));
     assert!(message.contains("You may search the web"));
-    assert!(message.contains("clankcord automations spec"));
     assert!(message.contains("Do not be sycophantic"));
-    assert!(message.contains(&packet_path.display().to_string()));
-    assert!(message.contains("\"job_id\": \"job_test\""));
-    assert!(message.contains("JOB_PACKET_JSON:"));
+    assert!(message.contains("CLANKCORD_AGENT_WORKDIR=/clankcord/state/agent-workspaces/task/guild/code"));
+    assert!(message.contains("===== PREVIOUS CONTEXT ====="));
+    assert!(message.contains("===== QUESTION / ACTIVATION ====="));
+    assert!(message.contains("vince (user-2): prior context"));
+    assert!(message.contains("will (user-1): summarize this"));
+    assert!(!message.contains("JOB_PACKET_JSON"));
+    assert!(!message.contains("\"schema\""));
+    assert!(!message.contains("\"tools\""));
+    assert!(!message.contains("\"manuals\""));
+    assert!(!message.contains("\"policy\""));
 }
 
-#[tokio::test(flavor = "current_thread")]
-async fn resumed_agent_task_message_omits_large_session_instructions() {
-    let raw = tempfile::tempdir().unwrap();
-    let packet_path = raw.path().join("job.packet.json");
-    let packet = json!({
-        "job_id": "job_test",
-        "guild_id": "guild",
-        "voice_channel_id": "code",
-        "request": {"command_kind": "agent_task", "text": "summarize this"}
-    });
-    let message = build_agent_task_message_for_session(&packet_path, &packet, false);
+#[test]
+fn resumed_agent_task_message_omits_large_session_instructions() {
+    let context = prompt_context();
+    let message = build_agent_task_message_for_session(&context, false);
 
-    assert!(message.contains("JOB_CONTEXT:"));
+    assert!(message.contains("JOB:"));
     assert!(!message.contains("SESSION_INSTRUCTIONS:"));
-    assert!(message.contains("clankcord responses submit"));
-    assert!(message.contains("JOB_PACKET_JSON:"));
+    assert!(message.contains("===== QUESTION / ACTIVATION ====="));
+    assert!(!message.contains("JOB_PACKET_JSON"));
+}
+
+fn prompt_context() -> AgentTaskPromptContext {
+    AgentTaskPromptContext {
+        job_id: "job_test".to_string(),
+        guild_id: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        requested_by_user_id: "user-1".to_string(),
+        requested_by: "will".to_string(),
+        request: "summarize this".to_string(),
+        workdir: "/clankcord/state/agent-workspaces/task/guild/code".to_string(),
+        previous_context: vec![
+            "[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string(),
+        ],
+        question: vec![
+            "[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string(),
+        ],
+    }
 }

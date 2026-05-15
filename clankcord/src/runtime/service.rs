@@ -108,6 +108,14 @@ impl RuntimeHandle {
     pub async fn drain_ready_jobs(&self) -> Result<Value> {
         self.executor.drain_ready_jobs().await
     }
+
+    pub async fn room_occupants(&self, guild_id: &str, channel_id: &str) -> Vec<Value> {
+        self.live_voice.room_occupants(guild_id, channel_id).await
+    }
+
+    pub async fn voice_occupancy_snapshot(&self) -> Value {
+        self.live_voice.voice_occupancy_snapshot().await
+    }
 }
 
 #[derive(Clone)]

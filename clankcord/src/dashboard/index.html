@@ -308,7 +308,7 @@
             </div>
             <details open><summary>Cumulative Session Text</summary><pre x-text="selectedAgentSession()?.transcript?.content || ''"></pre></details>
             <details><summary>Prompt Sent For Selected Job</summary><pre x-text="selectedAgentEntry()?.prompt?.content || ''"></pre></details>
-            <details><summary>Job Packet JSON</summary><pre x-text="json(selectedAgentEntry()?.packet?.value || {})"></pre></details>
+            <details><summary>Agent Workdir</summary><pre x-text="json(selectedAgentEntry()?.workdir || {})"></pre></details>
             <details><summary>Raw Codex JSONL</summary><pre x-text="selectedAgentEntry()?.raw?.content || ''"></pre></details>
             <details><summary>Job Record</summary><pre x-text="json(selectedAgentJob())"></pre></details>
           </div>
@@ -347,25 +347,11 @@
         </div>
         <div class="stack">
           <section>
-            <h2><span>SQLite Files</span></h2>
-            <div class="table-wrap scroll-region">
-              <table>
-                <thead><tr><th>Path</th><th>State</th><th>Size</th><th>Modified</th></tr></thead>
-                <tbody>
-                  <template x-for="file in database().files || []" :key="file.path">
-                    <tr>
-                      <td class="text-cell" x-text="file.path"></td>
-                      <td><span class="pill" :class="file.exists ? 'ok' : 'bad'" x-text="file.exists ? 'present' : 'missing'"></span></td>
-                      <td x-text="bytes(file.bytes)"></td>
-                      <td x-text="unixTime(file.modified)"></td>
-                    </tr>
-                  </template>
-                </tbody>
-              </table>
-            </div>
+            <h2><span>Postgres Server</span></h2>
+            <pre x-text="database().version || ''"></pre>
           </section>
           <section>
-            <h2><span>SQLite Tables</span></h2>
+            <h2><span>Postgres Tables</span></h2>
             <div class="table-wrap tall scroll-region">
               <table>
                 <thead><tr><th>Table</th><th>Rows</th></tr></thead>

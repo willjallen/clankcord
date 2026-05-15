@@ -129,7 +129,7 @@ pub(crate) struct AgentTaskMetadata {
     pub dispatch_attempts: i64,
     pub dispatch_error: String,
     pub dispatch_error_after_cancel: String,
-    pub packet_path: String,
+    pub workdir_path: String,
     pub prompt_path: String,
     pub result_path: String,
     pub raw_result_path: String,
@@ -153,7 +153,7 @@ impl AgentTaskMetadata {
             "dispatch_error_after_cancel",
             &self.dispatch_error_after_cancel,
         );
-        insert_non_empty(&mut object, "packet_path", &self.packet_path);
+        insert_non_empty(&mut object, "workdir_path", &self.workdir_path);
         insert_non_empty(&mut object, "prompt_path", &self.prompt_path);
         insert_non_empty(&mut object, "result_path", &self.result_path);
         insert_non_empty(&mut object, "raw_result_path", &self.raw_result_path);

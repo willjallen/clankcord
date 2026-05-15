@@ -231,6 +231,24 @@ impl TimelineStore {
               PRIMARY KEY (guild_id, voice_channel_id)
             );
 
+            CREATE TABLE IF NOT EXISTS discord_member_cache_refreshes (
+              guild_id TEXT PRIMARY KEY,
+              refreshed_at_ms BIGINT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS discord_members (
+              guild_id TEXT NOT NULL,
+              user_id TEXT NOT NULL,
+              username TEXT NOT NULL DEFAULT '',
+              global_name TEXT NOT NULL DEFAULT '',
+              nick TEXT NOT NULL DEFAULT '',
+              display_name TEXT NOT NULL DEFAULT '',
+              normalized_search TEXT NOT NULL DEFAULT '',
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL,
+              PRIMARY KEY (guild_id, user_id)
+            );
+
             CREATE TABLE IF NOT EXISTS capture_runs (
               capture_run_id TEXT PRIMARY KEY,
               guild_id TEXT NOT NULL,
@@ -388,6 +406,8 @@ impl TimelineStore {
               ON timeline_events(conversation_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_speaker_time
               ON timeline_events(speaker_user_id, started_at_ms, sequence);
+            CREATE INDEX IF NOT EXISTS idx_discord_members_guild_normalized
+              ON discord_members(guild_id, normalized_search);
             CREATE INDEX IF NOT EXISTS idx_timeline_kind_time
               ON timeline_events(event_kind, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_capture_runs_room_time

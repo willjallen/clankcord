@@ -60,6 +60,7 @@ impl DiscordVoiceClient {
         };
         let intents = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_VOICE_STATES
+            | GatewayIntents::GUILD_MEMBERS
             | GatewayIntents::DIRECT_MESSAGES;
         let client = Client::builder(&token, intents)
             .event_handler(handler)

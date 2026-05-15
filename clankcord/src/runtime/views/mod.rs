@@ -1,6 +1,7 @@
 mod debug;
 mod history;
 mod jobs;
+mod members;
 mod status;
 
 pub use debug::DebugOverviewRequest;
@@ -10,3 +11,4 @@ pub use history::{
     TimelineRangeRequest, TimelineTailRequest,
 };
 pub use jobs::JobsRequest;
+pub use members::{MemberGetRequest, MemberResolveRequest, MemberSearchRequest};

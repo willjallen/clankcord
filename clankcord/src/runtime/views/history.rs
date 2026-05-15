@@ -6,7 +6,8 @@ use crate::Result;
 use crate::config::{non_empty, string_field};
 use crate::errors::discord_tool_error;
 use crate::runtime::timeline::{
-    TimelineStore, isoformat_z, parse_instant, resolve_time_reference, utc_now,
+    TimelineStore, event_text, first_value_string, isoformat_z, parse_instant,
+    resolve_time_reference, utc_now,
 };
 
 use crate::runtime::Runtime;
@@ -17,6 +18,9 @@ pub struct TimelineTailRequest {
     pub guild_id: String,
     pub channel_id: String,
     pub since: String,
+    pub limit: usize,
+    pub include_ephemeral: bool,
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -26,6 +30,9 @@ pub struct TimelineRangeRequest {
     pub from: String,
     pub to: String,
     pub all_channels: bool,
+    pub limit: usize,
+    pub include_ephemeral: bool,
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,6 +59,7 @@ pub struct RenderTranscriptRequest {
     pub to: String,
     pub prefer_refined: bool,
     pub format: String,
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +175,12 @@ impl Runtime {
                 false,
             )
             .await?;
+        let events = compact_timeline_events(
+            events,
+            request.include_ephemeral,
+            request.verbose,
+            request.limit,
+        );
         Ok(
             json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(Some(start)), "events": events}),
         )
@@ -208,6 +222,12 @@ impl Runtime {
                     false,
                 )
                 .await?;
+            let events = compact_timeline_events(
+                events,
+                request.include_ephemeral,
+                request.verbose,
+                request.limit,
+            );
             channels.push(json!({"voice_channel_id": current_channel_id, "events": events}));
         }
         Ok(
@@ -302,6 +322,7 @@ impl Runtime {
                 end,
             )
         };
+        let format = non_empty(request.format, "json".to_string());
         let rendered = self
             .timeline_store
             .render_transcript(
@@ -311,13 +332,27 @@ impl Runtime {
                 end,
                 &window_id,
                 request.prefer_refined,
-                &non_empty(request.format, "markdown".to_string()),
+                &format,
             )
             .await?;
+        let events = if request.verbose {
+            rendered.events
+        } else {
+            rendered
+                .events
+                .into_iter()
+                .map(compact_timeline_event)
+                .collect::<Vec<_>>()
+        };
+        let content = if format == "json" {
+            String::new()
+        } else {
+            rendered.content
+        };
         Ok(json!({
             "window": if window.is_object() && window.as_object().is_some_and(|map| map.is_empty()) { rendered.window } else { window },
-            "content": rendered.content,
-            "events": rendered.events,
+            "content": content,
+            "events": events,
             "authoritativeSpans": rendered.spans,
         }))
     }
@@ -503,4 +538,77 @@ impl Runtime {
             )
             .await
     }
+}
+
+fn compact_timeline_events(
+    events: Vec<Value>,
+    include_ephemeral: bool,
+    verbose: bool,
+    limit: usize,
+) -> Vec<Value> {
+    let mut selected = events
+        .into_iter()
+        .filter(|event| {
+            include_ephemeral
+                || !timeline_event_is_ephemeral(&first_value_string(event, &["event_kind", "kind"]))
+        })
+        .map(|event| {
+            if verbose {
+                event
+            } else {
+                compact_timeline_event(event)
+            }
+        })
+        .collect::<Vec<_>>();
+    if limit > 0 && selected.len() > limit {
+        selected = selected[selected.len().saturating_sub(limit)..].to_vec();
+    }
+    selected
+}
+
+fn timeline_event_is_ephemeral(kind: &str) -> bool {
+    matches!(
+        kind,
+        "job_created"
+            | "wake_detected"
+            | "wake_activation_replaced"
+            | "wake_activation_ignored"
+            | "wake_activation_dispatched"
+            | "wake_activation_amended"
+            | "voice_bot_assigned"
+            | "voice_bot_released"
+            | "retention_retired"
+            | "agent_task_result_suppressed"
+    )
+}
+
+fn compact_timeline_event(event: Value) -> Value {
+    let mut object = Map::new();
+    for (output, keys) in [
+        ("event_id", &["event_id", "eventId"][..]),
+        ("kind", &["event_kind", "kind"][..]),
+        ("guild_id", &["guild_id", "guildId"][..]),
+        ("voice_channel_id", &["voice_channel_id", "channelId"][..]),
+        (
+            "timestamp",
+            &[
+                "segment_start_time",
+                "startedAt",
+                "created_at",
+                "timestamp",
+            ][..],
+        ),
+        ("speaker_user_id", &["speaker_user_id", "speakerId"][..]),
+        ("speaker_label", &["speaker_label", "speakerLabel"][..]),
+    ] {
+        let value = first_value_string(&event, keys);
+        if !value.trim().is_empty() {
+            object.insert(output.to_string(), Value::String(value));
+        }
+    }
+    let text = event_text(&event);
+    if !text.trim().is_empty() {
+        object.insert("text".to_string(), Value::String(text));
+    }
+    Value::Object(object)
 }

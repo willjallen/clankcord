@@ -377,6 +377,7 @@ window.dashboard = function dashboard() {
         ['Requester', job.requested_by_user_id],
         ['Model', codex.model || metadata.agent?.model || ''],
         ['Session', codex.sessionId || metadata.agent?.session_id || ''],
+        ['Workdir', entry?.workdir?.path || metadata.workdir_path || ''],
         ['Context', this.contextUsageLabel(stats)],
         ['Events', codex.eventCount ?? 0],
         ['Session Jobs', entry?.session?.jobCount ?? ''],
@@ -395,7 +396,7 @@ window.dashboard = function dashboard() {
       const health = this.data?.health || {};
       return [
         { label: 'Runtime', value: health.ok ? 'ok' : 'degraded', className: health.ok ? 'ok' : 'bad' },
-        { label: 'SQLite', value: health.sqlite ? 'ok' : 'error', className: health.sqlite ? 'ok' : 'bad' },
+        { label: 'Postgres', value: health.postgres ? 'ok' : 'error', className: health.postgres ? 'ok' : 'bad' },
         { label: 'Ready bots', value: `${health.readyBots ?? 0}/${health.configuredBots ?? 0}` },
         { label: 'Active sessions', value: health.activeSessions ?? 0 },
         { label: 'Active agent jobs', value: health.activeAgentJobs ?? 0 },
@@ -419,12 +420,10 @@ window.dashboard = function dashboard() {
     databaseRows() {
       const database = this.database();
       return [
-        { label: 'Path', value: database.path || '' },
+        { label: 'URL', value: database.url || '' },
+        { label: 'Database', value: database.database || '' },
+        { label: 'User', value: database.user || '' },
         { label: 'Root', value: database.root || '' },
-        { label: 'Physical bytes', value: this.bytes(database.physicalBytes || 0) },
-        { label: 'Logical pages', value: `${this.int(database.pageCount || 0)} x ${this.bytes(database.pageSize || 0)}` },
-        { label: 'Freelist pages', value: this.int(database.freelistCount || 0) },
-        { label: 'Journal mode', value: database.journalMode || '' },
       ];
     },
 

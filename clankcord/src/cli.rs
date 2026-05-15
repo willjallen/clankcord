@@ -1,3 +1,4 @@
+use std::fs;
 use std::io::Read;
 use std::time::Duration;
 
@@ -49,6 +50,10 @@ enum Command {
         #[command(subcommand)]
         command: ParticipantsCommand,
     },
+    Members {
+        #[command(subcommand)]
+        command: MembersCommand,
+    },
     Jobs {
         #[command(subcommand)]
         command: Option<JobsCommand>,
@@ -73,6 +78,7 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum RoomsCommand {
     Status(StatusArgs),
+    Occupants(RoomOccupantsArgs),
     Join(JoinArgs),
     Leave(RoomArgs),
     Move(MoveArgs),
@@ -116,15 +122,24 @@ enum ParticipantsCommand {
 }
 
 #[derive(Debug, Subcommand)]
+enum MembersCommand {
+    Search(MemberSearchArgs),
+    Resolve(MemberResolveArgs),
+    Get(MemberGetArgs),
+}
+
+#[derive(Debug, Subcommand)]
 enum JobsCommand {
     List(JobsListArgs),
-    Get(JobIdArg),
+    Get(JobGetArgs),
     Retry(JobIdArg),
     RunDue,
 }
 
 #[derive(Debug, Subcommand)]
 enum ResponsesCommand {
+    Send(ResponseSubmitArgs),
+    Dm(ResponseDmArgs),
     Submit(ResponseSubmitArgs),
     Ask(ResponseSubmitArgs),
 }
@@ -153,6 +168,15 @@ struct StatusArgs {
     guild: Option<String>,
     #[arg(long)]
     channel: Option<String>,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct RoomOccupantsArgs {
+    room: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -209,6 +233,14 @@ struct TimelineTailArgs {
     channel: Option<String>,
     #[arg(long, default_value = "-1h")]
     since: String,
+    #[arg(long, default_value_t = 200)]
+    limit: usize,
+    #[arg(long)]
+    ephemeral: bool,
+    #[arg(long)]
+    verbose: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -223,6 +255,14 @@ struct TimelineRangeArgs {
     to: Option<String>,
     #[arg(long)]
     all_channels: bool,
+    #[arg(long, default_value_t = 500)]
+    limit: usize,
+    #[arg(long)]
+    ephemeral: bool,
+    #[arg(long)]
+    verbose: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -299,8 +339,10 @@ struct TranscriptRenderArgs {
     to: Option<String>,
     #[arg(long)]
     no_prefer_refined: bool,
-    #[arg(long, default_value = "markdown")]
-    format: String,
+    #[arg(long)]
+    verbose: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -319,6 +361,8 @@ struct TranscriptSearchArgs {
     no_prefer_refined: bool,
     #[arg(long, default_value_t = 50)]
     limit: u64,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -328,7 +372,11 @@ struct JobsListArgs {
     #[arg(long)]
     state: Option<String>,
     #[arg(long)]
+    ephemeral: bool,
+    #[arg(long)]
     verbose: bool,
+    #[command(flatten)]
+    output: OutputArgs,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -336,10 +384,50 @@ struct JobIdArg {
     job_id: String,
 }
 
+#[derive(Debug, ClapArgs)]
+struct JobGetArgs {
+    job_id: String,
+    #[arg(long)]
+    ephemeral: bool,
+    #[arg(long)]
+    verbose: bool,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct MemberSearchArgs {
+    query: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long, default_value_t = 10)]
+    limit: usize,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct MemberResolveArgs {
+    query: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct MemberGetArgs {
+    user_id: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
 #[derive(Debug, ClapArgs, Default)]
 struct ResponseSubmitArgs {
     #[arg(long)]
-    job: String,
+    job: Option<String>,
     #[arg(long, default_value = "agent-chat")]
     sink: String,
     #[arg(long)]
@@ -352,6 +440,32 @@ struct ResponseSubmitArgs {
     content: Option<String>,
     #[arg(long)]
     stdin: bool,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct ResponseDmArgs {
+    #[arg(long)]
+    to: String,
+    #[arg(long)]
+    job: Option<String>,
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    requested_by_user_id: Option<String>,
+    #[arg(long)]
+    content: Option<String>,
+    #[arg(long)]
+    stdin: bool,
+}
+
+#[derive(Debug, ClapArgs, Default, Clone)]
+struct OutputArgs {
+    #[arg(long, default_value = "json")]
+    format: String,
+    #[arg(long)]
+    file: Option<String>,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -453,6 +567,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
         Command::Rooms { command } => {
             match command.unwrap_or(RoomsCommand::Status(StatusArgs::default())) {
                 RoomsCommand::Status(args) => status(args),
+                RoomsCommand::Occupants(args) => room_occupants(args),
                 RoomsCommand::Join(args) => join(args),
                 RoomsCommand::Leave(args) => leave(args),
                 RoomsCommand::Move(args) => room_move(args),
@@ -483,15 +598,15 @@ fn run_cli(cli: Cli) -> Result<i32> {
         Command::Participants { command } => match command {
             ParticipantsCommand::Trace(args) => participant_trace(args),
         },
+        Command::Members { command } => match command {
+            MembersCommand::Search(args) => members_search(args),
+            MembersCommand::Resolve(args) => members_resolve(args),
+            MembersCommand::Get(args) => members_get(args),
+        },
         Command::Jobs { command } => {
             match command.unwrap_or(JobsCommand::List(JobsListArgs::default())) {
                 JobsCommand::List(args) => jobs_list(args),
-                JobsCommand::Get(args) => api_emit(
-                    "GET",
-                    &format!("/v1/voice/jobs/{}", args.job_id),
-                    None,
-                    None,
-                ),
+                JobsCommand::Get(args) => jobs_get(args),
                 JobsCommand::Retry(args) => api_emit(
                     "POST",
                     &format!("/v1/voice/jobs/{}/retry", args.job_id),
@@ -502,6 +617,8 @@ fn run_cli(cli: Cli) -> Result<i32> {
             }
         }
         Command::Responses { command } => match command {
+            ResponsesCommand::Send(args) => response_submit(args, "message"),
+            ResponsesCommand::Dm(args) => response_dm(args),
             ResponsesCommand::Submit(args) => response_submit(args, "message"),
             ResponsesCommand::Ask(args) => response_submit(args, "question"),
         },
@@ -547,6 +664,16 @@ fn status(args: StatusArgs) -> Result<i32> {
         "/v1/voice/status",
         None,
         Some(json!({"guild": args.guild, "channel": args.channel})),
+    )
+}
+
+fn room_occupants(args: RoomOccupantsArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/rooms/occupants",
+        None,
+        Some(json!({"guild": agent_context_guild(args.guild), "room": args.room})),
+        &args.output,
     )
 }
 
@@ -605,16 +732,24 @@ fn room_play_cue(args: PlayCueArgs) -> Result<i32> {
 }
 
 fn timeline_tail(args: TimelineTailArgs) -> Result<i32> {
-    api_emit(
+    api_emit_output(
         "GET",
         "/v1/voice/timeline/tail",
         None,
-        Some(json!({"guild": args.guild, "channel": args.channel, "since": args.since})),
+        Some(json!({
+            "guild": args.guild,
+            "channel": args.channel,
+            "since": args.since,
+            "limit": args.limit,
+            "ephemeral": args.ephemeral,
+            "verbose": args.verbose,
+        })),
+        &args.output,
     )
 }
 
 fn timeline_range(args: TimelineRangeArgs) -> Result<i32> {
-    api_emit(
+    api_emit_output(
         "GET",
         "/v1/voice/timeline/range",
         None,
@@ -624,7 +759,11 @@ fn timeline_range(args: TimelineRangeArgs) -> Result<i32> {
             "from": args.from,
             "to": args.to,
             "allChannels": args.all_channels,
+            "limit": args.limit,
+            "ephemeral": args.ephemeral,
+            "verbose": args.verbose,
         })),
+        &args.output,
     )
 }
 
@@ -701,14 +840,15 @@ fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
             "from": args.from.unwrap_or_default(),
             "to": args.to.unwrap_or_default(),
             "preferRefined": !args.no_prefer_refined,
-            "format": args.format,
+            "format": args.output.format.clone(),
+            "verbose": args.verbose,
         })),
     )?;
-    Ok(emit(result, args.format != "markdown", Some("content")))
+    emit_output(result, &args.output)
 }
 
 fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
-    api_emit(
+    api_emit_output(
         "GET",
         "/v1/voice/transcript/search",
         None,
@@ -721,15 +861,69 @@ fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
             "preferRefined": !args.no_prefer_refined,
             "limit": args.limit,
         })),
+        &args.output,
     )
 }
 
 fn jobs_list(args: JobsListArgs) -> Result<i32> {
-    api_emit(
+    api_emit_output(
         "GET",
         "/v1/voice/jobs",
         None,
-        Some(json!({"guild": args.guild, "state": args.state, "verbose": args.verbose})),
+        Some(json!({
+            "guild": args.guild,
+            "state": args.state,
+            "ephemeral": args.ephemeral,
+            "verbose": args.verbose,
+        })),
+        &args.output,
+    )
+}
+
+fn jobs_get(args: JobGetArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        &format!("/v1/voice/jobs/{}", args.job_id),
+        None,
+        Some(json!({"ephemeral": args.ephemeral, "verbose": args.verbose})),
+        &args.output,
+    )
+}
+
+fn members_search(args: MemberSearchArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/members/search",
+        None,
+        Some(json!({
+            "guild": agent_context_guild(args.guild),
+            "query": args.query,
+            "limit": args.limit,
+        })),
+        &args.output,
+    )
+}
+
+fn members_resolve(args: MemberResolveArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/members/resolve",
+        None,
+        Some(json!({
+            "guild": agent_context_guild(args.guild),
+            "query": args.query,
+        })),
+        &args.output,
+    )
+}
+
+fn members_get(args: MemberGetArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        &format!("/v1/voice/members/{}", args.user_id),
+        None,
+        Some(json!({"guild": agent_context_guild(args.guild)})),
+        &args.output,
     )
 }
 
@@ -746,13 +940,60 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
         "/v1/voice/responses",
         Some(json!({
             "response_kind": response_kind,
-            "source_job_id": args.job,
+            "source_job_id": agent_context_job(args.job),
             "sink": args.sink,
-            "guild_id": args.guild.unwrap_or_default(),
-            "voice_channel_id": args.channel.unwrap_or_default(),
-            "requested_by_user_id": args.requested_by_user_id.unwrap_or_default(),
+            "guild_id": agent_context_guild(args.guild),
+            "voice_channel_id": agent_context_channel(args.channel),
+            "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": response_kind == "question",
+        })),
+        None,
+    )
+}
+
+fn response_dm(args: ResponseDmArgs) -> Result<i32> {
+    let content = if args.stdin {
+        let mut input = String::new();
+        std::io::stdin().read_to_string(&mut input)?;
+        input
+    } else {
+        args.content.unwrap_or_default()
+    };
+    let guild_id = agent_context_guild(args.guild.clone());
+    let resolved = api_request(
+        "GET",
+        "/v1/voice/members/resolve",
+        None,
+        Some(json!({"guild": guild_id, "query": args.to})),
+    )?;
+    if resolved.get("resolved").and_then(Value::as_bool) != Some(true) {
+        anyhow::bail!(
+            "DM recipient resolution is ambiguous or missing: {}",
+            serde_json::to_string_pretty(&resolved)?
+        );
+    }
+    let user_id = resolved
+        .get("user")
+        .and_then(|user| user.get("id"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if user_id.trim().is_empty() {
+        anyhow::bail!("DM recipient resolution did not return a user id");
+    }
+    api_emit(
+        "POST",
+        "/v1/voice/responses",
+        Some(json!({
+            "response_kind": "message",
+            "source_job_id": agent_context_job(args.job),
+            "sink": format!("dm:{user_id}"),
+            "guild_id": guild_id,
+            "voice_channel_id": agent_context_channel(args.channel),
+            "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
+            "content": content,
+            "expects_reply": false,
         })),
         None,
     )
@@ -938,6 +1179,86 @@ fn api_emit(
     Ok(emit(result, true, None))
 }
 
+fn api_emit_output(
+    method: &str,
+    path: &str,
+    payload: Option<Value>,
+    params: Option<Value>,
+    output: &OutputArgs,
+) -> Result<i32> {
+    let result = api_request(method, path, payload, params)?;
+    emit_output(result, output)
+}
+
+fn emit_output(payload: Value, output: &OutputArgs) -> Result<i32> {
+    ensure_json_format(&output.format)?;
+    let rendered = serde_json::to_string_pretty(&payload)?;
+    if let Some(path) = output
+        .file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        fs::write(path, format!("{rendered}\n"))?;
+        println!("Wrote JSON to {path}");
+        if let Some(count) = payload_record_count(&payload) {
+            println!("Records: {count}");
+        }
+        if let Some((from, to)) = payload_window(&payload) {
+            println!("Window: {from} to {to}");
+        }
+        return Ok(0);
+    }
+    println!("{rendered}");
+    Ok(0)
+}
+
+fn ensure_json_format(format: &str) -> Result<()> {
+    if format.trim().is_empty() || format.trim() == "json" {
+        Ok(())
+    } else {
+        Err(discord_tool_error("--format json is the only supported format"))
+    }
+}
+
+fn payload_record_count(payload: &Value) -> Option<usize> {
+    if let Some(count) = payload.get("count").and_then(Value::as_u64) {
+        return Some(count as usize);
+    }
+    for key in ["events", "hits", "jobs", "members", "candidates", "occupants"] {
+        if let Some(count) = payload.get(key).and_then(Value::as_array).map(Vec::len) {
+            return Some(count);
+        }
+    }
+    if let Some(channels) = payload.get("channels").and_then(Value::as_array) {
+        return Some(
+            channels
+                .iter()
+                .filter_map(|channel| channel.get("events").and_then(Value::as_array))
+                .map(Vec::len)
+                .sum(),
+        );
+    }
+    None
+}
+
+fn payload_window(payload: &Value) -> Option<(String, String)> {
+    let from = payload
+        .get("from")
+        .or_else(|| payload.get("since"))
+        .or_else(|| payload.pointer("/window/start_time"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let to = payload
+        .get("to")
+        .or_else(|| payload.pointer("/window/end_time"))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    (!from.is_empty() || !to.is_empty()).then_some((from, to))
+}
+
 fn emit(payload: Value, json_output: bool, text_field: Option<&str>) -> i32 {
     if !json_output {
         if let Some(text_field) = text_field
@@ -955,6 +1276,45 @@ fn emit(payload: Value, json_output: bool, text_field: Option<&str>) -> i32 {
         serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
     );
     0
+}
+
+fn agent_context_job(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value("CLANKCORD_AGENT_JOB_ID"))
+        .unwrap_or_default()
+}
+
+fn agent_context_guild(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value("CLANKCORD_AGENT_GUILD_ID"))
+        .unwrap_or_default()
+}
+
+fn agent_context_channel(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value("CLANKCORD_AGENT_VOICE_CHANNEL_ID"))
+        .unwrap_or_default()
+}
+
+fn agent_context_requested_by(value: Option<String>) -> String {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| env_value("CLANKCORD_AGENT_REQUESTED_BY_USER_ID"))
+        .unwrap_or_default()
+}
+
+fn env_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn query_pairs(payload: Option<&Value>) -> Vec<(String, String)> {
