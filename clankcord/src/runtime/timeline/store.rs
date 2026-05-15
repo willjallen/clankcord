@@ -299,6 +299,7 @@ impl TimelineStore {
         )?;
         self.create_binary_record_tables(&db)?;
         self.apply_binary_record_hard_cut(&db)?;
+        self.create_binary_record_indexes(&db)?;
         self.fts_enabled = db
             .execute_batch(
                 "CREATE VIRTUAL TABLE IF NOT EXISTS transcript_events_fts \
@@ -372,6 +373,14 @@ impl TimelineStore {
               payload_blob BLOB NOT NULL
             );
 
+            "#,
+        )?;
+        Ok(())
+    }
+
+    fn create_binary_record_indexes(&self, db: &Connection) -> Result<()> {
+        db.execute_batch(
+            r#"
             CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
               ON jobs(kind, ready_at_ms, created_at_ms, job_id)
               WHERE state = 'queued';
