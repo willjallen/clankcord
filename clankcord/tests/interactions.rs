@@ -9,7 +9,9 @@ fn agent_task_message_uses_compact_transcript_context() {
 
     assert!(message.contains("You are Clanky, a helpful and rigorous Discord server assistant"));
     assert!(message.contains("clankcord --help"));
-    assert!(message.contains("clankcord responses submit --help"));
+    assert!(message.contains("clankcord responses --help"));
+    assert!(message.contains("clankcord responses send"));
+    assert!(message.contains("clankcord responses dm"));
     assert!(message.contains("RESPONSE_SUBMITTED"));
     assert!(message.contains("NO_RESPONSE_NEEDED"));
     assert!(message.contains("Final text is not a publication path"));

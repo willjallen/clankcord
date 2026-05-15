@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Context;
 use serde_json::{Value, json};
@@ -295,7 +295,7 @@ async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Resul
             if !tick_due(record, *interval_seconds) {
                 return Ok(Vec::new());
             }
-            Ok(vec![base_context(runtime, record, None, None).await])
+            Ok(vec![base_context(runtime, record, None, None).await?])
         }
         AutomationTrigger::Event { event_kinds } => {
             event_contexts(runtime, record, event_kinds).await
@@ -348,7 +348,7 @@ async fn event_contexts(
             _ => true,
         }
     }) {
-        contexts.push(base_context(runtime, record, Some(event), None).await);
+        contexts.push(base_context(runtime, record, Some(event), None).await?);
     }
     Ok(contexts)
 }
@@ -384,7 +384,7 @@ async fn job_contexts(
         .collect::<Vec<_>>();
     let mut contexts = Vec::new();
     for job in jobs {
-        contexts.push(base_context(runtime, record, None, Some(job.to_value())).await);
+        contexts.push(base_context(runtime, record, None, Some(job.to_value())).await?);
     }
     Ok(contexts)
 }
@@ -394,21 +394,54 @@ async fn base_context(
     record: &AutomationRecord,
     event: Option<Value>,
     job: Option<Value>,
-) -> Value {
+) -> Result<Value> {
     let room = runtime.room_for_channel_ids(
         &record.spec.scope.guild_id,
         &record.spec.scope.voice_channel_id,
         None,
     );
-    json!({
+    let occupants = runtime
+        .timeline_store
+        .room_occupants(
+            &record.spec.scope.guild_id,
+            &record.spec.scope.voice_channel_id,
+        )
+        .await?;
+    let participants = room_participants(&occupants);
+    let mut room_status = runtime.status_for_room(&room).await;
+    if let Value::Object(object) = &mut room_status {
+        object.insert("liveOccupants".to_string(), json!(occupants));
+        object.insert("participants".to_string(), json!(participants));
+    }
+    Ok(json!({
         "automation": record.to_json(),
         "runtime": {
             "now": isoformat_z(None),
         },
-        "room": runtime.status_for_room(&room).await,
+        "room": room_status,
         "event": event.unwrap_or(Value::Null),
         "job": job.unwrap_or(Value::Null),
-    })
+    }))
+}
+
+fn room_participants(occupants: &[Value]) -> BTreeMap<String, Value> {
+    occupants
+        .iter()
+        .filter_map(|occupant| {
+            let user_id = first_value_string(occupant, &["user_id", "userId", "speaker_user_id"]);
+            (!user_id.is_empty()).then(|| {
+                (
+                    user_id.clone(),
+                    json!({
+                        "present": true,
+                        "user_id": user_id,
+                        "display_name": first_value_string(occupant, &["display_name", "member_display_name", "global_name", "globalName", "username"]),
+                        "username": first_value_string(occupant, &["username"]),
+                    }),
+                )
+            })
+        })
+        .collect()
 }
 
 fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Result<Job> {

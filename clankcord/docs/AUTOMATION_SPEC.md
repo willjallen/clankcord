@@ -385,7 +385,7 @@ The runtime currently records an action failure for `sound.play` until a sound a
   },
   "trigger": {
     "kind": "event",
-    "event_kinds": ["participant_joined", "occupancy_updated"]
+    "event_kinds": ["participant_joined"]
   },
   "condition": {
     "kind": "all",
@@ -398,17 +398,21 @@ The runtime currently records an action failure for `sound.play` until a sound a
   "actions": [
     {
       "kind": "response.send",
-      "sink": {"kind": "agent_chat"},
+      "sink": {"kind": "dm", "id": "requesting-user-id"},
       "content": "You and Blake are both here. Reminder: talk about x."
     }
   ]
 }
 ```
 
-Before using participant paths like `room.participants.<id>.present`, verify the current room status shape with:
+Stored automation conditions can use `room.participants.<discord-user-id>.present`.
+That participant map is built from the current voice occupants when the automation is
+evaluated.
+
+Before registering overlap rules, verify the current room occupants with:
 
 ```sh
-clankcord status --guild <guild-id> --channel <voice-channel-id>
+clankcord rooms occupants <voice-channel-id> --guild <guild-id>
 ```
 
 ### Research Later When A Job Completes

@@ -70,7 +70,8 @@ For large transcript, timeline, search, or job outputs, prefer explicit file out
 may be very large; avoid printing them into your conversation context.
 
 Use `clankcord --help` and subcommand `--help` to discover the CLI. For visible
-responses, inspect `clankcord responses submit --help`.
+responses, inspect `clankcord responses --help`; prefer `clankcord responses send` and
+`clankcord responses dm`.
 ```
 
 Add response behavior guidance:
@@ -87,8 +88,8 @@ If the user requested a straightforward action where a visible answer would add 
 perform the action through Clankcord and finish with NO_RESPONSE_NEEDED unless the action
 failed or the user clearly expects confirmation.
 
-If you do publish a visible response, inspect `clankcord responses submit --help` and
-choose the correct sink. After successful submission, finish with RESPONSE_SUBMITTED.
+If you do publish a visible response, use `clankcord responses send` or
+`clankcord responses dm`. After successful submission, finish with RESPONSE_SUBMITTED.
 ```
 
 This replaces any instruction that the agent must always submit to `--sink agent-chat`.
@@ -438,7 +439,7 @@ Add tests for:
 - Workdir path uses Clankcord guild/channel session key, not Codex session id.
 - Codex invocation cwd is the agent workdir.
 - Master prompt documents the agent env vars.
-- Master prompt tells agents to use `clankcord --help` and response submit help.
+- Master prompt tells agents to use `clankcord --help` and response send/dm help.
 - Master prompt allows `NO_RESPONSE_NEEDED`.
 - Per-job prompt contains `===== PREVIOUS CONTEXT =====`.
 - Per-job prompt contains `===== QUESTION / ACTIVATION =====`.

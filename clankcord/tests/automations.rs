@@ -114,6 +114,11 @@ async fn invalid_automation_specs_return_actionable_errors() {
             vec!["automation spec must be a JSON object"],
         ),
         (
+            "outer spec wrapper",
+            json!({"spec": spec_value(json!({}))}),
+            vec!["top-level JSON object", "remove the outer `spec` wrapper"],
+        ),
+        (
             "scope channel shorthand",
             spec_value_replacing("scope", json!({"guild_id": "guild", "channel": "code"})),
             vec![
@@ -464,6 +469,59 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
     let payload = job.response_payload().unwrap();
     assert_eq!(payload.content, "Blake left.");
+    assert!(!runtime.automations.contains_key(&record.automation_id));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn overlap_automation_can_match_current_room_participants() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "Will"))
+        .await
+        .unwrap();
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "overlap watcher",
+                "idempotency_key": "job_1:overlap-watcher",
+                "trigger": {"kind": "event", "event_kinds": ["participant_joined"]},
+                "condition": {
+                    "kind": "all",
+                    "conditions": [
+                        {"kind": "predicate", "path": "room.participants.user-a.present", "op": "eq", "value": true},
+                        {"kind": "predicate", "path": "room.participants.blake.present", "op": "eq", "value": true}
+                    ]
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "dm", "id": "user-a"},
+                    "content": "Reminder: talk to Blake about Woven."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store);
+    runtime.load_automation_registry().await.unwrap();
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let payload = job.response_payload().unwrap();
+    assert_eq!(payload.sink.kind, ResponseSinkKind::Dm);
+    assert_eq!(payload.sink.user_id, "user-a");
+    assert_eq!(payload.content, "Reminder: talk to Blake about Woven.");
     assert!(!runtime.automations.contains_key(&record.automation_id));
 }
 

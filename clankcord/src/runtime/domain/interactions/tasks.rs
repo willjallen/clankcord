@@ -595,7 +595,7 @@ pub fn agent_master_prompt() -> String {
         "The CLI is the supported way to ask Clankcord to do work. Do not post to Discord directly. Do not mutate Clankcord state by editing files or databases directly.",
         "",
         "When a user asks for immediate information, gather enough context to answer well. Use timeline, transcript, participant, room, message, and external research tools as needed.",
-        "Use `clankcord --help` and subcommand `--help` to discover the command surface. For visible responses, inspect `clankcord responses submit --help` and choose the correct sink.",
+        "Use `clankcord --help` and subcommand `--help` to discover the command surface. For visible responses, inspect `clankcord responses --help`; prefer `clankcord responses send --sink ...` or `clankcord responses dm --to ...`.",
         "",
         "ENVIRONMENT:",
         "You run from $CLANKCORD_AGENT_WORKDIR, a writable working directory for notes, temp files, command outputs, and intermediate artifacts. The Clankcord source checkout is at $CLANKCORD_REPO_DIR.",
@@ -606,13 +606,13 @@ pub fn agent_master_prompt() -> String {
         "You do not have to publish a visible response for every job.",
         "If the wake word appears to be a false activation, cross-talk, an accidental invocation, or the captured question is not actually directed at Clankcord, do not respond visibly. Finish with NO_RESPONSE_NEEDED.",
         "If the user requested a straightforward action where a visible answer would add noise, perform the action through Clankcord and finish with NO_RESPONSE_NEEDED unless the action failed or the user clearly expects confirmation.",
-        "If you publish a visible response, inspect `clankcord responses submit --help` and choose the correct sink. After successful submission, finish with RESPONSE_SUBMITTED. Final text is not a publication path.",
+        "If you publish a visible response, use `clankcord responses send` or `clankcord responses dm`. After successful submission, finish with RESPONSE_SUBMITTED. Final text is not a publication path.",
         "",
         "You may search the web and should use web research when it would materially improve the answer, especially for current facts, unfamiliar topics, fact-checking, product or technical details, or anything where the transcript alone is not enough.",
         "Do not invent facts when research is possible.",
         "",
         "When a user asks for runtime work such as transcript creation, room control, sound playback, reminders, or publication, use the corresponding `clankcord` command.",
-        "When a user asks for future, conditional, or recurring behavior, read `clankcord automations spec`, validate with `clankcord automations validate --stdin`, then register with `clankcord automations create --stdin`. Automations default to one shot unless the user clearly asks for recurring behavior. Give automations reasonable expiries. Resolve named people to Discord user IDs before storing durable conditions whenever possible.",
+        "When a user asks for future, conditional, or recurring behavior, read `clankcord automations spec`, validate with `clankcord automations validate --stdin`, then register with `clankcord automations create --stdin`. Use the Clankcord CLI for automations, not the runtime HTTP endpoints. Automations default to one shot unless the user clearly asks for recurring behavior. Give automations reasonable expiries. Resolve named people to Discord user IDs before storing durable conditions whenever possible.",
         "When the request is underspecified, ask a focused clarifying question through Clankcord. Keep the ongoing channel context in mind after the user answers.",
         "",
         "Be useful, complete, and intellectually honest. Do not choose a weak answer merely because it is shorter.",
@@ -900,7 +900,9 @@ mod tests {
         assert!(prompt.contains("CLANKCORD_AGENT_JOB_ID"));
         assert!(prompt.contains("NO_RESPONSE_NEEDED"));
         assert!(prompt.contains("clankcord --help"));
-        assert!(prompt.contains("clankcord responses submit --help"));
+        assert!(prompt.contains("clankcord responses --help"));
+        assert!(prompt.contains("clankcord responses dm"));
+        assert!(prompt.contains("not the runtime HTTP endpoints"));
         assert!(!prompt.contains("JOB_PACKET_JSON"));
         assert!(!prompt.contains("packet.json"));
         assert!(!prompt.contains("\"schema\""));

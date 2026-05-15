@@ -787,6 +787,11 @@ fn validate_boundary_automation_value(value: &Value) -> Result<()> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("automation spec must be a JSON object"))?;
+    if object.contains_key("spec") && !object.contains_key("name") {
+        anyhow::bail!(
+            "automation spec must be the top-level JSON object; remove the outer `spec` wrapper"
+        );
+    }
     if let Some(scope) = object.get("scope") {
         validate_scope_boundary(scope)?;
     }
