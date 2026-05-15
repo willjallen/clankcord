@@ -603,6 +603,9 @@ impl LiveVoiceAdapter {
         user_id: &str,
         active: bool,
     ) {
+        if self.is_voice_bot_user(user_id).await {
+            return;
+        }
         let Some(user) = self.resolve_speaker_profile(session_id, user_id).await else {
             return;
         };
@@ -615,6 +618,9 @@ impl LiveVoiceAdapter {
     }
 
     pub(super) async fn handle_client_disconnect(&self, session_id: &str, user_id: &str) {
+        if self.is_voice_bot_user(user_id).await {
+            return;
+        }
         let session = self.session(session_id).await;
         let Some(session) = session else {
             return;
@@ -649,6 +655,13 @@ impl LiveVoiceAdapter {
             .await
             .get(session_id)
             .cloned()
+    }
+
+    async fn is_voice_bot_user(&self, user_id: &str) -> bool {
+        self.voice_clients_lock.lock().await.values().any(|client| {
+            let status = client.status();
+            !status.user_id.is_empty() && status.user_id == user_id
+        })
     }
 
     async fn resolve_speaker_profile(

@@ -111,33 +111,57 @@ impl Runtime {
         requested_by_user_id: &str,
         reason: &str,
     ) -> Result<JobDecision> {
-        if let Some(session_id) = self.active_session_id_for_room(&room) {
-            let session =
-                self.sessions
-                    .get(&session_id)
-                    .cloned()
-                    .unwrap_or_else(|| RuntimeSessionStatus {
-                        session_id,
-                        room_id: room.room_id.clone(),
-                        guild_id: room.guild_id.clone(),
-                        channel_id: room.channel_id.clone(),
-                        voice_channel_id: room.channel_id.clone(),
-                        channel_name: room.channel_name.clone(),
-                        ..RuntimeSessionStatus::default()
-                    });
+        if let Some(session) = self.active_sessions_for_room(&room).into_iter().next() {
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                 RoomAgentPlacementOutput {
                     action: RoomAgentPlacementAction::Join,
                     status: "already_assigned".to_string(),
                     room,
-                    bot_id: String::new(),
-                    capture_run_id: String::new(),
+                    bot_id: session.bot_id.clone(),
+                    capture_run_id: session.capture_run_id.clone(),
                     requested_by_user_id: requested_by_user_id.to_string(),
                     reason: reason.to_string(),
                     session: Some(session),
                     sessions: Vec::new(),
                     bots: Vec::new(),
                     message: String::new(),
+                },
+            )));
+        }
+        if let Some(bot) = self.voice_bot_currently_in_room(&room) {
+            return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
+                RoomAgentPlacementOutput {
+                    action: RoomAgentPlacementAction::Join,
+                    status: "already_assigned".to_string(),
+                    room,
+                    bot_id: bot.bot_id,
+                    capture_run_id: bot.assigned_session_id,
+                    requested_by_user_id: requested_by_user_id.to_string(),
+                    reason: reason.to_string(),
+                    session: None,
+                    sessions: Vec::new(),
+                    bots: Vec::new(),
+                    message: "voice bot is already present in the channel".to_string(),
+                },
+            )));
+        }
+        if let Some(join) = self.active_voice_join_for_room(&room)? {
+            let payload = join.discord_voice_join_payload().ok_or_else(|| {
+                anyhow::anyhow!("active discord voice join {} has no join payload", join.id)
+            })?;
+            return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
+                RoomAgentPlacementOutput {
+                    action: RoomAgentPlacementAction::Join,
+                    status: "already_joining".to_string(),
+                    room,
+                    bot_id: payload.bot_id.clone(),
+                    capture_run_id: payload.capture_run_id.clone(),
+                    requested_by_user_id: requested_by_user_id.to_string(),
+                    reason: reason.to_string(),
+                    session: None,
+                    sessions: Vec::new(),
+                    bots: Vec::new(),
+                    message: "voice bot join is already in progress for the channel".to_string(),
                 },
             )));
         }
@@ -562,6 +586,14 @@ impl Runtime {
             .cloned()
     }
 
+    fn active_voice_join_for_room(&self, room: &RoomConfig) -> Result<Option<Job>> {
+        Ok(self
+            .timeline_store
+            .list_jobs_by_scope_kind(&room.guild_id, &room.channel_id, JobKind::DiscordVoiceJoin)?
+            .into_iter()
+            .find(|job| !job.state.is_terminal()))
+    }
+
     fn mark_bot_joining(&mut self, bot_id: &str, session_id: &str, error: &str) -> Result<()> {
         if let Some(status) = self.bots.get_mut(bot_id) {
             status.joining_session_id = session_id.to_string();
@@ -686,6 +718,86 @@ mod tests {
         assert_eq!(
             runtime.bots.get("clanky-vc1").unwrap().joining_session_id,
             payload.capture_run_id
+        );
+    }
+
+    #[test]
+    fn join_room_placement_treats_pending_voice_join_as_channel_reservation() {
+        let raw = tempfile::tempdir().unwrap();
+        let _env = test_state_dir(raw.path());
+        let store =
+            crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+        let room = test_room();
+        let pending = Job::discord_voice_join(DiscordVoiceJoinPayload {
+            room: room.clone(),
+            bot_id: "clanky-vc1".to_string(),
+            capture_run_id: "cap_joining".to_string(),
+            assignment_id: "assign_joining".to_string(),
+            started_at: utc_now(),
+            session_dir: raw.path().join("joining"),
+            requested_by_user_id: "user-a".to_string(),
+            reason: "explicit_request".to_string(),
+        });
+        store.create_job(pending).unwrap();
+        let mut runtime = test_runtime(store);
+        runtime.bots.insert(
+            "clanky-vc2".to_string(),
+            ready_bot_with("clanky-vc2", "bot-user-2"),
+        );
+
+        let decision = runtime
+            .prepare_join_room_jobs(room, "user-b", "explicit_request")
+            .unwrap();
+
+        let JobDecision::Complete(JobOutput::RoomAgentPlacement(output)) = decision else {
+            panic!("expected placement to complete without allocating a second bot");
+        };
+        assert_eq!(output.status, "already_joining");
+        assert_eq!(output.bot_id, "clanky-vc1");
+        assert_eq!(output.capture_run_id, "cap_joining");
+        assert!(runtime.bots["clanky-vc2"].joining_session_id.is_empty());
+    }
+
+    #[test]
+    fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() {
+        let raw = tempfile::tempdir().unwrap();
+        let _env = test_state_dir(raw.path());
+        let store =
+            crate::runtime::timeline::TimelineStore::new(Some(raw.path().join("voice"))).unwrap();
+        let room = test_room();
+        let mut runtime = test_runtime(store);
+        runtime.sessions.insert(
+            "cap_newer".to_string(),
+            RuntimeSessionStatus {
+                session_id: "cap_newer".to_string(),
+                guild_id: room.guild_id.clone(),
+                voice_channel_id: room.channel_id.clone(),
+                bot_id: "clanky-vc2".to_string(),
+                started_at: "2026-05-15T00:00:02.000Z".to_string(),
+                active: true,
+                ..RuntimeSessionStatus::default()
+            },
+        );
+        runtime.sessions.insert(
+            "cap_older".to_string(),
+            RuntimeSessionStatus {
+                session_id: "cap_older".to_string(),
+                guild_id: room.guild_id.clone(),
+                voice_channel_id: room.channel_id.clone(),
+                bot_id: "clanky-vc1".to_string(),
+                started_at: "2026-05-15T00:00:01.000Z".to_string(),
+                active: true,
+                ..RuntimeSessionStatus::default()
+            },
+        );
+
+        let duplicates = runtime.duplicate_voice_bot_sessions_for_room(&room);
+
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].session_id, "cap_newer");
+        assert_eq!(
+            runtime.active_session_id_for_room(&room).unwrap(),
+            "cap_older"
         );
     }
 
@@ -817,11 +929,15 @@ mod tests {
     }
 
     fn ready_bot() -> RuntimeBotStatus {
+        ready_bot_with("clanky-vc1", "bot-user")
+    }
+
+    fn ready_bot_with(bot_id: &str, user_id: &str) -> RuntimeBotStatus {
         RuntimeBotStatus {
-            bot_id: "clanky-vc1".to_string(),
+            bot_id: bot_id.to_string(),
             ready: true,
-            user_id: "bot-user".to_string(),
-            username: "clanky-vc1".to_string(),
+            user_id: user_id.to_string(),
+            username: bot_id.to_string(),
             ..RuntimeBotStatus::default()
         }
     }

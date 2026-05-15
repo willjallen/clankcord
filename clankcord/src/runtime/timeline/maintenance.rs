@@ -372,7 +372,9 @@ impl TimelineStore {
         }
         let job_cutoff_ms = instant_ms_dt(job_cutoff);
         let old_jobs: Vec<String> = db
-            .prepare("SELECT job_id FROM transcript_jobs WHERE created_at_ms IS NOT NULL AND created_at_ms < ?1")?
+            .prepare(
+                "SELECT job_id FROM jobs WHERE created_at_ms IS NOT NULL AND created_at_ms < ?1",
+            )?
             .query_map(params![job_cutoff_ms], |row| row.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         let deleted_jobs = old_jobs.len();
@@ -382,13 +384,7 @@ impl TimelineStore {
                 .collect::<Vec<_>>()
                 .join(",");
             db.execute(
-                &format!(
-                    "DELETE FROM job_dependencies WHERE parent_job_id IN ({placeholders}) OR child_job_id IN ({placeholders})"
-                ),
-                params_from_iter(old_jobs.iter().chain(old_jobs.iter())),
-            )?;
-            db.execute(
-                &format!("DELETE FROM transcript_jobs WHERE job_id IN ({placeholders})"),
+                &format!("DELETE FROM jobs WHERE job_id IN ({placeholders})"),
                 params_from_iter(old_jobs.iter()),
             )?;
         }

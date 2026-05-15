@@ -73,13 +73,59 @@ impl Runtime {
     }
 
     pub fn active_session_id_for_room(&self, room: &RoomConfig) -> Option<String> {
-        self.sessions.iter().find_map(|(id, session)| {
-            if session.voice_channel_id == room.channel_id && session.ended_at.trim().is_empty() {
-                Some(id.clone())
-            } else {
-                None
-            }
-        })
+        self.active_sessions_for_room(room)
+            .into_iter()
+            .next()
+            .map(|session| session.session_id)
+    }
+
+    pub(crate) fn active_sessions_for_room(&self, room: &RoomConfig) -> Vec<RuntimeSessionStatus> {
+        let mut sessions = self
+            .sessions
+            .values()
+            .filter(|session| {
+                session.active
+                    && session.ended_at.trim().is_empty()
+                    && session.guild_id == room.guild_id
+                    && session.voice_channel_id == room.channel_id
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            left.started_at
+                .cmp(&right.started_at)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+        sessions
+    }
+
+    pub(crate) fn duplicate_voice_bot_sessions_for_room(
+        &self,
+        room: &RoomConfig,
+    ) -> Vec<RuntimeSessionStatus> {
+        self.active_sessions_for_room(room)
+            .into_iter()
+            .skip(1)
+            .collect()
+    }
+
+    pub(crate) fn voice_bot_currently_in_room(
+        &self,
+        room: &RoomConfig,
+    ) -> Option<RuntimeBotStatus> {
+        self.bots
+            .values()
+            .find(|status| {
+                status.ready
+                    && status.current_guild_id == room.guild_id
+                    && status.current_channel_id == room.channel_id
+            })
+            .cloned()
+    }
+
+    pub(crate) fn room_has_voice_bot_presence(&self, room: &RoomConfig) -> bool {
+        !self.active_sessions_for_room(room).is_empty()
+            || self.voice_bot_currently_in_room(room).is_some()
     }
 
     fn enrich_session_status(&self, mut session: RuntimeSessionStatus) -> RuntimeSessionStatus {

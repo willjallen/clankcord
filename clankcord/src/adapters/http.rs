@@ -311,6 +311,7 @@ async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery
     result(runtime.jobs(JobsRequest {
         guild_id: query_str(&query, &["guild", "guildId"]),
         state: query_str(&query, &["state"]),
+        include_ephemeral: query_bool(&query, &["verbose"], false),
     }))
 }
 

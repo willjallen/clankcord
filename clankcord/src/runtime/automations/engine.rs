@@ -41,18 +41,16 @@ impl<'a> AutomationContext<'a> {
         self.runtime
     }
 
-    pub(crate) fn has_active_job(
+    pub(crate) fn has_active_job_in_guild(
         &self,
         kind: JobKind,
         guild_id: &str,
-        voice_channel_id: &str,
         matches: impl Fn(&Job) -> bool,
     ) -> bool {
         self.active_jobs.iter().any(|job| {
             job.kind == kind
                 && is_active_job_state(job.state)
                 && job.guild_id == guild_id
-                && job.voice_channel_id == voice_channel_id
                 && matches(job)
         })
     }

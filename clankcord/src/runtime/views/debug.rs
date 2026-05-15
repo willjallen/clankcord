@@ -314,7 +314,9 @@ fn observed_tables() -> &'static [&'static str] {
         "windows",
         "publications",
         "authoritative_spans",
-        "transcript_jobs",
+        "jobs",
+        "job_payloads",
+        "job_dependencies",
         "automations",
     ]
 }

@@ -3,7 +3,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 
 const BINARY_RECORD_SCHEMA_KEY: &str = "binary_record_schema";
-const BINARY_RECORD_SCHEMA_VERSION: &str = "native-bincode-2026-05-14";
+const BINARY_RECORD_SCHEMA_VERSION: &str = "job-projection-2026-05-15";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderedTranscript {
@@ -140,8 +140,14 @@ impl TimelineStore {
     }
 
     pub fn connect(&self) -> Result<Connection> {
+        self.connect_with_busy_timeout(5000)
+    }
+
+    pub fn connect_with_busy_timeout(&self, busy_timeout_ms: u64) -> Result<Connection> {
         let db = Connection::open(&self.db_path)?;
-        db.execute_batch("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")?;
+        db.execute_batch(&format!(
+            "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = {busy_timeout_ms};"
+        ))?;
         Ok(db)
     }
 }
@@ -263,41 +269,6 @@ impl TimelineStore {
               payload_json TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS transcript_jobs (
-              job_id TEXT PRIMARY KEY,
-              guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
-              kind TEXT NOT NULL DEFAULT '',
-              state TEXT NOT NULL DEFAULT '',
-              created_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL,
-              next_run_at_ms INTEGER,
-              payload_blob BLOB NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS job_dependencies (
-              parent_job_id TEXT NOT NULL,
-              child_job_id TEXT NOT NULL,
-              dependency_kind TEXT NOT NULL DEFAULT 'required',
-              created_at_ms INTEGER NOT NULL,
-              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
-              PRIMARY KEY (parent_job_id, child_job_id)
-            );
-
-            CREATE TABLE IF NOT EXISTS automations (
-              automation_id TEXT PRIMARY KEY,
-              guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
-              state TEXT NOT NULL DEFAULT '',
-              idempotency_key TEXT NOT NULL DEFAULT '',
-              created_at_ms INTEGER,
-              updated_at_ms INTEGER NOT NULL,
-              expires_at_ms INTEGER,
-              fire_count INTEGER NOT NULL DEFAULT 0,
-              max_fires INTEGER,
-              payload_blob BLOB NOT NULL
-            );
-
             CREATE TABLE IF NOT EXISTS runtime_metadata (
               key TEXT PRIMARY KEY,
               value TEXT NOT NULL,
@@ -322,26 +293,11 @@ impl TimelineStore {
               ON conversations(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_spans_room_time
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
-            CREATE INDEX IF NOT EXISTS idx_jobs_state_next
-              ON transcript_jobs(state, next_run_at_ms, updated_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_jobs_state_kind_next
-              ON transcript_jobs(state, kind, next_run_at_ms, created_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_jobs_scope_state_kind_updated
-              ON transcript_jobs(guild_id, voice_channel_id, state, kind, updated_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_jobs_scope_kind_updated
-              ON transcript_jobs(guild_id, voice_channel_id, kind, updated_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_jobs_kind_updated
-              ON transcript_jobs(kind, updated_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
-              ON job_dependencies(child_job_id, parent_job_id);
-            CREATE INDEX IF NOT EXISTS idx_automations_scope_state
-              ON automations(guild_id, voice_channel_id, state, expires_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_automations_idempotency
-              ON automations(guild_id, voice_channel_id, idempotency_key, state);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
               ON publications(guild_id, voice_channel_id, state, created_at_ms);
             "#,
         )?;
+        self.create_binary_record_tables(&db)?;
         self.apply_binary_record_hard_cut(&db)?;
         self.fts_enabled = db
             .execute_batch(
@@ -349,6 +305,111 @@ impl TimelineStore {
                  USING fts5(event_id UNINDEXED, guild_id UNINDEXED, voice_channel_id UNINDEXED, speaker_label, text);",
             )
             .is_ok();
+        Ok(())
+    }
+
+    fn create_binary_record_tables(&self, db: &Connection) -> Result<()> {
+        db.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS jobs (
+              job_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              kind TEXT NOT NULL DEFAULT '',
+              state TEXT NOT NULL DEFAULT '',
+              terminal INTEGER NOT NULL DEFAULT 0,
+              failed INTEGER NOT NULL DEFAULT 0,
+              ephemeral INTEGER NOT NULL DEFAULT 0,
+              cancellable INTEGER NOT NULL DEFAULT 0,
+              lane TEXT NOT NULL DEFAULT '',
+              ordering_key TEXT NOT NULL DEFAULT '',
+              ready_at_ms INTEGER NOT NULL,
+              created_at_ms INTEGER NOT NULL,
+              updated_at_ms INTEGER NOT NULL,
+              started_at_ms INTEGER,
+              completed_at_ms INTEGER,
+              gc_after_ms INTEGER,
+              root_job_id TEXT NOT NULL DEFAULT '',
+              parent_job_id TEXT,
+              lineage_depth INTEGER NOT NULL DEFAULT 0,
+              requested_by_user_id TEXT NOT NULL DEFAULT '',
+              command_kind TEXT NOT NULL DEFAULT '',
+              source_job_id TEXT NOT NULL DEFAULT '',
+              stream_id TEXT NOT NULL DEFAULT '',
+              target_job_id TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS job_payloads (
+              job_id TEXT PRIMARY KEY,
+              payload_blob BLOB NOT NULL,
+              FOREIGN KEY(job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS job_dependencies (
+              parent_job_id TEXT NOT NULL,
+              child_job_id TEXT NOT NULL,
+              dependency_kind TEXT NOT NULL DEFAULT 'required',
+              created_at_ms INTEGER NOT NULL,
+              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
+              PRIMARY KEY (parent_job_id, child_job_id),
+              FOREIGN KEY(parent_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
+              FOREIGN KEY(child_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS automations (
+              automation_id TEXT PRIMARY KEY,
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              state TEXT NOT NULL DEFAULT '',
+              idempotency_key TEXT NOT NULL DEFAULT '',
+              created_at_ms INTEGER,
+              updated_at_ms INTEGER NOT NULL,
+              expires_at_ms INTEGER,
+              fire_count INTEGER NOT NULL DEFAULT 0,
+              max_fires INTEGER,
+              payload_blob BLOB NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
+              ON jobs(kind, ready_at_ms, created_at_ms, job_id)
+              WHERE state = 'queued';
+            CREATE INDEX IF NOT EXISTS idx_jobs_active_ordering
+              ON jobs(ordering_key)
+              WHERE terminal = 0 AND ordering_key <> '';
+            CREATE INDEX IF NOT EXISTS idx_jobs_active_visible_scope
+              ON jobs(guild_id, voice_channel_id, updated_at_ms DESC, job_id)
+              WHERE terminal = 0 AND ephemeral = 0;
+            CREATE INDEX IF NOT EXISTS idx_jobs_recent_visible
+              ON jobs(updated_at_ms DESC, job_id)
+              WHERE ephemeral = 0;
+            CREATE INDEX IF NOT EXISTS idx_jobs_failed_visible
+              ON jobs(updated_at_ms DESC, job_id)
+              WHERE failed = 1 AND ephemeral = 0;
+            CREATE INDEX IF NOT EXISTS idx_jobs_scope_state_kind_updated
+              ON jobs(guild_id, voice_channel_id, state, kind, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_scope_kind_updated
+              ON jobs(guild_id, voice_channel_id, kind, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_kind_updated
+              ON jobs(kind, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_state_updated
+              ON jobs(state, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_jobs_ephemeral_gc
+              ON jobs(gc_after_ms, job_id)
+              WHERE ephemeral = 1 AND terminal = 1;
+            CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
+              ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
+              WHERE kind = 'wake_probe' AND state = 'queued';
+            CREATE INDEX IF NOT EXISTS idx_jobs_response_source
+              ON jobs(source_job_id, updated_at_ms DESC, job_id)
+              WHERE kind = 'response';
+            CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
+              ON job_dependencies(child_job_id, parent_job_id);
+            CREATE INDEX IF NOT EXISTS idx_automations_scope_state
+              ON automations(guild_id, voice_channel_id, state, expires_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_automations_idempotency
+              ON automations(guild_id, voice_channel_id, idempotency_key, state);
+            "#,
+        )?;
         Ok(())
     }
 
@@ -366,9 +427,16 @@ impl TimelineStore {
             return Ok(());
         }
 
-        let deleted_dependencies = db.execute("DELETE FROM job_dependencies", [])?;
-        let deleted_jobs = db.execute("DELETE FROM transcript_jobs", [])?;
-        let deleted_automations = db.execute("DELETE FROM automations", [])?;
+        db.execute_batch(
+            r#"
+            DROP TABLE IF EXISTS job_dependencies;
+            DROP TABLE IF EXISTS job_payloads;
+            DROP TABLE IF EXISTS jobs;
+            DROP TABLE IF EXISTS transcript_jobs;
+            DROP TABLE IF EXISTS automations;
+            "#,
+        )?;
+        self.create_binary_record_tables(db)?;
         db.execute(
             r#"
             INSERT INTO runtime_metadata(key, value, updated_at_ms)
@@ -383,16 +451,12 @@ impl TimelineStore {
                 instant_ms_dt(utc_now())
             ],
         )?;
-        if deleted_jobs > 0 || deleted_automations > 0 || deleted_dependencies > 0 {
-            crate::runtime::log(&format!(
-                "runtime binary record schema hard cut applied: deleted {deleted_jobs} job rows, {deleted_dependencies} dependency rows, and {deleted_automations} automation rows"
-            ));
-        }
+        crate::runtime::log("runtime job projection schema hard cut applied");
         Ok(())
     }
 
     fn job_payloads_decode(&self, db: &Connection) -> Result<bool> {
-        let mut statement = db.prepare("SELECT payload_blob FROM transcript_jobs")?;
+        let mut statement = db.prepare("SELECT payload_blob FROM job_payloads")?;
         let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
         for payload in rows {
             let payload = payload?;

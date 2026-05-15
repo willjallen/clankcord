@@ -7,12 +7,14 @@ use crate::config::{non_empty, string_field};
 use crate::runtime::{Job, JobState};
 
 use crate::runtime::Runtime;
+use crate::runtime::timeline::JobVisibility;
 use crate::runtime::util::{first_non_empty, preview};
 
 #[derive(Debug, Clone, Default)]
 pub struct JobsRequest {
     pub guild_id: String,
     pub state: String,
+    pub include_ephemeral: bool,
 }
 
 impl Runtime {
@@ -22,14 +24,19 @@ impl Runtime {
         } else {
             Some(JobState::from_str(&request.state)?)
         };
-        let jobs = self.timeline_store.list_jobs(
-            if request.guild_id.is_empty() {
-                None
-            } else {
-                Some(&request.guild_id)
-            },
-            state_filter,
-        )?;
+        let guild_id = if request.guild_id.is_empty() {
+            None
+        } else {
+            Some(request.guild_id.as_str())
+        };
+        let visibility = if request.include_ephemeral {
+            JobVisibility::IncludeEphemeral
+        } else {
+            JobVisibility::Visible
+        };
+        let jobs =
+            self.timeline_store
+                .list_jobs_with_visibility(guild_id, state_filter, visibility)?;
         let payloads = jobs.iter().map(Job::to_value).collect::<Vec<_>>();
         Ok(json!({"jobs": payloads, "count": jobs.len()}))
     }

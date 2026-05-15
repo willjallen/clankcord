@@ -327,6 +327,8 @@ struct JobsListArgs {
     guild: Option<String>,
     #[arg(long)]
     state: Option<String>,
+    #[arg(long)]
+    verbose: bool,
 }
 
 #[derive(Debug, ClapArgs)]
@@ -727,7 +729,7 @@ fn jobs_list(args: JobsListArgs) -> Result<i32> {
         "GET",
         "/v1/voice/jobs",
         None,
-        Some(json!({"guild": args.guild, "state": args.state})),
+        Some(json!({"guild": args.guild, "state": args.state, "verbose": args.verbose})),
     )
 }
 

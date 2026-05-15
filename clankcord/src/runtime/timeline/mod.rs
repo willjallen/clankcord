@@ -5,6 +5,7 @@ mod store;
 mod transcripts;
 mod util;
 
+pub use jobs::JobVisibility;
 pub use store::{CaptureRunInput, RenderedTranscript, SpeechEventInput, TimelineStore};
 pub use util::{
     event_end, event_speaker, event_start, event_text, first_value_string, instant_ms_dt,

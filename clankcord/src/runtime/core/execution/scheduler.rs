@@ -46,7 +46,7 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 14] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RoomAgentPlacement,
         JobLane::GeneralAsync,
-        JobOrdering::None,
+        JobOrdering::VoiceTarget,
     ),
     JobExecutionPolicy::adapter(
         JobKind::DiscordVoiceJoin,
@@ -270,18 +270,9 @@ where
         let permits = take_permits(&lane, dispatch_batch_limit(policy));
         let permit_count = permits.len();
         let mut blocked_keys = self.lanes.active_ordering_keys();
-        let jobs = self
-            .timeline_store
-            .claim_due_jobs(policy.kind, permit_count, |job| {
-                let Some(key) = ordering_key(policy.ordering, job) else {
-                    return false;
-                };
-                if blocked_keys.contains(&key) {
-                    return true;
-                }
-                blocked_keys.insert(key);
-                false
-            })?;
+        let jobs =
+            self.timeline_store
+                .claim_due_jobs(policy.kind, permit_count, &mut blocked_keys)?;
         let count = jobs.len();
         for (permit, job) in permits.into_iter().zip(jobs) {
             let active_key = ordering_key(policy.ordering, &job);
@@ -583,6 +574,18 @@ fn wake_stream_key(job: &Job) -> Option<String> {
 
 fn voice_target_key(job: &Job) -> Option<String> {
     match &job.payload {
+        JobPayload::RoomAgentPlacement(payload) => {
+            let room_key = if payload.room_id.trim().is_empty() {
+                job.voice_channel_id.as_str()
+            } else {
+                payload.room_id.as_str()
+            };
+            Some(format!(
+                "room:placement:{}:{}",
+                ordering_key_part(&job.guild_id),
+                ordering_key_part(room_key)
+            ))
+        }
         JobPayload::DiscordVoiceJoin(payload) => Some(format!("voice:bot:{}", payload.bot_id)),
         JobPayload::DiscordVoiceLeave(payload) => {
             Some(format!("voice:session:{}", payload.session_id))
@@ -597,6 +600,25 @@ fn voice_target_key(job: &Job) -> Option<String> {
             Some(format!("voice:session:{}", payload.session_id))
         }
         _ => None,
+    }
+}
+
+fn ordering_key_part(value: &str) -> String {
+    let normalized = value
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if normalized.is_empty() {
+        "unknown".to_string()
+    } else {
+        normalized
     }
 }
 

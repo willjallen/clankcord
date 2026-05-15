@@ -241,8 +241,9 @@ fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     store.create_job(future).unwrap();
     store.create_job(due).unwrap();
 
+    let mut blocked = BTreeSet::new();
     let claimed = store
-        .claim_due_jobs(JobKind::Response, 8, |_| false)
+        .claim_due_jobs(JobKind::Response, 8, &mut blocked)
         .unwrap();
 
     assert_eq!(claimed.len(), 1);
@@ -252,7 +253,7 @@ fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     assert_eq!(store.get_job(&future_id).unwrap().state, JobState::Queued);
     assert!(
         store
-            .claim_due_jobs(JobKind::Response, 8, |_| false)
+            .claim_due_jobs(JobKind::Response, 8, &mut BTreeSet::new())
             .unwrap()
             .is_empty()
     );
@@ -274,15 +275,16 @@ fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     let job_id = job.id.clone();
     store.create_job(job).unwrap();
 
+    let mut blocked = BTreeSet::from(["agent:task:guild:code".to_string()]);
     let skipped = store
-        .claim_due_jobs(JobKind::AgentTask, 4, |job| job.voice_channel_id == "code")
+        .claim_due_jobs(JobKind::AgentTask, 4, &mut blocked)
         .unwrap();
 
     assert!(skipped.is_empty());
     assert_eq!(store.get_job(&job_id).unwrap().state, JobState::Queued);
 
     let claimed = store
-        .claim_due_jobs(JobKind::AgentTask, 4, |_| false)
+        .claim_due_jobs(JobKind::AgentTask, 4, &mut BTreeSet::new())
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].id, job_id);
@@ -318,11 +320,8 @@ fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
     store.create_job(first).unwrap();
     store.create_job(second).unwrap();
 
-    let mut seen_channels = BTreeSet::new();
     let claimed = store
-        .claim_due_jobs(JobKind::AgentTask, 4, |job| {
-            !seen_channels.insert(job.voice_channel_id.clone())
-        })
+        .claim_due_jobs(JobKind::AgentTask, 4, &mut BTreeSet::new())
         .unwrap();
 
     assert_eq!(claimed.len(), 1);

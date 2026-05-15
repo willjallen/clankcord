@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::timeline::JobVisibility;
 use crate::runtime::timeline::{parse_instant, utc_now};
 use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 
@@ -14,10 +15,14 @@ impl Runtime {
             .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())?;
         let timed_out = self.fail_stale_running_jobs()?;
         let resolved_waiting = self.resolve_waiting_jobs()?;
+        let ephemeral_gc = self
+            .timeline_store
+            .garbage_collect_ephemeral_jobs(ephemeral_job_gc_batch_limit())?;
         Ok(json!({
             "staleWakeProbes": stale_wake_probes,
             "timedOutJobs": timed_out,
             "resolvedWaitingJobs": resolved_waiting,
+            "ephemeralJobGc": ephemeral_gc,
         }))
     }
 
@@ -140,10 +145,11 @@ impl Runtime {
     fn fail_stale_running_jobs(&self) -> Result<Vec<Value>> {
         let now = utc_now();
         let mut timed_out = Vec::new();
-        for mut job in self
-            .timeline_store
-            .list_jobs(None, Some(JobState::Running))?
-        {
+        for mut job in self.timeline_store.list_jobs_with_visibility(
+            None,
+            Some(JobState::Running),
+            JobVisibility::IncludeEphemeral,
+        )? {
             let updated_at = parse_instant(&job.updated_at);
             if updated_at
                 .map(|value| (now - value).num_minutes() < 30)
@@ -171,4 +177,12 @@ fn wake_probe_max_queue_age_seconds() -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(5)
         .clamp(1, 60)
+}
+
+fn ephemeral_job_gc_batch_limit() -> usize {
+    std::env::var("CLANKCORD_EPHEMERAL_JOB_GC_BATCH_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256)
+        .clamp(1, 1000)
 }

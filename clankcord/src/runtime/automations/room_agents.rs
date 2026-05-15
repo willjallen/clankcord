@@ -1,7 +1,8 @@
 use crate::Result;
 use crate::runtime::automations::{Automation, AutomationContext, AutomationOutput};
 use crate::runtime::{
-    Job, JobKind, RoomAgentPlacementAction, RoomConfig, Runtime, RuntimeBotStatus,
+    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, Runtime,
+    RuntimeBotStatus, RuntimeSessionStatus,
 };
 
 pub(crate) struct RoomAgentPlacementAutomation;
@@ -16,6 +17,11 @@ impl Automation for RoomAgentPlacementAutomation {
         let available_bot = has_available_voice_bot(runtime);
         let mut output = AutomationOutput::empty();
         for room in runtime.known_rooms() {
+            for duplicate in runtime.duplicate_voice_bot_sessions_for_room(&room) {
+                if !has_active_session_leave_job(context, &duplicate) {
+                    output.emit(duplicate_session_leave_job(&duplicate));
+                }
+            }
             let decision = RoomAgentPlacementDecision::evaluate(runtime, &room, available_bot);
             if let Some(action) = decision.action {
                 if !has_active_placement_job(context, &room, action) {
@@ -41,7 +47,7 @@ struct RoomAgentPlacementDecision {
 
 impl RoomAgentPlacementDecision {
     fn evaluate(runtime: &Runtime, room: &RoomConfig, available_bot: bool) -> Self {
-        let active_session = runtime.active_session_id_for_room(room).is_some();
+        let voice_bot_present = runtime.room_has_voice_bot_presence(room);
         let auto_suppressed =
             runtime.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
         let manual_hold =
@@ -52,7 +58,7 @@ impl RoomAgentPlacementDecision {
         let should_be_present =
             !auto_suppressed && !listening_paused && (manual_hold || auto_desired);
 
-        if should_be_present && !active_session && available_bot {
+        if should_be_present && !voice_bot_present && available_bot {
             return Self {
                 action: Some(RoomAgentPlacementAction::Join),
                 reason: if manual_hold {
@@ -64,7 +70,7 @@ impl RoomAgentPlacementDecision {
             };
         }
 
-        if active_session && !should_be_present {
+        if voice_bot_present && !should_be_present {
             return Self {
                 action: Some(RoomAgentPlacementAction::Leave),
                 reason: leave_reason(auto_suppressed, listening_paused),
@@ -125,13 +131,102 @@ fn has_active_placement_job(
     room: &RoomConfig,
     action: RoomAgentPlacementAction,
 ) -> bool {
-    context.has_active_job(
-        JobKind::RoomAgentPlacement,
-        &room.guild_id,
-        &room.channel_id,
-        |job| {
-            job.room_agent_placement_payload()
-                .is_some_and(|payload| payload.action == action)
+    context.has_active_job_in_guild(JobKind::RoomAgentPlacement, &room.guild_id, |job| {
+        job.room_agent_placement_payload()
+            .is_some_and(|payload| payload.action == action && placement_targets_room(job, room))
+    }) || context.has_active_job_in_guild(JobKind::DiscordVoiceJoin, &room.guild_id, |job| {
+        job.voice_channel_id == room.channel_id
+    })
+}
+
+fn placement_targets_room(job: &Job, room: &RoomConfig) -> bool {
+    room_identifier_matches(&job.voice_channel_id, room)
+        || job
+            .room_agent_placement_payload()
+            .is_some_and(|payload| room_identifier_matches(&payload.room_id, room))
+}
+
+fn room_identifier_matches(value: &str, room: &RoomConfig) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && [
+            room.room_id.as_str(),
+            room.channel_id.as_str(),
+            room.channel_slug.as_str(),
+            room.channel_name.as_str(),
+        ]
+        .contains(&value)
+}
+
+fn has_active_session_leave_job(
+    context: &AutomationContext<'_>,
+    session: &RuntimeSessionStatus,
+) -> bool {
+    context.has_active_job_in_guild(JobKind::DiscordVoiceLeave, &session.guild_id, |job| {
+        job.discord_voice_leave_payload()
+            .is_some_and(|payload| payload.session_id == session.session_id)
+    })
+}
+
+fn duplicate_session_leave_job(session: &RuntimeSessionStatus) -> Job {
+    Job::discord_voice_leave(
+        session.guild_id.clone(),
+        session.voice_channel_id.clone(),
+        "runtime_automation",
+        DiscordVoiceLeavePayload {
+            session_id: session.session_id.clone(),
+            reason: "duplicate_voice_bot_in_channel".to_string(),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_target_matches_room_aliases() {
+        let room = RoomConfig {
+            room_id: "code-lounge".to_string(),
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            channel_id: "1204188344993447956".to_string(),
+            channel_slug: "code-lounge".to_string(),
+            channel_name: "Code Lounge".to_string(),
+            auto_join: true,
+        };
+        let job = Job::room_agent_placement(
+            "guild",
+            "code-lounge",
+            "code-lounge",
+            RoomAgentPlacementAction::Join,
+            "explicit_request",
+            "placement",
+            None,
+        );
+
+        assert!(placement_targets_room(&job, &room));
+    }
+
+    #[test]
+    fn duplicate_session_leave_job_targets_specific_session() {
+        let session = RuntimeSessionStatus {
+            session_id: "cap_duplicate".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            ..RuntimeSessionStatus::default()
+        };
+
+        let job = duplicate_session_leave_job(&session);
+
+        assert_eq!(job.kind, JobKind::DiscordVoiceLeave);
+        assert_eq!(
+            job.discord_voice_leave_payload().unwrap().session_id,
+            "cap_duplicate"
+        );
+        assert_eq!(
+            job.discord_voice_leave_payload().unwrap().reason,
+            "duplicate_voice_bot_in_channel"
+        );
+    }
 }

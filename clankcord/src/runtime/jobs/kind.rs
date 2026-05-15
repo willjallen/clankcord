@@ -48,6 +48,10 @@ impl JobKind {
     pub fn is_agent_task(self) -> bool {
         matches!(self, Self::AgentTask)
     }
+
+    pub fn is_ephemeral(self) -> bool {
+        matches!(self, Self::AudioSegment | Self::WakeProbe)
+    }
 }
 
 impl fmt::Display for JobKind {

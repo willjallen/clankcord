@@ -19,7 +19,7 @@ use crate::runtime::timeline::{event_text, first_value_string, isoformat_z};
 use crate::runtime::util::{
     agent_task_timeout_seconds, first_non_empty, job_cancel_requested, log, preview,
 };
-use crate::runtime::{CommandArguments, Job, JobKind, JobState, Runtime};
+use crate::runtime::{CommandArguments, Job, JobState, Runtime};
 
 #[derive(Debug, Clone)]
 struct AgentTaskPacket {
@@ -276,16 +276,8 @@ impl Runtime {
     }
 
     fn response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
-        Ok(self
-            .timeline_store
-            .list_jobs(None, None)?
-            .into_iter()
-            .filter(|job| job.kind == JobKind::Response)
-            .filter(|job| {
-                job.response_payload()
-                    .is_some_and(|payload| payload.source_job_id == source_job_id)
-            })
-            .collect())
+        self.timeline_store
+            .list_response_jobs_for_source(source_job_id)
     }
 
     fn fail_agent_task_job(
