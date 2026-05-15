@@ -20,7 +20,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
-    append_event(
+    let prior = append_event(
         &runtime.timeline_store,
         start - chrono::Duration::seconds(20),
         start - chrono::Duration::seconds(18),
@@ -53,6 +53,17 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
         3,
     )
     .await;
+    let post_other = append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(4),
+        start + chrono::Duration::seconds(5),
+        "Vince",
+        "user-b",
+        "the float issue was about decimal formatting",
+        json!({}),
+        4,
+    )
+    .await;
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
@@ -76,29 +87,38 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
         .get_job(&command_job_id)
         .await
         .unwrap();
-    assert_eq!(command.kind, JobKind::Command);
+    assert_eq!(command.kind, JobKind::AgentTask);
     let command_value = command.command_value().unwrap();
     assert_eq!(command_value["command_kind"], json!("agent_task"));
     assert_eq!(
         command_value["arguments"]["request"],
-        json!("summarize what Vince said about floats")
+        json!("Hey Clanky summarize what Vince said about floats")
+    );
+    assert!(command_value["arguments"]["activation"]["prior_to_activation"].is_null());
+    assert!(command_value["arguments"]["activation"]["post_activation_turn"].is_null());
+    assert!(
+        !command_value["arguments"]["activation"]["source_event_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&prior["event_id"])
     );
     assert!(
-        command_value["arguments"]["activation"]["prior_to_activation"]
+        command_value["arguments"]["activation"]["source_event_ids"]
             .as_array()
             .unwrap()
-            .iter()
-            .any(|event| event
-                .to_string()
-                .contains("floating point rounding came up"))
+            .contains(&wake["event_id"])
     );
-    assert_eq!(
-        command_value["arguments"]["activation"]["post_activation_turn"]
+    assert!(
+        command_value["arguments"]["activation"]["source_event_ids"]
             .as_array()
             .unwrap()
-            .last()
-            .unwrap()["event_id"],
-        post["event_id"]
+            .contains(&post["event_id"])
+    );
+    assert!(
+        command_value["arguments"]["activation"]["source_event_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&post_other["event_id"])
     );
 }
 
@@ -161,7 +181,122 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let command_value = command.command_value().unwrap();
     assert_eq!(
         command_value["arguments"]["request"],
-        json!("summarize the floating point discussion")
+        json!("hey clanky summarize the floating point discussion")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_dispatches_agent_task_for_bare_wake_word() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true, "score": 0.88}),
+        1,
+    )
+    .await;
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    let agent_job_id = string_field(&result["created"]["job"], "job_id");
+    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
+    assert_eq!(agent_job.kind, JobKind::AgentTask);
+    let command_value = agent_job.command_value().unwrap();
+    assert_eq!(command_value["arguments"]["request"], json!("Hey Clanky"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true, "score": 0.88}),
+        1,
+    )
+    .await;
+    let first = append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(35),
+        start + chrono::Duration::seconds(36),
+        "Will",
+        "user-a",
+        "can you check the Codex usage",
+        json!({}),
+        2,
+    )
+    .await;
+    let last = append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(58),
+        start + chrono::Duration::seconds(59),
+        "Will",
+        "user-a",
+        "inside the Docker environment but I would like you to try",
+        json!({}),
+        3,
+    )
+    .await;
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    let agent_job_id = string_field(&result["created"]["job"], "job_id");
+    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
+    assert_eq!(agent_job.kind, JobKind::AgentTask);
+    let command_value = agent_job.command_value().unwrap();
+    assert_eq!(
+        command_value["arguments"]["request"],
+        json!(
+            "Hey Clanky can you check the Codex usage inside the Docker environment but I would like you to try"
+        )
+    );
+    assert!(
+        command_value["arguments"]["activation"]["source_event_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&first["event_id"])
+    );
+    assert!(
+        command_value["arguments"]["activation"]["source_event_ids"]
+            .as_array()
+            .unwrap()
+            .contains(&last["event_id"])
     );
 }
 

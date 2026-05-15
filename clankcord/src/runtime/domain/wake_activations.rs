@@ -2,15 +2,12 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::runtime::domain::interactions::{
-    evaluate_voice_command, validate_voice_command_result, voice_command_action,
-};
 use crate::runtime::timeline::{
     event_end, event_speaker, event_start, event_text, first_value_string, isoformat_z, new_id,
     parse_instant, utc_now,
 };
 use crate::runtime::{
-    DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
+    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
 };
 
 const DEFAULT_LOOKBACK_SECONDS: i64 = 30;
@@ -230,21 +227,6 @@ pub async fn execute(
             false,
         )
         .await?;
-    let latest_wake_event = if let Some(event) = events
-        .iter()
-        .find(|event| {
-            first_value_string(event, &["event_id", "eventId"]) == payload.latest_wake_event_id
-        })
-        .cloned()
-    {
-        event
-    } else {
-        runtime
-            .timeline_store
-            .get_event(&payload.latest_wake_event_id)
-            .await
-            .unwrap_or_else(|_| json!({}))
-    };
     if !has_post_wake_speech(payload, &events, latest_wake_at) && now < hard_cap {
         let next_run_at = std::cmp::min(now + chrono::Duration::milliseconds(500), hard_cap);
         let mut deferred = job.clone();
@@ -286,51 +268,7 @@ pub async fn execute(
         }));
     }
 
-    let room = runtime.room_for_channel_ids(
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        Some(&payload.voice_channel_name),
-    );
-    let room_status = runtime.status_for_room(&room).await;
-    let candidate = candidate_event(payload, &events, &latest_wake_event);
-    let mut result = evaluate_voice_command(&candidate, &events, &room_status);
-    attach_activation_bundle(&mut result, payload, &events, &room_status)?;
-    let (valid, reason) = validate_voice_command_result(&result);
-    if !valid || voice_command_action(&result) != "dispatch_now" {
-        let _ = runtime
-            .create_voice_playback_job_for_channel(
-                &payload.guild_id,
-                &payload.voice_channel_id,
-                &payload.speaker_user_id,
-                DiscordVoicePlaybackCue::Ack,
-                "wake_activation_window_closed",
-                &job.id,
-            )
-            .await?;
-        runtime
-            .timeline_store
-            .append_event(
-                &payload.guild_id,
-                &payload.voice_channel_id,
-                json!({
-                    "event_kind": "wake_activation_ignored",
-                    "kind": "wake_activation_ignored",
-                    "job_id": job.id,
-                    "activation_id": payload.activation_id,
-                    "reason": reason,
-                    "result": result,
-                }),
-            )
-            .await?;
-        return Ok(json!({
-            "kind": "wake_activation",
-            "status": "ignored",
-            "valid": valid,
-            "reason": reason,
-            "result": result,
-        }));
-    }
-    let command = crate::runtime::CommandRequest::from_json(&result)?;
+    let command = activation_agent_task_command(payload, &events)?;
     let _ = runtime
         .create_voice_playback_job_for_channel(
             &payload.guild_id,
@@ -341,7 +279,21 @@ pub async fn execute(
             &job.id,
         )
         .await?;
-    let created = runtime.create_command_job(command, Some(job)).await?;
+    let agent_job = Job::agent_task(
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        payload.speaker_user_id.clone(),
+        command,
+    );
+    let created_job = runtime
+        .timeline_store
+        .create_child_job(job, agent_job)
+        .await?;
+    let created = json!({
+        "kind": "agent_task_created",
+        "job_ids": [created_job.id.clone()],
+        "job": created_job.to_value(),
+    });
     runtime
         .timeline_store
         .append_event(
@@ -359,7 +311,6 @@ pub async fn execute(
     Ok(json!({
         "kind": "wake_activation",
         "status": "dispatched",
-        "result": result,
         "created": created,
     }))
 }
@@ -685,82 +636,92 @@ fn has_post_wake_speech(
     })
 }
 
-fn candidate_event(
+fn activation_agent_task_command(
     payload: &WakeActivationPayload,
     events: &[Value],
-    latest_wake_event: &Value,
-) -> Value {
-    let matching = events
-        .iter()
-        .filter(|event| same_speaker(event, &payload.speaker_user_id))
-        .filter(|event| {
-            parse_instant(&payload.latest_wake_at)
-                .map(|wake_at| event_overlaps_or_follows(event, wake_at))
-                .unwrap_or(true)
-        })
-        .collect::<Vec<_>>();
-    matching
-        .iter()
-        .copied()
-        .filter(|event| !event_text(event).is_empty())
-        .max_by_key(|event| event_end(event).unwrap_or_else(utc_now))
-        .or_else(|| {
-            matching
-                .iter()
-                .copied()
-                .max_by_key(|event| event_start(event).unwrap_or_else(utc_now))
-        })
-        .cloned()
-        .filter(|event| !event.as_object().is_none_or(|object| object.is_empty()))
-        .unwrap_or_else(|| latest_wake_event.clone())
+) -> Result<CommandRequest> {
+    let request = activation_request_text(payload, events);
+    let source_event_ids = activation_source_event_ids(payload, events);
+    let activation = activation_summary(payload, &source_event_ids);
+    CommandRequest::from_json(&json!({
+        "action": "dispatch_now",
+        "command_kind": "agent_task",
+        "guild_id": payload.guild_id,
+        "voice_channel_id": payload.voice_channel_id,
+        "requested_by_user_id": payload.speaker_user_id,
+        "requested_by_speaker_label": payload.speaker_label,
+        "acknowledgement_text": "Working on that for you.",
+        "requires_confirmation": false,
+        "arguments": {
+            "request": request,
+            "instruction_text": request,
+            "source_event_ids": source_event_ids,
+            "activation": activation,
+        },
+    }))
 }
 
-fn attach_activation_bundle(
-    result: &mut Value,
-    payload: &WakeActivationPayload,
-    events: &[Value],
-    room_status: &Value,
-) -> Result<()> {
-    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
-    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
-    let prior = events
-        .iter()
-        .filter(|event| event_end(event).is_some_and(|ended| ended <= original_wake_at))
-        .cloned()
-        .collect::<Vec<_>>();
-    let post = events
-        .iter()
-        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
-        .cloned()
-        .collect::<Vec<_>>();
-    let bundle = json!({
+fn activation_summary(payload: &WakeActivationPayload, source_event_ids: &[String]) -> Value {
+    json!({
         "activation_id": payload.activation_id,
-        "prior_to_activation": prior,
         "wake_event_id": payload.wake_event_id,
         "latest_wake_event_id": payload.latest_wake_event_id,
         "amended_wake_event_ids": payload.amended_wake_event_ids,
-        "post_activation_turn": post,
-        "room_snapshot": room_status,
-        "source_event_ids": source_event_ids(events),
-    });
-    let Some(map) = result.as_object_mut() else {
-        return Ok(());
-    };
-    let arguments = map
-        .entry("arguments".to_string())
-        .or_insert_with(|| json!({}));
-    if let Some(arguments) = arguments.as_object_mut() {
-        arguments.insert("activation".to_string(), bundle);
-    }
-    Ok(())
+        "wake_started_at": payload.wake_started_at,
+        "wake_ended_at": payload.wake_ended_at,
+        "latest_wake_at": payload.latest_wake_at,
+        "voice_channel_name": payload.voice_channel_name,
+        "speaker_user_id": payload.speaker_user_id,
+        "speaker_label": payload.speaker_label,
+        "source_event_ids": source_event_ids,
+    })
 }
 
-fn source_event_ids(events: &[Value]) -> Vec<String> {
-    events
+fn activation_request_text(payload: &WakeActivationPayload, events: &[Value]) -> String {
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    collapse_ws(
+        &events
+            .iter()
+            .filter(|event| same_speaker(event, &payload.speaker_user_id))
+            .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
+            .map(event_text)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn activation_source_event_ids(payload: &WakeActivationPayload, events: &[Value]) -> Vec<String> {
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    let mut ids = Vec::new();
+    for id in [
+        payload.wake_event_id.as_str(),
+        payload.latest_wake_event_id.as_str(),
+    ]
+    .into_iter()
+    .chain(payload.amended_wake_event_ids.iter().map(String::as_str))
+    {
+        if !id.trim().is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+    }
+    for event in events
         .iter()
-        .map(|event| first_value_string(event, &["event_id", "eventId"]))
-        .filter(|event_id| !event_id.is_empty())
-        .collect()
+        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
+        .filter(|event| !event_text(event).is_empty() || event_has_wake(event))
+    {
+        let id = first_value_string(event, &["event_id", "eventId"]);
+        if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+fn collapse_ws(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn ready_at_string(
