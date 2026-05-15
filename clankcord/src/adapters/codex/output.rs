@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-pub(crate) fn parse_codex_stdout_payload(stdout: &str) -> Value {
+pub fn parse_codex_stdout_payload(stdout: &str) -> Value {
     let raw = stdout.trim();
     if raw.is_empty() {
         return json!({});
@@ -21,7 +21,7 @@ pub(crate) fn parse_codex_stdout_payload(stdout: &str) -> Value {
         .unwrap_or_else(|_| Value::String(raw.to_string()))
 }
 
-pub(crate) fn codex_response_text(stdout: &str, last_message: &str) -> String {
+pub fn codex_response_text(stdout: &str, last_message: &str) -> String {
     let last_message = last_message.trim();
     if !last_message.is_empty() {
         return last_message.to_string();
@@ -56,7 +56,7 @@ pub(crate) fn codex_response_text(stdout: &str, last_message: &str) -> String {
     stdout.trim().to_string()
 }
 
-pub(crate) fn extract_codex_session_id(stdout: &str) -> String {
+pub fn extract_codex_session_id(stdout: &str) -> String {
     find_string_field(
         &json_values_from_stdout(stdout),
         &[
@@ -70,14 +70,14 @@ pub(crate) fn extract_codex_session_id(stdout: &str) -> String {
     )
 }
 
-pub(crate) fn extract_codex_model(stdout: &str) -> String {
+pub fn extract_codex_model(stdout: &str) -> String {
     find_string_field(
         &json_values_from_stdout(stdout),
         &["model", "model_id", "modelId", "model_slug", "modelSlug"],
     )
 }
 
-pub(crate) fn extract_codex_usage(stdout: &str) -> Value {
+pub fn extract_codex_usage(stdout: &str) -> Value {
     let latest = json_values_from_stdout(stdout)
         .into_iter()
         .filter_map(codex_usage_payload)
@@ -90,11 +90,11 @@ pub(crate) fn extract_codex_usage(stdout: &str) -> Value {
     }
 }
 
-pub(crate) fn parse_codex_jsonl(stdout: &str) -> Vec<Value> {
+pub fn parse_codex_jsonl(stdout: &str) -> Vec<Value> {
     json_values_from_stdout(stdout)
 }
 
-pub(crate) fn codex_usage_payload(value: Value) -> Option<Value> {
+pub fn codex_usage_payload(value: Value) -> Option<Value> {
     legacy_token_count_payload(&value).or_else(|| turn_completed_usage_payload(&value))
 }
 
@@ -162,51 +162,5 @@ fn find_string_field_in_value(value: &Value, keys: &[&str]) -> Option<String> {
             .iter()
             .find_map(|child| find_string_field_in_value(child, keys)),
         _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extracts_usage_from_current_codex_turn_completed_event() {
-        let stdout = r#"
-{"type":"thread.started","thread_id":"thread-1"}
-{"type":"turn.completed","usage":{"input_tokens":60770,"cached_input_tokens":36096,"output_tokens":2492,"reasoning_output_tokens":1876}}
-"#;
-
-        let usage = extract_codex_usage(stdout);
-        assert_eq!(
-            usage
-                .get("total_token_usage")
-                .and_then(|value| value.get("input_tokens"))
-                .and_then(Value::as_i64),
-            Some(60770)
-        );
-        assert_eq!(
-            usage
-                .get("last_token_usage")
-                .and_then(|value| value.get("cached_input_tokens"))
-                .and_then(Value::as_i64),
-            Some(36096)
-        );
-    }
-
-    #[test]
-    fn keeps_extracting_legacy_token_count_payloads() {
-        let stdout = r#"
-{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10},"model_context_window":100}}}
-"#;
-
-        let usage = extract_codex_usage(stdout);
-        assert_eq!(
-            usage
-                .get("info")
-                .and_then(|value| value.get("total_token_usage"))
-                .and_then(|value| value.get("input_tokens"))
-                .and_then(Value::as_i64),
-            Some(10)
-        );
     }
 }

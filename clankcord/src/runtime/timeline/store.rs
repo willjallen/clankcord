@@ -109,6 +109,14 @@ pub struct TimelineStore {
 
 impl TimelineStore {
     pub fn new(root: Option<PathBuf>) -> Result<Self> {
+        Self::new_with_database(root, database_url(), database_schema())
+    }
+
+    pub fn new_with_database(
+        root: Option<PathBuf>,
+        database_url: String,
+        database_schema: String,
+    ) -> Result<Self> {
         let configured = std::env::var("CLANKCORD_VOICE_MEMORY_ROOT")
             .or_else(|_| std::env::var("VOICE_MEMORY_ROOT"))
             .unwrap_or_default();
@@ -120,8 +128,6 @@ impl TimelineStore {
             }
         });
         fs::create_dir_all(&root)?;
-        let database_url = database_url();
-        let database_schema = database_schema();
         let mut pool_options = PgPoolOptions::new().max_connections(database_pool_size());
         if !database_schema.trim().is_empty() && database_schema != "public" {
             let schema = quote_identifier(&database_schema);

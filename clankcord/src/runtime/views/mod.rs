@@ -4,7 +4,7 @@ mod jobs;
 mod members;
 mod status;
 
-pub use debug::DebugOverviewRequest;
+pub use debug::{DebugOverviewRequest, parse_codex_trace};
 pub use history::{
     ContextResolveRequest, ForgetRequest, ListConversationsRequest, MaterializeTranscriptRequest,
     ParticipantTraceRequest, RenderTranscriptRequest, SearchTranscriptsRequest,

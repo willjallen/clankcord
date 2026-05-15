@@ -28,7 +28,7 @@ impl Runtime {
         }))
     }
 
-    pub(crate) async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
+    pub async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match routes::execute_runtime_async(self, &running).await {
             Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,

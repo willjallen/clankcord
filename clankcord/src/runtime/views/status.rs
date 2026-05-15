@@ -151,7 +151,7 @@ impl Runtime {
         sessions
     }
 
-    pub(crate) fn duplicate_voice_bot_sessions_for_room(
+    pub fn duplicate_voice_bot_sessions_for_room(
         &self,
         room: &RoomConfig,
     ) -> Vec<RuntimeSessionStatus> {

@@ -20,6 +20,28 @@ services:
       retries: 10
       start_period: 10s
 
+  postgres-test:
+    image: postgres:16
+    profiles:
+      - test
+    network_mode: host
+    environment:
+      POSTGRES_DB: clankcord_test
+      POSTGRES_USER: clankcord_test
+      POSTGRES_PASSWORD: clankcord_test
+    command:
+      - postgres
+      - -c
+      - port=54330
+    volumes:
+      - clankcord-postgres-test-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 54330 -U clankcord_test -d clankcord_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   clankcord:
     build:
       context: .
@@ -83,3 +105,4 @@ secrets:
 
 volumes:
   clankcord-postgres-data:
+  clankcord-postgres-test-data:

@@ -271,34 +271,3 @@ fn token_overlap_score(left: &BTreeSet<String>, right: &BTreeSet<String>) -> f64
         (shared / total) * 0.78
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn member_normalization_matches_spaced_name_to_camel_name() {
-        let member = json!({
-            "id": "284362763386617857",
-            "username": "mysterymanchien",
-            "global_name": "MysteryManChien",
-            "nick": null,
-            "display_name": "MysteryManChien"
-        });
-
-        assert_eq!(
-            normalize_member_query("Mystery Man Chien"),
-            normalize_member_query("MysteryManChien")
-        );
-        assert_eq!(member_match_score(&member, "Mystery Man Chien"), 1.0);
-    }
-
-    #[test]
-    fn ambiguous_member_queries_can_remain_ranked_candidates() {
-        let mystery = json!({"id": "1", "display_name": "MysteryManChien"});
-        let guest = json!({"id": "2", "display_name": "MysteryGuest"});
-
-        assert!(member_match_score(&mystery, "mystery") > 0.0);
-        assert!(member_match_score(&guest, "mystery") > 0.0);
-    }
-}

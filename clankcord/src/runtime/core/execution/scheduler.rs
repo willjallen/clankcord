@@ -4,10 +4,6 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
-#[cfg(test)]
-use crate::runtime::AgentRuntime;
-#[cfg(test)]
-use crate::runtime::JobPayload;
 use crate::runtime::core::execution::RuntimeAdapterJobs;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
@@ -475,81 +471,6 @@ fn env_usize(key: &str, default: usize, max: usize) -> usize {
         .clamp(1, max)
 }
 
-#[cfg(test)]
-fn agent_session_key(job: &Job) -> String {
-    AgentRuntime::task_session_key(&job.guild_id, &job.voice_channel_id)
-}
-
-#[cfg(test)]
-fn ordering_key(ordering: JobOrdering, job: &Job) -> Option<String> {
-    match ordering {
-        JobOrdering::None => None,
-        JobOrdering::VoiceTarget => voice_target_key(job),
-        JobOrdering::WakeStream => wake_stream_key(job),
-        JobOrdering::AgentSession => Some(format!("agent:{}", agent_session_key(job))),
-    }
-}
-
-#[cfg(test)]
-fn wake_stream_key(job: &Job) -> Option<String> {
-    match &job.payload {
-        JobPayload::WakeProbe(payload) => Some(format!("wake:stream:{}", payload.stream_id)),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-fn voice_target_key(job: &Job) -> Option<String> {
-    match &job.payload {
-        JobPayload::RoomAgentPlacement(payload) => {
-            let room_key = if payload.room_id.trim().is_empty() {
-                job.voice_channel_id.as_str()
-            } else {
-                payload.room_id.as_str()
-            };
-            Some(format!(
-                "room:placement:{}:{}",
-                ordering_key_part(&job.guild_id),
-                ordering_key_part(room_key)
-            ))
-        }
-        JobPayload::DiscordVoiceJoin(payload) => Some(format!("voice:bot:{}", payload.bot_id)),
-        JobPayload::DiscordVoiceLeave(payload) => {
-            Some(format!("voice:session:{}", payload.session_id))
-        }
-        JobPayload::DiscordVoicePlayback(payload) => {
-            Some(format!("voice:session:{}", payload.session_id))
-        }
-        JobPayload::DiscordVoiceMute(payload) => {
-            Some(format!("voice:session:{}", payload.session_id))
-        }
-        JobPayload::DiscordVoicePlayAudio(payload) => {
-            Some(format!("voice:session:{}", payload.session_id))
-        }
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-fn ordering_key_part(value: &str) -> String {
-    let normalized = value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if normalized.is_empty() {
-        "unknown".to_string()
-    } else {
-        normalized
-    }
-}
-
 fn scheduled_job_count(report: &Value) -> usize {
     report
         .get("totalScheduled")
@@ -587,74 +508,4 @@ fn error_chain(error: &anyhow::Error) -> String {
         .map(|cause| cause.to_string())
         .collect::<Vec<_>>()
         .join(": ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::runtime::{DiscordVoiceMutePayload, DiscordVoicePlaybackCue};
-
-    #[test]
-    fn execution_policy_prioritizes_urgent_voice_and_wake_before_bulk_audio() {
-        let position = |kind| {
-            JOB_EXECUTION_POLICIES
-                .iter()
-                .position(|policy| policy.kind == kind)
-                .expect("job kind should have a policy")
-        };
-
-        assert!(position(JobKind::DiscordVoiceMute) < position(JobKind::AudioSegment));
-        assert!(position(JobKind::DiscordVoicePlayAudio) < position(JobKind::AudioSegment));
-        assert!(position(JobKind::DiscordVoicePlayback) < position(JobKind::AudioSegment));
-        assert!(position(JobKind::WakeProbe) < position(JobKind::AudioSegment));
-        assert!(position(JobKind::AudioSegment) < position(JobKind::WakeActivation));
-    }
-
-    #[test]
-    fn store_owned_orchestration_uses_snapshot_execution() {
-        let policy = |kind| {
-            JOB_EXECUTION_POLICIES
-                .iter()
-                .find(|policy| policy.kind == kind)
-                .copied()
-                .expect("job kind should have a policy")
-        };
-
-        assert_eq!(
-            policy(JobKind::DiscordVoicePlayback).executor,
-            JobExecutor::RuntimeSnapshot
-        );
-        assert_eq!(
-            policy(JobKind::WakeActivation).executor,
-            JobExecutor::RuntimeSnapshot
-        );
-        assert_eq!(
-            policy(JobKind::RoomAgentPlacement).executor,
-            JobExecutor::RuntimeExclusive
-        );
-        assert_eq!(
-            policy(JobKind::WakeProbe).executor,
-            JobExecutor::BlockingSnapshot
-        );
-    }
-
-    #[test]
-    fn voice_target_ordering_uses_session_key_for_playback_control() {
-        let job = Job::discord_voice_mute(
-            "guild",
-            "code",
-            "user-a",
-            DiscordVoiceMutePayload {
-                session_id: "cap_test".to_string(),
-                muted: false,
-                source_job_id: "source".to_string(),
-                reason: DiscordVoicePlaybackCue::Wake.as_str().to_string(),
-            },
-        );
-
-        assert_eq!(
-            ordering_key(JobOrdering::VoiceTarget, &job).as_deref(),
-            Some("voice:session:cap_test")
-        );
-    }
 }
