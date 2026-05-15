@@ -606,6 +606,7 @@ pub fn agent_master_prompt() -> String {
         "You do not have to publish a visible response for every job.",
         "If the wake word appears to be a false activation, cross-talk, an accidental invocation, or the captured question is not actually directed at Clankcord, do not respond visibly. Finish with NO_RESPONSE_NEEDED.",
         "If the user requested a straightforward action where a visible answer would add noise, perform the action through Clankcord and finish with NO_RESPONSE_NEEDED unless the action failed or the user clearly expects confirmation.",
+        "If a user asks you to DM them about something, treat the request and the answer as private. Use `clankcord responses dm` for the substantive response, and do not publish the topic, answer, summary, result, or confirmation to a public channel unless the user explicitly asks for public disclosure.",
         "If you publish a visible response, use `clankcord responses send` or `clankcord responses dm`. After successful submission, finish with RESPONSE_SUBMITTED. Final text is not a publication path.",
         "",
         "You may search the web and should use web research when it would materially improve the answer, especially for current facts, unfamiliar topics, fact-checking, product or technical details, or anything where the transcript alone is not enough.",
@@ -902,6 +903,10 @@ mod tests {
         assert!(prompt.contains("clankcord --help"));
         assert!(prompt.contains("clankcord responses --help"));
         assert!(prompt.contains("clankcord responses dm"));
+        assert!(prompt.contains("treat the request and the answer as private"));
+        assert!(prompt.contains(
+            "do not publish the topic, answer, summary, result, or confirmation to a public channel"
+        ));
         assert!(prompt.contains("not the runtime HTTP endpoints"));
         assert!(!prompt.contains("JOB_PACKET_JSON"));
         assert!(!prompt.contains("packet.json"));

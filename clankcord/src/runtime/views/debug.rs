@@ -807,6 +807,8 @@ async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
     let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
     let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
+    let session_id = agent_job_session_id(job, &codex);
+    let session = agent_session_payload(runtime, job, &codex).await?;
     Ok(json!({
         "job": job.to_value(),
         "paths": {
@@ -820,11 +822,19 @@ async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
         "result": read_text_artifact(&metadata.result_path, AGENT_ARTIFACT_MAX_BYTES),
         "raw": raw,
         "codex": codex,
-        "session": agent_session_payload(runtime, job).await?,
+        "trace": {
+            "selectedJobId": job.id.clone(),
+            "selectedSessionId": session_id,
+        },
+        "session": session,
     }))
 }
 
-async fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Value> {
+async fn agent_session_payload(
+    runtime: &Runtime,
+    selected: &Job,
+    selected_codex: &Value,
+) -> Result<Value> {
     let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.voice_channel_id);
     let mut jobs = runtime
         .timeline_store
@@ -838,19 +848,23 @@ async fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Valu
         .into_iter()
         .find(|session| session.key == key)
         .map(|session| session.to_json());
+    let selected_session_id = agent_job_session_id(selected, selected_codex);
     jobs.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
             .then_with(|| left.id.cmp(&right.id))
     });
-    let truncated = jobs.len() > AGENT_SESSION_JOB_LIMIT;
-    if truncated {
-        jobs = jobs[jobs.len().saturating_sub(AGENT_SESSION_JOB_LIMIT)..].to_vec();
-    }
-    let rows = jobs
+    let channel_job_count = jobs.len();
+    let mut rows = jobs
         .iter()
+        .filter(|job| agent_job_matches_selected_session(*job, selected, &selected_session_id))
         .map(agent_session_job_payload)
         .collect::<Vec<_>>();
+    let total_job_count = rows.len();
+    let truncated = rows.len() > AGENT_SESSION_JOB_LIMIT;
+    if truncated {
+        rows = rows[rows.len().saturating_sub(AGENT_SESSION_JOB_LIMIT)..].to_vec();
+    }
     let transcript = agent_session_transcript(&rows);
     let mut timeline = Vec::new();
     for row in &rows {
@@ -864,14 +878,28 @@ async fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Valu
         for mut event in events {
             if let Value::Object(object) = &mut event {
                 object.insert("job_id".to_string(), json!(job_id));
+                object.insert(
+                    "selected".to_string(),
+                    json!(job_id == selected.id.as_str()),
+                );
             }
             timeline.push(event);
         }
     }
+    let scope = if selected_session_id.trim().is_empty() {
+        "selected_job"
+    } else {
+        "codex_session"
+    };
     Ok(json!({
         "key": key,
+        "scope": scope,
+        "selectedJobId": selected.id.clone(),
+        "sessionId": selected_session_id,
         "current": current,
         "jobCount": rows.len(),
+        "totalJobCount": total_job_count,
+        "channelJobCount": channel_job_count,
         "truncated": truncated,
         "jobs": rows,
         "transcript": {
@@ -882,6 +910,32 @@ async fn agent_session_payload(runtime: &Runtime, selected: &Job) -> Result<Valu
             "timeline": timeline,
         },
     }))
+}
+
+fn agent_job_session_id(job: &Job, codex: &Value) -> String {
+    non_empty(
+        agent_job_metadata_session_id(job),
+        string_field(codex, "sessionId"),
+    )
+}
+
+fn agent_job_metadata_session_id(job: &Job) -> String {
+    job.metadata
+        .agent_task()
+        .map(|task| task.agent.session_id.clone())
+        .unwrap_or_default()
+}
+
+fn agent_job_matches_selected_session(
+    job: &Job,
+    selected: &Job,
+    selected_session_id: &str,
+) -> bool {
+    if job.id == selected.id {
+        return true;
+    }
+    !selected_session_id.trim().is_empty()
+        && agent_job_metadata_session_id(job) == selected_session_id
 }
 
 fn agent_session_job_payload(job: &Job) -> Value {

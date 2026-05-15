@@ -63,6 +63,8 @@ window.dashboard = function dashboard() {
     selectedAgentJobId: '',
     selectedAutomationId: '',
     agentDetails: {},
+    agentDetailLoadingId: '',
+    agentDetailErrors: {},
     autoRefresh: true,
     timer: null,
     lastSubwindowScrollAt: 0,
@@ -185,7 +187,9 @@ window.dashboard = function dashboard() {
       if (!this.selectedJobId || !allJobs.some((job) => job.job_id === this.selectedJobId)) {
         this.selectedJobId = allJobs[0]?.job_id || '';
       }
-      if (!this.selectedAgentJobId || !this.agentJobs.some((entry) => entry.job?.job_id === this.selectedAgentJobId)) {
+      const selectedAgentInOverview = this.agentJobs.some((entry) => entry.job?.job_id === this.selectedAgentJobId);
+      const selectedAgentHasDetail = Boolean(this.agentDetails[this.selectedAgentJobId]);
+      if (!this.selectedAgentJobId || (!selectedAgentInOverview && !selectedAgentHasDetail)) {
         this.selectedAgentJobId = this.agentJobs[0]?.job?.job_id || '';
       }
       if (!this.selectedAutomationId || !this.automations.some((record) => record.automation_id === this.selectedAutomationId)) {
@@ -203,7 +207,9 @@ window.dashboard = function dashboard() {
 
     selectAgentJob(jobId) {
       this.selectedAgentJobId = jobId || '';
-      this.loadSelectedAgentDetail({ force: true });
+      if (this.selectedAgentJobId) {
+        this.loadSelectedAgentDetail({ force: true });
+      }
     },
 
     selectAutomation(automationId) {
@@ -211,16 +217,34 @@ window.dashboard = function dashboard() {
     },
 
     async loadSelectedAgentDetail(options = {}) {
-      const jobId = this.selectedAgentJobId;
+      const jobId = options.jobId || this.selectedAgentJobId;
       if (!jobId) return;
       const cached = this.agentDetails[jobId];
       if (cached && !options.force && !this.isActiveState(cached.job?.state)) return;
+      this.agentDetailLoadingId = jobId;
       try {
         const response = await fetch(`${rootPrefix}/v1/voice/debug/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
         if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-        this.agentDetails[jobId] = await response.json();
+        const detail = await response.json();
+        const returnedJobId = detail?.job?.job_id || '';
+        if (returnedJobId !== jobId) {
+          throw new Error(`requested ${jobId}, received ${returnedJobId || 'empty job id'}`);
+        }
+        this.agentDetails = { ...this.agentDetails, [jobId]: detail };
+        this.agentDetailErrors = { ...this.agentDetailErrors, [jobId]: '' };
+        if (this.selectedAgentJobId === jobId && this.error.startsWith('Agent detail load failed:')) {
+          this.error = '';
+        }
       } catch (error) {
-        this.error = `Agent detail load failed: ${error.message}`;
+        const message = `Agent detail load failed: ${error.message}`;
+        this.agentDetailErrors = { ...this.agentDetailErrors, [jobId]: message };
+        if (this.selectedAgentJobId === jobId) {
+          this.error = message;
+        }
+      } finally {
+        if (this.agentDetailLoadingId === jobId) {
+          this.agentDetailLoadingId = '';
+        }
       }
     },
 
@@ -349,7 +373,14 @@ window.dashboard = function dashboard() {
 
     selectedAgentEntry() {
       const jobId = this.selectedAgentJobId;
-      return this.agentDetails[jobId] || this.agentJobs.find((entry) => entry.job?.job_id === jobId) || null;
+      const detail = this.agentDetails[jobId];
+      if (detail) return detail;
+      const overview = this.agentJobs.find((entry) => entry.job?.job_id === jobId);
+      if (overview) return overview;
+      if (jobId && this.agentDetailLoadingId === jobId) {
+        return { job: { job_id: jobId, state: 'loading', kind: 'agent_task' }, codex: {}, session: null };
+      }
+      return null;
     },
 
     selectedAgentJob() {
@@ -362,6 +393,14 @@ window.dashboard = function dashboard() {
 
     selectedAgentSession() {
       return this.selectedAgentEntry()?.session || null;
+    },
+
+    selectedAgentDetailLoading() {
+      return this.selectedAgentJobId !== '' && this.agentDetailLoadingId === this.selectedAgentJobId;
+    },
+
+    selectedAgentDetailError() {
+      return this.agentDetailErrors[this.selectedAgentJobId] || '';
     },
 
     selectedAutomation() {
@@ -398,10 +437,12 @@ window.dashboard = function dashboard() {
         ['Requester', job.requested_by_user_id],
         ['Model', codex.model || metadata.agent?.model || ''],
         ['Session', codex.sessionId || metadata.agent?.session_id || ''],
+        ['Trace Scope', entry?.session?.scope || ''],
         ['Workdir', entry?.workdir?.path || metadata.workdir_path || ''],
         ['Context', this.contextUsageLabel(stats)],
         ['Events', codex.eventCount ?? 0],
         ['Session Jobs', entry?.session?.jobCount ?? ''],
+        ['Channel Jobs', entry?.session?.channelJobCount ?? ''],
       ].map(([label, value]) => ({ label, value: textValue(value) }));
     },
 
@@ -532,11 +573,17 @@ window.dashboard = function dashboard() {
       return Array.from(groups.values());
     },
 
-    sessionTrace() {
-      const sessionTrace = this.selectedAgentSession()?.codex?.timeline || [];
-      if (sessionTrace.length) return sessionTrace;
+    selectedAgentTrace() {
       const codex = this.selectedAgentCodex();
       return codex.timeline?.length ? codex.timeline : this.mergedCodexEvents(codex);
+    },
+
+    selectedAgentSessionTrace() {
+      return this.selectedAgentSession()?.codex?.timeline || [];
+    },
+
+    sessionTrace() {
+      return this.selectedAgentTrace();
     },
 
     mergedCodexEvents(codex) {

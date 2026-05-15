@@ -276,6 +276,8 @@
         <section>
           <h2><span>Selected Agent Job</span><small x-text="selectedAgentJobId"></small></h2>
           <div class="detail agent-detail scroll-region" x-show="selectedAgentEntry()">
+            <div class="empty" x-show="selectedAgentDetailLoading()">Loading selected agent job...</div>
+            <div class="error inline-error" x-show="selectedAgentDetailError()" x-text="selectedAgentDetailError()"></div>
             <div class="detail-head">
               <span class="pill" :class="statusClass(selectedAgentJob()?.kind)" x-text="selectedAgentJob()?.kind"></span>
               <span class="pill" :class="statusClass(selectedAgentJob()?.state)" x-text="selectedAgentJob()?.state"></span>
@@ -287,9 +289,9 @@
               </template>
             </div>
             <div class="embedded-panel">
-              <h2><span>Session Trace</span><small x-text="`${sessionTrace().length} events`"></small></h2>
+              <h2><span>Selected Job Trace</span><small x-text="`${selectedAgentTrace().length} events`"></small></h2>
               <div class="agent-trace scroll-region">
-                <template x-for="(event, index) in sessionTrace()" :key="`${event.job_id || 'event'}:${index}`">
+                <template x-for="(event, index) in selectedAgentTrace()" :key="`${selectedAgentJobId}:${event.job_id || event.callId || 'event'}:${index}`">
                   <article class="timeline-card">
                     <div class="timeline-head">
                       <div class="detail-tags">
@@ -303,10 +305,30 @@
                     <pre x-text="traceBody(event)"></pre>
                   </article>
                 </template>
-                <div class="empty" x-show="!sessionTrace().length">No Codex trace captured yet.</div>
+                <div class="empty" x-show="!selectedAgentTrace().length && !selectedAgentDetailLoading()">No Codex trace captured for the selected job.</div>
               </div>
             </div>
-            <details open><summary>Cumulative Session Text</summary><pre x-text="selectedAgentSession()?.transcript?.content || ''"></pre></details>
+            <details open><summary>Session History Text</summary><pre x-text="selectedAgentSession()?.transcript?.content || ''"></pre></details>
+            <details><summary>Session Trace</summary>
+              <div class="agent-trace scroll-region">
+                <template x-for="(event, index) in selectedAgentSessionTrace()" :key="`session:${selectedAgentJobId}:${event.job_id || event.callId || 'event'}:${index}`">
+                  <article class="timeline-card">
+                    <div class="timeline-head">
+                      <div class="detail-tags">
+                        <span class="pill" :class="statusClass(event.kind)" x-text="event.kind"></span>
+                        <span class="pill" x-show="event.role" x-text="event.role"></span>
+                        <span class="pill" x-show="event.name" x-text="event.name"></span>
+                        <span class="pill" x-show="event.selected">selected</span>
+                        <span class="muted" x-text="ago(event.timestamp)"></span>
+                      </div>
+                      <span class="mono" x-text="short(event.job_id || event.callId || '', 18)"></span>
+                    </div>
+                    <pre x-text="traceBody(event)"></pre>
+                  </article>
+                </template>
+                <div class="empty" x-show="!selectedAgentSessionTrace().length">No session trace captured.</div>
+              </div>
+            </details>
             <details><summary>Prompt Sent For Selected Job</summary><pre x-text="selectedAgentEntry()?.prompt?.content || ''"></pre></details>
             <details><summary>Agent Workdir</summary><pre x-text="json(selectedAgentEntry()?.workdir || {})"></pre></details>
             <details><summary>Raw Codex JSONL</summary><pre x-text="selectedAgentEntry()?.raw?.content || ''"></pre></details>

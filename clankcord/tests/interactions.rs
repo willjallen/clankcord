@@ -12,6 +12,10 @@ fn agent_task_message_uses_compact_transcript_context() {
     assert!(message.contains("clankcord responses --help"));
     assert!(message.contains("clankcord responses send"));
     assert!(message.contains("clankcord responses dm"));
+    assert!(message.contains("treat the request and the answer as private"));
+    assert!(message.contains(
+        "do not publish the topic, answer, summary, result, or confirmation to a public channel"
+    ));
     assert!(message.contains("RESPONSE_SUBMITTED"));
     assert!(message.contains("NO_RESPONSE_NEEDED"));
     assert!(message.contains("Final text is not a publication path"));
