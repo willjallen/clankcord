@@ -436,10 +436,10 @@
         </div>
         <div class="stack">
           <section>
-            <h2><span>Job Latency Windows</span><small>queue / run / total</small></h2>
+            <h2><span>Job Latency Windows</span><small>ready delay / queue / run / total</small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Window</th><th>Jobs</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Run p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Failed</th></tr></thead>
+                <thead><tr><th>Window</th><th>Jobs</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Run p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Failed</th></tr></thead>
                 <tbody>
                   <template x-for="window in latencyWindows()" :key="window.label">
                     <tr>
@@ -448,6 +448,7 @@
                       <td x-text="latencyValue(window.all, 'totalMs', 'p50')"></td>
                       <td x-text="latencyValue(window.all, 'totalMs', 'p95')"></td>
                       <td x-text="latencyValue(window.all, 'totalMs', 'max')"></td>
+                      <td x-text="latencyValue(window.all, 'readyDelayMs', 'p95')"></td>
                       <td x-text="latencyValue(window.all, 'runMs', 'p95')"></td>
                       <td x-text="latencyValue(window.all, 'queueMs', 'p95')"></td>
                       <td x-text="latencyValue(window.stt, 'totalMs', 'p95')"></td>
@@ -510,7 +511,7 @@
             <h2><span>Latency By Job Type</span><small>last hour</small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Run p95</th><th>Queue p95</th></tr></thead>
+                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Run p95</th><th>Queue p95</th></tr></thead>
                 <tbody>
                   <template x-for="row in latencyKindRows()" :key="row.kind">
                     <tr>
@@ -520,6 +521,7 @@
                       <td x-text="latencyValue(row, 'totalMs', 'p50')"></td>
                       <td x-text="latencyValue(row, 'totalMs', 'p95')"></td>
                       <td x-text="latencyValue(row, 'totalMs', 'max')"></td>
+                      <td x-text="latencyValue(row, 'readyDelayMs', 'p95')"></td>
                       <td x-text="latencyValue(row, 'runMs', 'p95')"></td>
                       <td x-text="latencyValue(row, 'queueMs', 'p95')"></td>
                     </tr>

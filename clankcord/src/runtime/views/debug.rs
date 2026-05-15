@@ -830,6 +830,7 @@ fn latency_by_kind(rows: &[JobDiagnosticRow], since_ms: i64) -> Vec<Value> {
 }
 
 fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str>) -> Value {
+    let mut ready_delay_ms = Vec::new();
     let mut queue_ms = Vec::new();
     let mut run_ms = Vec::new();
     let mut total_ms = Vec::new();
@@ -850,9 +851,10 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
         if row.is_failed() {
             failed += 1;
         }
-        total_ms.push((completed_at_ms - row.created_at_ms).max(0));
+        ready_delay_ms.push((row.ready_at_ms - row.created_at_ms).max(0));
+        total_ms.push((completed_at_ms - row.ready_at_ms).max(0));
         if let Some(started_at_ms) = row.started_at_ms {
-            queue_ms.push((started_at_ms - row.created_at_ms).max(0));
+            queue_ms.push((started_at_ms - row.ready_at_ms).max(0));
             run_ms.push((completed_at_ms - started_at_ms).max(0));
         }
         latest_ms = Some(latest_ms.map_or(completed_at_ms, |latest| latest.max(completed_at_ms)));
@@ -861,6 +863,7 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
     json!({
         "count": count,
         "failed": failed,
+        "readyDelayMs": latency_metric(ready_delay_ms),
         "queueMs": latency_metric(queue_ms),
         "runMs": latency_metric(run_ms),
         "totalMs": latency_metric(total_ms),
