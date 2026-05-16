@@ -10,21 +10,23 @@
       .replaceAll("'", '&#39;');
   }
 
-  function ensureTable(id, columns, rowClick) {
+  function ensureTable(id, columns, rowClick, options = {}) {
     const element = document.getElementById(id);
     if (!element) return null;
     if (!window.Tabulator) throw new Error('Tabulator is required by the dashboard');
     if (!tables.has(id)) {
-      const entry = { table: null, built: false, pendingData: null };
+      const entry = { table: null, element, built: false, pendingData: null, sort: options.initialSort || [] };
       const table = new window.Tabulator(element, {
         data: [],
         columns,
         height: '420px',
-        layout: 'fitDataStretch',
+        index: 'rowId',
+        layout: 'fitColumns',
         movableColumns: true,
         resizableColumnFit: true,
-        persistence: { columns: true, sort: true },
+        persistence: { columns: true },
         placeholder: 'No rows match the current filters.',
+        ...options,
       });
       table.on('rowClick', rowClick);
       table.on('tableBuilt', () => {
@@ -33,6 +35,7 @@
           table.replaceData(entry.pendingData);
           entry.pendingData = null;
         }
+        if (entry.sort.length) table.setSort(entry.sort);
       });
       entry.table = table;
       tables.set(id, entry);
@@ -43,49 +46,59 @@
   function replaceData(entry, rows) {
     if (!entry) return;
     if (entry.built) {
-      entry.table.replaceData(rows);
+      const holder = entry.element.querySelector('.tabulator-tableholder');
+      const scroll = holder ? { left: holder.scrollLeft, top: holder.scrollTop } : null;
+      const replaced = entry.table.replaceData(rows);
+      const restore = () => {
+        if (entry.sort.length) entry.table.setSort(entry.sort);
+        const nextHolder = entry.element.querySelector('.tabulator-tableholder');
+        if (nextHolder && scroll) {
+          nextHolder.scrollLeft = scroll.left;
+          nextHolder.scrollTop = scroll.top;
+        }
+      };
+      if (replaced && typeof replaced.then === 'function') {
+        replaced.then(() => requestAnimationFrame(restore));
+      } else {
+        requestAnimationFrame(restore);
+      }
     } else {
       entry.pendingData = rows;
     }
   }
 
-  function pillFormatter(field) {
+  function pillFormatter(field, classField = `${field}Class`) {
     return (cell) => {
       const row = cell.getRow().getData();
-      return `<span class="pill ${escapeHtml(row[`${field}Class`] || '')}">${escapeHtml(cell.getValue())}</span>`;
+      return `<span class="pill ${escapeHtml(row[classField] || '')}">${escapeHtml(cell.getValue())}</span>`;
     };
   }
 
-  function renderJobs(app) {
-    const table = ensureTable('job-explorer-table', [
-      { title: 'Job', field: 'jobId', width: 150, frozen: true, headerFilter: 'input' },
-      { title: 'Kind', field: 'kind', width: 150, formatter: pillFormatter('kind'), headerFilter: 'list', headerFilterParams: { valuesLookup: true, clearable: true } },
-      { title: 'State', field: 'state', width: 150, formatter: pillFormatter('state'), headerFilter: 'list', headerFilterParams: { valuesLookup: true, clearable: true } },
-      { title: 'Command', field: 'command', width: 150, headerFilter: 'input' },
-      { title: 'Room', field: 'room', width: 180, headerFilter: 'input' },
-      { title: 'Requester', field: 'requester', width: 160, headerFilter: 'input' },
-      { title: 'Attempts', field: 'attempts', width: 100, hozAlign: 'right', sorter: 'number' },
-      { title: 'Updated', field: 'updatedAgo', width: 115 },
-      { title: 'Detail', field: 'detail', minWidth: 360, formatter: 'textarea', headerFilter: 'input' },
-    ], (_event, row) => app.selectExplorerRecord('job', row.getData().__record));
-    replaceData(table, app.jobExplorerRows());
-  }
-
-  function renderTimeline(app) {
-    const table = ensureTable('timeline-explorer-table', [
-      { title: 'When', field: 'when', width: 115, frozen: true },
-      { title: 'Event', field: 'kind', width: 190, formatter: pillFormatter('kind'), headerFilter: 'list', headerFilterParams: { valuesLookup: true, clearable: true } },
-      { title: 'Room', field: 'room', width: 180, headerFilter: 'input' },
-      { title: 'Speaker', field: 'speaker', width: 170, headerFilter: 'input' },
-      { title: 'Detail', field: 'detail', minWidth: 420, formatter: 'textarea', headerFilter: 'input' },
-      { title: 'Id', field: 'id', width: 180, headerFilter: 'input' },
-    ], (_event, row) => app.selectExplorerRecord('event', row.getData().__record));
-    replaceData(table, app.timelineExplorerRows());
+  function renderUnifiedTimeline(app) {
+    const table = ensureTable('unified-timeline-table', [
+      { title: 'When', field: 'whenMs', width: 95, frozen: true, sorter: 'number', formatter: (cell) => escapeHtml(cell.getRow().getData().when) },
+      { title: 'Record', field: 'recordType', width: 85, headerSort: false, formatter: pillFormatter('recordType', 'recordClass') },
+      { title: 'Event', field: 'eventKind', width: 165, headerSort: false, formatter: pillFormatter('eventKind', 'eventClass') },
+      { title: 'Job Type', field: 'jobKind', width: 165, headerSort: false, formatter: pillFormatter('jobKind', 'jobClass') },
+      { title: 'State', field: 'state', width: 105, headerSort: false, formatter: pillFormatter('state') },
+      { title: 'Command', field: 'command', width: 105, headerSort: false },
+      { title: 'Room', field: 'room', width: 150, headerSort: false },
+      { title: 'Actor', field: 'actor', width: 150, headerSort: false },
+      { title: 'Detail', field: 'detail', minWidth: 220, widthGrow: 2, headerSort: false, formatter: 'textarea' },
+      { title: 'Id', field: 'id', width: 170, headerSort: false },
+    ], (_event, row) => {
+      const data = row.getData();
+      app.selectExplorerRecord(data.__kind, data.__record);
+    }, {
+      height: '620px',
+      initialSort: [{ column: 'whenMs', dir: 'desc' }],
+    });
+    table.sort = [{ column: 'whenMs', dir: 'desc' }];
+    replaceData(table, app.timelineRecordRows());
   }
 
   function render(app) {
-    renderJobs(app);
-    renderTimeline(app);
+    renderUnifiedTimeline(app);
   }
 
   window.ClankDashboardTables = { render };

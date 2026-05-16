@@ -47,59 +47,10 @@
       </template>
     </section>
 
-    <div class="view active" x-show="activeView === 'explore'">
-      <section>
-        <h2><span>Explorer Filters</span><small x-text="exploreCountLabel()"></small></h2>
-        <div class="filter-grid">
-          <label>Room
-            <select x-model="filters.globalRoom" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
-            </select>
-          </label>
-          <label>Guild
-            <select x-model="filters.globalGuild" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="guild in guildOptions()" :key="guild"><option :value="guild" x-text="short(guild, 28)"></option></template>
-            </select>
-          </label>
-          <label>Job Type
-            <select x-model="filters.globalJobKind" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="kind in jobKindOptions()" :key="kind"><option :value="kind" x-text="kind"></option></template>
-            </select>
-          </label>
-          <label>Job State
-            <select x-model="filters.globalJobState" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="state in jobStateOptions()" :key="state"><option :value="state" x-text="state"></option></template>
-            </select>
-          </label>
-          <label>Requester
-            <select x-model="filters.globalRequester" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="requester in requesterOptions()" :key="requester"><option :value="requester" x-text="short(requester, 28)"></option></template>
-            </select>
-          </label>
-          <label>Event Type
-            <select x-model="filters.globalEventKind" @change="globalFilterChanged()">
-              <option value="">All</option>
-              <template x-for="kind in timelineKinds()" :key="kind"><option :value="kind" x-text="kind"></option></template>
-            </select>
-          </label>
-          <label>Search
-            <input type="search" x-model.debounce.150ms="filters.globalSearch" @input.debounce.150ms="globalFilterChanged()" autocomplete="off">
-          </label>
-          <div class="filter-actions">
-            <label class="check"><input type="checkbox" x-model="filters.globalIncludeTerminal" @change="globalFilterChanged()"> Terminal</label>
-            <button type="button" @click="clearExploreFilters()">Clear</button>
-          </div>
-        </div>
-      </section>
-
+    <div class="view active" x-show="activeView === 'overview'">
       <div class="chart-grid">
         <section>
-          <h2><span>Jobs By Type And State</span><small>click bars to filter</small></h2>
+          <h2><span>Jobs By Type And State</span><small>click bars to filter timeline</small></h2>
           <div id="job-mix-chart" class="chart-host"></div>
         </section>
         <section>
@@ -107,7 +58,7 @@
           <div id="latency-kind-chart" class="chart-host"></div>
         </section>
         <section>
-          <h2><span>Timeline Activity</span><small>click lines to filter event type</small></h2>
+          <h2><span>Timeline Activity</span><small>click lines to filter timeline</small></h2>
           <div id="event-trend-chart" class="chart-host"></div>
         </section>
         <section>
@@ -115,39 +66,6 @@
           <div id="room-activity-chart" class="chart-host"></div>
         </section>
       </div>
-
-      <div class="explorer-layout">
-        <div class="stack">
-          <section>
-            <h2><span>Job Explorer</span><small x-text="`${filteredJobs().length}/${allJobs().length}`"></small></h2>
-            <div id="job-explorer-table" class="tabulator-host"></div>
-          </section>
-          <section>
-            <h2><span>Timeline Explorer</span><small x-text="`${filteredTimelineEvents().length}/${timelineEvents.length}`"></small></h2>
-            <div id="timeline-explorer-table" class="tabulator-host"></div>
-          </section>
-        </div>
-        <section>
-          <h2><span>Selected Record</span><small x-text="explorerSelectionLabel()"></small></h2>
-          <div class="detail scroll-region explorer-detail">
-            <div class="detail-head" x-show="explorerSelection.kind">
-              <span class="pill" :class="statusClass(explorerSelection.kind)" x-text="explorerSelection.kind"></span>
-              <span class="mono" x-text="explorerSelectionId()"></span>
-              <button type="button" @click="copyExplorerJson()">Copy JSON</button>
-            </div>
-            <div class="lifecycle-grid" x-show="explorerSelection.kind === 'job'">
-              <template x-for="item in selectedExplorerJobLifecycle()" :key="item.label">
-                <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
-              </template>
-            </div>
-            <div class="json-tree" x-ref="explorerJson"></div>
-            <div class="empty" x-show="!explorerSelection.kind">Select a job or timeline event.</div>
-          </div>
-        </section>
-      </div>
-    </div>
-
-    <div class="view active" x-show="activeView === 'overview'">
       <div class="layout overview-grid">
         <div class="stack">
           <section>
@@ -226,87 +144,6 @@
       </div>
     </div>
 
-    <div class="view active" x-show="activeView === 'jobs'">
-      <div class="panel-toolbar">
-        <label>Limit
-          <select x-model.number="filters.jobsLimit" @change="filterChanged()">
-            <option>80</option><option>120</option><option>250</option><option>500</option>
-          </select>
-        </label>
-      </div>
-      <div class="jobs-layout">
-        <section>
-          <h2><span>Active Jobs</span><small x-text="activeJobs.length"></small></h2>
-          <div class="table-wrap tall scroll-region">
-            <table>
-              <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Command</th><th>Parent</th><th>Attempts</th><th>Updated</th><th>Detail</th></tr></thead>
-              <tbody>
-                <template x-for="job in activeJobs" :key="job.job_id">
-                  <tr class="selectable" :class="{selected: selectedJobId === job.job_id}" @click="selectJob(job.job_id)">
-                    <td class="mono" x-text="short(job.job_id)"></td>
-                    <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
-                    <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
-                    <td x-text="commandKind(job)"></td>
-                    <td class="mono" x-text="short(job.parent_job_id || job.root_job_id || '', 16)"></td>
-                    <td x-text="job.attempts ?? 0"></td>
-                    <td x-text="ago(jobTime(job))"></td>
-                    <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <div class="empty" x-show="!activeJobs.length">No active jobs.</div>
-          </div>
-        </section>
-        <section>
-          <h2><span>Selected Job</span><small x-text="selectedJobId"></small></h2>
-          <div class="detail scroll-region" x-show="selectedJob()">
-            <div class="detail-head">
-              <span class="pill" :class="statusClass(selectedJob()?.kind)" x-text="selectedJob()?.kind"></span>
-              <span class="pill" :class="statusClass(selectedJob()?.state)" x-text="selectedJob()?.state"></span>
-              <span class="pill" x-show="commandKind(selectedJob())" x-text="commandKind(selectedJob())"></span>
-            </div>
-            <div class="kv-grid">
-              <template x-for="item in selectedJobFacts()" :key="item.label">
-                <div class="kv"><div class="k" x-text="item.label"></div><div class="v mono" x-text="item.value"></div></div>
-              </template>
-            </div>
-            <div class="kv" x-show="jobDetail(selectedJob())">
-              <div class="k">Detail</div>
-              <div class="v" x-text="jobDetail(selectedJob())"></div>
-            </div>
-            <details open><summary>Payload</summary><pre x-text="json(selectedJob()?.payload || {})"></pre></details>
-            <details><summary>Metadata</summary><pre x-text="json(selectedJob()?.metadata || {})"></pre></details>
-            <details><summary>Job Record</summary><pre x-text="json(selectedJob())"></pre></details>
-          </div>
-          <div class="empty" x-show="!selectedJob()">No job selected.</div>
-        </section>
-      </div>
-      <section>
-        <h2><span>Recent Jobs</span><small x-text="recentJobs.length"></small></h2>
-        <div class="table-wrap tall scroll-region">
-          <table>
-            <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Command</th><th>Parent</th><th>Attempts</th><th>Updated</th><th>Detail</th></tr></thead>
-            <tbody>
-              <template x-for="job in recentJobs" :key="job.job_id">
-                <tr class="selectable" :class="{selected: selectedJobId === job.job_id}" @click="selectJob(job.job_id)">
-                  <td class="mono" x-text="short(job.job_id)"></td>
-                  <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
-                  <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
-                  <td x-text="commandKind(job)"></td>
-                  <td class="mono" x-text="short(job.parent_job_id || job.root_job_id || '', 16)"></td>
-                  <td x-text="job.attempts ?? 0"></td>
-                  <td x-text="ago(jobTime(job))"></td>
-                  <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-          <div class="empty" x-show="!recentJobs.length">No recent jobs.</div>
-        </div>
-      </section>
-    </div>
-
     <div class="view active" x-show="activeView === 'agents'">
       <div class="panel-toolbar">
         <label>Limit
@@ -344,14 +181,14 @@
             <h2><span>Agent Sessions</span><small x-text="agentSessions.length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Key</th><th>Status</th><th>Codex Session</th><th>Active Job</th><th>Runs</th><th>Last Used</th><th>Error</th></tr></thead>
+                <thead><tr><th>Key</th><th>Status</th><th>Codex Session</th><th>Latest Job</th><th>Runs</th><th>Last Used</th><th>Error</th></tr></thead>
                 <tbody>
                   <template x-for="session in agentSessions" :key="session.key">
-                    <tr>
+                    <tr class="selectable" @click="selectAgentSession(session)">
                       <td class="mono" x-text="short(session.key, 32)"></td>
                       <td><span class="pill" :class="statusClass(session.status)" x-text="session.status"></span></td>
                       <td class="mono" x-text="short(session.session_id, 20)"></td>
-                      <td class="mono" x-text="short(session.active_job_id, 18)"></td>
+                      <td class="mono" x-text="short(session.active_job_id || session.latest_job_id, 18)"></td>
                       <td x-text="session.invocation_count ?? 0"></td>
                       <td x-text="ago(session.last_used_at)"></td>
                       <td class="text-cell" x-text="short(session.last_error, 100)"></td>
@@ -794,8 +631,22 @@
 
     <div class="view active" x-show="activeView === 'timeline'">
       <section>
-        <h2><span>Timeline Events</span><small x-text="`${timelinePageEvents().length}/${timelineEvents.length}`"></small></h2>
-        <div class="filterbar">
+        <h2><span>Timeline</span><small x-text="timelineRecordCountLabel()"></small></h2>
+        <div class="timeline-filter-grid">
+          <div class="timeline-filter-buttons">
+            <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineRecordTypes')}" @click="toggleTimelineFilterEditor('timelineRecordTypes')">
+              <span>Record</span><strong x-text="timelineFilterSummary('timelineRecordTypes')"></strong>
+            </button>
+            <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineKinds')}" @click="toggleTimelineFilterEditor('timelineKinds')">
+              <span>Kind</span><strong x-text="timelineFilterSummary('timelineKinds')"></strong>
+            </button>
+            <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineJobStates')}" @click="toggleTimelineFilterEditor('timelineJobStates')">
+              <span>Job State</span><strong x-text="timelineFilterSummary('timelineJobStates')"></strong>
+            </button>
+            <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineChannels')}" @click="toggleTimelineFilterEditor('timelineChannels')">
+              <span>Channel</span><strong x-text="timelineFilterSummary('timelineChannels')"></strong>
+            </button>
+          </div>
           <label>Window
             <select x-model="filters.timelineSince" @change="filterChanged()">
               <option value="-15m">15m</option><option value="-1h">1h</option><option value="-6h">6h</option><option value="-24h">24h</option><option value="-3d">3d</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option>
@@ -806,40 +657,47 @@
               <option>80</option><option>150</option><option>300</option><option>600</option><option>1000</option>
             </select>
           </label>
-          <label>Event Type
-            <select x-model="filters.timelineKind" @change="timelineFilterChanged()">
-              <option value="">All</option>
-              <template x-for="kind in timelineKinds()" :key="kind"><option :value="kind" x-text="kind"></option></template>
-            </select>
-          </label>
-          <label>Channel
-            <select x-model="filters.timelineChannel" @change="timelineFilterChanged()">
-              <option value="">All</option>
-              <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
-            </select>
-          </label>
-          <label>Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" @input.debounce.150ms="timelineFilterChanged()" autocomplete="off"></label>
-          <button type="button" @click="clearTimelineFilters()">Clear</button>
+          <label class="timeline-search">Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" @input.debounce.150ms="timelineFilterChanged()" placeholder="/feedback" autocomplete="off"></label>
+          <button type="button" class="filter-clear" @click="clearTimelineFilters()">Clear</button>
         </div>
-        <div class="table-wrap tall scroll-region">
-          <table>
-            <thead><tr><th>When</th><th>Event Type</th><th>Room</th><th>Speaker</th><th>Text / Detail</th><th>Id</th></tr></thead>
-            <tbody>
-              <template x-for="event in timelinePageEvents()" :key="event.event_id || event.eventId || event.job_id">
-                <tr>
-                  <td x-text="ago(eventWhen(event))"></td>
-                  <td><span class="pill" :class="statusClass(eventKind(event))" x-text="eventKind(event)"></span></td>
-                  <td x-text="eventChannelName(event)"></td>
-                  <td x-text="eventSpeaker(event)"></td>
-                  <td class="text-cell" x-text="short(eventDetail(event), 180)"></td>
-                  <td class="mono" x-text="short(eventId(event), 20)"></td>
-                </tr>
-              </template>
-            </tbody>
-          </table>
-          <div class="empty" x-show="!timelinePageEvents().length">No timeline events match.</div>
+        <div class="timeline-filter-editor" x-show="timelineFilterEditor" @keydown.escape.window="closeTimelineFilterEditor()">
+          <div class="timeline-filter-editor-head">
+            <strong x-text="timelineFilterTitle(timelineFilterEditor)"></strong>
+            <div class="filter-actions">
+              <button type="button" @click="clearTimelineFilterValue(timelineFilterEditor)">All</button>
+              <button type="button" @click="closeTimelineFilterEditor()">Close</button>
+            </div>
+          </div>
+          <div class="timeline-option-grid">
+            <template x-for="option in timelineFilterOptionRows(timelineFilterEditor)" :key="option.id">
+              <label class="check timeline-option"><input type="checkbox" :checked="timelineFilterSelected(timelineFilterEditor, option.id)" @change="toggleTimelineFilterValue(timelineFilterEditor, option.id)"> <span x-text="option.label"></span></label>
+            </template>
+          </div>
         </div>
       </section>
+      <div class="timeline-stack">
+        <section>
+          <h2><span>Records</span><small x-text="timelineRecordCountLabel()"></small></h2>
+          <div id="unified-timeline-table" class="tabulator-host"></div>
+        </section>
+        <section>
+          <h2><span>Selected Record</span><small x-text="explorerSelectionLabel()"></small></h2>
+          <div class="detail scroll-region explorer-detail">
+            <div class="detail-head" x-show="explorerSelection.kind">
+              <span class="pill" :class="statusClass(explorerSelection.kind)" x-text="explorerSelection.kind"></span>
+              <span class="mono" x-text="explorerSelectionId()"></span>
+              <button type="button" @click="copyExplorerJson()">Copy JSON</button>
+            </div>
+            <div class="lifecycle-grid" x-show="explorerSelection.kind === 'job'">
+              <template x-for="item in selectedExplorerJobLifecycle()" :key="item.label">
+                <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
+              </template>
+            </div>
+            <div class="json-tree" x-ref="timelineJson"></div>
+            <div class="empty" x-show="!explorerSelection.kind">Select a timeline row.</div>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div class="view active" x-show="activeView === 'transcript'">

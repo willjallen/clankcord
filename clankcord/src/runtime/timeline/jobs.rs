@@ -465,6 +465,33 @@ impl TimelineStore {
             .await
     }
 
+    pub async fn list_jobs_updated_between(
+        &self,
+        since: DateTime<Utc>,
+        until: DateTime<Utc>,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        let limit = limit.clamp(1, 500) as i64;
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.ephemeral = FALSE
+              AND j.updated_at_ms >= $1
+              AND j.updated_at_ms <= $2
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(instant_ms_dt(since))
+        .bind(instant_ms_dt(until))
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
     pub async fn list_recent_jobs_with_visibility(
         &self,
         guild_id: Option<&str>,

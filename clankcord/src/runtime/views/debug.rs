@@ -3,7 +3,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use sqlx::Row;
 
@@ -12,6 +12,7 @@ use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
 use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
+use crate::runtime::jobs::AgentTaskMetadata;
 use crate::runtime::timeline::{
     event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
     utc_now,
@@ -32,6 +33,7 @@ pub struct DebugOverviewRequest {
     pub agent_limit: usize,
     pub timeline_since: String,
     pub timeline_limit: usize,
+    pub timeline_query: String,
     pub transcript_since: String,
     pub transcript_limit: usize,
     pub publication_limit: usize,
@@ -44,6 +46,7 @@ impl Default for DebugOverviewRequest {
             agent_limit: 120,
             timeline_since: "-1h".to_string(),
             timeline_limit: 120,
+            timeline_query: String::new(),
             transcript_since: "-24h".to_string(),
             transcript_limit: 250,
             publication_limit: 120,
@@ -105,13 +108,32 @@ impl Runtime {
             .timeline_store
             .list_jobs_by_kind(JobKind::AgentTask, agent_limit)
             .await?;
+        let recent_events = self
+            .recent_events(timeline_since, timeline_limit, &request.timeline_query)
+            .await
+            .context("loading recent timeline events for debug overview")?;
+        let timeline_context_job_records = self
+            .timeline_context_jobs(&recent_events, jobs_limit)
+            .await
+            .context("loading timeline context jobs for debug overview")?;
+        let timeline_querying = !request.timeline_query.trim().is_empty();
         let summary_jobs = merge_jobs(
             active_job_records
                 .iter()
                 .chain(failed_job_records.iter())
                 .chain(recent_job_records.iter())
-                .chain(agent_job_records.iter()),
+                .chain(agent_job_records.iter())
+                .chain(timeline_context_job_records.iter()),
         );
+        let recent_job_records = if timeline_querying {
+            timeline_context_job_records
+        } else {
+            merge_jobs(
+                recent_job_records
+                    .iter()
+                    .chain(timeline_context_job_records.iter()),
+            )
+        };
         let active_jobs = active_job_records
             .iter()
             .map(debug_job_value)
@@ -120,10 +142,6 @@ impl Runtime {
             .iter()
             .map(debug_job_value)
             .collect::<Vec<_>>();
-        let recent_events = self
-            .recent_events(timeline_since, timeline_limit)
-            .await
-            .context("loading recent timeline events for debug overview")?;
         let transcript_events = self
             .recent_transcript_events(transcript_since, transcript_limit)
             .await
@@ -191,8 +209,9 @@ impl Runtime {
         &self,
         since: Option<DateTime<Utc>>,
         limit: usize,
+        query: &str,
     ) -> Result<Vec<Value>> {
-        self.recent_events_by_kind(since, limit, None).await
+        self.recent_events_by_kind(since, limit, None, query).await
     }
 
     pub async fn recent_transcript_events(
@@ -201,7 +220,8 @@ impl Runtime {
         limit: usize,
     ) -> Result<Vec<Value>> {
         let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-        self.recent_events_by_kind(since, limit, Some(&kinds)).await
+        self.recent_events_by_kind(since, limit, Some(&kinds), "")
+            .await
     }
 
     async fn recent_events_by_kind(
@@ -209,27 +229,96 @@ impl Runtime {
         since: Option<DateTime<Utc>>,
         limit: usize,
         kinds: Option<&BTreeSet<String>>,
+        query: &str,
     ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
-        for room in self.known_rooms() {
+        for (guild_id, channel_id) in self.debug_timeline_event_channels(since).await? {
             let mut room_events = self
                 .timeline_store
-                .load_events(
-                    &room.guild_id,
-                    &room.channel_id,
-                    since,
-                    None,
-                    kinds,
-                    None,
-                    false,
-                )
+                .load_events(&guild_id, &channel_id, since, None, kinds, None, false)
                 .await?;
             events.append(&mut room_events);
         }
         events.sort_by_key(|event| event_start(event).unwrap_or_else(utc_now));
+        let query = query.trim();
+        if !query.is_empty() {
+            let matched_indexes = events
+                .iter()
+                .enumerate()
+                .filter_map(|(index, event)| {
+                    debug_event_matches_query(event, query).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let mut selected_indexes = BTreeSet::new();
+            let context_each_side = limit.saturating_sub(1).min(80) / 2;
+            for index in matched_indexes.into_iter().rev() {
+                let start = index.saturating_sub(context_each_side);
+                let end = (index + context_each_side).min(events.len().saturating_sub(1));
+                for selected in start..=end {
+                    selected_indexes.insert(selected);
+                }
+                if selected_indexes.len() >= limit {
+                    break;
+                }
+            }
+            events = selected_indexes
+                .into_iter()
+                .filter_map(|index| events.get(index).cloned())
+                .collect();
+        }
         events.reverse();
         events.truncate(limit);
         Ok(events.into_iter().map(compact_debug_event).collect())
+    }
+
+    async fn debug_timeline_event_channels(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<(String, String)>> {
+        let rows = if let Some(since) = since {
+            sqlx::query(
+                r#"
+                SELECT DISTINCT guild_id, voice_channel_id
+                FROM timeline_events
+                WHERE forgotten = FALSE
+                  AND COALESCE(ended_at_ms, started_at_ms, created_at_ms) > $1
+                ORDER BY guild_id, voice_channel_id
+                "#,
+            )
+            .bind(instant_ms_dt(since))
+            .fetch_all(&self.timeline_store.pool)
+            .await?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT DISTINCT guild_id, voice_channel_id
+                FROM timeline_events
+                WHERE forgotten = FALSE
+                ORDER BY guild_id, voice_channel_id
+                "#,
+            )
+            .fetch_all(&self.timeline_store.pool)
+            .await?
+        };
+        rows.into_iter()
+            .map(|row| Ok((row.try_get("guild_id")?, row.try_get("voice_channel_id")?)))
+            .collect()
+    }
+
+    async fn timeline_context_jobs(&self, events: &[Value], limit: usize) -> Result<Vec<Job>> {
+        let Some(first) = events.iter().filter_map(event_start).min() else {
+            return Ok(Vec::new());
+        };
+        let Some(last) = events.iter().filter_map(event_start).max() else {
+            return Ok(Vec::new());
+        };
+        self.timeline_store
+            .list_jobs_updated_between(
+                first - Duration::minutes(10),
+                last + Duration::minutes(10),
+                limit,
+            )
+            .await
     }
 
     pub async fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
@@ -239,6 +328,18 @@ impl Runtime {
         }
         agent_job_payload(self, &job).await
     }
+}
+
+fn debug_event_matches_query(event: &Value, query: &str) -> bool {
+    let haystack = event.to_string().to_lowercase();
+    query
+        .split_whitespace()
+        .map(debug_search_term)
+        .all(|term| haystack.contains(&term))
+}
+
+fn debug_search_term(term: &str) -> String {
+    term.trim_start_matches('/').to_lowercase()
 }
 
 fn resolve_debug_since(
@@ -279,6 +380,7 @@ fn compact_debug_event(event: Value) -> Value {
         for key in [
             "event_id",
             "event_kind",
+            "kind",
             "guild_id",
             "guild_slug",
             "voice_channel_id",
@@ -291,9 +393,13 @@ fn compact_debug_event(event: Value) -> Value {
             "startedAt",
             "endedAt",
             "text",
+            "feedback_message",
             "reason",
             "state",
             "quality",
+            "job_id",
+            "job_kind",
+            "command_kind",
             "conversation_id",
             "capture_run_id",
             "segment_index",
@@ -1603,6 +1709,7 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
             ..AgentSession::default()
         });
         entry.invocation_count += 1;
+        entry.latest_job_id = job.id.clone();
         entry.last_used_at = job.updated_at.clone();
         if let Some(task) = job.metadata.agent_task() {
             if !task.agent.session_id.trim().is_empty() {
@@ -1836,11 +1943,7 @@ fn agent_session_transcript(rows: &[Value]) -> String {
 
 fn compact_agent_job_payload(job: &Job) -> Value {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
-    let usage = if metadata.agent.usage.is_empty() {
-        json!({})
-    } else {
-        usage_payload_info(&metadata.agent.usage.to_json())
-    };
+    let codex = compact_agent_codex_summary(&metadata);
     let mut job_value = Runtime::public_interaction_job_context(job);
     if let Value::Object(object) = &mut job_value {
         let metadata = job.metadata.to_json();
@@ -1863,19 +1966,46 @@ fn compact_agent_job_payload(job: &Job) -> Value {
         "prompt": artifact_stub(&metadata.prompt_path),
         "result": artifact_stub(&metadata.result_path),
         "raw": artifact_stub(&metadata.raw_result_path),
-        "codex": {
-            "sessionId": metadata.agent.session_id,
-            "model": metadata.agent.model,
-            "tokenUsage": usage,
-            "contextUsedTokens": token_usage_input_tokens(&usage),
-            "modelContextWindow": context_window_from_usage(&usage).unwrap_or(0),
-            "contextUsedPercent": context_used_percent(&usage),
-            "eventCount": 0,
-            "timeline": [],
-            "messages": [],
-            "toolCalls": [],
-        },
+        "codex": codex,
         "detailUrl": format!("/v1/voice/debug/agents/{}", job.id),
+    })
+}
+
+fn compact_agent_codex_summary(metadata: &AgentTaskMetadata) -> Value {
+    let needs_raw = metadata.agent.session_id.trim().is_empty()
+        || metadata.agent.model.trim().is_empty()
+        || metadata.agent.usage.is_empty();
+    let raw_trace = if needs_raw && !metadata.raw_result_path.trim().is_empty() {
+        let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
+        parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""))
+    } else {
+        json!({})
+    };
+    let usage = if metadata.agent.usage.is_empty() {
+        raw_trace
+            .get("tokenUsage")
+            .cloned()
+            .unwrap_or_else(|| json!({}))
+    } else {
+        usage_payload_info(&metadata.agent.usage.to_json())
+    };
+    json!({
+        "sessionId": first_non_empty([
+            metadata.agent.session_id.clone(),
+            string_field(&raw_trace, "sessionId"),
+        ]),
+        "model": first_non_empty([
+            metadata.agent.model.clone(),
+            string_field(&raw_trace, "model"),
+        ]),
+        "tokenUsage": usage,
+        "contextUsedTokens": token_usage_input_tokens(&usage),
+        "modelContextWindow": context_window_from_usage(&usage).unwrap_or(0),
+        "contextUsedPercent": context_used_percent(&usage),
+        "eventCount": raw_trace.get("eventCount").and_then(Value::as_u64).unwrap_or(0),
+        "timeline": [],
+        "messages": [],
+        "toolCalls": [],
     })
 }
 

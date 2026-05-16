@@ -7,8 +7,10 @@ const defaultFilters = {
   agentLimit: 120,
   timelineSince: '-1h',
   timelineLimit: 120,
-  timelineKind: '',
-  timelineChannel: '',
+  timelineRecordTypes: [],
+  timelineKinds: [],
+  timelineJobStates: [],
+  timelineChannels: [],
   timelineSearch: '',
   transcriptSince: '-24h',
   transcriptLimit: 250,
@@ -44,26 +46,25 @@ function firstText(values) {
 window.dashboard = function dashboard() {
   return {
     tabs: [
-      { id: 'explore', label: 'Explore' },
       { id: 'overview', label: 'Overview' },
-      { id: 'jobs', label: 'Jobs' },
+      { id: 'timeline', label: 'Timeline' },
       { id: 'agents', label: 'Agent Jobs' },
       { id: 'automations', label: 'Automations' },
       { id: 'health', label: 'Health' },
       { id: 'rooms', label: 'Rooms' },
       { id: 'control', label: 'Control' },
-      { id: 'timeline', label: 'Timeline' },
       { id: 'transcript', label: 'Transcript' },
       { id: 'raw', label: 'Raw' },
     ],
     data: null,
     loading: false,
     error: '',
-    activeView: localStorage.getItem(viewStorageKey) || 'explore',
+    activeView: localStorage.getItem(viewStorageKey) || 'overview',
     filters: { ...defaultFilters, ...storedJson(filterStorageKey, {}) },
     selectedJobId: '',
     selectedAgentJobId: '',
     selectedAutomationId: '',
+    timelineFilterEditor: '',
     ...window.ClankDashboardExplorer.initialState(),
     agentDetails: {},
     agentDetailLoadingId: '',
@@ -83,10 +84,20 @@ window.dashboard = function dashboard() {
 
     init() {
       if (!this.tabs.some((tab) => tab.id === this.activeView)) {
-        this.activeView = 'explore';
+        this.activeView = 'overview';
       }
       document.addEventListener('scroll', (event) => {
-        if (event.target?.closest?.('.scroll-region')) {
+        if (event.target?.closest?.('.scroll-region, .tabulator-host')) {
+          this.lastSubwindowScrollAt = Date.now();
+        }
+      }, true);
+      document.addEventListener('pointerdown', (event) => {
+        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor')) {
+          this.lastSubwindowScrollAt = Date.now();
+        }
+      }, true);
+      document.addEventListener('focusin', (event) => {
+        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor')) {
           this.lastSubwindowScrollAt = Date.now();
         }
       }, true);
@@ -122,16 +133,36 @@ window.dashboard = function dashboard() {
 
     timelineFilterChanged() {
       storeJson(filterStorageKey, this.filters);
+      this.refresh({ force: true });
+      this.scheduleRenderInteractive();
+    },
+
+    timelineLocalFilterChanged() {
+      storeJson(filterStorageKey, this.filters);
       this.scheduleRenderInteractive();
     },
 
     clearTimelineFilters() {
+      this.timelineFilterEditor = '';
       Object.assign(this.filters, {
-        timelineKind: '',
-        timelineChannel: '',
+        timelineRecordTypes: [],
+        timelineKinds: [],
+        timelineJobStates: [],
+        timelineChannels: [],
         timelineSearch: '',
       });
       this.timelineFilterChanged();
+    },
+
+    applyTimelineFilter(values = {}) {
+      this.timelineFilterEditor = '';
+      Object.assign(this.filters, values);
+      this.activateView('timeline');
+      if ('timelineSearch' in values || 'timelineSince' in values || 'timelineLimit' in values) {
+        this.timelineFilterChanged();
+      } else {
+        this.timelineLocalFilterChanged();
+      }
     },
 
     ...window.ClankDashboardExplorer.methods,
@@ -146,6 +177,7 @@ window.dashboard = function dashboard() {
         agentLimit: String(this.filters.agentLimit),
         timelineSince: this.filters.timelineSince,
         timelineLimit: String(this.filters.timelineLimit),
+        timelineSearch: textValue(this.filters.timelineSearch).trim(),
         transcriptSince: this.filters.transcriptSince,
         transcriptLimit: String(this.filters.transcriptLimit),
         publicationLimit: String(this.filters.publicationLimit),
@@ -154,9 +186,9 @@ window.dashboard = function dashboard() {
 
     shouldDeferAutoRefresh() {
       if (Date.now() - this.lastSubwindowScrollAt < 1800) return true;
-      if (document.querySelector('.scroll-region:hover')) return true;
+      if (document.querySelector('.scroll-region:hover, .tabulator-host:hover, .tabulator-popup-container')) return true;
       const active = document.activeElement;
-      return Boolean(active?.closest?.('.scroll-region'));
+      return Boolean(active?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor'));
     },
 
     async refresh(options = {}) {
@@ -192,6 +224,14 @@ window.dashboard = function dashboard() {
           left: element.scrollLeft,
           top: element.scrollTop,
         })),
+        tableHolders: Array.from(document.querySelectorAll('.tabulator-host')).map((element) => {
+          const holder = element.querySelector('.tabulator-tableholder');
+          return {
+            id: element.id,
+            left: holder?.scrollLeft || 0,
+            top: holder?.scrollTop || 0,
+          };
+        }),
       };
     },
 
@@ -204,6 +244,13 @@ window.dashboard = function dashboard() {
         if (element) {
           element.scrollLeft = region.left;
           element.scrollTop = region.top;
+        }
+      });
+      (snapshot.tableHolders || []).forEach((region) => {
+        const holder = document.getElementById(region.id)?.querySelector('.tabulator-tableholder');
+        if (holder) {
+          holder.scrollLeft = region.left;
+          holder.scrollTop = region.top;
         }
       });
     },
@@ -228,13 +275,24 @@ window.dashboard = function dashboard() {
 
     selectJob(jobId) {
       this.selectedJobId = jobId || '';
-      this.activateView('jobs');
+      const job = this.allJobs().find((record) => record.job_id === this.selectedJobId);
+      if (job) {
+        this.selectExplorerRecord('job', job);
+      }
+      this.activateView('timeline');
     },
 
     selectAgentJob(jobId) {
       this.selectedAgentJobId = jobId || '';
       if (this.selectedAgentJobId) {
         this.loadSelectedAgentDetail({ force: true });
+      }
+    },
+
+    selectAgentSession(session) {
+      const jobId = session?.active_job_id || session?.latest_job_id || '';
+      if (jobId) {
+        this.selectAgentJob(jobId);
       }
     },
 
@@ -589,6 +647,11 @@ window.dashboard = function dashboard() {
       this.rooms.forEach((room) => {
         if (room.channelId) channels.set(room.channelId, { id: room.channelId, label: this.roomName(room) });
       });
+      this.allJobs().forEach((job) => {
+        if (job.voice_channel_id && !channels.has(job.voice_channel_id)) {
+          channels.set(job.voice_channel_id, { id: job.voice_channel_id, label: this.roomLabel(job.voice_channel_id) });
+        }
+      });
       this.timelineEvents.concat(this.transcriptEvents).forEach((event) => {
         const id = this.eventChannelId(event);
         if (id && !channels.has(id)) channels.set(id, { id, label: this.eventChannelName(event) || id });
@@ -600,23 +663,122 @@ window.dashboard = function dashboard() {
       return Array.from(new Set(this.timelineEvents.map((event) => this.eventKind(event)).filter(Boolean))).sort();
     },
 
+    timelineRecordTypeOptions() {
+      return [
+        { id: 'event', label: 'Events' },
+        { id: 'job', label: 'Jobs' },
+      ];
+    },
+
+    timelineKindOptions() {
+      return Array.from(new Set([
+        ...this.timelineEvents.map((event) => this.eventKind(event)),
+        ...this.timelineEvents.map((event) => event?.job_kind),
+        ...this.allJobs().map((job) => job.kind),
+      ].filter(Boolean))).sort();
+    },
+
+    timelineJobStateOptions() {
+      return Array.from(new Set(this.allJobs().map((job) => job.state).filter(Boolean))).sort();
+    },
+
+    timelineFilterEditorOpen(field) {
+      return this.timelineFilterEditor === field;
+    },
+
+    toggleTimelineFilterEditor(field) {
+      this.timelineFilterEditor = this.timelineFilterEditor === field ? '' : field;
+      this.lastSubwindowScrollAt = Date.now();
+    },
+
+    closeTimelineFilterEditor() {
+      this.timelineFilterEditor = '';
+      this.lastSubwindowScrollAt = Date.now();
+    },
+
+    timelineFilterTitle(field) {
+      return {
+        timelineRecordTypes: 'Record',
+        timelineKinds: 'Kind',
+        timelineJobStates: 'Job State',
+        timelineChannels: 'Channel',
+      }[field] || '';
+    },
+
+    timelineFilterOptionRows(field) {
+      if (field === 'timelineRecordTypes') return this.timelineRecordTypeOptions();
+      if (field === 'timelineKinds') return this.timelineKindOptions().map((value) => ({ id: value, label: value }));
+      if (field === 'timelineJobStates') return this.timelineJobStateOptions().map((value) => ({ id: value, label: value }));
+      if (field === 'timelineChannels') return this.channelOptions();
+      return [];
+    },
+
+    timelineFilterValues(field) {
+      const values = Array.isArray(this.filters[field]) ? this.filters[field] : [];
+      return this.normalizeTimelineFilterValues(field, values);
+    },
+
+    normalizeTimelineFilterValues(field, values) {
+      const unique = Array.from(new Set(values.filter(Boolean)));
+      if (field === 'timelineRecordTypes' && unique.length === this.timelineRecordTypeOptions().length) {
+        return [];
+      }
+      return unique;
+    },
+
+    timelineFilterSelected(field, value) {
+      return this.timelineFilterValues(field).includes(value);
+    },
+
+    toggleTimelineFilterValue(field, value) {
+      const current = this.timelineFilterValues(field);
+      const next = current.includes(value)
+        ? current.filter((entry) => entry !== value)
+        : current.concat([value]);
+      this.filters[field] = this.normalizeTimelineFilterValues(field, next);
+      this.lastSubwindowScrollAt = Date.now();
+      this.timelineLocalFilterChanged();
+    },
+
+    clearTimelineFilterValue(field) {
+      this.filters[field] = [];
+      this.lastSubwindowScrollAt = Date.now();
+      this.timelineLocalFilterChanged();
+    },
+
+    timelineFilterSummary(field) {
+      const values = this.timelineFilterValues(field);
+      if (!values.length) return 'All';
+      if (values.length === 1) return this.short(this.timelineFilterDisplay(field, values[0]), 22);
+      return `${values.length} selected`;
+    },
+
+    timelineFilterDisplay(field, value) {
+      if (field === 'timelineChannels') {
+        return this.channelOptions().find((channel) => channel.id === value)?.label || value;
+      }
+      if (field === 'timelineRecordTypes') {
+        return this.timelineRecordTypeOptions().find((option) => option.id === value)?.label || value;
+      }
+      return value;
+    },
+
     filteredTimelineEvents(options = {}) {
       const includeGlobal = options.global !== false;
-      const kind = this.filters.timelineKind;
-      const channel = this.filters.timelineChannel;
+      const kinds = this.timelineFilterValues('timelineKinds');
+      const channels = this.timelineFilterValues('timelineChannels');
       const globalKind = includeGlobal ? this.filters.globalEventKind : '';
       const globalChannel = includeGlobal ? this.filters.globalRoom : '';
       const globalGuild = includeGlobal ? this.filters.globalGuild : '';
       const queries = [
-        this.filters.timelineSearch,
         includeGlobal ? this.filters.globalSearch : '',
       ]
         .map((value) => textValue(value).trim().toLowerCase())
         .filter(Boolean);
       return this.timelineEvents.filter((event) => {
-        if (kind && this.eventKind(event) !== kind) return false;
+        if (kinds.length && !kinds.includes(this.eventKind(event)) && !kinds.includes(event?.job_kind)) return false;
         if (globalKind && this.eventKind(event) !== globalKind) return false;
-        if (channel && this.eventChannelId(event) !== channel) return false;
+        if (channels.length && !channels.includes(this.eventChannelId(event))) return false;
         if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
         if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
         if (!queries.length) return true;
@@ -637,19 +799,99 @@ window.dashboard = function dashboard() {
       return this.filteredTimelineEvents({ global: false });
     },
 
+    timelinePageRecords() {
+      const recordTypes = this.timelineFilterValues('timelineRecordTypes');
+      const events = recordTypes.includes('job') && !recordTypes.includes('event')
+        ? []
+        : this.timelinePageEvents().map((event) => this.timelineEventRecord(event));
+      const jobs = recordTypes.includes('event') && !recordTypes.includes('job')
+        ? []
+        : this.filteredTimelineJobs().map((job) => this.timelineJobRecord(job));
+      return events
+        .concat(jobs)
+        .sort((left, right) => right.whenMs - left.whenMs || left.id.localeCompare(right.id));
+    },
+
+    timelineRecordRows() {
+      return this.timelinePageRecords();
+    },
+
+    timelineRecordCountLabel() {
+      const total = this.timelineEvents.length + this.allJobs().length;
+      return `${this.timelineRecordRows().length}/${total}`;
+    },
+
+    filteredTimelineJobs() {
+      const kinds = this.timelineFilterValues('timelineKinds');
+      const states = this.timelineFilterValues('timelineJobStates');
+      const channels = this.timelineFilterValues('timelineChannels');
+      if (textValue(this.filters.timelineSearch).trim() && !this.timelineEvents.length) {
+        return [];
+      }
+      return this.allJobs().filter((job) => {
+        if (kinds.length && !kinds.includes(job.kind)) return false;
+        if (states.length && !states.includes(job.state)) return false;
+        if (channels.length && !channels.includes(job.voice_channel_id)) return false;
+        return true;
+      });
+    },
+
+    timelineEventRecord(event) {
+      const id = this.eventId(event);
+      return {
+        rowId: `event:${id}`,
+        recordType: 'event',
+        recordClass: 'info',
+        when: this.ago(this.eventWhen(event)),
+        whenMs: Date.parse(this.eventWhen(event)) || 0,
+        eventKind: this.eventKind(event),
+        eventClass: this.statusClass(this.eventKind(event)),
+        jobKind: event?.job_kind || '',
+        jobClass: this.statusClass(event?.job_kind || ''),
+        state: event?.state || '',
+        stateClass: this.statusClass(event?.state || ''),
+        command: event?.command_kind || '',
+        room: this.eventChannelName(event),
+        actor: this.eventSpeaker(event),
+        detail: this.eventDetail(event),
+        id,
+        __kind: 'event',
+        __record: event,
+      };
+    },
+
+    timelineJobRecord(job) {
+      return {
+        rowId: `job:${job.job_id}`,
+        recordType: 'job',
+        recordClass: this.statusClass(job.state),
+        when: this.ago(this.jobTime(job)),
+        whenMs: Date.parse(this.jobTime(job)) || 0,
+        eventKind: 'job',
+        eventClass: 'info',
+        jobKind: job.kind,
+        jobClass: this.statusClass(job.kind),
+        state: job.state,
+        stateClass: this.statusClass(job.state),
+        command: this.commandKind(job),
+        room: this.roomLabel(job.voice_channel_id),
+        actor: job.requested_by_user_id || '',
+        detail: this.jobDetail(job),
+        id: job.job_id,
+        __kind: 'job',
+        __record: job,
+      };
+    },
+
     filteredTranscriptEvents() {
       const channel = this.filters.transcriptChannel;
-      const globalChannel = this.filters.globalRoom;
-      const globalGuild = this.filters.globalGuild;
-      const queries = [this.filters.transcriptSearch, this.filters.globalSearch]
+      const queries = [this.filters.transcriptSearch]
         .map((value) => textValue(value).trim().toLowerCase())
         .filter(Boolean);
       return this.transcriptEvents
         .filter((event) => {
           if (!this.transcriptText(event)) return false;
           if (channel && this.eventChannelId(event) !== channel) return false;
-          if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
-          if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
           if (!queries.length) return true;
           const haystack = [
             this.transcriptText(event),
@@ -826,7 +1068,9 @@ window.dashboard = function dashboard() {
       const result = event?.command_result || event?.command_response || event?.result || {};
       return firstText([
         event?.text,
+        event?.feedback_message,
         event?.reason,
+        event?.job_kind,
         result.reason,
         result.action,
         event?.state,

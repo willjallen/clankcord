@@ -230,6 +230,7 @@ impl Runtime {
     ) -> Result<Value> {
         let mut latest = self.timeline_store.get_job(&job_id).await?;
         latest.metadata.set_agent_task(dispatch_result);
+        self.timeline_store.update_job(&latest).await?;
         if latest.cancel_requested() {
             let cancelled_at = non_empty(
                 latest.cancelled_at.clone().unwrap_or_default(),
@@ -276,7 +277,7 @@ impl Runtime {
                 "agent task reported RESPONSE_SUBMITTED but no text delivery job exists for source job {job_id}"
             );
         }
-        if response_text == "NO_RESPONSE_NEEDED" {
+        if let Some(reason) = agent_task_no_response_reason(response_text) {
             latest.mark_complete();
             latest.metadata.agent_task_mut().result_suppressed = true;
             self.timeline_store.update_job(&latest).await?;
@@ -289,7 +290,7 @@ impl Runtime {
                         "kind": "agent_task_result_suppressed",
                         "job_id": job_id,
                         "job_kind": latest.kind.as_str(),
-                        "reason": "agent determined no visible response was needed",
+                        "reason": reason,
                     }),
                 )
                 .await?;
@@ -410,6 +411,18 @@ fn agent_task_requester_id(job: &Job) -> String {
         .map(|command| command.requested_by_user_id.clone())
         .unwrap_or_default();
     first_non_empty([job.requested_by_user_id.clone(), command_requester])
+}
+
+fn agent_task_no_response_reason(response_text: &str) -> Option<&'static str> {
+    let normalized = response_text
+        .trim()
+        .trim_matches('`')
+        .trim()
+        .trim_end_matches('.')
+        .replace(' ', "_")
+        .replace('-', "_")
+        .to_ascii_uppercase();
+    (normalized == "NO_RESPONSE_NEEDED").then_some("agent chose not to produce a visible response")
 }
 
 pub fn agent_invocation_infrastructure_failure(detail: &str) -> bool {

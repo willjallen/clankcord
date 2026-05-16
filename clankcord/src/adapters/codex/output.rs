@@ -26,6 +26,14 @@ pub fn codex_response_text(stdout: &str, last_message: &str) -> String {
     if !last_message.is_empty() {
         return last_message.to_string();
     }
+    let values = json_values_from_stdout(stdout);
+    if let Some(text) = values
+        .iter()
+        .filter_map(codex_assistant_message_text)
+        .last()
+    {
+        return text;
+    }
     let payload = parse_codex_stdout_payload(stdout);
     if let Some(payloads) = payload.get("payloads").and_then(Value::as_array) {
         let parts = payloads
@@ -54,6 +62,72 @@ pub fn codex_response_text(stdout: &str, last_message: &str) -> String {
         return text.to_string();
     }
     stdout.trim().to_string()
+}
+
+fn codex_assistant_message_text(value: &Value) -> Option<String> {
+    match value.get("type").and_then(Value::as_str).unwrap_or("") {
+        "item.completed" | "item.started" => current_item_message_text(value),
+        "response_item" => response_item_message_text(value),
+        "event_msg" => event_msg_message_text(value),
+        _ => None,
+    }
+}
+
+fn current_item_message_text(value: &Value) -> Option<String> {
+    let item = value.get("item")?;
+    match item.get("type").and_then(Value::as_str).unwrap_or("") {
+        "agent_message" => string_field(item, "text"),
+        "message" if item.get("role").and_then(Value::as_str) == Some("assistant") => {
+            current_message_item_text(item)
+        }
+        _ => None,
+    }
+}
+
+fn current_message_item_text(item: &Value) -> Option<String> {
+    if let Some(text) = string_field(item, "text") {
+        return Some(text);
+    }
+    let text = item
+        .get("content")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|part| {
+            part.get("text")
+                .or_else(|| part.get("content"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn response_item_message_text(value: &Value) -> Option<String> {
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("message")
+        || payload.get("role").and_then(Value::as_str) != Some("assistant")
+    {
+        return None;
+    }
+    let text = payload
+        .get("content")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|part| part.get("text").and_then(Value::as_str).map(str::trim))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+fn event_msg_message_text(value: &Value) -> Option<String> {
+    let payload = value.get("payload")?;
+    if payload.get("type").and_then(Value::as_str) != Some("agent_message") {
+        return None;
+    }
+    string_field(payload, "message")
 }
 
 pub fn extract_codex_session_id(stdout: &str) -> String {
@@ -163,4 +237,13 @@ fn find_string_field_in_value(value: &Value, keys: &[&str]) -> Option<String> {
             .find_map(|child| find_string_field_in_value(child, keys)),
         _ => None,
     }
+}
+
+fn string_field(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToOwned::to_owned)
 }

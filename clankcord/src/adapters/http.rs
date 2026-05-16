@@ -580,6 +580,7 @@ async fn debug_overview(
                 agent_limit: query_usize(&query, &["agentLimit"], 120),
                 timeline_since: query_str(&query, &["timelineSince"]),
                 timeline_limit: query_usize(&query, &["timelineLimit"], 120),
+                timeline_query: query_str(&query, &["timelineSearch", "timelineQuery"]),
                 transcript_since: query_str(&query, &["transcriptSince"]),
                 transcript_limit: query_usize(&query, &["transcriptLimit"], 250),
                 publication_limit: query_usize(&query, &["publicationLimit"], 120),

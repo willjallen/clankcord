@@ -59,16 +59,23 @@
 
     renderInteractive() {
       this.renderTimer = null;
-      if (this.activeView !== 'explore' || !this.data) return;
-      window.ClankDashboardCharts.render(this);
-      window.ClankDashboardTables.render(this);
+      if (!this.data) return;
+      if (this.activeView === 'overview') {
+        window.ClankDashboardCharts.render(this);
+      }
+      if (this.activeView === 'timeline') {
+        window.ClankDashboardTables.render(this);
+      }
       this.renderExplorerJson();
     },
 
     renderExplorerJson() {
-      const container = this.$refs?.explorerJson;
-      if (!container || !window.ClankDashboardJson) return;
-      window.ClankDashboardJson.render(container, this.explorerSelection.record || {}, this.explorerSelection.kind || 'record');
+      if (!window.ClankDashboardJson) return;
+      for (const container of [this.$refs?.explorerJson, this.$refs?.timelineJson]) {
+        if (container) {
+          window.ClankDashboardJson.render(container, this.explorerSelection.record || {}, this.explorerSelection.kind || 'record');
+        }
+      }
     },
 
     selectExplorerRecord(kind, record) {
@@ -180,10 +187,7 @@
     },
 
     filteredLatencyKindRows() {
-      return this.latencyKindRows().filter((row) => {
-        if (this.filters.globalJobKind && row.kind !== this.filters.globalJobKind) return false;
-        return true;
-      });
+      return this.latencyKindRows();
     },
 
     latencyNumber(row, name, field) {
@@ -193,7 +197,7 @@
 
     jobMixRows() {
       const rows = new Map();
-      for (const job of this.filteredJobs()) {
+      for (const job of this.allJobs()) {
         const kind = job.kind || 'unknown';
         const state = job.state || 'unknown';
         if (!rows.has(kind)) rows.set(kind, { kind, total: 0, states: {} });
@@ -216,7 +220,7 @@
     },
 
     eventTrendRows() {
-      const events = this.filteredTimelineEvents()
+      const events = this.timelineEvents
         .map((event) => ({ event, when: Date.parse(this.eventWhen(event)) }))
         .filter((entry) => Number.isFinite(entry.when))
         .sort((left, right) => left.when - right.when);
@@ -249,10 +253,10 @@
         if (!rows.has(id)) rows.set(id, { channelId: id, label: this.roomLabel(id), jobs: 0, speech: 0, transcripts: 0, wake: 0 });
         return rows.get(id);
       };
-      this.filteredJobs().forEach((job) => {
+      this.allJobs().forEach((job) => {
         ensure(job.voice_channel_id).jobs += 1;
       });
-      this.filteredTimelineEvents().forEach((event) => {
+      this.timelineEvents.forEach((event) => {
         const row = ensure(this.eventChannelId(event));
         const kind = this.eventKind(event);
         if (kind === 'speech_segment') row.speech += 1;

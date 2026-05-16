@@ -1,4 +1,4 @@
-use clankcord::adapters::codex::extract_codex_usage;
+use clankcord::adapters::codex::{codex_response_text, extract_codex_usage};
 use serde_json::Value;
 
 #[test]
@@ -40,4 +40,16 @@ fn keeps_extracting_legacy_token_count_payloads() {
             .and_then(Value::as_i64),
         Some(10)
     );
+}
+
+#[test]
+fn extracts_response_text_from_current_codex_jsonl() {
+    let stdout = r#"
+{"type":"thread.started","thread_id":"thread-1"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I am checking the room."}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"NO_RESPONSE_NEEDED"}}
+{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":2}}
+"#;
+
+    assert_eq!(codex_response_text(stdout, ""), "NO_RESPONSE_NEEDED");
 }

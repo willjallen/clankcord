@@ -57,8 +57,11 @@
     setChart('job-mix-chart', option, (params) => {
       const row = rows[params.dataIndex];
       if (!row) return;
-      app.applyExploreFilter('jobKind', row.kind);
-      app.applyExploreFilter('jobState', params.seriesName);
+      app.applyTimelineFilter({
+        timelineRecordTypes: ['job'],
+        timelineKinds: [row.kind],
+        timelineJobStates: [params.seriesName],
+      });
     });
   }
 
@@ -79,7 +82,13 @@
     };
     setChart('latency-kind-chart', option, (params) => {
       const row = rows[params.dataIndex];
-      if (row) app.applyExploreFilter('jobKind', row.kind);
+      if (row) {
+        app.applyTimelineFilter({
+          timelineRecordTypes: ['job'],
+          timelineKinds: [row.kind],
+          timelineJobStates: [],
+        });
+      }
     });
   }
 
@@ -102,7 +111,13 @@
       })),
     };
     setChart('event-trend-chart', option, (params) => {
-      if (params.seriesName) app.applyExploreFilter('eventKind', params.seriesName);
+      if (params.seriesName) {
+        app.applyTimelineFilter({
+          timelineRecordTypes: ['event'],
+          timelineKinds: [params.seriesName],
+          timelineJobStates: [],
+        });
+      }
     });
   }
 
@@ -124,7 +139,11 @@
     };
     setChart('room-activity-chart', option, (params) => {
       const row = rows[params.dataIndex];
-      if (row) app.applyExploreFilter('room', row.channelId);
+      if (row) {
+        app.applyTimelineFilter({
+          timelineChannels: [row.channelId],
+        });
+      }
     });
   }
 
