@@ -139,7 +139,7 @@ Runs when matching jobs in the scoped channel reach one of the listed states.
 
 Common job kinds: `audio_segment`, `wake_activation`, `agent_task`, `response`, `refine_transcript`, `confirmation_required`, `command`, `room_agent_placement`, `runtime_control`.
 
-Common states: `queued`, `running`, `waiting`, `complete`, `failed`, `cancelled`, `agent_dispatch_failed`, `confirmation_pending`, `approval_failed`.
+Common states: `queued`, `running`, `waiting`, `complete`, `failed`, `cancelled`, `confirmation_pending`, `approval_failed`.
 
 ### Room State Changed
 

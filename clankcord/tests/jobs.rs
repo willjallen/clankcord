@@ -42,6 +42,12 @@ async fn job_round_trips_as_binary_record() {
     );
 }
 
+#[test]
+fn job_state_rejects_agent_specific_dispatch_failure_state() {
+    assert!("agent_dispatch_failed".parse::<JobState>().is_err());
+    assert_eq!("failed".parse::<JobState>().unwrap(), JobState::Failed);
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn audio_segment_payload_references_ready_audio_artifact() {
     let start = chrono::Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap();

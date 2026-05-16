@@ -148,7 +148,6 @@ pub enum JobState {
     ApprovalFailed,
     Failed,
     FailedTimeout,
-    AgentDispatchFailed,
     FailedDraftRetained,
 }
 
@@ -166,7 +165,6 @@ impl JobState {
             Self::ApprovalFailed => "approval_failed",
             Self::Failed => "failed",
             Self::FailedTimeout => "failed_timeout",
-            Self::AgentDispatchFailed => "agent_dispatch_failed",
             Self::FailedDraftRetained => "failed_draft_retained",
         }
     }
@@ -190,7 +188,6 @@ impl JobState {
                 | Self::ApprovalFailed
                 | Self::Failed
                 | Self::FailedTimeout
-                | Self::AgentDispatchFailed
                 | Self::FailedDraftRetained
         )
     }
@@ -218,7 +215,6 @@ impl FromStr for JobState {
             "approval_failed" => Ok(Self::ApprovalFailed),
             "failed" => Ok(Self::Failed),
             "failed_timeout" => Ok(Self::FailedTimeout),
-            "agent_dispatch_failed" => Ok(Self::AgentDispatchFailed),
             "failed_draft_retained" => Ok(Self::FailedDraftRetained),
             value => anyhow::bail!("unknown job state: {value}"),
         }

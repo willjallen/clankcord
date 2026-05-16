@@ -162,8 +162,8 @@ impl Runtime {
                             | JobState::Waiting
                             | JobState::CancelRequested
                             | JobState::Complete
+                            | JobState::Failed
                             | JobState::FailedTimeout
-                            | JobState::AgentDispatchFailed
                     )
             })
             .collect::<Vec<_>>();

@@ -123,6 +123,6 @@ Codex final text is treated as a control signal. Visible Discord output is creat
 
 ## Recovery
 
-Startup recovery inspects interrupted running `agent_task` jobs. A task with an existing text-delivery job for the same source job is marked complete. The remaining interrupted task is marked `agent_dispatch_failed`.
+Startup recovery inspects interrupted running `agent_task` jobs. A task with an existing text-delivery job for the same source job is marked complete. The remaining interrupted task is marked `failed`, with the restart interruption recorded in dispatch metadata.
 
-Agent dispatch retries non-infrastructure failures up to three attempts. Infrastructure failures such as auth and token-refresh errors mark the job `agent_dispatch_failed` and may submit a visible "ChatGPT unavailable" text delivery when the response path is still empty.
+Agent dispatch retries non-infrastructure failures up to three attempts. Infrastructure failures such as auth and token-refresh errors mark the job `failed`, record the dispatch cause in `metadata.error` and `metadata.agent_task.dispatch_error`, and may submit a visible "ChatGPT unavailable" text delivery when the response path is still empty.

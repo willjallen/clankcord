@@ -130,7 +130,6 @@ impl Runtime {
                     JobState::ApprovalFailed,
                     JobState::Failed,
                     JobState::FailedTimeout,
-                    JobState::AgentDispatchFailed,
                     JobState::FailedDraftRetained,
                 ],
             )

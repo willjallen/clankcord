@@ -51,9 +51,10 @@ impl Runtime {
                 continue;
             }
             let mut interrupted = job.clone();
-            interrupted.set_state(JobState::AgentDispatchFailed);
-            interrupted.metadata.agent_task_mut().dispatch_error =
-                "agent task was interrupted by runtime restart".to_string();
+            interrupted.set_state(JobState::Failed);
+            let error_text = "agent task was interrupted by runtime restart".to_string();
+            interrupted.metadata.error = error_text.clone();
+            interrupted.metadata.agent_task_mut().dispatch_error = error_text;
             self.timeline_store.update_job(&interrupted).await?;
             let result = json!({
                 "dispatched": false,
@@ -74,7 +75,8 @@ impl Runtime {
             .unwrap_or(0);
         if attempts >= 3 {
             let mut failed = job.clone();
-            failed.set_state(JobState::AgentDispatchFailed);
+            failed.set_state(JobState::Failed);
+            failed.metadata.error = "agent task dispatch attempts exhausted".to_string();
             self.timeline_store.update_job(&failed).await?;
             return Ok(
                 json!({"dispatched": false, "job": failed.to_value(), "reason": "agent task dispatch attempts exhausted"}),
@@ -359,11 +361,12 @@ impl Runtime {
             next_attempts
         };
         latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
-        latest.set_state(if is_infrastructure_error || next_attempts >= 3 {
-            JobState::AgentDispatchFailed
+        if is_infrastructure_error || next_attempts >= 3 {
+            latest.set_state(JobState::Failed);
+            latest.metadata.error = error_text.clone();
         } else {
-            JobState::Queued
-        });
+            latest.set_state(JobState::Queued);
+        }
         let text_delivery_job = if publish_unavailable_text {
             self.agent_unavailable_text_delivery_job(&latest).await?
         } else {

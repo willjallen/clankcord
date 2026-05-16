@@ -1155,7 +1155,6 @@ fn is_failed_job_state(state: crate::runtime::JobState) -> bool {
         crate::runtime::JobState::ApprovalFailed
             | crate::runtime::JobState::Failed
             | crate::runtime::JobState::FailedTimeout
-            | crate::runtime::JobState::AgentDispatchFailed
             | crate::runtime::JobState::FailedDraftRetained
     )
 }

@@ -140,7 +140,7 @@
     },
 
     isTerminalState(state) {
-      return ['complete', 'failed', 'failed_timeout', 'approval_failed', 'agent_dispatch_failed', 'failed_draft_retained', 'cancelled', 'canceled'].includes(textValue(state));
+      return ['complete', 'failed', 'failed_timeout', 'approval_failed', 'failed_draft_retained', 'cancelled', 'canceled'].includes(textValue(state));
     },
 
     guildOptions() {

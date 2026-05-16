@@ -31,6 +31,8 @@ A job has identity, scope, lifecycle, lineage, scheduling, and result data. The 
 
 The row uses stable projections for scheduling and filtering. The payload blob holds the typed Rust `Job` value. That split matters operationally: Postgres can claim ready work through indexed columns while handlers still recover the exact domain payload they were written for. JSON appears at the boundary and in rendered views; execution moves through Rust enums and structs.
 
+Job states describe lifecycle, not domain-specific causes. Runtime code uses generic terminal states such as `complete`, `failed`, `failed_timeout`, and `cancelled`; job kind, typed output, `metadata.error`, and detail metadata record why that lifecycle transition happened. An agent dispatch failure is an `agent_task` in `failed` state with the dispatch cause recorded in `metadata.error` and `metadata.agent_task.dispatch_error`.
+
 Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, agent session startup, agent tasks, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
 
 ## Decisions
