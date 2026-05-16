@@ -93,7 +93,9 @@ confirmation_required
 
 ## Discord Ingress
 
-Discord slash commands use Discord's ephemeral interaction response flow, so the acknowledgement and final edited response are visible only to the invoking user. The registered commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)`, `/leave` lowers to `command(leave_room)`, and `/feedback` appends a durable `feedback` timeline event with the submitted text before completing the slash job. A `discord_slash_command` job with another command name completes with `ignored_unknown_command`.
+Discord slash commands use Discord's ephemeral interaction response flow, so the acknowledgement and final edited response are visible only to the invoking user. The gateway reads the invoking member's current voice-state cache entry and stores that voice channel on the slash payload. Voice-scoped commands require that voice channel.
+
+The registered commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)`, and `/leave` lowers to `command(leave_room)`. The optional room argument is the target; otherwise command scope uses the invoker voice channel when Discord supplied one. `/wake` appends a manual `wake_detected` timeline event for the invoker's current voice room and schedules normal `wake_activation` work from that event. `/deafen` lowers to `command(deafen_listening)`, and `/undeafen` lowers to `command(resume_listening)`. `/feedback` appends a durable `feedback` timeline event with the submitted text before completing the slash job. A `discord_slash_command` job with another command name completes with `ignored_unknown_command`.
 
 Discord text messages enter as `discord_text_message` jobs. Runtime ingress decides whether the message belongs to a DM session, managed agent thread, top-level `agent-chat` channel, or unmanaged channel. DMs and managed threads become agent tasks. Top-level `agent-chat` messages complete as ignored ingress. The `agent_chat` target remains available as a response sink for `text_delivery`.
 

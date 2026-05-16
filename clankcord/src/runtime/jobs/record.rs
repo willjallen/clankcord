@@ -430,7 +430,7 @@ impl Job {
     pub fn discord_slash_command(payload: DiscordSlashCommandPayload) -> Self {
         Self::new(
             payload.guild_id.clone(),
-            payload.channel_id.clone(),
+            payload.timeline_channel_id().to_string(),
             payload.user_id.clone(),
             JobState::Queued,
             JobPayload::DiscordSlashCommand(payload),

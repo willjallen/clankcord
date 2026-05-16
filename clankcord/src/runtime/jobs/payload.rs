@@ -879,6 +879,7 @@ pub struct DiscordSlashCommandPayload {
     pub application_id: String,
     pub guild_id: String,
     pub channel_id: String,
+    pub voice_channel_id: String,
     pub user_id: String,
     pub username: String,
     pub command_name: String,
@@ -890,6 +891,18 @@ pub struct DiscordSlashCommandPayload {
 impl DiscordSlashCommandPayload {
     pub fn options_json(&self) -> Value {
         self.options.to_json()
+    }
+
+    pub fn timeline_channel_id(&self) -> &str {
+        if matches!(
+            self.command_name.as_str(),
+            "join" | "leave" | "wake" | "deafen" | "undeafen"
+        ) && !self.voice_channel_id.trim().is_empty()
+        {
+            &self.voice_channel_id
+        } else {
+            &self.channel_id
+        }
     }
 }
 
@@ -1306,6 +1319,7 @@ impl JobPayload {
                 "application_id": payload.application_id,
                 "guild_id": payload.guild_id,
                 "channel_id": payload.channel_id,
+                "voice_channel_id": payload.voice_channel_id,
                 "user_id": payload.user_id,
                 "username": payload.username,
                 "command_name": payload.command_name,

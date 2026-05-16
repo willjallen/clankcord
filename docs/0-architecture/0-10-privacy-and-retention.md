@@ -29,6 +29,8 @@ The user-facing state is carried through durable or rendered fields. `control.li
 
 `deafen_listening` plays the deafen cue and sets the room pause marker for the manual leave cooldown duration. Voice capture drops packets while an active session is in `deafened_paused` mode, and room placement can release the voice bot according to the active controls.
 
+The `/deafen` and `/undeafen` Discord slash commands lower to `deafen_listening` and `resume_listening` for the invoking user's current voice room.
+
 Room control timestamps are stored in the `room_controls` table and pruned when they expire.
 
 ```text

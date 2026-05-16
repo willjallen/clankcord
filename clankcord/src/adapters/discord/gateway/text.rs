@@ -51,6 +51,7 @@ impl DiscordTextAdapter {
             }
         }
         let intents = GatewayIntents::GUILDS
+            | GatewayIntents::GUILD_VOICE_STATES
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::DIRECT_MESSAGES
             | GatewayIntents::MESSAGE_CONTENT;

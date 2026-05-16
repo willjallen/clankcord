@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::voice_capture::wake_activations;
 use crate::runtime::{
     CommandKind, CommandRequest, DiscordSlashCommandPayload, Job, JobOutput, Runtime,
 };
@@ -15,13 +16,14 @@ pub(crate) async fn prepare(
         .timeline_store
         .append_event(
             &payload.guild_id,
-            &payload.channel_id,
+            payload.timeline_channel_id(),
             json!({
                 "event_kind": "discord_slash_command",
                 "kind": "discord_slash_command",
                 "job_id": job.id,
                 "interaction_id": payload.interaction_id,
                 "discord_channel_id": payload.channel_id,
+                "voice_channel_id": payload.voice_channel_id,
                 "speaker_user_id": payload.user_id,
                 "speaker_label": payload.username,
                 "command_name": payload.command_name,
@@ -34,6 +36,11 @@ pub(crate) async fn prepare(
     match payload.command_name.as_str() {
         "join" => queue_command_child(runtime, job, payload, CommandKind::JoinRoom).await,
         "leave" => queue_command_child(runtime, job, payload, CommandKind::LeaveRoom).await,
+        "wake" => schedule_manual_wake(runtime, job, payload).await,
+        "deafen" => queue_command_child(runtime, job, payload, CommandKind::DeafenListening).await,
+        "undeafen" => {
+            queue_command_child(runtime, job, payload, CommandKind::ResumeListening).await
+        }
         "feedback" => record_feedback(runtime, job, payload).await,
         command => Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
@@ -55,13 +62,14 @@ async fn record_feedback(
         .timeline_store
         .append_event(
             &payload.guild_id,
-            &payload.channel_id,
+            payload.timeline_channel_id(),
             json!({
                 "event_kind": "feedback",
                 "kind": "feedback",
                 "job_id": job.id,
                 "interaction_id": payload.interaction_id,
                 "discord_channel_id": payload.channel_id,
+                "voice_channel_id": payload.voice_channel_id,
                 "source": "discord_slash_command",
                 "speaker_user_id": payload.user_id,
                 "speaker_label": payload.username,
@@ -78,6 +86,55 @@ async fn record_feedback(
             "kind": "feedback",
             "status": "recorded",
             "message": message,
+        }),
+    )?))
+}
+
+async fn schedule_manual_wake(
+    runtime: &mut Runtime,
+    job: &Job,
+    payload: &DiscordSlashCommandPayload,
+) -> Result<JobDecision> {
+    let voice_channel_id = slash_voice_channel_id(payload)?;
+    let event = runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &voice_channel_id,
+            json!({
+                "event_kind": "wake_detected",
+                "kind": "wake_detected",
+                "job_id": job.id,
+                "interaction_id": payload.interaction_id,
+                "source": "discord_slash_command",
+                "manual": true,
+                "discord_channel_id": payload.channel_id,
+                "voice_channel_id": voice_channel_id,
+                "channelId": voice_channel_id,
+                "speaker_user_id": payload.user_id,
+                "speakerId": payload.user_id,
+                "speaker_label": payload.username,
+                "speakerLabel": payload.username,
+                "speaker_username": payload.username,
+                "speakerUsername": payload.username,
+                "startedAt": payload.created_at,
+                "endedAt": payload.created_at,
+                "timestamp": payload.created_at,
+                "duration_ms": 0,
+                "durationMs": 0,
+                "wake": {
+                    "wake": true,
+                    "source": "discord_slash_command",
+                },
+                "wake_detected": true,
+            }),
+        )
+        .await?;
+    let wake = wake_activations::schedule_from_wake_event(runtime, &event).await?;
+    Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+        &json!({
+            "kind": "manual_wake",
+            "wake": wake,
         }),
     )?))
 }
@@ -103,7 +160,7 @@ fn command_request(
         "action": "dispatch_now",
         "command_kind": command_kind.as_str(),
         "guild_id": payload.guild_id,
-        "voice_channel_id": "",
+        "voice_channel_id": payload.voice_channel_id,
         "requested_by_user_id": payload.user_id,
         "requested_by_speaker_label": payload.username,
         "target_voice_channel_id": target,
@@ -112,6 +169,17 @@ fn command_request(
             "target_channel": target,
         },
     }))
+}
+
+fn slash_voice_channel_id(payload: &DiscordSlashCommandPayload) -> Result<String> {
+    let voice_channel_id = payload.voice_channel_id.trim();
+    if voice_channel_id.is_empty() {
+        anyhow::bail!(
+            "/{} requires the invoking user to be in a voice channel",
+            payload.command_name
+        );
+    }
+    Ok(voice_channel_id.to_string())
 }
 
 fn slash_option_string(payload: &DiscordSlashCommandPayload, names: &[&str]) -> String {

@@ -85,6 +85,21 @@ fn slash_commands() -> serde_json::Value {
             }]
         },
         {
+            "name": "wake",
+            "description": "Manually trigger Clanky voice wake in your current voice room.",
+            "type": 1
+        },
+        {
+            "name": "deafen",
+            "description": "Deafen Clanky in your current voice room.",
+            "type": 1
+        },
+        {
+            "name": "undeafen",
+            "description": "Undeafen Clanky in your current voice room.",
+            "type": 1
+        },
+        {
             "name": "feedback",
             "description": "Send feedback.",
             "type": 1,

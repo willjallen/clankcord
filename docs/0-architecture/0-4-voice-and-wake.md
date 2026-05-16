@@ -119,6 +119,8 @@ audio_checksum
 
 `wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, waits for pending `audio_segment` STT work, closes the request window, plays an acknowledgement cue, and creates `agent_session_start` or `agent_task` when usable request text exists.
 
+`/wake` uses the same activation path. The slash-command ingress appends a manual `wake_detected` event for the invoking user's current voice room, then schedules `wake_activation` from that event. Follow-up, replacement, cue playback, window closing, and agent dispatch follow the normal wake activation rules.
+
 Follow-up wakes can amend an activation before work has spawned. Inside the preempt window, replacement logic can cancel still-cancellable activation work and schedule preempt cue playback. When the request window closes without usable text, the runtime records `wake_activation_no_request`.
 
 The default timing model is:
