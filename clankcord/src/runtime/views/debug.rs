@@ -28,12 +28,35 @@ const DEBUG_VALUE_MAX_ARRAY_ITEMS: usize = 100;
 const HEALTH_WINDOWS: &[(&str, i64)] = &[("5m", 5 * 60), ("15m", 15 * 60), ("1h", 60 * 60)];
 
 #[derive(Debug, Clone)]
+struct DebugTimeRange {
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    label: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DebugSearchField {
+    All,
+    Detail,
+    Feedback,
+    Kind,
+    JobKind,
+    State,
+    Command,
+    Room,
+    Actor,
+}
+
+#[derive(Debug, Clone)]
 pub struct DebugOverviewRequest {
     pub jobs_limit: usize,
     pub agent_limit: usize,
-    pub timeline_since: String,
+    pub timeline_window: String,
+    pub timeline_start: String,
+    pub timeline_end: String,
     pub timeline_limit: usize,
     pub timeline_query: String,
+    pub timeline_query_field: String,
     pub transcript_since: String,
     pub transcript_limit: usize,
     pub publication_limit: usize,
@@ -44,9 +67,12 @@ impl Default for DebugOverviewRequest {
         Self {
             jobs_limit: 120,
             agent_limit: 120,
-            timeline_since: "-1h".to_string(),
+            timeline_window: "-1h".to_string(),
+            timeline_start: String::new(),
+            timeline_end: String::new(),
             timeline_limit: 120,
             timeline_query: String::new(),
+            timeline_query_field: "all".to_string(),
             transcript_since: "-24h".to_string(),
             transcript_limit: 250,
             publication_limit: 120,
@@ -57,8 +83,15 @@ impl Default for DebugOverviewRequest {
 impl Runtime {
     pub async fn debug_overview(&self, request: DebugOverviewRequest) -> Result<Value> {
         let now = utc_now();
-        let timeline_since = resolve_debug_since(&request.timeline_since, "-1h", now)?;
+        let timeline_range = resolve_debug_time_range(
+            &request.timeline_window,
+            &request.timeline_start,
+            &request.timeline_end,
+            "-1h",
+            now,
+        )?;
         let transcript_since = resolve_debug_since(&request.transcript_since, "-24h", now)?;
+        let timeline_query_field = parse_debug_search_field(&request.timeline_query_field)?;
         let jobs_limit = request.jobs_limit.clamp(10, 500);
         let agent_limit = request.agent_limit.clamp(10, 500);
         let timeline_limit = request.timeline_limit.clamp(10, 1000);
@@ -109,7 +142,13 @@ impl Runtime {
             .list_jobs_by_kind(JobKind::AgentTask, agent_limit)
             .await?;
         let recent_events = self
-            .recent_events(timeline_since, timeline_limit, &request.timeline_query)
+            .recent_events(
+                timeline_range.start,
+                timeline_range.end,
+                timeline_limit,
+                &request.timeline_query,
+                timeline_query_field,
+            )
             .await
             .context("loading recent timeline events for debug overview")?;
         let timeline_context_job_records = self
@@ -127,6 +166,10 @@ impl Runtime {
         );
         let recent_job_records = if timeline_querying {
             timeline_context_job_records
+        } else if let Some(start) = timeline_range.start {
+            self.timeline_store
+                .list_jobs_updated_between(start, timeline_range.end.unwrap_or(now), jobs_limit)
+                .await?
         } else {
             merge_jobs(
                 recent_job_records
@@ -186,7 +229,9 @@ impl Runtime {
                 "recent": recent_jobs,
             },
             "timeline": {
-                "since": debug_since_label(timeline_since),
+                "window": timeline_range.label,
+                "start": debug_time_label(timeline_range.start),
+                "end": debug_time_label(timeline_range.end),
                 "recentEvents": recent_events,
                 "eventKindCounts": event_kind_counts,
             },
@@ -205,13 +250,16 @@ impl Runtime {
         }))
     }
 
-    pub async fn recent_events(
+    async fn recent_events(
         &self,
-        since: Option<DateTime<Utc>>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         limit: usize,
         query: &str,
+        query_field: DebugSearchField,
     ) -> Result<Vec<Value>> {
-        self.recent_events_by_kind(since, limit, None, query).await
+        self.recent_events_by_kind(start, end, limit, None, query, query_field)
+            .await
     }
 
     pub async fn recent_transcript_events(
@@ -220,22 +268,24 @@ impl Runtime {
         limit: usize,
     ) -> Result<Vec<Value>> {
         let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-        self.recent_events_by_kind(since, limit, Some(&kinds), "")
+        self.recent_events_by_kind(since, None, limit, Some(&kinds), "", DebugSearchField::All)
             .await
     }
 
     async fn recent_events_by_kind(
         &self,
-        since: Option<DateTime<Utc>>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
         limit: usize,
         kinds: Option<&BTreeSet<String>>,
         query: &str,
+        query_field: DebugSearchField,
     ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
-        for (guild_id, channel_id) in self.debug_timeline_event_channels(since).await? {
+        for (guild_id, channel_id) in self.debug_timeline_event_channels(start, end).await? {
             let mut room_events = self
                 .timeline_store
-                .load_events(&guild_id, &channel_id, since, None, kinds, None, false)
+                .load_events(&guild_id, &channel_id, start, end, kinds, None, false)
                 .await?;
             events.append(&mut room_events);
         }
@@ -246,7 +296,7 @@ impl Runtime {
                 .iter()
                 .enumerate()
                 .filter_map(|(index, event)| {
-                    debug_event_matches_query(event, query).then_some(index)
+                    debug_event_matches_query(event, query, query_field).then_some(index)
                 })
                 .collect::<Vec<_>>();
             let mut selected_indexes = BTreeSet::new();
@@ -273,33 +323,28 @@ impl Runtime {
 
     async fn debug_timeline_event_channels(
         &self,
-        since: Option<DateTime<Utc>>,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
     ) -> Result<Vec<(String, String)>> {
-        let rows = if let Some(since) = since {
-            sqlx::query(
-                r#"
-                SELECT DISTINCT guild_id, voice_channel_id
-                FROM timeline_events
-                WHERE forgotten = FALSE
-                  AND COALESCE(ended_at_ms, started_at_ms, created_at_ms) > $1
-                ORDER BY guild_id, voice_channel_id
-                "#,
-            )
-            .bind(instant_ms_dt(since))
-            .fetch_all(&self.timeline_store.pool)
-            .await?
-        } else {
-            sqlx::query(
-                r#"
-                SELECT DISTINCT guild_id, voice_channel_id
-                FROM timeline_events
-                WHERE forgotten = FALSE
-                ORDER BY guild_id, voice_channel_id
-                "#,
-            )
-            .fetch_all(&self.timeline_store.pool)
-            .await?
-        };
+        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+            r#"
+            SELECT DISTINCT guild_id, voice_channel_id
+            FROM timeline_events
+            WHERE forgotten = FALSE
+            "#,
+        );
+        if let Some(start) = start {
+            query
+                .push(" AND COALESCE(ended_at_ms, started_at_ms, created_at_ms) > ")
+                .push_bind(instant_ms_dt(start));
+        }
+        if let Some(end) = end {
+            query
+                .push(" AND COALESCE(started_at_ms, created_at_ms) < ")
+                .push_bind(instant_ms_dt(end));
+        }
+        query.push(" ORDER BY guild_id, voice_channel_id");
+        let rows = query.build().fetch_all(&self.timeline_store.pool).await?;
         rows.into_iter()
             .map(|row| Ok((row.try_get("guild_id")?, row.try_get("voice_channel_id")?)))
             .collect()
@@ -330,16 +375,153 @@ impl Runtime {
     }
 }
 
-fn debug_event_matches_query(event: &Value, query: &str) -> bool {
-    let haystack = event.to_string().to_lowercase();
+fn debug_event_matches_query(event: &Value, query: &str, field: DebugSearchField) -> bool {
+    let haystack = debug_event_search_values(event, field)
+        .join(" ")
+        .to_lowercase();
     query
         .split_whitespace()
         .map(debug_search_term)
         .all(|term| haystack.contains(&term))
 }
 
+fn debug_event_search_values(event: &Value, field: DebugSearchField) -> Vec<String> {
+    match field {
+        DebugSearchField::All => [
+            DebugSearchField::Detail,
+            DebugSearchField::Feedback,
+            DebugSearchField::Kind,
+            DebugSearchField::JobKind,
+            DebugSearchField::State,
+            DebugSearchField::Command,
+            DebugSearchField::Room,
+            DebugSearchField::Actor,
+        ]
+        .into_iter()
+        .flat_map(|field| debug_event_search_values(event, field))
+        .collect(),
+        DebugSearchField::Detail => {
+            debug_non_empty_fields(event, &["text", "feedback_message", "reason", "quality"])
+                .into_iter()
+                .chain(debug_result_search_values(event))
+                .collect()
+        }
+        DebugSearchField::Feedback => debug_non_empty_fields(
+            event,
+            &["kind", "event_kind", "feedback_message", "text", "reason"],
+        )
+        .into_iter()
+        .filter(|value| {
+            debug_non_empty_fields(event, &["kind", "event_kind"])
+                .iter()
+                .any(|kind| kind == "feedback")
+                || value == "feedback"
+        })
+        .collect(),
+        DebugSearchField::Kind => debug_non_empty_fields(event, &["kind", "event_kind"]),
+        DebugSearchField::JobKind => debug_non_empty_fields(event, &["job_kind"]),
+        DebugSearchField::State => debug_non_empty_fields(event, &["state"]),
+        DebugSearchField::Command => debug_non_empty_fields(event, &["command_kind"]),
+        DebugSearchField::Room => debug_non_empty_fields(
+            event,
+            &["guild_slug", "voice_channel_name", "voice_channel_slug"],
+        ),
+        DebugSearchField::Actor => {
+            debug_non_empty_fields(event, &["speaker_label", "speaker_username"])
+        }
+    }
+}
+
+fn debug_non_empty_fields(event: &Value, fields: &[&str]) -> Vec<String> {
+    fields
+        .iter()
+        .map(|field| string_field(event, field))
+        .filter(|value| !value.trim().is_empty())
+        .collect()
+}
+
+fn debug_result_search_values(event: &Value) -> Vec<String> {
+    let mut values = Vec::new();
+    for result_key in ["result", "command_result", "command_response"] {
+        let Some(result) = event.get(result_key) else {
+            continue;
+        };
+        for field in ["kind", "status", "reason", "action", "message", "summary"] {
+            let value = string_field(result, field);
+            if !value.trim().is_empty() {
+                values.push(value);
+            }
+        }
+    }
+    values
+}
+
+fn parse_debug_search_field(raw: &str) -> Result<DebugSearchField> {
+    let field = non_empty(raw.trim().to_lowercase(), "all".to_string());
+    match field.as_str() {
+        "all" => Ok(DebugSearchField::All),
+        "detail" => Ok(DebugSearchField::Detail),
+        "feedback" => Ok(DebugSearchField::Feedback),
+        "kind" => Ok(DebugSearchField::Kind),
+        "job_kind" => Ok(DebugSearchField::JobKind),
+        "state" => Ok(DebugSearchField::State),
+        "command" => Ok(DebugSearchField::Command),
+        "room" => Ok(DebugSearchField::Room),
+        "actor" => Ok(DebugSearchField::Actor),
+        _ => anyhow::bail!("invalid dashboard timeline search field: {field}"),
+    }
+}
+
 fn debug_search_term(term: &str) -> String {
     term.trim_start_matches('/').to_lowercase()
+}
+
+fn resolve_debug_time_range(
+    raw_window: &str,
+    raw_start: &str,
+    raw_end: &str,
+    default_window: &str,
+    now: DateTime<Utc>,
+) -> Result<DebugTimeRange> {
+    let window = non_empty(raw_window.trim().to_string(), default_window.to_string());
+    if window.eq_ignore_ascii_case("all") {
+        return Ok(DebugTimeRange {
+            start: None,
+            end: None,
+            label: "all".to_string(),
+        });
+    }
+    if window.eq_ignore_ascii_case("custom") {
+        let start = resolve_debug_bound(raw_start, "timeline start")?;
+        let end = resolve_debug_bound(raw_end, "timeline end")?;
+        if let (Some(start), Some(end)) = (start, end) {
+            if end < start {
+                anyhow::bail!("timeline end must be after timeline start");
+            }
+        }
+        return Ok(DebugTimeRange {
+            start,
+            end,
+            label: "custom".to_string(),
+        });
+    }
+    let start = resolve_time_reference(&window, Some(now))
+        .ok_or_else(|| anyhow::anyhow!("invalid dashboard timeline window: {window}"))?;
+    Ok(DebugTimeRange {
+        start: Some(start),
+        end: None,
+        label: window,
+    })
+}
+
+fn resolve_debug_bound(raw: &str, label: &str) -> Result<Option<DateTime<Utc>>> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    resolve_time_reference(value, None)
+        .map(Some)
+        .ok_or_else(|| anyhow::anyhow!("invalid dashboard {label}: {value}"))
 }
 
 fn resolve_debug_since(
@@ -360,6 +542,11 @@ fn debug_since_label(since: Option<DateTime<Utc>>) -> String {
     since
         .map(|since| isoformat_z(Some(since)))
         .unwrap_or_else(|| "all".to_string())
+}
+
+fn debug_time_label(time: Option<DateTime<Utc>>) -> String {
+    time.map(|time| isoformat_z(Some(time)))
+        .unwrap_or_else(|| "open".to_string())
 }
 
 fn debug_job_value(job: &Job) -> Value {

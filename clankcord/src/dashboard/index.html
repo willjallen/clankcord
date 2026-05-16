@@ -632,6 +632,42 @@
     <div class="view active" x-show="activeView === 'timeline'">
       <section>
         <h2><span>Timeline</span><small x-text="timelineRecordCountLabel()"></small></h2>
+        <div class="timeline-window-grid">
+          <label>Quick
+            <select x-model="filters.timelineWindow" @change="timelineWindowPresetChanged()">
+              <option value="-15m">15m</option><option value="-1h">1h</option><option value="-6h">6h</option><option value="-24h">24h</option><option value="-3d">3d</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option><option value="custom">Custom</option>
+            </select>
+          </label>
+          <label>From
+            <input type="datetime-local" x-model="filters.timelineStart" @change="timelineDateRangeChanged()">
+          </label>
+          <label>To
+            <input type="datetime-local" x-model="filters.timelineEnd" @change="timelineDateRangeChanged()">
+          </label>
+          <label>Limit
+            <select x-model.number="filters.timelineLimit" @change="timelineFilterChanged()">
+              <option>80</option><option>150</option><option>300</option><option>600</option><option>1000</option>
+            </select>
+          </label>
+          <small x-text="timelineWindowLabel()"></small>
+        </div>
+      </section>
+      <section>
+        <h2><span>Search</span><small x-text="timelineSearchLabel()"></small></h2>
+        <div class="timeline-search-grid">
+          <label>Field
+            <select x-model="filters.timelineSearchField" @change="timelineFilterChanged()">
+              <template x-for="option in timelineSearchFieldOptions()" :key="option.id"><option :value="option.id" x-text="option.label"></option></template>
+            </select>
+          </label>
+          <label>Query
+            <input type="search" x-model.debounce.150ms="filters.timelineSearch" @input.debounce.150ms="timelineFilterChanged()" placeholder="/feedback" autocomplete="off">
+          </label>
+          <button type="button" @click="clearTimelineSearch()">Clear</button>
+        </div>
+      </section>
+      <section>
+        <h2><span>Filters</span><small x-text="timelineRecordCountLabel()"></small></h2>
         <div class="timeline-filter-grid">
           <div class="timeline-filter-buttons">
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineRecordTypes')}" @click="toggleTimelineFilterEditor('timelineRecordTypes')">
@@ -647,17 +683,6 @@
               <span>Channel</span><strong x-text="timelineFilterSummary('timelineChannels')"></strong>
             </button>
           </div>
-          <label>Window
-            <select x-model="filters.timelineSince" @change="filterChanged()">
-              <option value="-15m">15m</option><option value="-1h">1h</option><option value="-6h">6h</option><option value="-24h">24h</option><option value="-3d">3d</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option>
-            </select>
-          </label>
-          <label>Limit
-            <select x-model.number="filters.timelineLimit" @change="filterChanged()">
-              <option>80</option><option>150</option><option>300</option><option>600</option><option>1000</option>
-            </select>
-          </label>
-          <label class="timeline-search">Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" @input.debounce.150ms="timelineFilterChanged()" placeholder="/feedback" autocomplete="off"></label>
           <button type="button" class="filter-clear" @click="clearTimelineFilters()">Clear</button>
         </div>
         <div class="timeline-filter-editor" x-show="timelineFilterEditor" @keydown.escape.window="closeTimelineFilterEditor()">

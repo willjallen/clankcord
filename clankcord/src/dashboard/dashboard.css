@@ -275,21 +275,52 @@ section h2 small,
 
 .timeline-filter-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 2fr) minmax(120px, 0.55fr) minmax(120px, 0.55fr) minmax(260px, 1.4fr) auto;
+  grid-template-columns: minmax(420px, 1fr) auto;
   align-items: end;
   gap: 10px;
   padding: 10px 12px;
   background: var(--panel-3);
 }
 
-.timeline-filter-grid label {
+.timeline-window-grid,
+.timeline-search-grid {
+  display: grid;
+  align-items: end;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-3);
+}
+
+.timeline-window-grid {
+  grid-template-columns: minmax(120px, 0.6fr) repeat(2, minmax(210px, 1fr)) minmax(110px, 0.5fr) minmax(220px, 1fr);
+}
+
+.timeline-search-grid {
+  grid-template-columns: minmax(180px, 0.55fr) minmax(280px, 1.4fr) auto;
+}
+
+.timeline-window-grid small {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.timeline-filter-grid label,
+.timeline-window-grid label,
+.timeline-search-grid label {
   display: grid;
   gap: 5px;
   align-items: start;
 }
 
 .timeline-filter-grid select,
-.timeline-filter-grid input {
+.timeline-filter-grid input,
+.timeline-window-grid select,
+.timeline-window-grid input,
+.timeline-search-grid select,
+.timeline-search-grid input {
   min-width: 0;
   width: 100%;
 }
@@ -859,11 +890,18 @@ details summary {
   }
 
   .timeline-filter-grid {
-    grid-template-columns: minmax(0, 1fr) 140px 140px auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .timeline-filter-buttons,
-  .timeline-search {
+  .timeline-window-grid {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+
+  .timeline-search-grid {
+    grid-template-columns: minmax(180px, 0.6fr) minmax(260px, 1.4fr) auto;
+  }
+
+  .timeline-filter-buttons {
     grid-column: 1 / -1;
   }
 }
@@ -894,12 +932,10 @@ details summary {
   }
 
   .timeline-filter-grid,
-  .timeline-filter-buttons {
+  .timeline-filter-buttons,
+  .timeline-window-grid,
+  .timeline-search-grid {
     grid-template-columns: 1fr;
-  }
-
-  .timeline-search {
-    grid-column: auto;
   }
 
   .transcript-line {

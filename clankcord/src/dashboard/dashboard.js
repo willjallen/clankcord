@@ -5,13 +5,16 @@ const filterStorageKey = 'clankcord.dashboard.filters';
 const defaultFilters = {
   jobsLimit: 120,
   agentLimit: 120,
-  timelineSince: '-1h',
+  timelineWindow: '-1h',
+  timelineStart: '',
+  timelineEnd: '',
   timelineLimit: 120,
   timelineRecordTypes: [],
   timelineKinds: [],
   timelineJobStates: [],
   timelineChannels: [],
   timelineSearch: '',
+  timelineSearchField: 'all',
   transcriptSince: '-24h',
   transcriptLimit: 250,
   transcriptChannel: '',
@@ -86,18 +89,19 @@ window.dashboard = function dashboard() {
       if (!this.tabs.some((tab) => tab.id === this.activeView)) {
         this.activeView = 'overview';
       }
+      this.ensureTimelineWindowDefaults();
       document.addEventListener('scroll', (event) => {
         if (event.target?.closest?.('.scroll-region, .tabulator-host')) {
           this.lastSubwindowScrollAt = Date.now();
         }
       }, true);
       document.addEventListener('pointerdown', (event) => {
-        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor')) {
+        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid')) {
           this.lastSubwindowScrollAt = Date.now();
         }
       }, true);
       document.addEventListener('focusin', (event) => {
-        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor')) {
+        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid')) {
           this.lastSubwindowScrollAt = Date.now();
         }
       }, true);
@@ -142,6 +146,14 @@ window.dashboard = function dashboard() {
       this.scheduleRenderInteractive();
     },
 
+    clearTimelineSearch() {
+      Object.assign(this.filters, {
+        timelineSearch: '',
+        timelineSearchField: 'all',
+      });
+      this.timelineFilterChanged();
+    },
+
     clearTimelineFilters() {
       this.timelineFilterEditor = '';
       Object.assign(this.filters, {
@@ -149,7 +161,11 @@ window.dashboard = function dashboard() {
         timelineKinds: [],
         timelineJobStates: [],
         timelineChannels: [],
+        timelineWindow: '-1h',
+        timelineStart: this.localDateTimeInput(new Date(Date.now() - 60 * 60 * 1000)),
+        timelineEnd: '',
         timelineSearch: '',
+        timelineSearchField: 'all',
       });
       this.timelineFilterChanged();
     },
@@ -158,7 +174,7 @@ window.dashboard = function dashboard() {
       this.timelineFilterEditor = '';
       Object.assign(this.filters, values);
       this.activateView('timeline');
-      if ('timelineSearch' in values || 'timelineSince' in values || 'timelineLimit' in values) {
+      if ('timelineSearch' in values || 'timelineSearchField' in values || 'timelineWindow' in values || 'timelineStart' in values || 'timelineEnd' in values || 'timelineLimit' in values) {
         this.timelineFilterChanged();
       } else {
         this.timelineLocalFilterChanged();
@@ -175,9 +191,12 @@ window.dashboard = function dashboard() {
       return new URLSearchParams({
         jobsLimit: String(this.filters.jobsLimit),
         agentLimit: String(this.filters.agentLimit),
-        timelineSince: this.filters.timelineSince,
+        timelineWindow: this.filters.timelineWindow,
+        timelineStart: this.timelineInputIso(this.filters.timelineStart),
+        timelineEnd: this.timelineInputIso(this.filters.timelineEnd),
         timelineLimit: String(this.filters.timelineLimit),
         timelineSearch: textValue(this.filters.timelineSearch).trim(),
+        timelineSearchField: this.filters.timelineSearchField,
         transcriptSince: this.filters.transcriptSince,
         transcriptLimit: String(this.filters.transcriptLimit),
         publicationLimit: String(this.filters.publicationLimit),
@@ -188,7 +207,7 @@ window.dashboard = function dashboard() {
       if (Date.now() - this.lastSubwindowScrollAt < 1800) return true;
       if (document.querySelector('.scroll-region:hover, .tabulator-host:hover, .tabulator-popup-container')) return true;
       const active = document.activeElement;
-      return Boolean(active?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor'));
+      return Boolean(active?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid'));
     },
 
     async refresh(options = {}) {
@@ -682,6 +701,95 @@ window.dashboard = function dashboard() {
       return Array.from(new Set(this.allJobs().map((job) => job.state).filter(Boolean))).sort();
     },
 
+    timelineSearchFieldOptions() {
+      return [
+        { id: 'all', label: 'All Fields' },
+        { id: 'detail', label: 'Text / Detail' },
+        { id: 'feedback', label: 'Feedback' },
+        { id: 'kind', label: 'Event Kind' },
+        { id: 'job_kind', label: 'Job Type' },
+        { id: 'state', label: 'State' },
+        { id: 'command', label: 'Command' },
+        { id: 'room', label: 'Room' },
+        { id: 'actor', label: 'Actor' },
+      ];
+    },
+
+    ensureTimelineWindowDefaults() {
+      if (!this.filters.timelineWindow) {
+        this.filters.timelineWindow = '-1h';
+      }
+      if (this.filters.timelineWindow !== 'custom') {
+        this.applyTimelineWindowPreset({ refresh: false });
+      }
+    },
+
+    timelineWindowPresetChanged() {
+      this.applyTimelineWindowPreset({ refresh: true });
+    },
+
+    timelineDateRangeChanged() {
+      this.filters.timelineWindow = 'custom';
+      this.timelineFilterChanged();
+    },
+
+    applyTimelineWindowPreset(options = {}) {
+      if (this.filters.timelineWindow === 'all') {
+        this.filters.timelineStart = '';
+        this.filters.timelineEnd = '';
+      } else if (this.filters.timelineWindow !== 'custom') {
+        this.filters.timelineStart = this.localDateTimeInput(new Date(Date.now() - this.timelineWindowDurationMs(this.filters.timelineWindow)));
+        this.filters.timelineEnd = '';
+      }
+      if (options.refresh) {
+        this.timelineFilterChanged();
+      }
+    },
+
+    timelineWindowDurationMs(value) {
+      return {
+        '-15m': 15 * 60 * 1000,
+        '-1h': 60 * 60 * 1000,
+        '-6h': 6 * 60 * 60 * 1000,
+        '-24h': 24 * 60 * 60 * 1000,
+        '-3d': 3 * 24 * 60 * 60 * 1000,
+        '-7d': 7 * 24 * 60 * 60 * 1000,
+        '-30d': 30 * 24 * 60 * 60 * 1000,
+      }[value];
+    },
+
+    localDateTimeInput(date) {
+      const pad = (value) => String(value).padStart(2, '0');
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    },
+
+    timelineInputIso(value) {
+      const text = textValue(value).trim();
+      return text ? new Date(text).toISOString() : '';
+    },
+
+    timelineTimeMatches(whenMs) {
+      if (this.filters.timelineWindow === 'all') return true;
+      const startMs = Date.parse(textValue(this.filters.timelineStart));
+      const endMs = this.filters.timelineEnd ? Date.parse(textValue(this.filters.timelineEnd)) : Date.now();
+      if (startMs && whenMs < startMs) return false;
+      if (endMs && whenMs > endMs) return false;
+      return true;
+    },
+
+    timelineWindowLabel() {
+      const start = textValue(this.filters.timelineStart).replace('T', ' ') || 'open';
+      const end = textValue(this.filters.timelineEnd).replace('T', ' ') || 'now';
+      if (this.filters.timelineWindow === 'all') return 'all';
+      return `${start} to ${end}`;
+    },
+
+    timelineSearchLabel() {
+      const field = this.timelineSearchFieldOptions().find((option) => option.id === this.filters.timelineSearchField)?.label || 'All Fields';
+      const query = textValue(this.filters.timelineSearch).trim();
+      return query ? `${field}: ${query}` : field;
+    },
+
     timelineFilterEditorOpen(field) {
       return this.timelineFilterEditor === field;
     },
@@ -776,6 +884,7 @@ window.dashboard = function dashboard() {
         .map((value) => textValue(value).trim().toLowerCase())
         .filter(Boolean);
       return this.timelineEvents.filter((event) => {
+        if (!this.timelineTimeMatches(Date.parse(this.eventWhen(event)) || 0)) return false;
         if (kinds.length && !kinds.includes(this.eventKind(event)) && !kinds.includes(event?.job_kind)) return false;
         if (globalKind && this.eventKind(event) !== globalKind) return false;
         if (channels.length && !channels.includes(this.eventChannelId(event))) return false;
@@ -829,6 +938,7 @@ window.dashboard = function dashboard() {
         return [];
       }
       return this.allJobs().filter((job) => {
+        if (!this.timelineTimeMatches(Date.parse(this.jobTime(job)) || 0)) return false;
         if (kinds.length && !kinds.includes(job.kind)) return false;
         if (states.length && !states.includes(job.state)) return false;
         if (channels.length && !channels.includes(job.voice_channel_id)) return false;
