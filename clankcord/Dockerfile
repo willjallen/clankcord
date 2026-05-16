@@ -19,7 +19,7 @@ RUN --mount=type=cache,id=clankcord-cargo-registry,target=/usr/local/cargo/regis
     --mount=type=cache,id=clankcord-cargo-git,target=/usr/local/cargo/git/db \
     target="$(rustc -vV | sed -n 's/^host: //p')" \
     && cargo fetch --locked --target "$target"
-COPY clankcord/docs ./docs
+COPY docs /app/docs
 COPY clankcord/src ./src
 RUN --mount=type=cache,id=clankcord-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=clankcord-cargo-git,target=/usr/local/cargo/git/db \

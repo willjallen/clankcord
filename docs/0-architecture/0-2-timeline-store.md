@@ -1,0 +1,84 @@
+# Timeline Store
+
+The timeline store is Clankcord's durable memory. It records events, jobs, dependency edges, voice state, capture runs, agent sessions, automations, transcript windows, publication state, authoritative spans, and artifact metadata. Runtime memory gives handlers a convenient view; the store preserves the facts that survive process restart.
+
+```text
+runtime domain logic
+        |
+        v
+TimelineStore
+        |
+        +--> Postgres projections
+        +--> typed payload blobs
+        +--> JSONB timeline events
+        +--> agent session records
+        +--> automation records
+        +--> artifact files
+        |
+        v
+CLI, HTTP, dashboard, agent, and debug views
+```
+
+The store also owns the artifact root for voice memory and transcript publication. Audio segment jobs refer to ready WAV files with checksums, timing, speaker identity, capture run, and format metadata. Accepted speech is written as `speech_segment` timeline events. Transcript materialization and refinement write durable files under publication directories and store the paths in publication records.
+
+## Schema Shape
+
+Startup creates the schema before runtime state is loaded. The tables group around the same concepts the runtime exposes.
+
+Voice tables describe configured rooms, raw Discord voice-state rows, capture runs, room assignments, capture sessions, and occupancy snapshots. They answer which room exists, which bot is assigned, who is present, which capture run is active, and when a session began or ended.
+
+Timeline and transcript tables store events, conversations, materialized windows, publications, and authoritative spans. Speech arrives as `speech_segment` events. Windows select intervals over those events. Publications preserve draft and refined artifacts. Authoritative spans let renderers prefer refined text for covered time ranges while retaining the underlying draft events.
+
+Jobs use a projected row plus a typed payload blob.
+
+```text
+jobs
+  indexed scheduling, state, scope, lineage, and filter fields
+
+job_payloads
+  bincode-encoded typed Job payload and metadata
+
+job_dependencies
+  parent/child edges and resolution policy
+```
+
+That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
+
+Automations and agent sessions follow the same pattern. Each has queryable projections for routing, expiry, scope, and state, plus typed payload data that Rust code validates and executes.
+
+## Artifact Root
+
+The artifact tree holds files that are part of durable runtime state.
+
+```text
+ephemeral/
+  guild-<guild-id>/
+    channel-<voice-channel-id>/
+      audio/
+        <capture-run-id>/
+          speaker-<user-id>/
+            <segment-id>.wav
+
+durable/
+  publications/
+    <publication-id>/
+      transcript.draft.txt
+      transcript.refined.txt
+      speaker_alignment.json
+      elevenlabs.raw.json
+      metadata.json
+```
+
+Job payloads and timeline events store the paths and checksums needed to interpret these files. Users and agents normally read them through Clankcord commands and rendered views, which keeps the storage layout under runtime ownership.
+
+## Events And Views
+
+Timeline events are JSONB records with stable projections for room, time, event kind, capture run, speaker, and text. Speech, wake detections, Discord text ingress, slash commands, agent-session creation, automation firing, job creation, occupancy changes, participant transitions, forget, retention, publication, and refinement all enter through this event stream.
+
+The store loads ranges by guild, channel, time window, event kinds, capture run, and forgotten-state filtering. Timeline tails, transcript rendering, conversation lists, participant traces, context resolution, and dashboard diagnostics are all derived from these stored events and the records around them.
+
+Rendered views are projections. A conversation is a view over timeline state. A transcript window is a materialized selection over events and spans. The dashboard combines jobs, events, sessions, automations, publications, and artifacts into an operator view. These views can change shape as presentation needs change; the stored facts remain the authority they render from.
+
+## Runtime Memory
+
+Postgres stores orchestration facts and durable state. Runtime memory stores config-derived maps, live status snapshots, room controls, and process capabilities. Active Discord voice clients, capture sessions, and gateway clients belong in the service process. Jobs, events, automations, agent sessions, and publication state belong in the timeline store. The runtime works by reading durable facts into a process-local view, executing a typed handler, and committing the resulting job, event, or artifact state back into the store.
