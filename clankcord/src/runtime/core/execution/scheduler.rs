@@ -11,7 +11,7 @@ use crate::runtime::{Job, JobKind, Runtime, log};
 
 const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 15] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 16] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -46,7 +46,7 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 15] = [
     JobExecutionPolicy::runtime_snapshot(
         JobKind::WakeActivation,
         JobLane::GeneralAsync,
-        JobOrdering::None,
+        JobOrdering::IngressRoute,
     ),
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RoomAgentPlacement,
@@ -66,7 +66,12 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 15] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::Command,
         JobLane::GeneralAsync,
-        JobOrdering::None,
+        JobOrdering::IngressRoute,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::DiscordTextMessage,
+        JobLane::GeneralAsync,
+        JobOrdering::IngressRoute,
     ),
     JobExecutionPolicy::blocking_snapshot(JobKind::Response, JobLane::Response, JobOrdering::None),
     JobExecutionPolicy::blocking_snapshot(
@@ -162,6 +167,7 @@ enum JobOrdering {
     None,
     VoiceTarget,
     WakeStream,
+    IngressRoute,
     AgentSession,
     RuntimeMaintenance,
 }

@@ -1,3 +1,4 @@
+mod agent_sessions;
 mod commands;
 mod policy;
 mod tasks;

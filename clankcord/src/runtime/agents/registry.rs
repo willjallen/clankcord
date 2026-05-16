@@ -1,7 +1,12 @@
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::Result;
 use crate::adapters::codex::CodexAdapter;
 use crate::runtime::agents::AgentRole;
+use crate::runtime::jobs::{ResponseSink, ResponseSinkKind};
 use crate::runtime::timeline::isoformat_z;
 
 #[derive(Debug, Clone, Default)]
@@ -21,6 +26,212 @@ impl AgentRuntime {
             normalize_key_part(voice_channel_id)
         )
     }
+
+    pub fn agent_session_key(agent_session_id: &str) -> String {
+        format!("agent:session:{}", normalize_key_part(agent_session_id))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentSessionRouteKind {
+    Voice,
+    Dm,
+    Thread,
+}
+
+impl AgentSessionRouteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Voice => "voice",
+            Self::Dm => "dm",
+            Self::Thread => "thread",
+        }
+    }
+}
+
+impl FromStr for AgentSessionRouteKind {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "voice" => Ok(Self::Voice),
+            "dm" => Ok(Self::Dm),
+            "thread" => Ok(Self::Thread),
+            value => anyhow::bail!("unknown agent session route kind: {value}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentSessionRecordState {
+    Starting,
+    Active,
+    Expired,
+    Failed,
+}
+
+impl AgentSessionRecordState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn is_selectable(self) -> bool {
+        matches!(self, Self::Starting | Self::Active)
+    }
+}
+
+impl FromStr for AgentSessionRecordState {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "starting" => Ok(Self::Starting),
+            "active" => Ok(Self::Active),
+            "expired" => Ok(Self::Expired),
+            "failed" => Ok(Self::Failed),
+            value => anyhow::bail!("unknown agent session state: {value}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionRecord {
+    pub agent_session_id: String,
+    pub codex_session_id: String,
+    pub route_kind: AgentSessionRouteKind,
+    pub route_key: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub dm_user_id: String,
+    pub discord_thread_id: String,
+    pub discord_parent_channel_id: String,
+    pub response_sink: ResponseSink,
+    pub state: AgentSessionRecordState,
+    pub created_at: String,
+    pub last_activity_at: String,
+    pub expires_at: String,
+}
+
+impl AgentSessionRecord {
+    pub fn new_voice(
+        agent_session_id: impl Into<String>,
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        discord_parent_channel_id: impl Into<String>,
+        discord_thread_id: impl Into<String>,
+        created_at: impl Into<String>,
+        expires_at: impl Into<String>,
+    ) -> Self {
+        let agent_session_id = agent_session_id.into();
+        let guild_id = guild_id.into();
+        let voice_channel_id = voice_channel_id.into();
+        let discord_parent_channel_id = discord_parent_channel_id.into();
+        let discord_thread_id = discord_thread_id.into();
+        let created_at = created_at.into();
+        Self {
+            agent_session_id,
+            codex_session_id: String::new(),
+            route_kind: AgentSessionRouteKind::Voice,
+            route_key: voice_route_key(&guild_id, &voice_channel_id),
+            guild_id,
+            voice_channel_id,
+            dm_user_id: String::new(),
+            response_sink: ResponseSink {
+                kind: ResponseSinkKind::Channel,
+                channel_id: discord_thread_id.clone(),
+                user_id: String::new(),
+            },
+            discord_thread_id,
+            discord_parent_channel_id,
+            state: AgentSessionRecordState::Active,
+            last_activity_at: created_at.clone(),
+            created_at,
+            expires_at: expires_at.into(),
+        }
+    }
+
+    pub fn new_dm(
+        agent_session_id: impl Into<String>,
+        user_id: impl Into<String>,
+        created_at: impl Into<String>,
+        expires_at: impl Into<String>,
+    ) -> Self {
+        let agent_session_id = agent_session_id.into();
+        let user_id = user_id.into();
+        let created_at = created_at.into();
+        Self {
+            agent_session_id,
+            codex_session_id: String::new(),
+            route_kind: AgentSessionRouteKind::Dm,
+            route_key: dm_route_key(&user_id),
+            guild_id: "dm".to_string(),
+            voice_channel_id: user_id.clone(),
+            dm_user_id: user_id.clone(),
+            discord_thread_id: String::new(),
+            discord_parent_channel_id: String::new(),
+            response_sink: ResponseSink {
+                kind: ResponseSinkKind::Dm,
+                channel_id: String::new(),
+                user_id,
+            },
+            state: AgentSessionRecordState::Active,
+            last_activity_at: created_at.clone(),
+            created_at,
+            expires_at: expires_at.into(),
+        }
+    }
+
+    pub fn invocation_key(&self) -> String {
+        AgentRuntime::agent_session_key(&self.agent_session_id)
+    }
+
+    pub fn thread_route_key(&self) -> String {
+        thread_route_key(&self.guild_id, &self.discord_thread_id)
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "agent_session_id": self.agent_session_id,
+            "codex_session_id": self.codex_session_id,
+            "route_kind": self.route_kind.as_str(),
+            "route_key": self.route_key,
+            "guild_id": self.guild_id,
+            "voice_channel_id": self.voice_channel_id,
+            "dm_user_id": self.dm_user_id,
+            "discord_thread_id": self.discord_thread_id,
+            "discord_parent_channel_id": self.discord_parent_channel_id,
+            "response_sink": self.response_sink.to_json(),
+            "state": self.state.as_str(),
+            "created_at": self.created_at,
+            "last_activity_at": self.last_activity_at,
+            "expires_at": self.expires_at,
+        })
+    }
+}
+
+pub fn voice_route_key(guild_id: &str, voice_channel_id: &str) -> String {
+    format!(
+        "voice:{}:{}",
+        normalize_key_part(guild_id),
+        normalize_key_part(voice_channel_id)
+    )
+}
+
+pub fn dm_route_key(user_id: &str) -> String {
+    format!("dm:{}", normalize_key_part(user_id))
+}
+
+pub fn thread_route_key(guild_id: &str, thread_id: &str) -> String {
+    format!(
+        "thread:{}:{}",
+        normalize_key_part(guild_id),
+        normalize_key_part(thread_id)
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

@@ -355,9 +355,17 @@ async fn dispatch_after_stt_settles(
     }
 
     let command = activation_agent_task_command(payload, &request_events, closed_at)?;
-    let agent_job = Job::agent_task(
-        &payload.guild_id,
-        &payload.voice_channel_id,
+    let session = runtime
+        .ensure_voice_agent_session(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            &payload.speaker_user_id,
+        )
+        .await?;
+    let agent_job = Job::agent_task_for_session(
+        session.agent_session_id,
+        session.guild_id,
+        session.voice_channel_id,
         payload.speaker_user_id.clone(),
         command,
     );

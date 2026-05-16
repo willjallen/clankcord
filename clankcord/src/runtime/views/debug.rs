@@ -23,6 +23,8 @@ use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
+const DEBUG_VALUE_MAX_STRING_CHARS: usize = 4000;
+const DEBUG_VALUE_MAX_ARRAY_ITEMS: usize = 100;
 const HEALTH_WINDOWS: &[(&str, i64)] = &[("5m", 5 * 60), ("15m", 15 * 60), ("1h", 60 * 60)];
 
 #[derive(Debug, Clone)]
@@ -44,7 +46,7 @@ impl Default for DebugOverviewRequest {
             timeline_since: "-1h".to_string(),
             timeline_limit: 120,
             transcript_since: "-24h".to_string(),
-            transcript_limit: 500,
+            transcript_limit: 250,
             publication_limit: 120,
         }
     }
@@ -228,7 +230,7 @@ impl Runtime {
         events.sort_by_key(|event| event_start(event).unwrap_or_else(utc_now));
         events.reverse();
         events.truncate(limit);
-        Ok(events)
+        Ok(events.into_iter().map(compact_debug_event).collect())
     }
 
     pub async fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
@@ -261,7 +263,7 @@ fn debug_since_label(since: Option<DateTime<Utc>>) -> String {
 }
 
 fn debug_job_value(job: &Job) -> Value {
-    let mut value = job.to_value();
+    let mut value = compact_debug_value(job.to_value(), 5);
     if let Value::Object(object) = &mut value {
         let command_kind = job.command_kind();
         if !command_kind.trim().is_empty() {
@@ -269,6 +271,117 @@ fn debug_job_value(job: &Job) -> Value {
         }
     }
     value
+}
+
+fn compact_debug_event(event: Value) -> Value {
+    let compact = compact_debug_value(event, 4);
+    if let Value::Object(object) = &compact {
+        let mut result = Map::new();
+        for key in [
+            "event_id",
+            "event_kind",
+            "guild_id",
+            "guild_slug",
+            "voice_channel_id",
+            "voice_channel_name",
+            "voice_channel_slug",
+            "speaker_user_id",
+            "speaker_label",
+            "speaker_username",
+            "created_at",
+            "startedAt",
+            "endedAt",
+            "text",
+            "reason",
+            "state",
+            "quality",
+            "conversation_id",
+            "capture_run_id",
+            "segment_index",
+            "duration_ms",
+            "referenced_message_id",
+            "discord_message_id",
+            "discord_channel_id",
+            "agent_session_id",
+        ] {
+            if let Some(value) = object.get(key).filter(|value| !value.is_null()) {
+                result.insert(key.to_string(), value.clone());
+            }
+        }
+        for key in ["result", "command_result", "command_response"] {
+            if let Some(value) = object.get(key).filter(|value| !value.is_null()) {
+                result.insert(key.to_string(), compact_debug_value(value.clone(), 2));
+            }
+        }
+        return Value::Object(result);
+    }
+    compact
+}
+
+fn compact_debug_value(value: Value, depth: usize) -> Value {
+    match value {
+        Value::Object(object) => {
+            if depth == 0 {
+                return json!({"truncated": true, "fields": object.len()});
+            }
+            let mut compact = Map::new();
+            for (key, value) in object {
+                if omit_debug_key(&key) {
+                    continue;
+                }
+                compact.insert(key, compact_debug_value(value, depth - 1));
+            }
+            Value::Object(compact)
+        }
+        Value::Array(values) => {
+            if depth == 0 {
+                return json!({"truncated": true, "items": values.len()});
+            }
+            let original_len = values.len();
+            let mut compact = values
+                .into_iter()
+                .take(DEBUG_VALUE_MAX_ARRAY_ITEMS)
+                .map(|value| compact_debug_value(value, depth - 1))
+                .collect::<Vec<_>>();
+            if original_len > compact.len() {
+                compact.push(json!({"truncated": true, "remaining": original_len - compact.len()}));
+            }
+            Value::Array(compact)
+        }
+        Value::String(value) => Value::String(truncate_debug_string(value)),
+        value => value,
+    }
+}
+
+fn omit_debug_key(key: &str) -> bool {
+    matches!(
+        key,
+        "stt"
+            | "wake_metadata"
+            | "wakeMetadata"
+            | "token_logprobs"
+            | "tokenLogprobs"
+            | "logprobs"
+            | "audio_bytes"
+            | "audioBytes"
+            | "audio_checksum"
+            | "audioChecksum"
+            | "source_audio_path"
+            | "sourceAudioPath"
+            | "local"
+            | "artifacts"
+    )
+}
+
+fn truncate_debug_string(value: String) -> String {
+    if value.chars().count() <= DEBUG_VALUE_MAX_STRING_CHARS {
+        return value;
+    }
+    value
+        .chars()
+        .take(DEBUG_VALUE_MAX_STRING_CHARS)
+        .collect::<String>()
+        + "...[truncated]"
 }
 
 fn merge_jobs<'a>(jobs: impl Iterator<Item = &'a Job>) -> Vec<Job> {

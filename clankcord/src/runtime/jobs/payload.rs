@@ -660,6 +660,7 @@ impl Default for ResponseKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ResponseSinkKind {
+    AgentSession,
     AgentChat,
     Channel,
     Dm,
@@ -669,6 +670,7 @@ pub enum ResponseSinkKind {
 impl ResponseSinkKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::AgentSession => "session",
             Self::AgentChat => "agent_chat",
             Self::Channel => "channel",
             Self::Dm => "dm",
@@ -682,6 +684,7 @@ impl FromStr for ResponseSinkKind {
 
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
+            "session" | "agent_session" | "agent-session" => Ok(Self::AgentSession),
             "" | "agent_chat" | "agent-chat" => Ok(Self::AgentChat),
             "channel" => Ok(Self::Channel),
             "dm" => Ok(Self::Dm),
@@ -695,7 +698,7 @@ impl FromStr for ResponseSinkKind {
 
 impl Default for ResponseSinkKind {
     fn default() -> Self {
-        Self::AgentChat
+        Self::AgentSession
     }
 }
 
@@ -834,7 +837,21 @@ impl ResponsePayload {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
+    pub agent_session_id: String,
     pub command: CommandRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordTextMessagePayload {
+    pub guild_id: String,
+    pub channel_id: String,
+    pub message_id: String,
+    pub author_user_id: String,
+    pub author_username: String,
+    pub author_display_name: String,
+    pub content: String,
+    pub created_at: String,
+    pub referenced_message_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1007,6 +1024,7 @@ pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
     WakeActivation(WakeActivationPayload),
     AgentTask(AgentTaskPayload),
+    DiscordTextMessage(DiscordTextMessagePayload),
     Response(ResponsePayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
@@ -1028,6 +1046,7 @@ impl JobPayload {
             Self::AudioSegment(_) => JobKind::AudioSegment,
             Self::WakeActivation(_) => JobKind::WakeActivation,
             Self::AgentTask(_) => JobKind::AgentTask,
+            Self::DiscordTextMessage(_) => JobKind::DiscordTextMessage,
             Self::Response(_) => JobKind::Response,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
@@ -1051,6 +1070,7 @@ impl JobPayload {
             Self::RuntimeMaintenance(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
+            Self::DiscordTextMessage(_) => None,
             Self::Response(_) => None,
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::Command(payload) => Some(&payload.command),
@@ -1072,6 +1092,7 @@ impl JobPayload {
             Self::RuntimeMaintenance(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
+            Self::DiscordTextMessage(_) => None,
             Self::Response(_) => None,
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::Command(payload) => Some(&mut payload.command),
@@ -1141,7 +1162,21 @@ impl JobPayload {
                 "amended_wake_event_ids": payload.amended_wake_event_ids,
                 "replacement_of_job_ids": payload.replacement_of_job_ids,
             }),
-            Self::AgentTask(payload) => json!({"command": payload.command.to_json()}),
+            Self::AgentTask(payload) => json!({
+                "agent_session_id": payload.agent_session_id,
+                "command": payload.command.to_json(),
+            }),
+            Self::DiscordTextMessage(payload) => json!({
+                "guild_id": payload.guild_id,
+                "channel_id": payload.channel_id,
+                "message_id": payload.message_id,
+                "author_user_id": payload.author_user_id,
+                "author_username": payload.author_username,
+                "author_display_name": payload.author_display_name,
+                "content": payload.content,
+                "created_at": payload.created_at,
+                "referenced_message_id": payload.referenced_message_id,
+            }),
             Self::Response(payload) => payload.to_json(),
             Self::RefineTranscript(payload) => json!({
                 "window_id": payload.window_id,

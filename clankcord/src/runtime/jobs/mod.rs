@@ -13,11 +13,12 @@ pub use output::{
 pub use payload::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload, JobPayload,
-    OpaqueValue, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSink,
-    ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
+    DiscordTextMessagePayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
+    DiscordVoicePlaybackPayload, JobPayload, OpaqueValue, RefineTranscriptPayload, ResponseKind,
+    ResponsePayload, ResponseSink, ResponseSinkKind, RoomAgentPlacementAction,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
+    RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

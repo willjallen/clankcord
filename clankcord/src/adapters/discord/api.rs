@@ -169,6 +169,32 @@ pub fn send_message(channel_id: &str, content: &str) -> Result<Value> {
     })
 }
 
+pub fn create_forum_thread(
+    parent_channel_id: &str,
+    name: &str,
+    content: &str,
+    auto_archive_minutes: i64,
+) -> Result<Value> {
+    let body = serde_json::json!({
+        "name": name,
+        "auto_archive_duration": auto_archive_minutes,
+        "message": {"content": content},
+    });
+    let payload = discord_request(
+        "POST",
+        &format!("/channels/{parent_channel_id}/threads"),
+        Some(&body),
+        None,
+        None,
+        30,
+    )?;
+    Ok(if payload.is_object() {
+        payload
+    } else {
+        Value::Object(Default::default())
+    })
+}
+
 pub fn create_dm_channel(user_id: &str) -> Result<Value> {
     let body = serde_json::json!({"recipient_id": user_id});
     let payload = discord_request("POST", "/users/@me/channels", Some(&body), None, None, 30)?;

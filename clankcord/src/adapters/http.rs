@@ -551,7 +551,7 @@ async fn debug_overview(
                 timeline_since: query_str(&query, &["timelineSince"]),
                 timeline_limit: query_usize(&query, &["timelineLimit"], 120),
                 transcript_since: query_str(&query, &["transcriptSince"]),
-                transcript_limit: query_usize(&query, &["transcriptLimit"], 500),
+                transcript_limit: query_usize(&query, &["transcriptLimit"], 250),
                 publication_limit: query_usize(&query, &["publicationLimit"], 120),
             })
             .await,

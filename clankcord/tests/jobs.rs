@@ -4,12 +4,12 @@ use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
 use clankcord::runtime::{
-    AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordVoiceJoinPayload,
-    DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
-    DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload,
-    JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload, ResponseSinkKind, RoomConfig,
-    WakeActivationPayload, WakeProbePayload,
+    AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordTextMessagePayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload,
+    ResponseSinkKind, RoomConfig, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -25,7 +25,7 @@ async fn job_round_trips_as_binary_record() {
         "arguments": {"question": "what happened?", "relative_start": "-20m"}
     }))
     .unwrap();
-    let job = Job::agent_task("guild", "channel", "requester", command);
+    let job = Job::agent_task_for_session("ags_test", "guild", "channel", "requester", command);
 
     let encoded = job.encode().unwrap();
     let parsed = Job::decode(&encoded).unwrap();
@@ -319,11 +319,11 @@ async fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
         "arguments": {"question": "summarize this"}
     }))
     .unwrap();
-    let job = Job::agent_task("guild", "code", "user-a", command);
+    let job = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
     let job_id = job.id.clone();
     store.create_job(job).await.unwrap();
 
-    let mut blocked = BTreeSet::from(["agent:task:guild:code".to_string()]);
+    let mut blocked = BTreeSet::from(["agent:session:ags_test".to_string()]);
     let skipped = store
         .claim_due_jobs(JobKind::AgentTask, 4, &mut blocked)
         .await
@@ -348,6 +348,56 @@ async fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_agent_ingress_serializes_by_voice_route_across_job_kinds() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let command_job = Job::command_request(
+        "guild",
+        "code",
+        "user-a",
+        CommandRequest::agent_task("guild", "code", "user-a", "first request"),
+    );
+    let wake_job = Job::wake_activation(wake_activation_payload("guild", "code"));
+    let wake_job_id = wake_job.id.clone();
+    store.create_job(command_job).await.unwrap();
+    store.create_job(wake_job).await.unwrap();
+
+    let claimed_commands = store
+        .claim_due_jobs(JobKind::Command, 4, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    assert_eq!(claimed_commands.len(), 1);
+
+    let mut blocked = store.active_ordering_keys().await.unwrap();
+    let claimed_wake = store
+        .claim_due_jobs(JobKind::WakeActivation, 4, &mut blocked)
+        .await
+        .unwrap();
+    assert!(claimed_wake.is_empty());
+    assert_eq!(
+        store.get_job(&wake_job_id).await.unwrap().state,
+        JobState::Queued
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_dm_text_messages_serializes_by_user_route() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let first = Job::discord_text_message(discord_dm_text_message("dm-a", "msg-1", "user-a"));
+    let second = Job::discord_text_message(discord_dm_text_message("dm-b", "msg-2", "user-a"));
+    store.create_job(first).await.unwrap();
+    store.create_job(second).await.unwrap();
+
+    let claimed = store
+        .claim_due_jobs(JobKind::DiscordTextMessage, 4, &mut BTreeSet::new())
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
@@ -359,14 +409,15 @@ async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
         "arguments": {"question": "summarize this"}
     }))
     .unwrap();
-    let mut first = Job::agent_task("guild", "code", "user-a", command.clone());
+    let mut first =
+        Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command.clone());
     first.created_at = Utc
         .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
         .unwrap()
         .to_rfc3339_opts(SecondsFormat::Millis, true);
     first.updated_at = first.created_at.clone();
     let first_id = first.id.clone();
-    let mut second = Job::agent_task("guild", "code", "user-a", command);
+    let mut second = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
     second.created_at = Utc
         .with_ymd_and_hms(2026, 5, 12, 16, 0, 1)
         .unwrap()
@@ -687,5 +738,48 @@ fn wake_probe_payload(stream_id: &str, probe_index: i64) -> WakeProbePayload {
         post_processing: "pcm_s16le_to_wav".to_string(),
         stream_id: stream_id.to_string(),
         reset_stream: true,
+    }
+}
+
+fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActivationPayload {
+    WakeActivationPayload {
+        activation_id: "act_route".to_string(),
+        guild_id: guild_id.to_string(),
+        voice_channel_id: voice_channel_id.to_string(),
+        voice_channel_name: "Code".to_string(),
+        speaker_user_id: "user-a".to_string(),
+        speaker_label: "Will".to_string(),
+        wake_event_id: "evt_wake".to_string(),
+        wake_started_at: "2026-05-14T12:00:00.000Z".to_string(),
+        wake_ended_at: "2026-05-14T12:00:01.000Z".to_string(),
+        latest_wake_event_id: "evt_wake".to_string(),
+        latest_wake_at: "2026-05-14T12:00:00.000Z".to_string(),
+        lookback_seconds: 30,
+        min_post_seconds: 5,
+        speaker_idle_seconds: 5,
+        stt_flush_grace_seconds: 2,
+        max_window_seconds: 60,
+        additive_preempt_seconds: 10,
+        independent_after_seconds: 45,
+        amended_wake_event_ids: Vec::new(),
+        replacement_of_job_ids: Vec::new(),
+    }
+}
+
+fn discord_dm_text_message(
+    channel_id: &str,
+    message_id: &str,
+    author_user_id: &str,
+) -> DiscordTextMessagePayload {
+    DiscordTextMessagePayload {
+        guild_id: String::new(),
+        channel_id: channel_id.to_string(),
+        message_id: message_id.to_string(),
+        author_user_id: author_user_id.to_string(),
+        author_username: "will".to_string(),
+        author_display_name: "Will".to_string(),
+        content: "follow up".to_string(),
+        created_at: "2026-05-14T12:00:00.000Z".to_string(),
+        referenced_message_id: String::new(),
     }
 }

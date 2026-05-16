@@ -1180,6 +1180,7 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         crate::runtime::JobKind::Response => "response",
         crate::runtime::JobKind::RefineTranscript => "refinement",
         crate::runtime::JobKind::AgentTask => "agent",
+        crate::runtime::JobKind::DiscordTextMessage => "general_async",
         crate::runtime::JobKind::RuntimeMaintenance => "maintenance",
         _ => "general_async",
     }
@@ -1190,12 +1191,32 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::WakeProbe(payload) => {
             format!("wake:stream:{}", payload.stream_id)
         }
-        crate::runtime::JobPayload::AgentTask(_) => {
+        crate::runtime::JobPayload::AgentTask(payload) => {
             format!(
-                "agent:task:{}:{}",
-                normalize_key_part(&job.guild_id),
-                normalize_key_part(&job.voice_channel_id)
+                "agent:session:{}",
+                normalize_key_part(&payload.agent_session_id)
             )
+        }
+        crate::runtime::JobPayload::WakeActivation(payload) => {
+            voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
+        }
+        crate::runtime::JobPayload::Command(payload)
+            if payload.command.command_kind == crate::runtime::CommandKind::AgentTask =>
+        {
+            voice_agent_route_ordering_key(
+                &payload.command.guild_id,
+                &payload.command.voice_channel_id,
+            )
+        }
+        crate::runtime::JobPayload::DiscordTextMessage(payload) => {
+            if payload.guild_id.trim().is_empty() {
+                format!(
+                    "agent:route:{}",
+                    crate::runtime::dm_route_key(&payload.author_user_id)
+                )
+            } else {
+                format!("discord:text:{}", normalize_key_part(&payload.channel_id))
+            }
         }
         crate::runtime::JobPayload::RoomAgentPlacement(payload) => {
             let room_key = if payload.room_id.trim().is_empty() {
@@ -1227,6 +1248,13 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::RuntimeMaintenance(_) => "runtime:maintenance".to_string(),
         _ => String::new(),
     }
+}
+
+fn voice_agent_route_ordering_key(guild_id: &str, voice_channel_id: &str) -> String {
+    format!(
+        "agent:route:{}",
+        crate::runtime::voice_route_key(guild_id, voice_channel_id)
+    )
 }
 
 fn source_job_id(job: &Job) -> String {

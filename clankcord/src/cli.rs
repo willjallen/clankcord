@@ -428,7 +428,7 @@ struct MemberGetArgs {
 struct ResponseSubmitArgs {
     #[arg(long)]
     job: Option<String>,
-    #[arg(long, default_value = "agent-chat")]
+    #[arg(long, default_value = "session")]
     sink: String,
     #[arg(long)]
     guild: Option<String>,

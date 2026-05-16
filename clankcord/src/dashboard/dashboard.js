@@ -11,7 +11,7 @@ const defaultFilters = {
   timelineChannel: '',
   timelineSearch: '',
   transcriptSince: '-24h',
-  transcriptLimit: 500,
+  transcriptLimit: 250,
   transcriptChannel: '',
   transcriptSearch: '',
   publicationLimit: 120,

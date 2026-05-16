@@ -4,6 +4,7 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::audio_segments;
 use crate::runtime::domain::responses;
+use crate::runtime::domain::text_messages;
 use crate::runtime::domain::wake_activations;
 use crate::runtime::domain::wake_probes;
 use crate::runtime::refinement::run_refinement_job;
@@ -21,6 +22,9 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
             )?))
         }
         JobPayload::Command(_) => commands::prepare(runtime, job).await,
+        JobPayload::DiscordTextMessage(payload) => {
+            text_messages::prepare(runtime, job, payload).await
+        }
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::prepare(runtime, job, payload).await
         }

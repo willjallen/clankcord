@@ -36,3 +36,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "clankcord"
 path = "src/main.rs"
+
+[[test]]
+name = "agent_sessions"
+path = "tess/agent_sessions.rs"

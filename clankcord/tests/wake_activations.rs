@@ -8,8 +8,9 @@ mod common;
 use clankcord::runtime::domain::wake_activations::{execute, schedule_from_wake_event};
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, string_field};
 use clankcord::runtime::{
-    AgentRuntime, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue, Job, JobKind,
-    JobState, Runtime, RuntimeSessionStatus, SessionCaptureStats, SessionSpeakerCaptureStats,
+    AgentRuntime, AgentSessionRecord, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue,
+    Job, JobKind, JobState, Runtime, RuntimeSessionStatus, SessionCaptureStats,
+    SessionSpeakerCaptureStats,
 };
 
 use common::{dt, test_store};
@@ -19,6 +20,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let prior = append_event(
         &runtime.timeline_store,
@@ -127,6 +129,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = runtime
         .timeline_store
@@ -190,6 +193,7 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
         &runtime.timeline_store,
@@ -230,6 +234,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
         &runtime.timeline_store,
@@ -359,6 +364,7 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     runtime.sessions.insert(
         "cap_test".to_string(),
         RuntimeSessionStatus {
@@ -417,6 +423,7 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
     let wake = append_event(
@@ -481,6 +488,7 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
     let wake = append_event(
@@ -545,6 +553,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     runtime.sessions.insert(
         "cap_test".to_string(),
         RuntimeSessionStatus {
@@ -687,6 +696,7 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
         &runtime.timeline_store,
@@ -836,6 +846,19 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
         manual_join_hold_seconds: 60 * 60,
         pause_release_seconds: 20 * 60,
     }
+}
+
+async fn insert_agent_session(store: &TimelineStore) {
+    let record = AgentSessionRecord::new_voice(
+        "ags_wake_test",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-wake-test",
+        dt(2026, 5, 12, 15, 0, 0).to_rfc3339_opts(SecondsFormat::Millis, true),
+        dt(2099, 5, 12, 15, 0, 0).to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    store.create_agent_session_record(record).await.unwrap();
 }
 
 async fn append_event(

@@ -8,9 +8,7 @@ use std::process::Command;
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
 use crate::config::non_empty;
-use crate::runtime::agents::{
-    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
-};
+use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     BinaryPayload,
@@ -126,15 +124,19 @@ impl Runtime {
         let prompt_path = job_dir.join(format!("{}.agent-prompt.txt", latest.id));
         let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
         let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
-        let session_key =
-            AgentRuntime::task_session_key(&latest.guild_id, &latest.voice_channel_id);
+        let agent_session_id = agent_task_session_id(&latest)?;
+        let agent_session = self
+            .timeline_store
+            .get_agent_session_record(&agent_session_id)
+            .await?;
+        let session_key = agent_session.invocation_key();
         let prior_session_id = non_empty(
             latest
                 .metadata
                 .agent_task()
                 .map(|task| task.agent.session_id.clone())
                 .unwrap_or_default(),
-            self.latest_agent_session_id(&latest).await?,
+            agent_session.codex_session_id.clone(),
         );
         let include_master_prompt = prior_session_id.trim().is_empty();
         let prompt = self
@@ -188,6 +190,19 @@ impl Runtime {
         }
 
         let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
+        let completed_session = self
+            .set_agent_session_codex_session(
+                &agent_session_id,
+                non_empty(
+                    invocation
+                        .session
+                        .as_ref()
+                        .map(|session| session.session_id.clone())
+                        .unwrap_or_default(),
+                    invocation.session_id.clone(),
+                ),
+            )
+            .await?;
         Ok(AgentTaskMetadata {
             workdir_path: workdir.display().to_string(),
             prompt_path: prompt_path.display().to_string(),
@@ -196,14 +211,7 @@ impl Runtime {
             dispatch_stdout_preview: preview(&response_text, 1000),
             dispatch_stderr: preview(&invocation.stderr, 1000),
             agent: AgentInvocationMetadata {
-                session_id: non_empty(
-                    invocation
-                        .session
-                        .as_ref()
-                        .map(|session| session.session_id.clone())
-                        .unwrap_or_default(),
-                    invocation.session_id,
-                ),
+                session_id: completed_session.codex_session_id,
                 provider: "codex".to_string(),
                 model: invocation.model,
                 usage: BinaryPayload::from_json(&extract_codex_usage(&invocation.stdout))
@@ -300,30 +308,6 @@ impl Runtime {
         self.timeline_store
             .list_response_jobs_for_source(source_job_id)
             .await
-    }
-
-    async fn latest_agent_session_id(&self, job: &Job) -> Result<String> {
-        let mut jobs = self
-            .timeline_store
-            .list_jobs_by_scope_kind(&job.guild_id, &job.voice_channel_id, JobKind::AgentTask)
-            .await?;
-        jobs.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(jobs
-            .into_iter()
-            .rev()
-            .filter(|candidate| candidate.id != job.id)
-            .filter_map(|candidate| {
-                candidate
-                    .metadata
-                    .agent_task()
-                    .map(|task| task.agent.session_id.clone())
-            })
-            .find(|session_id| !session_id.trim().is_empty())
-            .unwrap_or_default())
     }
 
     async fn fail_agent_task_job(
@@ -434,6 +418,7 @@ pub fn agent_invocation_infrastructure_failure(detail: &str) -> bool {
 #[derive(Debug, Clone, Default)]
 pub struct AgentTaskPromptContext {
     pub job_id: String,
+    pub agent_session_id: String,
     pub guild_id: String,
     pub voice_channel_id: String,
     pub requested_by_user_id: String,
@@ -473,7 +458,7 @@ impl Runtime {
         let source_event_ids = agent_task_source_event_ids(job);
         let end = parse_instant(&job.created_at).unwrap_or_else(utc_now);
         let start = end - chrono::Duration::minutes(5);
-        let speech_kinds = set(["speech_segment", "transcript"]);
+        let speech_kinds = set(["speech_segment", "transcript", "discord_text_message"]);
         let events = self
             .timeline_store
             .load_events(
@@ -511,6 +496,7 @@ impl Runtime {
         }
         Ok(AgentTaskPromptContext {
             job_id: job.id.clone(),
+            agent_session_id: agent_task_session_id(job)?,
             guild_id: job.guild_id.clone(),
             voice_channel_id: job.voice_channel_id.clone(),
             requested_by_user_id: job.requested_by_user_id.clone(),
@@ -553,6 +539,7 @@ fn agent_job_prompt(context: &AgentTaskPromptContext) -> String {
     [
         "JOB:",
         &format!("job_id: {}", context.job_id),
+        &format!("agent_session_id: {}", context.agent_session_id),
         &format!("guild_id: {}", context.guild_id),
         &format!("voice_channel_id: {}", context.voice_channel_id),
         &format!(
@@ -595,11 +582,11 @@ pub fn agent_master_prompt() -> String {
         "The CLI is the supported way to ask Clankcord to do work. Do not post to Discord directly. Do not mutate Clankcord state by editing files or databases directly.",
         "",
         "When a user asks for immediate information, gather enough context to answer well. Use timeline, transcript, participant, room, message, and external research tools as needed.",
-        "Use `clankcord --help` and subcommand `--help` to discover the command surface. For visible responses, inspect `clankcord responses --help`; prefer `clankcord responses send --sink ...` or `clankcord responses dm --to ...`.",
+        "Use `clankcord --help`, `clankcord responses --help`, and subcommand `--help` to discover the command surface. For visible responses in the current agent session, use `clankcord responses send`; for explicitly private replies, use `clankcord responses dm --to ...`.",
         "",
         "ENVIRONMENT:",
         "You run from $CLANKCORD_AGENT_WORKDIR, a writable working directory for notes, temp files, command outputs, and intermediate artifacts. The Clankcord source checkout is at $CLANKCORD_REPO_DIR.",
-        "Current job context is available in CLANKCORD_AGENT_JOB_ID, CLANKCORD_AGENT_GUILD_ID, CLANKCORD_AGENT_VOICE_CHANNEL_ID, and CLANKCORD_AGENT_REQUESTED_BY_USER_ID.",
+        "Current job context is available in CLANKCORD_AGENT_JOB_ID, CLANKCORD_AGENT_SESSION_ID, CLANKCORD_AGENT_GUILD_ID, CLANKCORD_AGENT_VOICE_CHANNEL_ID, and CLANKCORD_AGENT_REQUESTED_BY_USER_ID.",
         "For large transcript, timeline, search, or job outputs, prefer explicit file output like `--file result.json --format json`, then inspect files with jq, rg, and sed. Large files may be very large; avoid printing them into your conversation context.",
         "",
         "RESPONSE BEHAVIOR:",
@@ -607,7 +594,7 @@ pub fn agent_master_prompt() -> String {
         "If the wake word appears to be a false activation, cross-talk, an accidental invocation, or the captured question is not actually directed at Clankcord, do not respond visibly. Finish with NO_RESPONSE_NEEDED.",
         "If the user requested a straightforward action where a visible answer would add noise, perform the action through Clankcord and finish with NO_RESPONSE_NEEDED unless the action failed or the user clearly expects confirmation.",
         "If a user asks you to DM them about something, treat the request and the answer as private. Use `clankcord responses dm` for the substantive response, and do not publish the topic, answer, summary, result, or confirmation to a public channel unless the user explicitly asks for public disclosure.",
-        "If you publish a visible response, use `clankcord responses send` or `clankcord responses dm`. After successful submission, finish with RESPONSE_SUBMITTED. Final text is not a publication path.",
+        "If you publish a visible response, use `clankcord responses send` for the current session surface or `clankcord responses dm` for explicit DMs. After successful submission, finish with RESPONSE_SUBMITTED. Final text is not a publication path.",
         "",
         "You may search the web and should use web research when it would materially improve the answer, especially for current facts, unfamiliar topics, fact-checking, product or technical details, or anything where the transcript alone is not enough.",
         "Do not invent facts when research is possible.",
@@ -631,14 +618,26 @@ fn validate_agent_task_job(job: &Job) -> Result<()> {
     {
         anyhow::bail!("agent task job is missing job/guild/channel identity");
     }
+    agent_task_session_id(job)?;
     Ok(())
 }
 
+fn agent_task_session_id(job: &Job) -> Result<String> {
+    let crate::runtime::JobPayload::AgentTask(payload) = &job.payload else {
+        anyhow::bail!("job {} is not an agent task", job.id);
+    };
+    if payload.agent_session_id.trim().is_empty() {
+        anyhow::bail!("agent task job {} is missing agent_session_id", job.id);
+    }
+    Ok(payload.agent_session_id.clone())
+}
+
 pub fn agent_task_workdir(job: &Job) -> PathBuf {
-    agent_workspace_root()
-        .join("task")
-        .join(&job.guild_id)
-        .join(&job.voice_channel_id)
+    let agent_session_id = match &job.payload {
+        crate::runtime::JobPayload::AgentTask(payload) => payload.agent_session_id.clone(),
+        _ => job.id.clone(),
+    };
+    agent_workspace_root().join("task").join(agent_session_id)
 }
 
 fn agent_workspace_root() -> PathBuf {
@@ -661,6 +660,9 @@ fn agent_task_env(
         workdir.display().to_string(),
     );
     vars.insert("CLANKCORD_AGENT_JOB_ID".to_string(), job.id.clone());
+    if let Ok(agent_session_id) = agent_task_session_id(job) {
+        vars.insert("CLANKCORD_AGENT_SESSION_ID".to_string(), agent_session_id);
+    }
     vars.insert("CLANKCORD_AGENT_GUILD_ID".to_string(), job.guild_id.clone());
     vars.insert(
         "CLANKCORD_AGENT_VOICE_CHANNEL_ID".to_string(),

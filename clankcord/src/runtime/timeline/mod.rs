@@ -1,3 +1,4 @@
+mod agent_sessions;
 mod events;
 mod jobs;
 mod maintenance;

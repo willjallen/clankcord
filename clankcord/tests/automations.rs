@@ -664,7 +664,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
-    assert_eq!(job.kind, JobKind::AgentTask);
+    assert_eq!(job.kind, JobKind::Command);
     assert_eq!(
         job.command().unwrap().arguments.request,
         "Summarize the completed response job."
@@ -793,7 +793,8 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
 }
 
 async fn insert_agent_source_job(store: &TimelineStore) {
-    let mut job = Job::agent_task(
+    let mut job = Job::agent_task_for_session(
+        "ags_source",
         "guild",
         "code",
         "user-a",

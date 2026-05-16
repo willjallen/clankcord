@@ -462,7 +462,7 @@ fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Resul
                 false,
             ),
         )),
-        AutomationAction::AgentTaskStart { prompt, .. } => Ok(Job::agent_task(
+        AutomationAction::AgentTaskStart { prompt, .. } => Ok(Job::command_request(
             guild_id.clone(),
             voice_channel_id.clone(),
             requested_by_user_id.clone(),

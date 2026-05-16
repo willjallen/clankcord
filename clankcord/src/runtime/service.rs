@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::Result;
+use crate::adapters::discord::text::DiscordTextAdapter;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::{config_path, read_json};
 use crate::runtime::core::execution::RuntimeExecutor;
@@ -201,6 +202,7 @@ impl RuntimeService {
 
     pub fn spawn(self) {
         spawn_intake_loop(self.handle.clone(), self.intake);
+        spawn_discord_text_loop(self.handle.job_sink());
         spawn_live_voice_loop(self.handle.live_voice.clone());
         spawn_dispatch_loop(self.handle.clone());
     }
@@ -311,6 +313,10 @@ fn spawn_live_voice_loop(live_voice: Arc<LiveVoiceAdapter>) {
             }
         }
     });
+}
+
+fn spawn_discord_text_loop(job_sink: RuntimeJobSink) {
+    DiscordTextAdapter::new(job_sink).spawn();
 }
 
 fn spawn_dispatch_loop(handle: RuntimeHandle) {

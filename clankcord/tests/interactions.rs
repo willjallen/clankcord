@@ -50,6 +50,7 @@ fn resumed_agent_task_message_omits_large_session_instructions() {
 fn prompt_context() -> AgentTaskPromptContext {
     AgentTaskPromptContext {
         job_id: "job_test".to_string(),
+        agent_session_id: "ags_test".to_string(),
         guild_id: "guild".to_string(),
         voice_channel_id: "code".to_string(),
         requested_by_user_id: "user-1".to_string(),

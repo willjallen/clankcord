@@ -401,6 +401,26 @@ impl TimelineStore {
               max_fires BIGINT,
               payload_blob BYTEA NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS agent_sessions (
+              agent_session_id TEXT PRIMARY KEY,
+              codex_session_id TEXT NOT NULL DEFAULT '',
+              route_kind TEXT NOT NULL DEFAULT '',
+              route_key TEXT NOT NULL DEFAULT '',
+              guild_id TEXT NOT NULL DEFAULT '',
+              voice_channel_id TEXT NOT NULL DEFAULT '',
+              dm_user_id TEXT NOT NULL DEFAULT '',
+              discord_thread_id TEXT NOT NULL DEFAULT '',
+              discord_parent_channel_id TEXT NOT NULL DEFAULT '',
+              response_sink_kind TEXT NOT NULL DEFAULT '',
+              response_channel_id TEXT NOT NULL DEFAULT '',
+              response_user_id TEXT NOT NULL DEFAULT '',
+              state TEXT NOT NULL DEFAULT '',
+              created_at_ms BIGINT NOT NULL,
+              last_activity_at_ms BIGINT NOT NULL,
+              expires_at_ms BIGINT NOT NULL,
+              payload_blob BYTEA NOT NULL
+            );
             "#,
         )
         .execute(&self.pool)
@@ -478,6 +498,14 @@ impl TimelineStore {
               ON automations(guild_id, voice_channel_id, state, expires_at_ms);
             CREATE INDEX IF NOT EXISTS idx_automations_idempotency
               ON automations(guild_id, voice_channel_id, idempotency_key, state);
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_route
+              ON agent_sessions(route_key, state, expires_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_thread
+              ON agent_sessions(discord_thread_id, state, expires_at_ms DESC)
+              WHERE discord_thread_id <> '';
+            CREATE INDEX IF NOT EXISTS idx_agent_sessions_codex
+              ON agent_sessions(codex_session_id)
+              WHERE codex_session_id <> '';
             "#,
         )
         .execute(&self.pool)

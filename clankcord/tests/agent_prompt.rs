@@ -6,6 +6,7 @@ use clankcord::runtime::domain::interactions::{
 fn agent_task_prompt_is_compact_and_packet_free() {
     let prompt = build_agent_task_message(&AgentTaskPromptContext {
         job_id: "job_1".to_string(),
+        agent_session_id: "ags_1".to_string(),
         guild_id: "guild".to_string(),
         voice_channel_id: "voice".to_string(),
         requested_by_user_id: "user".to_string(),

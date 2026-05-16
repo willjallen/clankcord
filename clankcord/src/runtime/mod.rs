@@ -13,21 +13,24 @@ pub mod timeline;
 pub(crate) mod util;
 pub mod views;
 
-pub use agents::AgentRuntime;
+pub use agents::{
+    AgentRuntime, AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
+    thread_route_key, voice_route_key,
+};
 pub use bots::RuntimeBotStatus;
 pub use core::Runtime;
 pub use jobs::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
     CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
-    DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobCreatedOutput, JobFailure,
-    JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload, ResponseKind,
-    ResponseOutput, ResponsePayload, ResponseSink, ResponseSinkKind, RoomAgentPlacementAction,
-    RoomAgentPlacementOutput, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload, WakeActivationPayload,
-    WakeProbePayload,
+    DiscordTextMessagePayload, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
+    DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload, DiscordVoiceMuteOutput,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job,
+    JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState,
+    RefineTranscriptPayload, ResponseKind, ResponseOutput, ResponsePayload, ResponseSink,
+    ResponseSinkKind, RoomAgentPlacementAction, RoomAgentPlacementOutput,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload,
+    RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use runtime_config::{ControlConfig, GuildConfig};

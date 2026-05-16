@@ -8,11 +8,12 @@ use super::util::{
 };
 use super::{
     AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
-    ConfirmationContext, ConfirmationRequiredPayload, DiscordVoiceJoinPayload,
-    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
-    ResponsePayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
+    ConfirmationContext, ConfirmationRequiredPayload, DiscordTextMessagePayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload,
+    JobState, RefineTranscriptPayload, ResponsePayload, RoomAgentPlacementAction,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
+    RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -383,7 +384,8 @@ impl Job {
         Ok(())
     }
 
-    pub fn agent_task(
+    pub fn agent_task_for_session(
+        agent_session_id: impl Into<String>,
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
@@ -394,7 +396,30 @@ impl Job {
             voice_channel_id,
             requested_by_user_id,
             JobState::Queued,
-            JobPayload::AgentTask(AgentTaskPayload { command }),
+            JobPayload::AgentTask(AgentTaskPayload {
+                agent_session_id: agent_session_id.into(),
+                command,
+            }),
+        )
+    }
+
+    pub fn discord_text_message(payload: DiscordTextMessagePayload) -> Self {
+        let guild_id = if payload.guild_id.trim().is_empty() {
+            "dm".to_string()
+        } else {
+            payload.guild_id.clone()
+        };
+        let scope_channel_id = if payload.guild_id.trim().is_empty() {
+            payload.author_user_id.clone()
+        } else {
+            payload.channel_id.clone()
+        };
+        Self::new(
+            guild_id,
+            scope_channel_id,
+            payload.author_user_id.clone(),
+            JobState::Queued,
+            JobPayload::DiscordTextMessage(payload),
         )
     }
 

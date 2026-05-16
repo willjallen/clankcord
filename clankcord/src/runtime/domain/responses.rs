@@ -70,6 +70,7 @@ pub(crate) async fn execute(
         anyhow::bail!("response job {} has empty content", job.id);
     }
     let post = match payload.sink.kind {
+        ResponseSinkKind::AgentSession => post_to_agent_session(runtime, job, payload).await?,
         ResponseSinkKind::AgentChat => post_to_agent_chat(runtime, job, payload)?,
         ResponseSinkKind::Channel => post_to_channel(job, payload, &payload.sink.channel_id)?,
         ResponseSinkKind::Dm => post_to_dm(job, payload)?,
@@ -118,6 +119,47 @@ fn post_to_agent_chat(
         anyhow::bail!("botsChannelId is not configured");
     }
     post_to_channel(job, payload, &channel_id)
+}
+
+async fn post_to_agent_session(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &ResponsePayload,
+) -> Result<DiscordPostMetadata> {
+    let source_job_id = payload.source_job_id.trim();
+    if source_job_id.is_empty() {
+        anyhow::bail!(
+            "response job {} uses session sink without source job",
+            job.id
+        );
+    }
+    let source = runtime.timeline_store.get_job(source_job_id).await?;
+    let crate::runtime::JobPayload::AgentTask(agent_task) = &source.payload else {
+        anyhow::bail!(
+            "response job {} uses session sink but source job {} is not an agent task",
+            job.id,
+            source_job_id
+        );
+    };
+    let session = runtime
+        .timeline_store
+        .get_agent_session_record(&agent_task.agent_session_id)
+        .await?;
+    match session.response_sink.kind {
+        ResponseSinkKind::Channel => {
+            post_to_channel(job, payload, &session.response_sink.channel_id)
+        }
+        ResponseSinkKind::Dm => {
+            let mut routed = payload.clone();
+            routed.sink = session.response_sink;
+            post_to_dm(job, &routed)
+        }
+        kind => anyhow::bail!(
+            "agent session {} has unsupported response sink {}",
+            session.agent_session_id,
+            kind.as_str()
+        ),
+    }
 }
 
 fn post_to_channel(

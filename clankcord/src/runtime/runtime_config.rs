@@ -25,6 +25,8 @@ pub struct ControlConfig {
     #[serde(default)]
     pub bots_channel_id: String,
     #[serde(default)]
+    pub agent_threads_channel_id: String,
+    #[serde(default)]
     pub transcripts_forum_id: String,
     #[serde(default)]
     pub thread_auto_archive_minutes: i64,

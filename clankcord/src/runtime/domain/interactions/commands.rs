@@ -307,9 +307,17 @@ impl Runtime {
                 if !job_kind.is_agent_task() {
                     anyhow::bail!("unsupported queued job kind: {job_kind}");
                 }
-                let job = Job::agent_task(
-                    &guild_id,
-                    &channel_id,
+                let session = self
+                    .ensure_voice_agent_session(
+                        &guild_id,
+                        &channel_id,
+                        &command.requested_by_user_id,
+                    )
+                    .await?;
+                let job = Job::agent_task_for_session(
+                    session.agent_session_id,
+                    session.guild_id,
+                    session.voice_channel_id,
                     command.requested_by_user_id.clone(),
                     command,
                 );
