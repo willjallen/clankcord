@@ -579,7 +579,7 @@ window.dashboard = function dashboard() {
       return [
         { label: 'Runtime', value: health.ok ? 'ok' : 'degraded', className: health.ok ? 'ok' : 'bad' },
         { label: 'Postgres', value: health.postgres ? 'ok' : 'error', className: health.postgres ? 'ok' : 'bad' },
-        { label: 'Ready bots', value: `${health.readyBots ?? 0}/${health.configuredBots ?? 0}` },
+        { label: 'Ready bots', value: `${health.readyBots ?? 0}/${health.observedBots ?? 0}` },
         { label: 'Active sessions', value: health.activeSessions ?? 0 },
         { label: 'Active agent jobs', value: health.activeAgentJobs ?? 0 },
         { label: 'Loaded automations', value: health.automationsLoaded ?? 0 },

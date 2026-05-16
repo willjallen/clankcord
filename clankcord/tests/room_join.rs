@@ -18,7 +18,7 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
     let store = test_store(raw.path()).await;
     let room = test_room();
     let mut runtime = test_runtime(store.clone(), room.clone());
-    runtime.bots.insert("clanky-vc1".to_string(), ready_bot());
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let mut placement = Job::room_agent_placement(
         &room.guild_id,
         &room.channel_id,
@@ -42,10 +42,11 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
     assert_eq!(payload.bot_id, "clanky-vc1");
     assert_eq!(payload.requested_by_user_id, "user-a");
     assert!(!payload.capture_run_id.trim().is_empty());
-    assert_eq!(
-        runtime.bots.get("clanky-vc1").unwrap().joining_session_id,
-        payload.capture_run_id
-    );
+    let assignments = store.list_active_voice_assignments().await.unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].state, "joining");
+    assert_eq!(assignments[0].voice_bot_id, "clanky-vc1");
+    assert_eq!(assignments[0].capture_run_id, payload.capture_run_id);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -67,10 +68,10 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
     });
     store.create_job(pending).await.unwrap();
     let mut runtime = test_runtime(store.clone(), room.clone());
-    runtime.bots.insert(
-        "clanky-vc2".to_string(),
-        ready_bot_with("clanky-vc2", "bot-user-2"),
-    );
+    store
+        .upsert_voice_bot_state(&ready_bot_with("clanky-vc2", "bot-user-2"))
+        .await
+        .unwrap();
     let parent = store
         .create_job(Job::room_agent_placement(
             &room.guild_id,
@@ -96,7 +97,13 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
     assert_eq!(output.status, "already_joining");
     assert_eq!(output.bot_id, "clanky-vc1");
     assert_eq!(output.capture_run_id, "cap_joining");
-    assert!(runtime.bots["clanky-vc2"].joining_session_id.is_empty());
+    assert!(
+        store
+            .list_active_voice_assignments()
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -150,6 +157,12 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     let store = test_store(raw.path()).await;
     let room = test_room();
     let mut runtime = test_runtime(store.clone(), room.clone());
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap()
+        .unwrap();
     let parent = store
         .create_job(Job::room_agent_placement(
             &room.guild_id,
@@ -164,9 +177,9 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
         .unwrap();
     let join_payload = DiscordVoiceJoinPayload {
         room: room.clone(),
-        bot_id: "clanky-vc1".to_string(),
-        capture_run_id: "cap_1".to_string(),
-        assignment_id: "assign_1".to_string(),
+        bot_id: assignment.voice_bot_id.clone(),
+        capture_run_id: assignment.capture_run_id.clone(),
+        assignment_id: assignment.assignment_id.clone(),
         started_at: utc_now(),
         session_dir: raw.path().join("session"),
         requested_by_user_id: "user-a".to_string(),
@@ -181,22 +194,21 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     completed_child.metadata.output = Some(JobOutput::DiscordVoiceJoin(DiscordVoiceJoinOutput {
         status: "assigned".to_string(),
         session: Some(VoiceCaptureSessionStatus {
-            session_id: "cap_1".to_string(),
+            session_id: assignment.capture_run_id.clone(),
             room_id: room.room_id.clone(),
             guild_id: room.guild_id.clone(),
             channel_id: room.channel_id.clone(),
             voice_channel_id: room.channel_id.clone(),
             channel_name: room.channel_name.clone(),
             bot_id: "clanky-vc1".to_string(),
-            capture_run_id: "cap_1".to_string(),
-            assignment_id: "assign_1".to_string(),
+            capture_run_id: assignment.capture_run_id.clone(),
+            assignment_id: assignment.assignment_id.clone(),
             active: true,
             ..VoiceCaptureSessionStatus::default()
         }),
         bot_status: Some(VoiceBotStatus {
             bot_id: "clanky-vc1".to_string(),
             ready: true,
-            assigned_session_id: "cap_1".to_string(),
             ..VoiceBotStatus::default()
         }),
         message: String::new(),
@@ -234,8 +246,11 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
         panic!("expected room placement output");
     };
     assert_eq!(output.status, "assigned");
-    assert_eq!(runtime.sessions["cap_1"].channel_id, room.channel_id);
-    assert_eq!(runtime.bots["clanky-vc1"].assigned_session_id, "cap_1");
+    let sessions = store.list_active_capture_sessions().await.unwrap();
+    assert_eq!(sessions[0].channel_id, room.channel_id);
+    let assignments = store.list_active_voice_assignments().await.unwrap();
+    assert_eq!(assignments[0].state, "capturing");
+    assert_eq!(assignments[0].capture_run_id, assignment.capture_run_id);
 }
 
 fn test_runtime(
@@ -249,6 +264,7 @@ fn test_runtime(
         control_config: ControlConfig::default(),
         sessions: BTreeMap::new(),
         bots: BTreeMap::new(),
+        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

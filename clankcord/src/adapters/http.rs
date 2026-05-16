@@ -126,10 +126,18 @@ async fn healthz(State(state): State<AppState>) -> Response {
         Ok(runtime) => runtime,
         Err(error) => return err(error),
     };
+    let bots = match runtime.timeline_store.list_voice_bot_states().await {
+        Ok(bots) => bots,
+        Err(error) => return err(error),
+    };
+    let sessions = match runtime.timeline_store.list_active_capture_sessions().await {
+        Ok(sessions) => sessions,
+        Err(error) => return err(error),
+    };
     ok(json!({
         "ok": true,
-        "botsConfigured": runtime.bots.len(),
-        "sessionsActive": runtime.sessions.len(),
+        "botsObserved": bots.len(),
+        "activeSessions": sessions.len(),
         "roomsConfigured": runtime.rooms.len(),
     }))
 }

@@ -172,6 +172,7 @@ impl AutomationRunner {
 
 impl Runtime {
     pub async fn run_automations(&mut self) -> Result<AutomationRun> {
+        self.refresh_voice_state_from_store().await?;
         self.load_automation_registry().await?;
         AutomationRunner::runtime_default().run(self).await
     }

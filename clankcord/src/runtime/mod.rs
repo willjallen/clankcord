@@ -18,7 +18,7 @@ pub use agents::{
 pub use core::Runtime;
 pub use domain::voice::{
     ArtifactStatus, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
-    VoiceBotStatus, VoiceCaptureSessionStatus,
+    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 pub use jobs::{
     AgentSessionStartOutput, AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload,

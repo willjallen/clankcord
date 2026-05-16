@@ -17,7 +17,7 @@ timeline memory
 
 ## Visible State
 
-Room status renders the current voice mode, assigned voice bot, capture run, retention policy, room controls, occupancy payload, live publications, active jobs, active session, and pool capacity. The dashboard and CLI read those status views instead of inferring state from raw files.
+Room status renders the current voice mode, active voice assignment, assigned voice bot, capture run, retention policy, room controls, occupancy payload, live publications, active jobs, active capture session, and pool capacity. The dashboard and CLI read those status views from Postgres-backed runtime views.
 
 The user-facing state is carried through durable or rendered fields. `control.listeningPaused` shows an active room pause marker. `livePublications` shows live draft transcript publications in Discord. `activeJobs` shows queued, running, and waiting work affecting the room. `retentionPolicy` shows draft transcript, source audio, and job metadata retention windows. Status answers what Clankcord is doing in the room: whether a voice bot is assigned, whether listening is paused, whether transcript publication is active, and which jobs are changing state.
 

@@ -9,6 +9,7 @@ use super::routes;
 
 impl Runtime {
     pub async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
+        self.refresh_voice_state_from_store().await?;
         let job_id = running.id.clone();
         match routes::execute_runtime_async(self, &running).await {
             Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,
@@ -24,6 +25,7 @@ impl Runtime {
     where
         A: RuntimeExternalApi,
     {
+        self.refresh_voice_state_from_store().await?;
         let job_id = running.id.clone();
         match routes::execute_runtime_async_with_external_api(self, &running, external_api).await {
             Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,

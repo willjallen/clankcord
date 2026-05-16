@@ -2,7 +2,7 @@ use crate::Result;
 use crate::runtime::automations::{Automation, AutomationContext, AutomationOutput};
 use crate::runtime::{
     DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, Runtime,
-    VoiceBotStatus, VoiceCaptureSessionStatus,
+    VoiceCaptureSessionStatus,
 };
 
 pub(crate) struct RoomAgentPlacementAutomation;
@@ -120,11 +120,13 @@ fn leave_reason(auto_suppressed: bool, listening_paused: bool) -> &'static str {
 }
 
 fn has_available_voice_bot(runtime: &Runtime) -> bool {
-    runtime.bots.values().any(voice_bot_available)
-}
-
-fn voice_bot_available(bot: &VoiceBotStatus) -> bool {
-    bot.ready && bot.joining_session_id.is_empty() && bot.assigned_session_id.is_empty()
+    runtime.bots.values().any(|bot| {
+        bot.ready
+            && !runtime
+                .assignments
+                .values()
+                .any(|assignment| assignment.is_active() && assignment.voice_bot_id == bot.bot_id)
+    })
 }
 
 fn has_active_placement_job(

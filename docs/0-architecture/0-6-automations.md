@@ -105,6 +105,6 @@ The authoring workflow is deliberately explicit: resolve durable ids, inspect th
 
 ## Built-In Room Placement
 
-The built-in room placement automation keeps configured rooms aligned with runtime state. It considers global auto-join config, room-level `auto_join`, manual join holds, listening pause controls, auto-join suppression, available voice bots, duplicate active voice-bot sessions, and active placement, join, and leave jobs.
+The built-in room placement automation keeps configured rooms aligned with runtime state. It considers global auto-join config, room-level `auto_join`, manual join holds, listening pause controls, auto-join suppression, active voice assignments, available voice bots, duplicate active voice-bot sessions, and active placement, join, and leave jobs.
 
 When a room needs a transition, placement emits `room_agent_placement` or direct duplicate-session `discord_voice_leave` work. The join and leave mechanics then proceed through normal runtime jobs and the Discord voice adapter.

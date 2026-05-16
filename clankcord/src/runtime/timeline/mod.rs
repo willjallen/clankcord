@@ -7,6 +7,7 @@ mod room_controls;
 mod store;
 mod transcripts;
 mod util;
+mod voice_state;
 
 pub use jobs::JobVisibility;
 pub use store::{CaptureRunInput, RenderedTranscript, SpeechEventInput, TimelineStore};

@@ -89,6 +89,7 @@ fn test_runtime(timeline_store: clankcord::runtime::timeline::TimelineStore) -> 
         control_config: ControlConfig::default(),
         sessions: BTreeMap::new(),
         bots: BTreeMap::new(),
+        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

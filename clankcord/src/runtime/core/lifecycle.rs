@@ -20,6 +20,7 @@ impl Runtime {
             control_config: ControlConfig::default(),
             sessions: BTreeMap::new(),
             bots: BTreeMap::new(),
+            assignments: BTreeMap::new(),
             agents: AgentRuntime::default(),
             automations: BTreeMap::new(),
             timeline_store,
@@ -56,7 +57,31 @@ impl Runtime {
             .map(|room| (room.room_id.clone(), room))
             .collect();
         self.control_config = config::control_config();
-        self.load_status_snapshot();
+        Ok(())
+    }
+
+    pub(crate) async fn refresh_voice_state_from_store(&mut self) -> Result<()> {
+        self.bots = self
+            .timeline_store
+            .list_voice_bot_states()
+            .await?
+            .into_iter()
+            .map(|bot| (bot.bot_id.clone(), bot))
+            .collect();
+        self.sessions = self
+            .timeline_store
+            .list_active_capture_sessions()
+            .await?
+            .into_iter()
+            .map(|session| (session.session_id.clone(), session))
+            .collect();
+        self.assignments = self
+            .timeline_store
+            .list_active_voice_assignments()
+            .await?
+            .into_iter()
+            .map(|assignment| (assignment.assignment_id.clone(), assignment))
+            .collect();
         Ok(())
     }
 }

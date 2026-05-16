@@ -192,7 +192,7 @@ impl Runtime {
         let event_kind_counts = event_kind_counts(&recent_events);
         let summary = job_summary(&summary_jobs);
         let database = database_diagnostics(self).await;
-        let health = runtime_health(self, &summary_jobs, &database);
+        let health = runtime_health(self, &summary_jobs, &database, &status);
         let operations = operational_diagnostics(self, now)
             .await
             .context("loading operational health diagnostics")?;
@@ -821,8 +821,18 @@ impl BacklogKindSummary {
     }
 }
 
-fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
+fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value, status: &Value) -> Value {
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let bots = status
+        .get("bots")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let sessions = status
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let failed_jobs = jobs
         .iter()
         .filter(|job| is_failed_state(job.state.as_str()))
@@ -834,9 +844,9 @@ fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value) -> Value {
     json!({
         "ok": database_ok,
         "postgres": database_ok,
-        "configuredBots": runtime.bots.len(),
-        "readyBots": runtime.bots.values().filter(|bot| bot.ready).count(),
-        "activeSessions": runtime.sessions.len(),
+        "observedBots": bots.len(),
+        "readyBots": bots.iter().filter(|bot| bot.get("ready").and_then(Value::as_bool).unwrap_or(false)).count(),
+        "activeSessions": sessions.len(),
         "configuredRooms": runtime.rooms.len(),
         "activeAgentJobs": active_agent_jobs,
         "failedJobs": failed_jobs,
@@ -885,6 +895,7 @@ fn observed_tables() -> &'static [&'static str] {
         "discord_member_cache_refreshes",
         "discord_members",
         "capture_runs",
+        "capture_sessions",
         "timeline_events",
         "conversations",
         "windows",

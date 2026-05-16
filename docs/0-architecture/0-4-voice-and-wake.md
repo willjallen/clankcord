@@ -24,41 +24,47 @@ runtime handlers
 
 ## Voice Bot Pool
 
-Dedicated Discord voice bot tokens form the capture pool. Each bot reports `VoiceBotStatus` with readiness, assignment, join-in-progress state, Discord user identity, gateway status, and receive backend. A room capture has `VoiceCaptureSessionStatus`, which records the guild, channel, bot identity, capture run, assignment id, participants, capture stats, artifact status, and lifecycle timestamps.
+Dedicated Discord voice bot tokens form the capture pool. Each bot reports `VoiceBotStatus` with readiness, Discord user identity, current Discord location, gateway status, receive backend, and the latest adapter error. `VoiceBotStatus` describes the bot process and observed Discord state.
+
+`VoiceAssignment` is the durable room-to-bot binding. It records the guild, voice channel, selected voice bot, Discord bot user id, capture run, reason, and lifecycle state. Active assignment states are `joining`, `capturing`, and `leaving`; terminal states are `ended` and `failed`. Placement, capacity checks, status rendering, and automation availability use active assignments as the source of room ownership.
+
+A room capture has `VoiceCaptureSessionStatus`, which records the live adapter's capture observation: guild, channel, bot identity, capture run, assignment id, participants, capture stats, artifact status, and lifecycle timestamps. Capture sessions describe packet capture. Assignments describe room ownership.
 
 Voice bots are audio capture workers. Agent work begins later, when wake activation, commands, DMs, or managed thread messages resolve to an agent session and create `agent_task` work.
 
 ## Room Placement
 
-Room placement decides whether a configured room needs a voice bot. The built-in placement automation reads configured rooms, room controls, active sessions, active join and leave work, available bots, and duplicate voice-bot sessions. When a room needs a transition, it emits `room_agent_placement`. Active work for the same room suppresses duplicate placement jobs.
+Room placement decides whether a configured room needs a voice bot. The built-in placement automation reads configured rooms, room controls, active assignments, active capture sessions, active join and leave work, available bots, and duplicate voice-bot sessions. When a room needs a transition, it emits `room_agent_placement`. Active work for the same room suppresses duplicate placement jobs.
 
-Join starts by selecting a room and available bot. The placement parent creates a capture run, marks the selected bot as joining, and creates a `discord_voice_join` child. The child joins Discord and creates the live capture session. When the child completes, the parent resumes, commits session and occupancy state, optionally plays the join cue, and completes.
+Join starts by selecting a room and claiming an assignment in Postgres. The claim transaction selects a ready unassigned bot, creates the capture run, creates the `VoiceAssignment` in `joining`, appends `voice_bot_assigned`, and returns the selected assignment. The placement parent then creates a `discord_voice_join` child. The child joins Discord and creates the live capture session. When the child completes, the parent resumes, records the adapter's bot and session observations, marks the assignment `capturing`, commits occupancy state, optionally plays the join cue, and completes.
 
 ```text
 room_agent_placement(join)
       |
+      +--> claim VoiceAssignment in Postgres
       +--> create capture run
-      +--> mark bot joining
       +--> discord_voice_join
               |
               +--> join Discord
               +--> create live capture session
       |
+      +--> mark assignment capturing
       +--> commit durable session state
       +--> optional join cue
 ```
 
-Leave follows the same durable pattern. The placement parent can suppress immediate auto-join, create leave cue playback for active sessions, create a `discord_voice_leave` child, then resume to close the capture run, submit final audio segments, mark sessions ended, and complete.
+Leave follows the same durable pattern. The placement parent marks the active assignment `leaving`, can suppress immediate auto-join, creates leave cue playback for active sessions, creates a `discord_voice_leave` child, then resumes to close the capture run, submit final audio segments, mark sessions and assignments ended, and complete.
 
 ```text
 room_agent_placement(leave)
       |
+      +--> mark assignment leaving
       +--> leave cue playback
       +--> discord_voice_leave
       |
       +--> close capture run
       +--> submit final audio_segment jobs
-      +--> mark sessions ended
+      +--> mark session and assignment ended
 ```
 
 When a voice transition is slow, inspect the concrete operation on the path: adapter locks, Songbird join or leave calls, audio playback, WAV writes, STT and wake provider calls, Postgres contention, scheduler ordering keys, lane capacity, or configured timers.

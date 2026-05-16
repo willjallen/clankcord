@@ -96,6 +96,7 @@ fn test_runtime(timeline_store: TimelineStore, room: RoomConfig) -> Runtime {
         control_config: ControlConfig::default(),
         sessions: BTreeMap::<String, VoiceCaptureSessionStatus>::new(),
         bots: BTreeMap::<String, VoiceBotStatus>::new(),
+        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

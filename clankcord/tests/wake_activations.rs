@@ -848,6 +848,7 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
         control_config: ControlConfig::default(),
         sessions: BTreeMap::new(),
         bots: BTreeMap::new(),
+        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

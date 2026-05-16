@@ -147,7 +147,7 @@ impl LiveVoiceAdapter {
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
-            client.joining_session_id = Some(session_id.clone());
+            client.joining_live_session_id = Some(session_id.clone());
             client.last_error.clear();
             (client.voice(), client.discord_user_id()?)
         };
@@ -223,13 +223,17 @@ impl LiveVoiceAdapter {
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
-            client.joining_session_id = None;
-            client.assigned_session_id = Some(session_id.clone());
+            client.joining_live_session_id = None;
+            client.active_live_session_id = Some(session_id.clone());
             client.current_guild_id = room.guild_id.clone();
             client.current_channel_id = room.channel_id.clone();
             client.last_error.clear();
             Some(client.status())
         };
+        if let Some(status) = &bot_status {
+            self.persist_bot_status(status).await;
+        }
+        self.persist_capture_session_status(&session_metadata).await;
         Ok(DiscordVoiceJoinOutput {
             status: "assigned".to_string(),
             session: Some(session_metadata),
@@ -241,9 +245,12 @@ impl LiveVoiceAdapter {
     async fn mark_join_failed(&self, bot_id: &str, error: &str) -> Option<VoiceBotStatus> {
         let mut clients = self.voice_clients_lock.lock().await;
         let client = clients.get_mut(bot_id)?;
-        client.joining_session_id = None;
+        client.joining_live_session_id = None;
         client.last_error = error.to_string();
-        Some(client.status())
+        let status = client.status();
+        drop(clients);
+        self.persist_bot_status(&status).await;
+        Some(status)
     }
 
     pub(crate) async fn finish_session(
@@ -275,8 +282,8 @@ impl LiveVoiceAdapter {
             let client = clients.get_mut(&finished.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", finished.bot_id))
             })?;
-            client.assigned_session_id = None;
-            client.joining_session_id = None;
+            client.active_live_session_id = None;
+            client.joining_live_session_id = None;
             client.current_guild_id.clear();
             client.current_channel_id.clear();
             client.voice()
@@ -289,6 +296,11 @@ impl LiveVoiceAdapter {
                 .get(&finished.bot_id)
                 .map(DiscordVoiceClient::status)
         };
+        if let Some(status) = &bot_status {
+            self.persist_bot_status(status).await;
+        }
+        self.persist_capture_session_status(&finished.metadata)
+            .await;
         Ok(DiscordVoiceLeaveOutput {
             session_id: finished.session_id,
             status: "ended".to_string(),
@@ -433,15 +445,46 @@ impl LiveVoiceAdapter {
         statuses
     }
 
-    pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
+    async fn persist_bot_status(&self, status: &VoiceBotStatus) {
+        if let Err(error) = self.timeline_store.upsert_voice_bot_state(status).await {
+            log(&format!(
+                "persisting voice bot status {} failed: {error}",
+                status.bot_id
+            ));
+        }
+    }
+
+    async fn persist_capture_session_status(
+        &self,
+        status: &crate::runtime::VoiceCaptureSessionStatus,
+    ) {
+        if let Err(error) = self
+            .timeline_store
+            .upsert_capture_session_status(status)
+            .await
         {
+            log(&format!(
+                "persisting capture session status {} failed: {error}",
+                status.session_id
+            ));
+        }
+    }
+
+    pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
+        let status = {
             let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
                 client.ready = true;
                 client.user_id = ready.user.id.get().to_string();
                 client.username = ready.user.name.clone();
                 client.last_error.clear();
+                Some(client.status())
+            } else {
+                None
             }
+        };
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
         }
         log(&format!("bot {bot_id} ready as {}", ready.user.name));
     }
@@ -491,24 +534,36 @@ impl LiveVoiceAdapter {
             }
         }
 
-        let mut clients = self.voice_clients_lock.lock().await;
-        let Some(client) = clients.get_mut(bot_id) else {
-            return;
+        let status = {
+            let mut clients = self.voice_clients_lock.lock().await;
+            let Some(client) = clients.get_mut(bot_id) else {
+                return;
+            };
+            if client.user_id.is_empty() || client.user_id != user_id {
+                return;
+            }
+            client.current_guild_id = guild_id;
+            client.current_channel_id = channel_id;
+            Some(client.status())
         };
-        if client.user_id.is_empty() || client.user_id != user_id {
-            return;
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
         }
-        client.current_guild_id = guild_id;
-        client.current_channel_id = channel_id;
     }
 
     pub(super) async fn note_client_error(&self, bot_id: &str, error: &str) {
-        {
+        let status = {
             let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
                 client.ready = false;
                 client.last_error = error.to_string();
+                Some(client.status())
+            } else {
+                None
             }
+        };
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
         }
         log(&format!("bot {bot_id} error: {error}"));
     }

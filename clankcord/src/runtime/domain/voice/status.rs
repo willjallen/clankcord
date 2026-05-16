@@ -8,8 +8,6 @@ use serde_json::{Value, json};
 pub struct VoiceBotStatus {
     pub bot_id: String,
     pub ready: bool,
-    pub joining_session_id: String,
-    pub assigned_session_id: String,
     pub current_guild_id: String,
     pub current_channel_id: String,
     pub last_error: String,
@@ -22,6 +20,34 @@ pub struct VoiceBotStatus {
 }
 
 impl VoiceBotStatus {
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceAssignment {
+    pub assignment_id: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub voice_channel_name: String,
+    pub voice_bot_id: String,
+    pub voice_bot_discord_user_id: String,
+    pub capture_run_id: String,
+    pub state: String,
+    pub mode: String,
+    pub assigned_at: String,
+    pub released_at: String,
+    pub assignment_reason: String,
+    pub release_reason: String,
+}
+
+impl VoiceAssignment {
+    pub fn is_active(&self) -> bool {
+        matches!(self.state.as_str(), "joining" | "capturing" | "leaving")
+    }
+
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({}))
     }

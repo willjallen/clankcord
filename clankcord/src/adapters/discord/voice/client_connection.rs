@@ -31,8 +31,8 @@ use crate::runtime::VoiceBotStatus;
 pub(super) struct DiscordVoiceClient {
     pub(super) bot_id: String,
     pub(super) ready: bool,
-    pub(super) joining_session_id: Option<String>,
-    pub(super) assigned_session_id: Option<String>,
+    pub(super) joining_live_session_id: Option<String>,
+    pub(super) active_live_session_id: Option<String>,
     pub(super) current_guild_id: String,
     pub(super) current_channel_id: String,
     pub(super) last_error: String,
@@ -73,8 +73,8 @@ impl DiscordVoiceClient {
         Ok(Self {
             bot_id,
             ready: false,
-            joining_session_id: None,
-            assigned_session_id: None,
+            joining_live_session_id: None,
+            active_live_session_id: None,
             current_guild_id: String::new(),
             current_channel_id: String::new(),
             last_error: String::new(),
@@ -110,8 +110,6 @@ impl DiscordVoiceClient {
         VoiceBotStatus {
             bot_id: self.bot_id.clone(),
             ready: self.ready,
-            joining_session_id: self.joining_session_id.clone().unwrap_or_default(),
-            assigned_session_id: self.assigned_session_id.clone().unwrap_or_default(),
             current_guild_id: self.current_guild_id.clone(),
             current_channel_id: self.current_channel_id.clone(),
             last_error: self.last_error.clone(),

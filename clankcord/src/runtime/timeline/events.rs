@@ -739,7 +739,7 @@ impl TimelineStore {
             "startedAt": isoformat_z(Some(started)),
             "ended_at": Value::Null,
             "endedAt": "",
-            "state": "active",
+            "state": "joining",
             "mode": mode,
             "retention_policy": policy,
             "retentionPolicy": policy
@@ -752,7 +752,7 @@ impl TimelineStore {
             "voice_bot_id": voice_bot_id,
             "voice_bot_discord_user_id": voice_bot_discord_user_id,
             "capture_run_id": capture_run_id,
-            "state": "capturing",
+            "state": "joining",
             "mode": mode,
             "assigned_at": isoformat_z(Some(started)),
             "released_at": Value::Null,
@@ -782,7 +782,7 @@ impl TimelineStore {
         .bind(&voice_channel_id)
         .bind(&voice_bot_id)
         .bind(now_ms)
-        .bind("active")
+        .bind("joining")
         .bind(&mode)
         .bind(now_ms)
         .bind(&run)
@@ -802,7 +802,7 @@ impl TimelineStore {
         .bind(&voice_channel_id)
         .bind(&voice_bot_id)
         .bind(&capture_run_id)
-        .bind("capturing")
+        .bind("joining")
         .bind(now_ms)
         .bind(now_ms)
         .bind(&assignment)
@@ -875,7 +875,9 @@ impl TimelineStore {
         .execute(&self.pool)
         .await?;
         let assignment_id = first_value_string(&run, &["assignment_id", "assignmentId"]);
-        self.release_assignment(&assignment_id, Some(ended), reason)
+        self.release_assignment(&assignment_id, Some(ended), reason, state)
+            .await?;
+        self.mark_capture_session_ended(capture_run_id, ended)
             .await?;
         self.append_event(
             &non_empty(string_field(&run, "guild_id"), guild_id.to_string()),
@@ -903,6 +905,7 @@ impl TimelineStore {
         assignment_id: &str,
         released_at: Option<DateTime<Utc>>,
         reason: &str,
+        state: &str,
     ) -> Result<()> {
         if assignment_id.trim().is_empty() {
             return Ok(());
@@ -920,13 +923,21 @@ impl TimelineStore {
             &mut assignment,
             [
                 ("released_at", Value::String(isoformat_z(Some(released)))),
-                ("state", Value::String("released".to_string())),
+                ("releasedAt", Value::String(isoformat_z(Some(released)))),
+                ("state", Value::String(state.to_string())),
                 ("release_reason", Value::String(reason.to_string())),
+                ("releaseReason", Value::String(reason.to_string())),
             ],
         );
         let updated_ms = instant_ms_dt(released);
-        let assigned_ms = instant_ms_str(Some(&string_field(&assignment, "assigned_at")));
-        let released_ms = instant_ms_str(Some(&string_field(&assignment, "released_at")));
+        let assigned_ms = instant_ms_str(Some(&first_value_string(
+            &assignment,
+            &["assigned_at", "assignedAt"],
+        )));
+        let released_ms = instant_ms_str(Some(&first_value_string(
+            &assignment,
+            &["released_at", "releasedAt"],
+        )));
         sqlx::query(
             r#"
             INSERT INTO assignments(
@@ -947,11 +958,20 @@ impl TimelineStore {
             "#,
         )
         .bind(assignment_id)
-        .bind(string_field(&assignment, "guild_id"))
-        .bind(string_field(&assignment, "voice_channel_id"))
-        .bind(string_field(&assignment, "voice_bot_id"))
-        .bind(string_field(&assignment, "capture_run_id"))
-        .bind(string_field(&assignment, "state"))
+        .bind(first_value_string(&assignment, &["guild_id", "guildId"]))
+        .bind(first_value_string(
+            &assignment,
+            &["voice_channel_id", "voiceChannelId"],
+        ))
+        .bind(first_value_string(
+            &assignment,
+            &["voice_bot_id", "voiceBotId", "botId"],
+        ))
+        .bind(first_value_string(
+            &assignment,
+            &["capture_run_id", "captureRunId"],
+        ))
+        .bind(first_value_string(&assignment, &["state"]))
         .bind(assigned_ms)
         .bind(released_ms)
         .bind(updated_ms)

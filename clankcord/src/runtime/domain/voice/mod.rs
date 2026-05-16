@@ -5,5 +5,5 @@ mod status;
 
 pub use status::{
     ArtifactStatus, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
-    VoiceBotStatus, VoiceCaptureSessionStatus,
+    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
 };

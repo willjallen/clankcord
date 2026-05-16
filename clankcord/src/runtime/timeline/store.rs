@@ -221,9 +221,10 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
-        "sessions",
+        "capture_sessions",
         &[
             column("session_id", "text", false),
+            column("assignment_id", "text", false),
             column("guild_id", "text", false),
             column("voice_channel_id", "text", false),
             column("bot_id", "text", false),
@@ -551,7 +552,10 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
     ),
     ("runtime_metadata", &["runtime_metadata_pkey"]),
     ("runtime_status", &["runtime_status_pkey"]),
-    ("sessions", &["idx_sessions_active_room", "sessions_pkey"]),
+    (
+        "capture_sessions",
+        &["capture_sessions_pkey", "idx_capture_sessions_active_room"],
+    ),
     (
         "timeline_events",
         &[
@@ -607,8 +611,9 @@ impl TimelineStore {
               payload_json JSONB NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS sessions (
+            CREATE TABLE IF NOT EXISTS capture_sessions (
               session_id TEXT PRIMARY KEY,
+              assignment_id TEXT NOT NULL DEFAULT '',
               guild_id TEXT NOT NULL DEFAULT '',
               voice_channel_id TEXT NOT NULL DEFAULT '',
               bot_id TEXT NOT NULL DEFAULT '',
@@ -988,8 +993,8 @@ impl TimelineStore {
               ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
               ON publications(guild_id, voice_channel_id, state, created_at_ms);
-            CREATE INDEX IF NOT EXISTS idx_sessions_active_room
-              ON sessions(guild_id, voice_channel_id, active, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_capture_sessions_active_room
+              ON capture_sessions(guild_id, voice_channel_id, active, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
               ON jobs(kind, ready_at_ms, created_at_ms, job_id)
               WHERE state = 'queued';
