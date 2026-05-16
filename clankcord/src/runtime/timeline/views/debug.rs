@@ -15,7 +15,7 @@ use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::jobs::AgentTaskMetadata;
 use crate::runtime::timeline::{
     event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
-    utc_now,
+    round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
 use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
@@ -60,6 +60,7 @@ pub struct DebugOverviewRequest {
     pub transcript_since: String,
     pub transcript_limit: usize,
     pub publication_limit: usize,
+    pub http_requests: Value,
 }
 
 impl Default for DebugOverviewRequest {
@@ -76,6 +77,7 @@ impl Default for DebugOverviewRequest {
             transcript_since: "-24h".to_string(),
             transcript_limit: 250,
             publication_limit: 120,
+            http_requests: json!({}),
         }
     }
 }
@@ -234,6 +236,7 @@ impl Runtime {
             },
             "health": health,
             "database": database,
+            "requests": request.http_requests,
             "load": load_payload(&active_job_records, now),
             "operations": operations,
             "agents": agent_dashboard_payload(&agent_job_records, agent_limit),
@@ -885,6 +888,7 @@ async fn database_diagnostics(runtime: &Runtime) -> Value {
             "url": runtime.timeline_store.database_url,
             "root": runtime.timeline_store.root.display().to_string(),
             "error": error.to_string(),
+            "pool": postgres_pool_payload(runtime),
             "tables": [],
         });
     }
@@ -894,6 +898,42 @@ async fn database_diagnostics(runtime: &Runtime) -> Value {
     .fetch_one(&runtime.timeline_store.pool)
     .await
     .ok();
+    let mut errors = Vec::new();
+    let statistics = match postgres_database_statistics(runtime).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(json!({"source": "pg_stat_database", "error": error.to_string()}));
+            json!({})
+        }
+    };
+    let settings = match postgres_settings(runtime).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(json!({"source": "pg_settings", "error": error.to_string()}));
+            Vec::new()
+        }
+    };
+    let activity = match postgres_activity_rows(runtime).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(json!({"source": "pg_stat_activity", "error": error.to_string()}));
+            Vec::new()
+        }
+    };
+    let locks = match postgres_lock_rows(runtime).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(json!({"source": "pg_locks", "error": error.to_string()}));
+            Vec::new()
+        }
+    };
+    let table_activity = match postgres_table_activity_rows(runtime).await {
+        Ok(value) => value,
+        Err(error) => {
+            errors.push(json!({"source": "pg_stat_user_tables", "error": error.to_string()}));
+            Vec::new()
+        }
+    };
     let table_rows = table_counts(runtime).await;
     json!({
         "ok": true,
@@ -902,8 +942,245 @@ async fn database_diagnostics(runtime: &Runtime) -> Value {
         "database": row.as_ref().and_then(|row| row.try_get::<String, _>("database_name").ok()).unwrap_or_default(),
         "user": row.as_ref().and_then(|row| row.try_get::<String, _>("user_name").ok()).unwrap_or_default(),
         "version": row.as_ref().and_then(|row| row.try_get::<String, _>("version").ok()).unwrap_or_default(),
+        "pool": postgres_pool_payload(runtime),
+        "statistics": statistics,
+        "settings": settings,
+        "activity": activity,
+        "locks": locks,
         "tables": table_rows,
+        "tableActivity": table_activity,
+        "errors": errors,
     })
+}
+
+fn postgres_pool_payload(runtime: &Runtime) -> Value {
+    let open_connections = u64::from(runtime.timeline_store.pool.size());
+    let idle_connections = runtime.timeline_store.pool.num_idle() as u64;
+    json!({
+        "configuredMaxConnections": runtime.timeline_store.pool.options().get_max_connections(),
+        "openConnections": open_connections,
+        "idleConnections": idle_connections,
+        "inUseConnections": open_connections - idle_connections,
+        "closed": runtime.timeline_store.pool.is_closed(),
+    })
+}
+
+async fn postgres_database_statistics(runtime: &Runtime) -> Result<Value> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            numbackends::BIGINT AS numbackends,
+            xact_commit,
+            xact_rollback,
+            blks_read,
+            blks_hit,
+            tup_returned,
+            tup_fetched,
+            tup_inserted,
+            tup_updated,
+            tup_deleted,
+            conflicts,
+            temp_files,
+            temp_bytes,
+            deadlocks,
+            blk_read_time,
+            blk_write_time,
+            stats_reset,
+            pg_database_size(current_database())::BIGINT AS database_size_bytes
+        FROM pg_stat_database
+        WHERE datname = current_database()
+        "#,
+    )
+    .fetch_one(&runtime.timeline_store.pool)
+    .await?;
+
+    let commits = row.try_get::<i64, _>("xact_commit")?;
+    let rollbacks = row.try_get::<i64, _>("xact_rollback")?;
+    let block_hits = row.try_get::<i64, _>("blks_hit")?;
+    let blocks_read = row.try_get::<i64, _>("blks_read")?;
+    let transactions = commits + rollbacks;
+    let block_accesses = block_hits + blocks_read;
+    let stats_reset = row.try_get::<Option<DateTime<Utc>>, _>("stats_reset")?;
+
+    Ok(json!({
+        "databaseSizeBytes": row.try_get::<i64, _>("database_size_bytes")?,
+        "backends": row.try_get::<i64, _>("numbackends")?,
+        "transactions": transactions,
+        "commits": commits,
+        "rollbacks": rollbacks,
+        "rollbackPercent": ratio_percent(rollbacks, transactions),
+        "blocksRead": blocks_read,
+        "blockHits": block_hits,
+        "cacheHitPercent": ratio_percent(block_hits, block_accesses),
+        "tuplesReturned": row.try_get::<i64, _>("tup_returned")?,
+        "tuplesFetched": row.try_get::<i64, _>("tup_fetched")?,
+        "tuplesInserted": row.try_get::<i64, _>("tup_inserted")?,
+        "tuplesUpdated": row.try_get::<i64, _>("tup_updated")?,
+        "tuplesDeleted": row.try_get::<i64, _>("tup_deleted")?,
+        "conflicts": row.try_get::<i64, _>("conflicts")?,
+        "tempFiles": row.try_get::<i64, _>("temp_files")?,
+        "tempBytes": row.try_get::<i64, _>("temp_bytes")?,
+        "deadlocks": row.try_get::<i64, _>("deadlocks")?,
+        "blockReadMillis": row.try_get::<f64, _>("blk_read_time")?,
+        "blockWriteMillis": row.try_get::<f64, _>("blk_write_time")?,
+        "statsResetAt": stats_reset.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+    }))
+}
+
+async fn postgres_settings(runtime: &Runtime) -> Result<Vec<Value>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT name, setting, COALESCE(unit, '') AS unit
+        FROM pg_settings
+        WHERE name IN (
+            'max_connections',
+            'shared_buffers',
+            'effective_cache_size',
+            'work_mem',
+            'maintenance_work_mem',
+            'track_io_timing'
+        )
+        ORDER BY name
+        "#,
+    )
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(json!({
+                "name": row.try_get::<String, _>("name")?,
+                "setting": row.try_get::<String, _>("setting")?,
+                "unit": row.try_get::<String, _>("unit")?,
+            }))
+        })
+        .collect()
+}
+
+async fn postgres_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(state, 'unknown') AS state,
+            COUNT(*)::BIGINT AS connections,
+            COUNT(*) FILTER (WHERE wait_event_type IS NOT NULL)::BIGINT AS waiting,
+            COALESCE(MAX(EXTRACT(EPOCH FROM now() - query_start))::BIGINT, 0) AS oldest_query_seconds,
+            COALESCE(MAX(EXTRACT(EPOCH FROM now() - xact_start))::BIGINT, 0) AS oldest_transaction_seconds
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+        GROUP BY COALESCE(state, 'unknown')
+        ORDER BY connections DESC, state
+        "#,
+    )
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(json!({
+                "state": row.try_get::<String, _>("state")?,
+                "connections": row.try_get::<i64, _>("connections")?,
+                "waiting": row.try_get::<i64, _>("waiting")?,
+                "oldestQuerySeconds": row.try_get::<i64, _>("oldest_query_seconds")?,
+                "oldestTransactionSeconds": row.try_get::<i64, _>("oldest_transaction_seconds")?,
+            }))
+        })
+        .collect()
+}
+
+async fn postgres_lock_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT mode, granted, COUNT(*)::BIGINT AS locks
+        FROM pg_locks
+        WHERE database = (
+            SELECT oid FROM pg_database WHERE datname = current_database()
+        )
+        GROUP BY mode, granted
+        ORDER BY locks DESC, mode, granted DESC
+        "#,
+    )
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            Ok(json!({
+                "mode": row.try_get::<String, _>("mode")?,
+                "granted": row.try_get::<bool, _>("granted")?,
+                "locks": row.try_get::<i64, _>("locks")?,
+            }))
+        })
+        .collect()
+}
+
+async fn postgres_table_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            relname AS table_name,
+            n_live_tup,
+            n_dead_tup,
+            seq_scan,
+            idx_scan,
+            n_tup_ins,
+            n_tup_upd,
+            n_tup_del,
+            vacuum_count,
+            autovacuum_count,
+            analyze_count,
+            autoanalyze_count,
+            last_vacuum,
+            last_autovacuum,
+            last_analyze,
+            last_autoanalyze,
+            pg_total_relation_size(relid)::BIGINT AS total_bytes,
+            pg_relation_size(relid)::BIGINT AS heap_bytes,
+            pg_indexes_size(relid)::BIGINT AS index_bytes
+        FROM pg_stat_user_tables
+        WHERE schemaname = current_schema()
+        ORDER BY pg_total_relation_size(relid) DESC, n_dead_tup DESC, relname
+        "#,
+    )
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|row| {
+            let last_vacuum = row.try_get::<Option<DateTime<Utc>>, _>("last_vacuum")?;
+            let last_autovacuum = row.try_get::<Option<DateTime<Utc>>, _>("last_autovacuum")?;
+            let last_analyze = row.try_get::<Option<DateTime<Utc>>, _>("last_analyze")?;
+            let last_autoanalyze = row.try_get::<Option<DateTime<Utc>>, _>("last_autoanalyze")?;
+            Ok(json!({
+                "table": row.try_get::<String, _>("table_name")?,
+                "liveRows": row.try_get::<i64, _>("n_live_tup")?,
+                "deadRows": row.try_get::<i64, _>("n_dead_tup")?,
+                "seqScans": row.try_get::<i64, _>("seq_scan")?,
+                "indexScans": row.try_get::<i64, _>("idx_scan")?,
+                "inserts": row.try_get::<i64, _>("n_tup_ins")?,
+                "updates": row.try_get::<i64, _>("n_tup_upd")?,
+                "deletes": row.try_get::<i64, _>("n_tup_del")?,
+                "vacuumCount": row.try_get::<i64, _>("vacuum_count")?,
+                "autovacuumCount": row.try_get::<i64, _>("autovacuum_count")?,
+                "analyzeCount": row.try_get::<i64, _>("analyze_count")?,
+                "autoanalyzeCount": row.try_get::<i64, _>("autoanalyze_count")?,
+                "lastVacuumAt": last_vacuum.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+                "lastAutovacuumAt": last_autovacuum.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+                "lastAnalyzeAt": last_analyze.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+                "lastAutoanalyzeAt": last_autoanalyze.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+                "totalBytes": row.try_get::<i64, _>("total_bytes")?,
+                "heapBytes": row.try_get::<i64, _>("heap_bytes")?,
+                "indexBytes": row.try_get::<i64, _>("index_bytes")?,
+            }))
+        })
+        .collect()
+}
+
+fn ratio_percent(part: i64, total: i64) -> Option<f64> {
+    if total <= 0 {
+        return None;
+    }
+    Some(round3((part as f64 / total as f64) * 100.0))
 }
 
 fn observed_tables() -> &'static [&'static str] {
@@ -932,11 +1209,31 @@ fn observed_tables() -> &'static [&'static str] {
 async fn table_counts(runtime: &Runtime) -> Vec<Value> {
     let mut rows = Vec::new();
     for table in observed_tables() {
-        let count = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+        let result = sqlx::query(&format!(
+            "SELECT COUNT(*) AS row_count, pg_total_relation_size('{table}'::regclass)::BIGINT AS total_bytes FROM {table}"
+        ))
             .fetch_one(&runtime.timeline_store.pool)
-            .await
-            .unwrap_or(0);
-        rows.push(json!({"table": table, "rows": count}));
+            .await;
+        match result {
+            Ok(row) => match (
+                row.try_get::<i64, _>("row_count"),
+                row.try_get::<i64, _>("total_bytes"),
+            ) {
+                (Ok(row_count), Ok(total_bytes)) => rows.push(json!({
+                    "table": table,
+                    "rows": row_count,
+                    "totalBytes": total_bytes,
+                })),
+                (Err(error), _) | (_, Err(error)) => rows.push(json!({
+                    "table": table,
+                    "error": error.to_string(),
+                })),
+            },
+            Err(error) => rows.push(json!({
+                "table": table,
+                "error": error.to_string(),
+            })),
+        }
     }
     rows
 }

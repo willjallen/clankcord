@@ -1,9 +1,16 @@
-use axum::extract::{Path, Query, State};
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use axum::extract::{MatchedPath, Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::http::header;
+use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -19,6 +26,203 @@ use crate::runtime::{
     ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle, SearchTranscriptsRequest,
     TimelineRangeRequest, TimelineTailRequest,
 };
+
+static HTTP_REQUEST_METRICS: OnceLock<HttpRequestMetrics> = OnceLock::new();
+
+#[derive(Debug)]
+struct HttpRequestMetrics {
+    started_at: String,
+    total_started: AtomicU64,
+    completed: AtomicU64,
+    in_flight: AtomicU64,
+    successful: AtomicU64,
+    client_errors: AtomicU64,
+    server_errors: AtomicU64,
+    other_statuses: AtomicU64,
+    total_latency_micros: AtomicU64,
+    max_latency_micros: AtomicU64,
+    routes: Mutex<BTreeMap<String, HttpRouteMetrics>>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct HttpRouteMetrics {
+    total_started: u64,
+    completed: u64,
+    in_flight: u64,
+    successful: u64,
+    client_errors: u64,
+    server_errors: u64,
+    other_statuses: u64,
+    total_latency_micros: u64,
+    max_latency_micros: u64,
+}
+
+impl HttpRequestMetrics {
+    fn new() -> Self {
+        Self {
+            started_at: Utc::now().to_rfc3339(),
+            total_started: AtomicU64::new(0),
+            completed: AtomicU64::new(0),
+            in_flight: AtomicU64::new(0),
+            successful: AtomicU64::new(0),
+            client_errors: AtomicU64::new(0),
+            server_errors: AtomicU64::new(0),
+            other_statuses: AtomicU64::new(0),
+            total_latency_micros: AtomicU64::new(0),
+            max_latency_micros: AtomicU64::new(0),
+            routes: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    fn start(&self, route: &str) {
+        self.total_started.fetch_add(1, Ordering::Relaxed);
+        self.in_flight.fetch_add(1, Ordering::Relaxed);
+        let mut routes = self.routes.lock().expect("http metrics mutex poisoned");
+        let route = routes.entry(route.to_string()).or_default();
+        route.total_started += 1;
+        route.in_flight += 1;
+    }
+
+    fn finish(&self, route: &str, status: StatusCode, duration: Duration) {
+        self.completed.fetch_add(1, Ordering::Relaxed);
+        self.in_flight.fetch_sub(1, Ordering::Relaxed);
+        let latency_micros = duration.as_micros().min(u128::from(u64::MAX)) as u64;
+        self.total_latency_micros
+            .fetch_add(latency_micros, Ordering::Relaxed);
+        fetch_max(&self.max_latency_micros, latency_micros);
+        match status.as_u16() {
+            200..=399 => {
+                self.successful.fetch_add(1, Ordering::Relaxed);
+            }
+            400..=499 => {
+                self.client_errors.fetch_add(1, Ordering::Relaxed);
+            }
+            500..=599 => {
+                self.server_errors.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                self.other_statuses.fetch_add(1, Ordering::Relaxed);
+            }
+        };
+
+        let mut routes = self.routes.lock().expect("http metrics mutex poisoned");
+        let route = routes.entry(route.to_string()).or_default();
+        route.completed += 1;
+        route.in_flight -= 1;
+        route.total_latency_micros += latency_micros;
+        route.max_latency_micros = route.max_latency_micros.max(latency_micros);
+        match status.as_u16() {
+            200..=399 => route.successful += 1,
+            400..=499 => route.client_errors += 1,
+            500..=599 => route.server_errors += 1,
+            _ => route.other_statuses += 1,
+        }
+    }
+
+    fn snapshot(&self) -> Value {
+        let total_started = self.total_started.load(Ordering::Relaxed);
+        let completed = self.completed.load(Ordering::Relaxed);
+        let total_latency_micros = self.total_latency_micros.load(Ordering::Relaxed);
+        let routes = self
+            .routes
+            .lock()
+            .expect("http metrics mutex poisoned")
+            .iter()
+            .map(|(route, metrics)| route_metrics_payload(route, metrics))
+            .collect::<Vec<_>>();
+        let mut routes = routes;
+        routes.sort_by(|left, right| {
+            json_u64(right, "totalStarted")
+                .cmp(&json_u64(left, "totalStarted"))
+                .then_with(|| route_name(left).cmp(&route_name(right)))
+        });
+        routes.truncate(24);
+
+        json!({
+            "startedAt": self.started_at,
+            "totalStarted": total_started,
+            "completed": completed,
+            "inFlight": self.in_flight.load(Ordering::Relaxed),
+            "successful": self.successful.load(Ordering::Relaxed),
+            "clientErrors": self.client_errors.load(Ordering::Relaxed),
+            "serverErrors": self.server_errors.load(Ordering::Relaxed),
+            "otherStatuses": self.other_statuses.load(Ordering::Relaxed),
+            "averageLatencyMicros": average_u64(total_latency_micros, completed),
+            "maxLatencyMicros": self.max_latency_micros.load(Ordering::Relaxed),
+            "routes": routes,
+        })
+    }
+}
+
+fn http_metrics() -> &'static HttpRequestMetrics {
+    HTTP_REQUEST_METRICS.get_or_init(HttpRequestMetrics::new)
+}
+
+fn http_request_metrics_snapshot() -> Value {
+    http_metrics().snapshot()
+}
+
+async fn track_http_request(request: Request, next: Next) -> Response {
+    let route = request_route(&request);
+    let started = Instant::now();
+    http_metrics().start(&route);
+    let response = next.run(request).await;
+    http_metrics().finish(&route, response.status(), started.elapsed());
+    response
+}
+
+fn request_route(request: &Request) -> String {
+    let path = request
+        .extensions()
+        .get::<MatchedPath>()
+        .map(MatchedPath::as_str)
+        .unwrap_or_else(|| request.uri().path());
+    format!("{} {path}", request.method())
+}
+
+fn fetch_max(target: &AtomicU64, value: u64) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+fn route_metrics_payload(route: &str, metrics: &HttpRouteMetrics) -> Value {
+    json!({
+        "route": route,
+        "totalStarted": metrics.total_started,
+        "completed": metrics.completed,
+        "inFlight": metrics.in_flight,
+        "successful": metrics.successful,
+        "clientErrors": metrics.client_errors,
+        "serverErrors": metrics.server_errors,
+        "otherStatuses": metrics.other_statuses,
+        "averageLatencyMicros": average_u64(metrics.total_latency_micros, metrics.completed),
+        "maxLatencyMicros": metrics.max_latency_micros,
+    })
+}
+
+fn average_u64(total: u64, count: u64) -> u64 {
+    if count == 0 { 0 } else { total / count }
+}
+
+fn json_u64(value: &Value, key: &str) -> u64 {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .expect("http route metrics contain numeric sort key")
+}
+
+fn route_name(value: &Value) -> String {
+    value
+        .get("route")
+        .and_then(Value::as_str)
+        .expect("http route metrics contain route")
+        .to_string()
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -111,6 +315,7 @@ pub fn router(handle: RuntimeHandle) -> Router {
         )
         .route("/debug/dashboard.js", get(debug_dashboard_js))
         .route("/debug/alpine.min.js", get(debug_alpine_js))
+        .layer(middleware::from_fn(track_http_request))
         .with_state(state)
 }
 
@@ -599,6 +804,7 @@ async fn debug_overview(
                 transcript_since: query_str(&query, &["transcriptSince"]),
                 transcript_limit: query_usize(&query, &["transcriptLimit"], 250),
                 publication_limit: query_usize(&query, &["publicationLimit"], 120),
+                http_requests: http_request_metrics_snapshot(),
             })
             .await,
     )

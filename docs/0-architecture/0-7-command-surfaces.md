@@ -52,6 +52,8 @@ HTTP routes are mounted over the runtime handle. They cover health, status, voic
 
 Read routes render runtime and timeline views. Mutation routes submit jobs or runtime-control jobs through `RuntimeHandle`.
 
+The debug overview powers the dashboard health tab. It combines runtime status with process load, HTTP request counters, job backlog and latency windows, speech and wake activity, and Postgres diagnostics. The Postgres payload includes pool usage, `pg_stat_database` counters, connection activity, lock counts, selected server settings, table row counts, and table activity from `pg_stat_user_tables`, giving operators a direct view of cache behavior, database size, active backends, lock waits, dead tuples, scan counts, writes, temp files, and deadlocks.
+
 ## Runtime Commands
 
 `CommandRequest` is the typed envelope for runtime commands. The command set covers agent tasks, live and draft transcript creation, transcript materialization, permanent publication, pause, deafen, resume, forget, leave, join, voice mute, and voice cue playback.

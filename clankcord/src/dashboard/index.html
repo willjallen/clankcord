@@ -377,8 +377,85 @@
               </template>
             </div>
           </section>
+          <section>
+            <h2><span>HTTP Requests</span></h2>
+            <div class="dense-list">
+              <template x-for="row in requestRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong :class="row.className" x-text="row.value"></strong></div>
+              </template>
+            </div>
+          </section>
         </div>
         <div class="stack">
+          <section>
+            <h2><span>HTTP Routes</span><small x-text="requestRouteRows().length"></small></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Route</th><th>Started</th><th>In Flight</th><th>2xx/3xx</th><th>4xx</th><th>5xx</th><th>Avg</th><th>Max</th></tr></thead>
+                <tbody>
+                  <template x-for="row in requestRouteRows()" :key="row.route">
+                    <tr>
+                      <td x-text="row.route"></td>
+                      <td x-text="int(row.totalStarted)"></td>
+                      <td x-text="int(row.inFlight)"></td>
+                      <td x-text="int(row.successful)"></td>
+                      <td x-text="int(row.clientErrors)"></td>
+                      <td x-text="int(row.serverErrors)"></td>
+                      <td x-text="micros(row.averageLatencyMicros)"></td>
+                      <td x-text="micros(row.maxLatencyMicros)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!requestRouteRows().length">No HTTP request samples.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Postgres Activity</span></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>State</th><th>Connections</th><th>Waiting</th><th>Oldest Query</th><th>Oldest Transaction</th></tr></thead>
+                <tbody>
+                  <template x-for="row in postgresActivityRows()" :key="row.state">
+                    <tr>
+                      <td x-text="row.state"></td>
+                      <td x-text="int(row.connections)"></td>
+                      <td x-text="int(row.waiting)"></td>
+                      <td x-text="seconds(row.oldestQuerySeconds)"></td>
+                      <td x-text="seconds(row.oldestTransactionSeconds)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!postgresActivityRows().length">No Postgres activity samples.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Postgres Locks</span></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Mode</th><th>Granted</th><th>Locks</th></tr></thead>
+                <tbody>
+                  <template x-for="row in postgresLockRows()" :key="`${row.mode}:${row.granted}`">
+                    <tr>
+                      <td x-text="row.mode"></td>
+                      <td><span class="pill" :class="row.granted ? 'ok' : 'bad'" x-text="row.granted ? 'granted' : 'waiting'"></span></td>
+                      <td x-text="int(row.locks)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!postgresLockRows().length">No Postgres locks.</div>
+            </div>
+          </section>
+          <section>
+            <h2><span>Postgres Settings</span></h2>
+            <div class="dense-list">
+              <template x-for="row in postgresSettingRows()" :key="row.label">
+                <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+              </template>
+            </div>
+          </section>
           <section>
             <h2><span>Job Latency Windows</span><small>ready delay / queue / run / total</small></h2>
             <div class="table-wrap scroll-region">
@@ -479,10 +556,47 @@
             <h2><span>Postgres Tables</span></h2>
             <div class="table-wrap tall scroll-region">
               <table>
-                <thead><tr><th>Table</th><th>Rows</th></tr></thead>
+                <thead><tr><th>Table</th><th>Rows</th><th>Total Size</th><th>Error</th></tr></thead>
                 <tbody>
                   <template x-for="row in database().tables || []" :key="row.table">
-                    <tr><td x-text="row.table"></td><td x-text="int(row.rows)"></td></tr>
+                    <tr><td x-text="row.table"></td><td x-text="int(row.rows)"></td><td x-text="bytes(row.totalBytes)"></td><td x-text="row.error || ''"></td></tr>
+                  </template>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <section>
+            <h2><span>Postgres Table Activity</span><small x-text="postgresTableActivityRows().length"></small></h2>
+            <div class="table-wrap tall scroll-region">
+              <table>
+                <thead><tr><th>Table</th><th>Size</th><th>Live</th><th>Dead</th><th>Seq Scans</th><th>Index Scans</th><th>Writes</th><th>Vacuum</th><th>Analyze</th></tr></thead>
+                <tbody>
+                  <template x-for="row in postgresTableActivityRows()" :key="row.table">
+                    <tr>
+                      <td x-text="row.table"></td>
+                      <td x-text="bytes(row.totalBytes)"></td>
+                      <td x-text="int(row.liveRows)"></td>
+                      <td x-text="int(row.deadRows)"></td>
+                      <td x-text="int(row.seqScans)"></td>
+                      <td x-text="int(row.indexScans)"></td>
+                      <td x-text="int((row.inserts || 0) + (row.updates || 0) + (row.deletes || 0))"></td>
+                      <td x-text="int((row.vacuumCount || 0) + (row.autovacuumCount || 0))"></td>
+                      <td x-text="int((row.analyzeCount || 0) + (row.autoanalyzeCount || 0))"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <div class="empty" x-show="!postgresTableActivityRows().length">No table activity samples.</div>
+            </div>
+          </section>
+          <section x-show="databaseErrorRows().length">
+            <h2><span>Postgres Diagnostics Errors</span></h2>
+            <div class="table-wrap scroll-region">
+              <table>
+                <thead><tr><th>Source</th><th>Error</th></tr></thead>
+                <tbody>
+                  <template x-for="row in databaseErrorRows()" :key="row.source">
+                    <tr><td x-text="row.source"></td><td x-text="row.error"></td></tr>
                   </template>
                 </tbody>
               </table>

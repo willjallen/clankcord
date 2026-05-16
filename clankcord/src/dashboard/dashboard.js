@@ -603,12 +603,66 @@ window.dashboard = function dashboard() {
 
     databaseRows() {
       const database = this.database();
+      const stats = database.statistics || {};
+      const pool = database.pool || {};
       return [
         { label: 'URL', value: database.url || '' },
         { label: 'Database', value: database.database || '' },
         { label: 'User', value: database.user || '' },
         { label: 'Root', value: database.root || '' },
+        { label: 'Database size', value: this.bytes(stats.databaseSizeBytes) },
+        { label: 'Cache hit', value: stats.cacheHitPercent === null || stats.cacheHitPercent === undefined ? '' : this.pct(stats.cacheHitPercent) },
+        { label: 'Backends', value: this.int(stats.backends) },
+        { label: 'Pool in use', value: `${this.int(pool.inUseConnections)} / ${this.int(pool.openConnections)} open / ${this.int(pool.configuredMaxConnections)} max` },
+        { label: 'Pool idle', value: this.int(pool.idleConnections) },
+        { label: 'Transactions', value: `${this.int(stats.transactions)}${stats.rollbackPercent === null || stats.rollbackPercent === undefined ? '' : ` (${this.pct(stats.rollbackPercent)} rollback)`}` },
+        { label: 'Temp files', value: this.int(stats.tempFiles) },
+        { label: 'Temp bytes', value: this.bytes(stats.tempBytes) },
+        { label: 'Deadlocks', value: this.int(stats.deadlocks) },
+        { label: 'Stats reset', value: stats.statsResetAt || '' },
       ];
+    },
+
+    requestRows() {
+      const requests = this.data?.requests || {};
+      return [
+        { label: 'Started', value: this.int(requests.totalStarted) },
+        { label: 'Completed', value: this.int(requests.completed) },
+        { label: 'In flight', value: this.int(requests.inFlight) },
+        { label: 'Successful', value: this.int(requests.successful) },
+        { label: 'Client errors', value: this.int(requests.clientErrors), className: requests.clientErrors ? 'bad' : '' },
+        { label: 'Server errors', value: this.int(requests.serverErrors), className: requests.serverErrors ? 'bad' : '' },
+        { label: 'Avg latency', value: this.micros(requests.averageLatencyMicros) },
+        { label: 'Max latency', value: this.micros(requests.maxLatencyMicros) },
+        { label: 'Tracking since', value: requests.startedAt || '' },
+      ];
+    },
+
+    requestRouteRows() {
+      return this.data?.requests?.routes || [];
+    },
+
+    postgresActivityRows() {
+      return this.database().activity || [];
+    },
+
+    postgresLockRows() {
+      return this.database().locks || [];
+    },
+
+    postgresSettingRows() {
+      return (this.database().settings || []).map((setting) => ({
+        label: setting.name,
+        value: `${setting.setting || ''}${setting.unit ? ` ${setting.unit}` : ''}`,
+      }));
+    },
+
+    postgresTableActivityRows() {
+      return this.database().tableActivity || [];
+    },
+
+    databaseErrorRows() {
+      return this.database().errors || [];
     },
 
     operations() {
