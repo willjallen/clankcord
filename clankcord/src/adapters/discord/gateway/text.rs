@@ -35,10 +35,20 @@ impl DiscordTextAdapter {
                 return Ok(());
             }
         };
-        if let Err(error) = registration::register_slash_commands() {
-            log(&format!(
-                "discord slash command registration failed: {error}"
-            ));
+        match registration::register_slash_commands(&token) {
+            Ok(registration) => log(&format!(
+                "registered {} guild-scoped discord slash command(s) for application {} ({}) in {} guild(s); global commands cleared={}",
+                registration.command_count,
+                registration.application_name,
+                registration.application_id,
+                registration.guild_ids.len(),
+                registration.cleared_global_commands
+            )),
+            Err(error) => {
+                log(&format!(
+                    "discord slash command registration failed: {error}"
+                ));
+            }
         }
         let intents = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MESSAGES
