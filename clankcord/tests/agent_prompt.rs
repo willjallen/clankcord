@@ -25,8 +25,9 @@ fn agent_task_prompt_is_compact_and_packet_free() {
     assert!(prompt.contains("CLANKCORD_AGENT_JOB_ID"));
     assert!(prompt.contains("NO_RESPONSE_NEEDED"));
     assert!(prompt.contains("clankcord --help"));
-    assert!(prompt.contains("clankcord responses --help"));
+    assert!(prompt.contains("command-group `--help`"));
     assert!(prompt.contains("clankcord responses dm"));
+    assert!(prompt.contains("single-quoted heredoc"));
     assert!(prompt.contains("treat the request and the answer as private"));
     assert!(prompt.contains(
         "do not publish the topic, answer, summary, result, or confirmation to a public channel"

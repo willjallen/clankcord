@@ -9,9 +9,75 @@ use crate::Result;
 use crate::adapters::discord::messages::{read as read_messages, search as search_messages};
 use crate::errors::discord_tool_error;
 
+const CLI_AFTER_HELP: &str = r#"Common agent workflows:
+  Inspect recent memory:      clankcord timeline tail --since -10m --file timeline.json
+  Render transcript context:  clankcord transcripts render --since -30m --file transcript.md --format markdown
+  Resolve a person:           clankcord members resolve "display name"
+  Publish a visible reply:    clankcord responses send <<'EOF'
+                              message body
+                              EOF
+  Ask a clarifying question:  clankcord responses ask <<'EOF'
+                              question text
+                              EOF
+  Send a private reply:       clankcord responses dm --to "display name" <<'EOF'
+                              private message
+                              EOF
+  Create automation:          clankcord automations spec
+                              clankcord automations validate < automation.json
+                              clankcord automations create < automation.json
+
+Most agent commands infer job, guild, channel, and requester from CLANKCORD_AGENT_* environment variables. Use --file for large outputs so command results do not flood the agent context."#;
+
+const RESPONSE_BODY_AFTER_HELP: &str = r#"Response body input:
+  Read Markdown/plain text from stdin by default. Use a single-quoted heredoc so shells do not expand backticks, dollars, quotes, or backslashes:
+
+    clankcord responses send --job "$CLANKCORD_AGENT_JOB_ID" <<'EOF'
+    Markdown with `code`, ``` fences, "$quotes", $vars, and \slashes.
+    EOF
+
+  Or read the body from a UTF-8 file:
+
+    clankcord responses send --file response.md
+
+Common forms:
+    clankcord responses send <<'EOF'
+    visible reply
+    EOF
+
+    clankcord responses ask <<'EOF'
+    clarifying question
+    EOF
+
+    clankcord responses dm --to "display name" <<'EOF'
+    private reply
+    EOF
+
+Targets:
+  send/submit default to the current session.
+  ask sends a visible question and marks expects_reply=true.
+  dm resolves --to through guild member lookup and sends a private Discord DM.
+  Explicit sink values include session, agent-chat, channel:<id>, and dm:<user-id>."#;
+
+const AUTOMATION_BODY_AFTER_HELP: &str = r#"Automation JSON input:
+  Read JSON from stdin by default:
+
+    clankcord automations validate < automation.json
+    clankcord automations create < automation.json
+
+  Or read JSON from a UTF-8 file:
+
+    clankcord automations validate --file automation.json
+    clankcord automations create --file automation.json
+
+Read the schema first with clankcord automations spec. Validate before create."#;
+
 #[derive(Debug, Parser)]
 #[command(name = "clankcord")]
-#[command(about = "Agent CLI surface for Clankcord memory, jobs, and Discord operations.")]
+#[command(
+    about = "CLI action boundary for Clankcord's Discord memory, jobs, automations, and responses.",
+    long_about = "Clankcord is the supported command surface for agents and operators. Use it to inspect Discord voice-room memory, render transcript context, resolve members, control room behavior, create jobs and automations, and publish responses back through Clankcord.",
+    after_help = CLI_AFTER_HELP
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -19,127 +85,187 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    #[command(about = "Run the persistent Clankcord runtime process.")]
     Start,
+    #[command(about = "Show live runtime, room, voice bot, and capture-session status.")]
     Status(StatusArgs),
+    #[command(
+        about = "Inspect and control voice-room occupancy, bot placement, mute state, and cues."
+    )]
     Rooms {
         #[command(subcommand)]
         command: Option<RoomsCommand>,
     },
+    #[command(about = "Read or search Discord text messages through the bot account.")]
     Messages {
         #[command(subcommand)]
         command: MessagesCommand,
     },
+    #[command(about = "Inspect raw timeline events for recent room memory and job activity.")]
     Timeline {
         #[command(subcommand)]
         command: TimelineCommand,
     },
+    #[command(about = "Materialize, render, and search voice transcripts.")]
     Transcripts {
         #[command(subcommand)]
         command: TranscriptsCommand,
     },
+    #[command(about = "List detected conversation windows in the timeline.")]
     Conversations {
         #[command(subcommand)]
         command: ConversationsCommand,
     },
+    #[command(about = "Resolve natural-language time references into timeline ranges.")]
     Context {
         #[command(subcommand)]
         command: ContextCommand,
     },
+    #[command(about = "Trace a Discord participant's presence and speech over time.")]
     Participants {
         #[command(subcommand)]
         command: ParticipantsCommand,
     },
+    #[command(about = "Search, resolve, and inspect Discord guild members.")]
     Members {
         #[command(subcommand)]
         command: MembersCommand,
     },
+    #[command(about = "List, inspect, retry, and run Clankcord runtime jobs.")]
     Jobs {
         #[command(subcommand)]
         command: Option<JobsCommand>,
     },
+    #[command(about = "Publish public replies, questions, and DMs through Clankcord.")]
     Responses {
         #[command(subcommand)]
         command: ResponsesCommand,
     },
+    #[command(about = "Print, validate, create, list, inspect, and cancel automations.")]
     Automations {
         #[command(subcommand)]
         command: AutomationsCommand,
     },
+    #[command(about = "Approve or cancel confirmation-required jobs.")]
     Confirmations {
         #[command(subcommand)]
         command: ConfirmationsCommand,
     },
+    #[command(about = "Pause room listening for a bounded duration.")]
     Pause(PauseArgs),
+    #[command(about = "Resume room listening.")]
     Resume(RoomArgs),
+    #[command(about = "Forget a recent transcript window or explicit window id.")]
     Forget(ForgetArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum RoomsCommand {
+    #[command(about = "Show room and voice-bot status.")]
     Status(StatusArgs),
+    #[command(about = "List live occupants for a room.")]
     Occupants(RoomOccupantsArgs),
+    #[command(about = "Request a voice bot join a room.")]
     Join(JoinArgs),
+    #[command(about = "Request a voice bot leave a room.")]
     Leave(RoomArgs),
+    #[command(about = "Move a named voice bot to another room.")]
     Move(MoveArgs),
+    #[command(about = "Mute the active voice session for a room.")]
     Mute(RoomArgs),
+    #[command(about = "Unmute the active voice session for a room.")]
     Unmute(RoomArgs),
+    #[command(about = "Play a named cue in a room.")]
     PlayCue(PlayCueArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum MessagesCommand {
+    #[command(about = "Read recent messages from a channel or thread.")]
     Read(read_messages::Args),
+    #[command(about = "Search Discord text channels, forums, and threads.")]
     Search(search_messages::Args),
 }
 
 #[derive(Debug, Subcommand)]
 enum TimelineCommand {
+    #[command(about = "Show recent timeline events.")]
     Tail(TimelineTailArgs),
+    #[command(about = "Show timeline events in an explicit time range.")]
     Range(TimelineRangeArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum TranscriptsCommand {
+    #[command(about = "Create a transcript window job.")]
     Materialize(TranscriptMaterializeArgs),
+    #[command(about = "Render transcript text for a window or time range.")]
     Render(TranscriptRenderArgs),
+    #[command(about = "Search transcript text over recent history.")]
     Search(TranscriptSearchArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum ConversationsCommand {
+    #[command(about = "List conversation windows for a room or guild.")]
     List(ConversationsListArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum ContextCommand {
+    #[command(about = "Resolve a natural-language reference such as 'last hour' or 'yesterday'.")]
     Resolve(ContextResolveArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum ParticipantsCommand {
+    #[command(about = "Trace one participant's presence and optional speech snippets.")]
     Trace(ParticipantTraceArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum MembersCommand {
+    #[command(about = "Search guild members by name or id.")]
     Search(MemberSearchArgs),
+    #[command(about = "Resolve one member name or id to a Discord user.")]
     Resolve(MemberResolveArgs),
+    #[command(about = "Get one member by Discord user id.")]
     Get(MemberGetArgs),
 }
 
 #[derive(Debug, Subcommand)]
 enum JobsCommand {
+    #[command(about = "List runtime jobs.")]
     List(JobsListArgs),
+    #[command(about = "Inspect one runtime job.")]
     Get(JobGetArgs),
+    #[command(about = "Retry a failed or cancelled job.")]
     Retry(JobIdArg),
+    #[command(about = "Run due jobs immediately in the runtime.")]
     RunDue,
 }
 
 #[derive(Debug, Subcommand)]
 enum ResponsesCommand {
+    #[command(
+        about = "Send a visible response to the current session or explicit sink.",
+        after_help = RESPONSE_BODY_AFTER_HELP
+    )]
     Send(ResponseSubmitArgs),
+    #[command(
+        about = "Resolve a member and send a private DM response.",
+        after_help = RESPONSE_BODY_AFTER_HELP
+    )]
     Dm(ResponseDmArgs),
+    #[command(
+        about = "Alias for send; publishes a visible response.",
+        after_help = RESPONSE_BODY_AFTER_HELP
+    )]
     Submit(ResponseSubmitArgs),
+    #[command(
+        about = "Send a visible clarifying question.",
+        after_help = RESPONSE_BODY_AFTER_HELP
+    )]
     Ask(ResponseSubmitArgs),
 }
 
@@ -147,17 +273,34 @@ enum ResponsesCommand {
 enum AutomationsCommand {
     #[command(about = "Print the automation JSON spec manual.")]
     Spec,
+    #[command(
+        about = "Create an automation from JSON read from stdin or --file.",
+        after_help = AUTOMATION_BODY_AFTER_HELP
+    )]
     Create(AutomationSpecArgs),
+    #[command(
+        about = "Validate automation JSON read from stdin or --file.",
+        after_help = AUTOMATION_BODY_AFTER_HELP
+    )]
     Validate(AutomationSpecArgs),
+    #[command(
+        about = "Evaluate automation JSON without creating it.",
+        after_help = AUTOMATION_BODY_AFTER_HELP
+    )]
     DryRun(AutomationSpecArgs),
+    #[command(about = "List automations by optional guild, channel, and state.")]
     List(AutomationListArgs),
+    #[command(about = "Inspect one automation by id.")]
     Get(AutomationIdArg),
+    #[command(about = "Cancel one automation by id.")]
     Cancel(AutomationIdArg),
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfirmationsCommand {
+    #[command(about = "Approve a confirmation-required job.")]
     Approve(ConfirmationApproveArgs),
+    #[command(about = "Cancel a confirmation-required job.")]
     Cancel(ConfirmationCancelArgs),
 }
 
@@ -425,38 +568,61 @@ struct MemberGetArgs {
 
 #[derive(Debug, ClapArgs, Default)]
 struct ResponseSubmitArgs {
-    #[arg(long)]
+    #[arg(long, help = "Source job id. Defaults to CLANKCORD_AGENT_JOB_ID.")]
     job: Option<String>,
-    #[arg(long, default_value = "session")]
+    #[arg(
+        long,
+        default_value = "session",
+        help = "Response target: session, agent-chat, channel:<id>, or dm:<user-id>."
+    )]
     sink: String,
-    #[arg(long)]
+    #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
+    )]
     channel: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Requesting Discord user id. Defaults to CLANKCORD_AGENT_REQUESTED_BY_USER_ID."
+    )]
     requested_by_user_id: Option<String>,
-    #[arg(long)]
-    content: Option<String>,
-    #[arg(long)]
-    stdin: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Read response body from a UTF-8 file instead of stdin."
+    )]
+    file: Option<String>,
 }
 
 #[derive(Debug, ClapArgs, Default)]
 struct ResponseDmArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Recipient display name, username, mention, or Discord user id."
+    )]
     to: String,
-    #[arg(long)]
+    #[arg(long, help = "Source job id. Defaults to CLANKCORD_AGENT_JOB_ID.")]
     job: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
+    )]
     channel: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Requesting Discord user id. Defaults to CLANKCORD_AGENT_REQUESTED_BY_USER_ID."
+    )]
     requested_by_user_id: Option<String>,
-    #[arg(long)]
-    content: Option<String>,
-    #[arg(long)]
-    stdin: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Read DM body from a UTF-8 file instead of stdin."
+    )]
+    file: Option<String>,
 }
 
 #[derive(Debug, ClapArgs, Default, Clone)]
@@ -469,10 +635,12 @@ struct OutputArgs {
 
 #[derive(Debug, ClapArgs, Default)]
 struct AutomationSpecArgs {
-    #[arg(long)]
-    content: Option<String>,
-    #[arg(long)]
-    stdin: bool,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Read automation JSON from a UTF-8 file instead of stdin."
+    )]
+    file: Option<String>,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -927,13 +1095,7 @@ fn members_get(args: MemberGetArgs) -> Result<i32> {
 }
 
 fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32> {
-    let content = if args.stdin {
-        let mut input = String::new();
-        std::io::stdin().read_to_string(&mut input)?;
-        input
-    } else {
-        args.content.unwrap_or_default()
-    };
+    let content = read_required_payload(args.file, "response body")?;
     api_emit(
         "POST",
         "/v1/voice/responses",
@@ -952,13 +1114,7 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
 }
 
 fn response_dm(args: ResponseDmArgs) -> Result<i32> {
-    let content = if args.stdin {
-        let mut input = String::new();
-        std::io::stdin().read_to_string(&mut input)?;
-        input
-    } else {
-        args.content.unwrap_or_default()
-    };
+    let content = read_required_payload(args.file, "DM body")?;
     let guild_id = agent_context_guild(args.guild.clone());
     let resolved = api_request(
         "GET",
@@ -999,7 +1155,7 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
 }
 
 fn automation_spec(args: AutomationSpecArgs, path: &str) -> Result<i32> {
-    let content = read_cli_payload(args.stdin, args.content)?;
+    let content = read_required_payload(args.file, "automation JSON")?;
     let spec = serde_json::from_str::<Value>(&content)?;
     api_emit("POST", path, Some(spec), None)
 }
@@ -1017,15 +1173,18 @@ fn automations_list(args: AutomationListArgs) -> Result<i32> {
     )
 }
 
-fn read_cli_payload(stdin: bool, content: Option<String>) -> Result<String> {
-    if stdin {
+fn read_required_payload(file: Option<String>, label: &str) -> Result<String> {
+    let content = if let Some(path) = file {
+        fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("failed to read {label} file {path:?}: {error}"))?
+    } else {
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
-        return Ok(input);
-    }
-    let Some(content) = content else {
-        anyhow::bail!("provide --stdin or --content");
+        input
     };
+    if content.trim().is_empty() {
+        anyhow::bail!("{label} is empty; provide text on stdin or with --file");
+    }
     Ok(content)
 }
 

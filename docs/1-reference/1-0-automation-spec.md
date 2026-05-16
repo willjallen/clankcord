@@ -11,14 +11,14 @@ clankcord automations spec
 The usual authoring flow is to write JSON, validate it, then create it.
 
 ```sh
-cat automation.json | clankcord automations validate --stdin
-cat automation.json | clankcord automations create --stdin
+clankcord automations validate < automation.json
+clankcord automations create < automation.json
 ```
 
 Inspection and lifecycle commands use the same automation surface.
 
 ```sh
-cat automation.json | clankcord automations dry-run --stdin
+clankcord automations dry-run < automation.json
 clankcord automations list --guild <guild-id> --channel <voice-channel-id>
 clankcord automations get <automation-id>
 clankcord automations cancel <automation-id>

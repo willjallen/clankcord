@@ -7,8 +7,8 @@ fn current_codex_jsonl_populates_agent_debug_trace() {
 {"type":"thread.started","thread_id":"019e270d-878f-70c0-855e-456d2225d85c"}
 {"type":"turn.started"}
 {"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I will answer and publish through Clankcord."}}
-{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"clankcord responses submit --job job_1 --stdin","aggregated_output":"","exit_code":null,"status":"in_progress"}}
-{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"clankcord responses submit --job job_1 --stdin","aggregated_output":"{\"job_ids\":[\"job_response\"]}\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"clankcord responses submit --job job_1 <<'EOF'\nAnswer text\nEOF","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"clankcord responses submit --job job_1 <<'EOF'\nAnswer text\nEOF","aggregated_output":"{\"job_ids\":[\"job_response\"]}\n","exit_code":0,"status":"completed"}}
 {"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"RESPONSE_SUBMITTED"}}
 {"type":"turn.completed","usage":{"input_tokens":60770,"cached_input_tokens":36096,"output_tokens":2492,"reasoning_output_tokens":1876}}
 "#;

@@ -13,7 +13,7 @@ stored automation
 normal job scheduling and timeline events
 ```
 
-The schema is `clankcord.automation.v0`. The CLI accepts JSON through `clankcord automations create --stdin`, validates JSON through `clankcord automations validate --stdin`, and prints the reference contract through `clankcord automations spec`. Agents use that spec command before creating future, conditional, or recurring behavior.
+The schema is `clankcord.automation.v0`. The CLI accepts JSON on stdin through `clankcord automations create`, validates JSON through `clankcord automations validate`, and prints the reference contract through `clankcord automations spec`. `--file` is available when the JSON already lives in a UTF-8 file. Agents use the spec command before creating future, conditional, or recurring behavior.
 
 ## Stored Specs
 

@@ -118,4 +118,4 @@ NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
-DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. A single agent task may create multiple text-delivery jobs, and the runtime verifies publication by looking for text-delivery jobs tied to the agent task.
+DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. Response bodies are read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.
