@@ -8,7 +8,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::dashboard::{ALPINE_JS, APP_JS, INDEX_HTML, STYLES_CSS};
+use crate::dashboard::{
+    ALPINE_JS, APP_JS, CHARTS_JS, ECHARTS_JS, EXPLORER_JS, INDEX_HTML, JSON_JS, STYLES_CSS,
+    TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
+};
 use crate::runtime::automations::AutomationState;
 use crate::runtime::{
     CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
@@ -93,6 +96,19 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/voice/debug/agents/{job_id}", get(debug_agent_job))
         .route("/debug", get(debug_dashboard))
         .route("/debug/dashboard.css", get(debug_dashboard_css))
+        .route(
+            "/debug/tabulator_midnight.min.css",
+            get(debug_tabulator_css),
+        )
+        .route("/debug/echarts.min.js", get(debug_echarts_js))
+        .route("/debug/tabulator.min.js", get(debug_tabulator_js))
+        .route("/debug/dashboard-json.js", get(debug_dashboard_json_js))
+        .route("/debug/dashboard-charts.js", get(debug_dashboard_charts_js))
+        .route("/debug/dashboard-tables.js", get(debug_dashboard_tables_js))
+        .route(
+            "/debug/dashboard-explorer.js",
+            get(debug_dashboard_explorer_js),
+        )
         .route("/debug/dashboard.js", get(debug_dashboard_js))
         .route("/debug/alpine.min.js", get(debug_alpine_js))
         .with_state(state)
@@ -571,6 +587,73 @@ async fn debug_dashboard_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         STYLES_CSS,
+    )
+}
+
+async fn debug_tabulator_css() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
+        TABULATOR_CSS,
+    )
+}
+
+async fn debug_echarts_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        ECHARTS_JS,
+    )
+}
+
+async fn debug_tabulator_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        TABULATOR_JS,
+    )
+}
+
+async fn debug_dashboard_json_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        JSON_JS,
+    )
+}
+
+async fn debug_dashboard_charts_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        CHARTS_JS,
+    )
+}
+
+async fn debug_dashboard_tables_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        TABLES_JS,
+    )
+}
+
+async fn debug_dashboard_explorer_js() -> impl IntoResponse {
+    (
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
+        EXPLORER_JS,
     )
 }
 

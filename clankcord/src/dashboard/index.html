@@ -4,7 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clankcord Dashboard</title>
+  <link rel="stylesheet" href="./debug/tabulator_midnight.min.css">
   <link rel="stylesheet" href="./debug/dashboard.css">
+  <script defer src="./debug/echarts.min.js"></script>
+  <script defer src="./debug/tabulator.min.js"></script>
+  <script defer src="./debug/dashboard-json.js"></script>
+  <script defer src="./debug/dashboard-charts.js"></script>
+  <script defer src="./debug/dashboard-tables.js"></script>
+  <script defer src="./debug/dashboard-explorer.js"></script>
   <script defer src="./debug/dashboard.js"></script>
   <script defer src="./debug/alpine.min.js"></script>
 </head>
@@ -39,6 +46,106 @@
         </div>
       </template>
     </section>
+
+    <div class="view active" x-show="activeView === 'explore'">
+      <section>
+        <h2><span>Explorer Filters</span><small x-text="exploreCountLabel()"></small></h2>
+        <div class="filter-grid">
+          <label>Room
+            <select x-model="filters.globalRoom" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
+            </select>
+          </label>
+          <label>Guild
+            <select x-model="filters.globalGuild" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="guild in guildOptions()" :key="guild"><option :value="guild" x-text="short(guild, 28)"></option></template>
+            </select>
+          </label>
+          <label>Job Type
+            <select x-model="filters.globalJobKind" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="kind in jobKindOptions()" :key="kind"><option :value="kind" x-text="kind"></option></template>
+            </select>
+          </label>
+          <label>Job State
+            <select x-model="filters.globalJobState" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="state in jobStateOptions()" :key="state"><option :value="state" x-text="state"></option></template>
+            </select>
+          </label>
+          <label>Requester
+            <select x-model="filters.globalRequester" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="requester in requesterOptions()" :key="requester"><option :value="requester" x-text="short(requester, 28)"></option></template>
+            </select>
+          </label>
+          <label>Event Type
+            <select x-model="filters.globalEventKind" @change="globalFilterChanged()">
+              <option value="">All</option>
+              <template x-for="kind in timelineKinds()" :key="kind"><option :value="kind" x-text="kind"></option></template>
+            </select>
+          </label>
+          <label>Search
+            <input type="search" x-model.debounce.150ms="filters.globalSearch" @input.debounce.150ms="globalFilterChanged()" autocomplete="off">
+          </label>
+          <div class="filter-actions">
+            <label class="check"><input type="checkbox" x-model="filters.globalIncludeTerminal" @change="globalFilterChanged()"> Terminal</label>
+            <button type="button" @click="clearExploreFilters()">Clear</button>
+          </div>
+        </div>
+      </section>
+
+      <div class="chart-grid">
+        <section>
+          <h2><span>Jobs By Type And State</span><small>click bars to filter</small></h2>
+          <div id="job-mix-chart" class="chart-host"></div>
+        </section>
+        <section>
+          <h2><span>Latency By Job Type</span><small>p50 / p95 / max</small></h2>
+          <div id="latency-kind-chart" class="chart-host"></div>
+        </section>
+        <section>
+          <h2><span>Timeline Activity</span><small>click lines to filter event type</small></h2>
+          <div id="event-trend-chart" class="chart-host"></div>
+        </section>
+        <section>
+          <h2><span>Room Activity</span><small>jobs / speech / transcript / wake</small></h2>
+          <div id="room-activity-chart" class="chart-host"></div>
+        </section>
+      </div>
+
+      <div class="explorer-layout">
+        <div class="stack">
+          <section>
+            <h2><span>Job Explorer</span><small x-text="`${filteredJobs().length}/${allJobs().length}`"></small></h2>
+            <div id="job-explorer-table" class="tabulator-host"></div>
+          </section>
+          <section>
+            <h2><span>Timeline Explorer</span><small x-text="`${filteredTimelineEvents().length}/${timelineEvents.length}`"></small></h2>
+            <div id="timeline-explorer-table" class="tabulator-host"></div>
+          </section>
+        </div>
+        <section>
+          <h2><span>Selected Record</span><small x-text="explorerSelectionLabel()"></small></h2>
+          <div class="detail scroll-region explorer-detail">
+            <div class="detail-head" x-show="explorerSelection.kind">
+              <span class="pill" :class="statusClass(explorerSelection.kind)" x-text="explorerSelection.kind"></span>
+              <span class="mono" x-text="explorerSelectionId()"></span>
+              <button type="button" @click="copyExplorerJson()">Copy JSON</button>
+            </div>
+            <div class="lifecycle-grid" x-show="explorerSelection.kind === 'job'">
+              <template x-for="item in selectedExplorerJobLifecycle()" :key="item.label">
+                <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
+              </template>
+            </div>
+            <div class="json-tree" x-ref="explorerJson"></div>
+            <div class="empty" x-show="!explorerSelection.kind">Select a job or timeline event.</div>
+          </div>
+        </section>
+      </div>
+    </div>
 
     <div class="view active" x-show="activeView === 'overview'">
       <div class="layout overview-grid">

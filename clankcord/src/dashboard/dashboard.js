@@ -15,6 +15,7 @@ const defaultFilters = {
   transcriptChannel: '',
   transcriptSearch: '',
   publicationLimit: 120,
+  ...window.ClankDashboardExplorer.defaultFilters,
 };
 
 function storedJson(key, fallback) {
@@ -43,6 +44,7 @@ function firstText(values) {
 window.dashboard = function dashboard() {
   return {
     tabs: [
+      { id: 'explore', label: 'Explore' },
       { id: 'overview', label: 'Overview' },
       { id: 'jobs', label: 'Jobs' },
       { id: 'agents', label: 'Agent Jobs' },
@@ -57,11 +59,12 @@ window.dashboard = function dashboard() {
     data: null,
     loading: false,
     error: '',
-    activeView: localStorage.getItem(viewStorageKey) || 'overview',
+    activeView: localStorage.getItem(viewStorageKey) || 'explore',
     filters: { ...defaultFilters, ...storedJson(filterStorageKey, {}) },
     selectedJobId: '',
     selectedAgentJobId: '',
     selectedAutomationId: '',
+    ...window.ClankDashboardExplorer.initialState(),
     agentDetails: {},
     agentDetailLoadingId: '',
     agentDetailErrors: {},
@@ -79,6 +82,9 @@ window.dashboard = function dashboard() {
     },
 
     init() {
+      if (!this.tabs.some((tab) => tab.id === this.activeView)) {
+        this.activeView = 'explore';
+      }
       document.addEventListener('scroll', (event) => {
         if (event.target?.closest?.('.scroll-region')) {
           this.lastSubwindowScrollAt = Date.now();
@@ -105,12 +111,16 @@ window.dashboard = function dashboard() {
       if (view === 'agents') {
         this.loadSelectedAgentDetail();
       }
+      this.scheduleRenderInteractive();
     },
 
     filterChanged() {
       storeJson(filterStorageKey, this.filters);
       this.refresh({ force: true });
+      this.scheduleRenderInteractive();
     },
+
+    ...window.ClankDashboardExplorer.methods,
 
     jsonUrl() {
       return `${rootPrefix}/v1/voice/debug/overview?${this.queryParams().toString()}`;
@@ -149,6 +159,8 @@ window.dashboard = function dashboard() {
         setTimeout(() => {
           this.restoreScrollState(scrollState);
           this.loadSelectedAgentDetail();
+          this.scheduleRenderInteractive();
+          this.renderExplorerJson();
         }, 0);
       } catch (error) {
         this.error = `Dashboard refresh failed: ${error.message}`;
@@ -368,7 +380,7 @@ window.dashboard = function dashboard() {
     },
 
     selectedJob() {
-      return this.activeJobs.concat(this.recentJobs).find((job) => job.job_id === this.selectedJobId) || null;
+      return this.allJobs().find((job) => job.job_id === this.selectedJobId) || null;
     },
 
     selectedAgentEntry() {
@@ -577,34 +589,54 @@ window.dashboard = function dashboard() {
     filteredTimelineEvents() {
       const kind = this.filters.timelineKind;
       const channel = this.filters.timelineChannel;
-      const query = this.filters.timelineSearch.trim().toLowerCase();
+      const globalKind = this.filters.globalEventKind;
+      const globalChannel = this.filters.globalRoom;
+      const globalGuild = this.filters.globalGuild;
+      const queries = [this.filters.timelineSearch, this.filters.globalSearch]
+        .map((value) => textValue(value).trim().toLowerCase())
+        .filter(Boolean);
       return this.timelineEvents.filter((event) => {
         if (kind && this.eventKind(event) !== kind) return false;
+        if (globalKind && this.eventKind(event) !== globalKind) return false;
         if (channel && this.eventChannelId(event) !== channel) return false;
-        if (!query) return true;
-        return [
+        if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
+        if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
+        if (!queries.length) return true;
+        const haystack = [
           this.eventKind(event),
+          this.eventGuildId(event),
           this.eventChannelName(event),
+          this.eventChannelId(event),
           this.eventSpeaker(event),
           this.eventDetail(event),
           this.eventId(event),
-        ].join(' ').toLowerCase().includes(query);
+        ].join(' ').toLowerCase();
+        return queries.every((query) => haystack.includes(query));
       });
     },
 
     filteredTranscriptEvents() {
       const channel = this.filters.transcriptChannel;
-      const query = this.filters.transcriptSearch.trim().toLowerCase();
+      const globalChannel = this.filters.globalRoom;
+      const globalGuild = this.filters.globalGuild;
+      const queries = [this.filters.transcriptSearch, this.filters.globalSearch]
+        .map((value) => textValue(value).trim().toLowerCase())
+        .filter(Boolean);
       return this.transcriptEvents
         .filter((event) => {
           if (!this.transcriptText(event)) return false;
           if (channel && this.eventChannelId(event) !== channel) return false;
-          if (!query) return true;
-          return [
+          if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
+          if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
+          if (!queries.length) return true;
+          const haystack = [
             this.transcriptText(event),
             this.eventSpeaker(event),
             this.eventChannelName(event),
-          ].join(' ').toLowerCase().includes(query);
+            this.eventChannelId(event),
+            this.eventGuildId(event),
+          ].join(' ').toLowerCase();
+          return queries.every((query) => haystack.includes(query));
         })
         .sort((left, right) => this.eventWhen(left).localeCompare(this.eventWhen(right)));
     },
@@ -742,6 +774,10 @@ window.dashboard = function dashboard() {
 
     eventKind(event) {
       return event?.kind || event?.event_kind || 'event';
+    },
+
+    eventGuildId(event) {
+      return event?.guild_id || event?.guildId || '';
     },
 
     eventChannelId(event) {
@@ -892,6 +928,14 @@ window.dashboard = function dashboard() {
       if (ms < 1000) return `${Math.round(ms)}ms`;
       if (ms < 60000) return `${(ms / 1000).toFixed(ms >= 10000 ? 1 : 2)}s`;
       return `${(ms / 60000).toFixed(1)}m`;
+    },
+
+    durationBetween(startIso, endIso) {
+      if (!startIso || !endIso) return '';
+      const start = Date.parse(startIso);
+      const end = Date.parse(endIso);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return '';
+      return this.millis(end - start);
     },
 
     micros(value) {

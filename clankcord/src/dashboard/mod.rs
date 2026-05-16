@@ -1,4 +1,11 @@
 pub const INDEX_HTML: &str = include_str!("index.html");
 pub const STYLES_CSS: &str = include_str!("dashboard.css");
 pub const APP_JS: &str = include_str!("dashboard.js");
+pub const CHARTS_JS: &str = include_str!("dashboard-charts.js");
+pub const EXPLORER_JS: &str = include_str!("dashboard-explorer.js");
+pub const JSON_JS: &str = include_str!("dashboard-json.js");
+pub const TABLES_JS: &str = include_str!("dashboard-tables.js");
+pub const ECHARTS_JS: &str = include_str!("echarts.min.js");
+pub const TABULATOR_JS: &str = include_str!("tabulator.min.js");
+pub const TABULATOR_CSS: &str = include_str!("tabulator_midnight.min.css");
 pub const ALPINE_JS: &str = include_str!("alpine.min.js");
