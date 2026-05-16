@@ -1,5 +1,6 @@
 use clankcord::runtime::domain::interactions::{
-    AgentTaskPromptContext, agent_invocation_infrastructure_failure, build_agent_task_message,
+    AgentTaskPromptContext, agent_invocation_infrastructure_failure,
+    agent_invocation_warning_event_kind, build_agent_task_message,
 };
 
 #[test]
@@ -42,10 +43,19 @@ fn agent_task_prompt_is_compact_and_packet_free() {
 }
 
 #[test]
-fn codex_auth_failure_is_infrastructure_failure_but_watchdog_text_is_not() {
+fn codex_auth_failure_is_infrastructure_failure_but_mcp_token_warning_is_not() {
     assert!(agent_invocation_infrastructure_failure(
         "Auth(TokenRefreshFailed(\"invalid_grant\"))"
     ));
+    assert!(!agent_invocation_infrastructure_failure(
+        "MCP server docs failed: Auth(TokenRefreshFailed(\"invalid_grant\"))"
+    ));
+    assert_eq!(
+        agent_invocation_warning_event_kind(
+            "MCP server docs failed: Auth(TokenRefreshFailed(\"invalid_grant\"))"
+        ),
+        Some("agent_mcp_token_warning")
+    );
     assert!(!agent_invocation_infrastructure_failure(
         "codex command timed out after 240 seconds"
     ));

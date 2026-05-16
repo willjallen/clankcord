@@ -157,6 +157,8 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
     }
 
     args.push(OsString::from("exec"));
+    args.push(OsString::from("--skip-git-repo-check"));
+    args.push(OsString::from("--ignore-user-config"));
     if let Some(session_id) = request
         .session_id
         .as_ref()

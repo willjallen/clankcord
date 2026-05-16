@@ -174,6 +174,12 @@ impl Runtime {
             raw_result_path: raw_result_path.clone(),
         })?;
 
+        self.append_agent_invocation_warning_events(
+            &latest,
+            &[invocation.stdout.as_str(), invocation.stderr.as_str()],
+        )
+        .await?;
+
         if !invocation.success {
             let detail = first_non_empty([
                 invocation.stderr.trim().to_string(),
@@ -408,6 +414,37 @@ impl Runtime {
         );
         self.timeline_store.create_job(response).await.map(Some)
     }
+
+    async fn append_agent_invocation_warning_events(
+        &self,
+        job: &Job,
+        details: &[&str],
+    ) -> Result<()> {
+        let mut emitted = std::collections::BTreeSet::new();
+        for detail in details {
+            let Some(event_kind) = agent_invocation_warning_event_kind(detail) else {
+                continue;
+            };
+            if !emitted.insert(event_kind) {
+                continue;
+            }
+            self.timeline_store
+                .append_event(
+                    &job.guild_id,
+                    &job.voice_channel_id,
+                    json!({
+                        "event_kind": event_kind,
+                        "kind": event_kind,
+                        "severity": "warning",
+                        "job_id": job.id.clone(),
+                        "job_kind": job.kind.as_str(),
+                        "message": agent_invocation_warning_message(event_kind),
+                    }),
+                )
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 fn agent_task_requester_id(job: &Job) -> String {
@@ -431,9 +468,32 @@ fn agent_task_no_response_reason(response_text: &str) -> Option<&'static str> {
 }
 
 pub fn agent_invocation_infrastructure_failure(detail: &str) -> bool {
+    if agent_invocation_warning_event_kind(detail).is_some() {
+        return false;
+    }
     detail.contains("TokenRefreshFailed")
         || detail.contains("invalid_grant")
         || detail.contains("Auth(")
+}
+
+pub fn agent_invocation_warning_event_kind(detail: &str) -> Option<&'static str> {
+    let normalized = detail.to_ascii_lowercase();
+    let mcp_related = normalized.contains("mcp");
+    let token_auth_related = normalized.contains("tokenrefreshfailed")
+        || normalized.contains("invalid_grant")
+        || normalized.contains("expired")
+        || (normalized.contains("token") && normalized.contains("auth"))
+        || (normalized.contains("token") && normalized.contains("invalid"));
+    (mcp_related && token_auth_related).then_some("agent_mcp_token_warning")
+}
+
+fn agent_invocation_warning_message(event_kind: &str) -> &'static str {
+    match event_kind {
+        "agent_mcp_token_warning" => {
+            "Codex reported an MCP authentication token warning during agent invocation."
+        }
+        _ => "Codex reported an agent invocation warning.",
+    }
 }
 
 #[derive(Debug, Clone, Default)]

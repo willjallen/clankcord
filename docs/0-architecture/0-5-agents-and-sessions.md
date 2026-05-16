@@ -103,7 +103,7 @@ Empty messages, expired managed threads, top-level `agent-chat` messages, and un
 
 ## Agent Task
 
-`agent_task` is a blocking snapshot job on the `agent` lane. It validates the job and session identity, creates or reuses the session workspace under `paths.agent_workspaces_root`, runs preflight checks, builds a prompt from the active job and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, and stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata.
+`agent_task` is a blocking snapshot job on the `agent` lane. It validates the job and session identity, creates or reuses the session workspace under `paths.agent_workspaces_root`, runs preflight checks, builds a prompt from the active job and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, and stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata. The Codex process uses the runtime-selected workspace, skips the Git repository trust check for that workspace, and ignores user Codex config.
 
 The detailed process contract is documented in [Agent Runtime Contract](0-9-agent-runtime-contract.md).
 
