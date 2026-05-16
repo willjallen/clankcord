@@ -96,7 +96,7 @@ timeout_seconds = 600
 model_id = "scribe_v2"
 
 [voice.sound]
-dir = "/workspace/clankcord/clankcord/assets/sounds"
+dir = "/workspace/clankcord/res/audio"
 timeout_ms = 3000
 
 [voice.capture]
