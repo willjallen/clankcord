@@ -1,22 +1,88 @@
 use std::collections::BTreeSet;
 
 use chrono::{Duration, SecondsFormat, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
-    DiscordForumThreadCreatePayload, DiscordTextMessagePayload, DiscordTextSendPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime,
-    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
+    DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,
+    DiscordTextSendPayload, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput,
+    DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload, JobState,
+    RefineTranscriptPayload, RoomConfig, Runtime, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload,
+    WakeProbePayload,
 };
 
 mod common;
 use common::{initialize_test_config, test_store};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+enum PreV0_2_0JobState {
+    Queued,
+    Running,
+    Waiting,
+    Complete,
+    Cancelled,
+    CancelRequested,
+    ConfirmationPending,
+    Approved,
+    ApprovalFailed,
+    Failed,
+    FailedTimeout,
+    AgentDispatchFailed,
+    FailedDraftRetained,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_2_0Job<Payload> {
+    id: String,
+    kind: JobKind,
+    guild_id: String,
+    voice_channel_id: String,
+    state: PreV0_2_0JobState,
+    requested_by_user_id: String,
+    payload: Payload,
+    attempts: i64,
+    created_at: String,
+    updated_at: String,
+    next_run_at: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    cancelled_at: Option<String>,
+    parent_job_id: Option<String>,
+    root_job_id: String,
+    lineage_depth: u8,
+    metadata: JobMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum PreV0_2_0SlashPayloadNoVoiceChannel {
+    AudioSegment,
+    WakeActivation,
+    AgentTask,
+    DiscordTextMessage,
+    DiscordSlashCommand(PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel {
+    interaction_id: String,
+    interaction_token: String,
+    application_id: String,
+    guild_id: String,
+    channel_id: String,
+    user_id: String,
+    username: String,
+    command_name: String,
+    options: BinaryPayload,
+    created_at: String,
+    response_visibility: String,
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
@@ -43,9 +109,61 @@ async fn job_round_trips_as_binary_record() {
 }
 
 #[test]
+fn job_payload_blob_uses_current_version_envelope() {
+    let job = Job::runtime_maintenance(500);
+    let encoded = job.encode().unwrap();
+
+    assert_eq!(&encoded[..8], b"CLANKJOB");
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 1);
+    assert!(Job::is_current_payload_blob(&encoded));
+}
+
+#[test]
+fn job_decode_rejects_pre_v0_2_0_raw_bincode_payload() {
+    let job = Job::runtime_maintenance(500);
+    let pre_v0_2_0 = bincode::serialize(&job).unwrap();
+
+    let error = Job::decode(&pre_v0_2_0).unwrap_err().to_string();
+
+    assert!(error.contains("job payload blob is not a current encoded job payload"));
+    assert!(!Job::is_current_payload_blob(&pre_v0_2_0));
+}
+
+#[test]
 fn job_state_rejects_agent_specific_dispatch_failure_state() {
     assert!("agent_dispatch_failed".parse::<JobState>().is_err());
     assert_eq!("failed".parse::<JobState>().unwrap(), JobState::Failed);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_initialize_records_v0_2_0_schema_migration() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+
+    let row = sqlx::query(
+        r#"
+        SELECT version, name, clankcord_version
+        FROM clankcord_schema_migrations
+        WHERE version = '0.2.0'
+        "#,
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "version").unwrap(),
+        "0.2.0"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "name").unwrap(),
+        "job payload blob envelope"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "clankcord_version").unwrap(),
+        "0.2.0"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -189,6 +307,131 @@ async fn runtime_maintenance_replacement_deletes_active_singleton_by_projection(
         active[0].runtime_maintenance_payload().unwrap().interval_ms,
         1000
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_2_0_schema_migration_rewrites_pre_v0_2_0_job_blobs() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::runtime_maintenance(500))
+        .await
+        .unwrap();
+    let pre_v0_2_0 = bincode::serialize(&created).unwrap();
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(&pre_v0_2_0)
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.2.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.2.0");
+    let migrated = store.get_job(&created.id).await.unwrap();
+    assert_eq!(migrated.id, created.id);
+    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert!(Job::is_current_payload_blob(&payload_blob));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_2_0_schema_migration_rewrites_pre_v0_2_0_slash_payloads() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::discord_slash_command(DiscordSlashCommandPayload {
+            interaction_id: "interaction-pre-v0-2-0".to_string(),
+            interaction_token: "token-pre-v0-2-0".to_string(),
+            application_id: "application".to_string(),
+            guild_id: "guild".to_string(),
+            channel_id: "text".to_string(),
+            voice_channel_id: "voice".to_string(),
+            user_id: "requester".to_string(),
+            username: "requester".to_string(),
+            command_name: "leave".to_string(),
+            options: BinaryPayload::empty(),
+            created_at: "2026-05-16T12:00:00.000Z".to_string(),
+            response_visibility: "ephemeral".to_string(),
+        }))
+        .await
+        .unwrap();
+    let JobPayload::DiscordSlashCommand(payload) = &created.payload else {
+        panic!("created test job should be a slash-command job");
+    };
+    let pre_v0_2_0 = PreV0_2_0Job {
+        id: created.id.clone(),
+        kind: created.kind,
+        guild_id: created.guild_id.clone(),
+        voice_channel_id: created.voice_channel_id.clone(),
+        state: PreV0_2_0JobState::Queued,
+        requested_by_user_id: created.requested_by_user_id.clone(),
+        payload: PreV0_2_0SlashPayloadNoVoiceChannel::DiscordSlashCommand(
+            PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel {
+                interaction_id: payload.interaction_id.clone(),
+                interaction_token: payload.interaction_token.clone(),
+                application_id: payload.application_id.clone(),
+                guild_id: payload.guild_id.clone(),
+                channel_id: payload.channel_id.clone(),
+                user_id: payload.user_id.clone(),
+                username: payload.username.clone(),
+                command_name: payload.command_name.clone(),
+                options: payload.options.clone(),
+                created_at: payload.created_at.clone(),
+                response_visibility: payload.response_visibility.clone(),
+            },
+        ),
+        attempts: created.attempts,
+        created_at: created.created_at.clone(),
+        updated_at: created.updated_at.clone(),
+        next_run_at: created.next_run_at.clone(),
+        started_at: created.started_at.clone(),
+        completed_at: created.completed_at.clone(),
+        cancelled_at: created.cancelled_at.clone(),
+        parent_job_id: created.parent_job_id.clone(),
+        root_job_id: created.root_job_id.clone(),
+        lineage_depth: created.lineage_depth,
+        metadata: created.metadata.clone(),
+    };
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(bincode::serialize(&pre_v0_2_0).unwrap())
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.2.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.2.0");
+    let migrated = store.get_job(&created.id).await.unwrap();
+    let JobPayload::DiscordSlashCommand(payload) = &migrated.payload else {
+        panic!("migrated test job should be a slash-command job");
+    };
+    assert_eq!(payload.interaction_id, "interaction-pre-v0-2-0");
+    assert_eq!(payload.voice_channel_id, "voice");
+    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert!(Job::is_current_payload_blob(&payload_blob));
 }
 
 #[tokio::test(flavor = "current_thread")]

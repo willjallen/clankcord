@@ -3,7 +3,9 @@ use super::store::*;
 impl TimelineStore {
     pub async fn initialize(&self) -> Result<()> {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
+        self.ensure_schema_migration_table().await?;
         self.create_tables().await?;
+        self.run_pending_schema_migrations().await?;
         self.create_indexes().await?;
         self.assert_schema_invariants().await?;
         Ok(())
@@ -252,6 +254,15 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "clankcord_schema_migrations",
+        &[
+            column("version", "text", false),
+            column("name", "text", false),
+            column("applied_at_ms", "bigint", false),
+            column("clankcord_version", "text", false),
+        ],
+    ),
+    table(
         "jobs",
         &[
             column("job_id", "text", false),
@@ -406,6 +417,10 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
             "idx_jobs_wake_stream_queued",
             "jobs_pkey",
         ],
+    ),
+    (
+        "clankcord_schema_migrations",
+        &["clankcord_schema_migrations_pkey"],
     ),
     ("occupancy", &["occupancy_pkey"]),
     (

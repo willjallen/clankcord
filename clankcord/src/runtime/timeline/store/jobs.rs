@@ -979,7 +979,7 @@ fn job_summary_from_row(row: &PgRow) -> Result<JobSummary> {
     })
 }
 
-async fn upsert_job_rows(
+pub(crate) async fn upsert_job_rows(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     job: &Job,
 ) -> Result<()> {

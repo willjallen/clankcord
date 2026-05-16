@@ -21,6 +21,11 @@ use super::{
 };
 use crate::Result;
 
+const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 1;
+const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
+    JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct AgentPreflightCheck {
     pub command: String,
@@ -796,11 +801,39 @@ impl Job {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(self)?)
+        let body = bincode::serialize(self)?;
+        let mut bytes = Vec::with_capacity(JOB_PAYLOAD_BLOB_HEADER_LEN + body.len());
+        bytes.extend_from_slice(JOB_PAYLOAD_BLOB_MAGIC);
+        bytes.extend_from_slice(&JOB_PAYLOAD_BLOB_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&body);
+        Ok(bytes)
     }
 
     pub fn decode(bytes: &[u8]) -> Result<Self> {
-        Ok(bincode::deserialize(bytes)?)
+        if bytes.len() < JOB_PAYLOAD_BLOB_HEADER_LEN {
+            anyhow::bail!("job payload blob is not a current encoded job payload");
+        }
+        let (magic, rest) = bytes.split_at(JOB_PAYLOAD_BLOB_MAGIC.len());
+        if magic != JOB_PAYLOAD_BLOB_MAGIC {
+            anyhow::bail!("job payload blob is not a current encoded job payload");
+        }
+        let (version_bytes, body) = rest.split_at(std::mem::size_of::<u16>());
+        let version = u16::from_le_bytes([version_bytes[0], version_bytes[1]]);
+        if version != JOB_PAYLOAD_BLOB_VERSION {
+            anyhow::bail!(
+                "unsupported job payload blob version {version}; expected {JOB_PAYLOAD_BLOB_VERSION}"
+            );
+        }
+        Ok(bincode::deserialize(body)?)
+    }
+
+    pub fn is_current_payload_blob(bytes: &[u8]) -> bool {
+        bytes.len() >= JOB_PAYLOAD_BLOB_HEADER_LEN
+            && &bytes[..JOB_PAYLOAD_BLOB_MAGIC.len()] == JOB_PAYLOAD_BLOB_MAGIC
+            && u16::from_le_bytes([
+                bytes[JOB_PAYLOAD_BLOB_MAGIC.len()],
+                bytes[JOB_PAYLOAD_BLOB_MAGIC.len() + 1],
+            ]) == JOB_PAYLOAD_BLOB_VERSION
     }
 
     pub fn to_value(&self) -> Value {

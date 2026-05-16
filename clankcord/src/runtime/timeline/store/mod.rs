@@ -15,6 +15,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
+pub(crate) use jobs::upsert_job_rows;
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::fs;

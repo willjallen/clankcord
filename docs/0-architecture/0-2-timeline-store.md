@@ -24,7 +24,7 @@ The store also owns the artifact root for voice memory and transcript publicatio
 
 ## Schema Shape
 
-Startup creates the schema before runtime config is snapshotted into Postgres. The tables group around the same concepts the runtime exposes.
+Startup prepares durable storage before runtime config is snapshotted into Postgres. `clankcord_schema_migrations` records applied Clankcord schema migrations by semantic version. The runtime creates this ledger table, ensures the current table set exists, applies pending migrations in version order, creates current indexes, and then checks schema invariants. Discord adapters, job scheduling, HTTP serving, and runtime maintenance start after that gate completes.
 
 Runtime configuration lives in `runtime_config`. Service startup stores the current pool, control, guild, and room config there. Domain code reads those records through store methods, the same way it reads room controls, voice state, jobs, and automation records.
 
@@ -39,13 +39,21 @@ jobs
   indexed scheduling, state, scope, lineage, and filter fields
 
 job_payloads
-  bincode-encoded typed Job payload and metadata
+  versioned typed Job payload and metadata blob
 
 job_dependencies
   parent/child edges and resolution policy
 ```
 
-That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
+That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. In Clankcord `0.2.0`, `job_payloads.payload_blob` begins with the `CLANKJOB` envelope and a little-endian payload version, followed by the bincode-encoded `Job`. The envelope is decoded before the typed body, so an unsupported payload schema fails at the storage contract boundary. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
+
+## Schema Migrations
+
+Timeline migrations are Rust modules under `timeline/migrations/` named for the Clankcord version that activates them. Version `0.2.0` is implemented in `v0_2_0.rs`. Future durable changes follow the same naming pattern, such as `v0_7_0.rs` or `v1_0_0.rs`.
+
+At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
+
+The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
 Automations and agent sessions follow the same pattern. Each has queryable projections for routing, expiry, scope, and state, plus typed payload data that Rust code validates and executes.
 
