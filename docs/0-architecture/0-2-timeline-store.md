@@ -25,7 +25,7 @@ The store also owns the artifact root for voice memory and transcript publicatio
 
 Startup creates the schema before runtime state is loaded. The tables group around the same concepts the runtime exposes.
 
-Voice tables describe configured rooms, raw Discord voice-state rows, capture runs, room assignments, capture sessions, and occupancy snapshots. They answer which room exists, which bot is assigned, who is present, which capture run is active, and when a session began or ended.
+Voice tables describe configured rooms, room controls, raw Discord voice-state rows, capture runs, room assignments, capture sessions, and occupancy snapshots. They answer which room exists, which control markers are active, which bot is assigned, who is present, which capture run is active, and when a session began or ended.
 
 Timeline and transcript tables store events, conversations, materialized windows, publications, and authoritative spans. Speech arrives as `speech_segment` events. Windows select intervals over those events. Publications preserve draft and refined artifacts. Authoritative spans let renderers prefer refined text for covered time ranges while retaining the underlying draft events.
 
@@ -81,4 +81,4 @@ Rendered views are projections. A conversation is a view over timeline state. A 
 
 ## Runtime Memory
 
-Postgres stores orchestration facts and durable state. Runtime memory stores config-derived maps, live status snapshots, room controls, and process capabilities. Active Discord voice clients, capture sessions, and gateway clients belong in the service process. Jobs, events, automations, agent sessions, and publication state belong in the timeline store. The runtime works by reading durable facts into a process-local view, executing a typed handler, and committing the resulting job, event, or artifact state back into the store.
+Postgres stores orchestration facts and durable state, including room controls. Runtime memory stores config-derived maps, live status snapshots, and process capabilities. Active Discord voice clients, capture sessions, and gateway clients belong in the service process. Jobs, room controls, events, automations, agent sessions, and publication state belong in the timeline store. The runtime works by reading durable facts through the store, executing a typed handler, and committing the resulting job, control, event, or artifact state back into the store.

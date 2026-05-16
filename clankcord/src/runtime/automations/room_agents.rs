@@ -22,7 +22,7 @@ impl Automation for RoomAgentPlacementAutomation {
                     output.emit(duplicate_session_leave_job(&duplicate));
                 }
             }
-            let decision = RoomAgentPlacementDecision::evaluate(runtime, &room, available_bot);
+            let decision = RoomAgentPlacementDecision::evaluate(context, &room, available_bot);
             if let Some(action) = decision.action {
                 if !has_active_placement_job(context, &room, action) {
                     output.emit(placement_job(
@@ -46,14 +46,15 @@ struct RoomAgentPlacementDecision {
 }
 
 impl RoomAgentPlacementDecision {
-    fn evaluate(runtime: &Runtime, room: &RoomConfig, available_bot: bool) -> Self {
+    fn evaluate(context: &AutomationContext<'_>, room: &RoomConfig, available_bot: bool) -> Self {
+        let runtime = context.runtime();
         let voice_bot_present = runtime.room_has_voice_bot_presence(room);
         let auto_suppressed =
-            runtime.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
+            context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
         let manual_hold =
-            runtime.room_control_datetime_active(&room.channel_id, "manual_hold_until");
+            context.room_control_datetime_active(&room.channel_id, "manual_hold_until");
         let listening_paused =
-            runtime.room_control_datetime_active(&room.channel_id, "listening_paused_until");
+            context.room_control_datetime_active(&room.channel_id, "listening_paused_until");
         let auto_desired = runtime.auto_join_enabled && room.auto_join;
         let should_be_present =
             !auto_suppressed && !listening_paused && (manual_hold || auto_desired);

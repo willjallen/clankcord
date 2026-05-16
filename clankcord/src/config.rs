@@ -42,7 +42,6 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PathsConfig {
     pub state_dir: PathBuf,
-    pub room_controls_path: PathBuf,
     pub voice_memory_root: PathBuf,
     pub agent_workspaces_root: PathBuf,
 }
@@ -318,10 +317,6 @@ fn validate_config(config: &AppConfig) -> Result<()> {
 
 pub fn state_dir() -> PathBuf {
     app_config().paths.state_dir.clone()
-}
-
-pub fn room_controls_path() -> PathBuf {
-    app_config().paths.room_controls_path.clone()
 }
 
 pub fn voice_memory_root() -> PathBuf {

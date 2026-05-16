@@ -27,7 +27,7 @@ spawn service loops
 HTTP API
 ```
 
-Startup begins with the timeline store. The store initializes the Postgres schema, then the runtime loads the durable facts that handlers need: configuration-derived maps, configured rooms, room controls, voice bot state, active automations, and status snapshots. The runtime value is a process-local view over those facts plus access to the store.
+Startup begins with the timeline store. The store initializes the Postgres schema, then the runtime loads the durable facts that handlers need: configuration-derived maps, configured rooms, voice bot state, active automations, and status snapshots. Room controls remain Postgres records in the timeline store and are read by the handlers and views that need them.
 
 Agent recovery happens during startup because Codex execution crosses a process boundary. A restart can leave an `agent_task` marked `running`. The service inspects interrupted tasks and looks for a text-delivery job submitted by the same source task. A task that already submitted response work can be completed. The remaining interrupted tasks are marked `agent_dispatch_failed`, keeping the interrupted run visible in job inspection.
 
@@ -56,9 +56,9 @@ This intake path gives boundary code a narrow contract. Adapters translate exter
 
 The dispatcher runs a hot drain loop. Each drain pass resolves waiting parents with terminal children, claims due queued jobs, and starts the workers allowed by each lane and ordering key. When a worker finishes, it releases its lane permit and wakes the dispatcher again. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is reached.
 
-Workers reconstruct a `Runtime` from the shared timeline store when they need domain behavior. That runtime view contains configuration, room controls, status snapshots, the automation registry, the agent runtime harness, and the timeline store. Live Discord voice clients remain in the live voice adapter because those are process capabilities, while jobs, events, automations, sessions, publications, and artifacts remain durable state.
+Workers reconstruct a `Runtime` from the shared timeline store when they need domain behavior. That runtime view contains configuration, status snapshots, the automation registry, the agent runtime harness, and the timeline store. Live Discord voice clients remain in the live voice adapter because those are process capabilities, while jobs, room controls, events, automations, sessions, publications, and artifacts remain durable state.
 
-The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots or room controls. Runtime-snapshot jobs work from a reconstructed runtime view. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Adapter async jobs perform Discord IO. Runtime maintenance uses a runtime-environment bridge to sync live adapter state into runtime state.
+The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots and Postgres-backed room controls. Runtime-snapshot jobs work from a reconstructed runtime view. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Adapter async jobs perform Discord IO. Runtime maintenance uses a runtime-environment bridge to sync live adapter state into runtime state.
 
 ## Live Loops
 

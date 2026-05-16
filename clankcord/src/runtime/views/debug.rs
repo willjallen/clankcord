@@ -61,7 +61,7 @@ impl Runtime {
         let timeline_limit = request.timeline_limit.clamp(10, 1000);
         let transcript_limit = request.transcript_limit.clamp(10, 5000);
         let publication_limit = request.publication_limit.clamp(10, 500);
-        let mut status = self.status_payload(None).await;
+        let mut status = self.status_payload(None).await?;
         if let Value::Object(object) = &mut status {
             object.insert(
                 "liveVoiceOccupancy".to_string(),

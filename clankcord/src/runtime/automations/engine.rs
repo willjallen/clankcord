@@ -14,8 +14,8 @@ use crate::runtime::automations::{
 use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
-    CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind,
+    CommandRequest, Job, JobKind, JobState, RoomControl, Runtime, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 pub(crate) trait Automation: Send + Sync {
@@ -26,13 +26,19 @@ pub(crate) trait Automation: Send + Sync {
 pub(crate) struct AutomationContext<'a> {
     runtime: &'a Runtime,
     active_jobs: &'a [Job],
+    room_controls: &'a BTreeMap<String, RoomControl>,
 }
 
 impl<'a> AutomationContext<'a> {
-    fn new(runtime: &'a Runtime, active_jobs: &'a [Job]) -> Self {
+    fn new(
+        runtime: &'a Runtime,
+        active_jobs: &'a [Job],
+        room_controls: &'a BTreeMap<String, RoomControl>,
+    ) -> Self {
         Self {
             runtime,
             active_jobs,
+            room_controls,
         }
     }
 
@@ -52,6 +58,14 @@ impl<'a> AutomationContext<'a> {
                 && job.guild_id == guild_id
                 && matches(job)
         })
+    }
+
+    pub(crate) fn room_control_datetime_active(&self, channel_id: &str, key: &str) -> bool {
+        crate::runtime::rooms::control_state::room_control_datetime_active_from_map(
+            self.room_controls,
+            channel_id,
+            key,
+        )
     }
 }
 
@@ -110,7 +124,8 @@ impl AutomationRunner {
     }
 
     async fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
-        runtime.prune_expired_room_controls(true);
+        runtime.prune_expired_room_controls().await?;
+        let room_controls = runtime.timeline_store.list_room_controls().await?;
 
         let mut active_jobs = runtime
             .timeline_store
@@ -124,7 +139,7 @@ impl AutomationRunner {
         for automation in &self.automations {
             let automation_name = automation.name();
             let jobs = {
-                let context = AutomationContext::new(runtime, &active_jobs);
+                let context = AutomationContext::new(runtime, &active_jobs, &room_controls);
                 automation
                     .evaluate(&context)
                     .with_context(|| format!("evaluating automation {automation_name}"))?
@@ -157,7 +172,6 @@ impl AutomationRunner {
 
 impl Runtime {
     pub async fn run_automations(&mut self) -> Result<AutomationRun> {
-        self.load_room_controls();
         self.load_automation_registry().await?;
         AutomationRunner::runtime_default().run(self).await
     }
@@ -407,7 +421,7 @@ async fn base_context(
         )
         .await?;
     let participants = room_participants(&occupants);
-    let mut room_status = runtime.status_for_room(&room).await;
+    let mut room_status = runtime.status_for_room(&room).await?;
     if let Value::Object(object) = &mut room_status {
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));

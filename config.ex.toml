@@ -1,6 +1,5 @@
 [paths]
 state_dir = "/clankcord/state"
-room_controls_path = "/clankcord/state/room-controls.json"
 voice_memory_root = "/clankcord/durable/clankcord/voice"
 agent_workspaces_root = "/clankcord/state/agent-workspaces"
 

@@ -72,16 +72,28 @@ pub struct RoomControl {
 impl RoomControl {
     pub fn clear_key(&mut self, key: &str) {
         match key {
-            "auto_join_suppressed_until" => self.auto_join_suppressed_until = None,
+            "auto_join_suppressed_until" => {
+                self.auto_join_suppressed_until = None;
+                self.auto_join_suppression_reason = None;
+                self.auto_join_suppressed_by_user_id = None;
+            }
             "auto_join_suppression_reason" => self.auto_join_suppression_reason = None,
             "auto_join_suppressed_by_user_id" => self.auto_join_suppressed_by_user_id = None,
-            "manual_hold_until" => self.manual_hold_until = None,
+            "manual_hold_until" => {
+                self.manual_hold_until = None;
+                self.manual_hold_reason = None;
+                self.manual_hold_by_user_id = None;
+            }
             "manual_hold_reason" => self.manual_hold_reason = None,
             "manual_hold_by_user_id" => self.manual_hold_by_user_id = None,
-            "listening_paused_until" => self.listening_paused_until = None,
+            "listening_paused_until" => {
+                self.listening_paused_until = None;
+                self.listening_pause_reason = None;
+                self.listening_paused_by_user_id = None;
+            }
             "listening_pause_reason" => self.listening_pause_reason = None,
             "listening_paused_by_user_id" => self.listening_paused_by_user_id = None,
-            _ => {}
+            _ => unreachable!("unknown room control key: {key}"),
         }
     }
 

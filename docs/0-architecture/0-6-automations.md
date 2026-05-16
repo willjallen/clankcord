@@ -99,7 +99,7 @@ Action results return through ordinary job state and timeline events. A fired au
 
 ## Execution
 
-`Runtime::run_automations` loads room controls and active automation records, then runs built-in runtime automations followed by stored durable automations. Stored execution is cursor-based. Expired records are marked `expired`. Trigger contexts are loaded after the automation cursor. The first matching context fires actions. Firing marks the automation evaluated and fired, increments `fire_count`, persists emitted jobs through the timeline store, and records events tying those jobs back to the automation.
+`Runtime::run_automations` prunes expired room-control markers in Postgres, loads a room-control snapshot from the timeline store, loads active automation records, and then runs built-in runtime automations followed by stored durable automations. Stored execution is cursor-based. Expired records are marked `expired`. Trigger contexts are loaded after the automation cursor. The first matching context fires actions. Firing marks the automation evaluated and fired, increments `fire_count`, persists emitted jobs through the timeline store, and records events tying those jobs back to the automation.
 
 The authoring workflow is deliberately explicit: resolve durable ids, inspect the context shape, write JSON, validate it, create it, and publish a visible response describing the registered behavior. Validation errors identify the path that violates the spec, including owner/source fields, scope ids, trigger field shapes, expiry timestamps, job kind and state names, action content, sink ids, and condition paths.
 

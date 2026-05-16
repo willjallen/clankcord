@@ -10,7 +10,7 @@ use crate::runtime::util::first_non_empty;
 use crate::runtime::{JobState, RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
 
 impl Runtime {
-    pub async fn status_for_room(&self, room: &RoomConfig) -> Value {
+    pub async fn status_for_room(&self, room: &RoomConfig) -> Result<Value> {
         let session_id = self.active_session_id_for_room(room);
         let session = match session_id
             .as_ref()
@@ -23,8 +23,7 @@ impl Runtime {
         let occupancy = self
             .timeline_store
             .get_occupancy(&room.guild_id, &room.channel_id)
-            .await
-            .unwrap_or_else(|_| json!({}));
+            .await?;
         let retention_policy = occupancy
             .get("retention_policy")
             .cloned()
@@ -36,8 +35,7 @@ impl Runtime {
                 Some(&room.channel_id),
                 Some("live_draft_published"),
             )
-            .await
-            .unwrap_or_default();
+            .await?;
         let active_jobs = self
             .timeline_store
             .list_jobs_by_states(
@@ -50,32 +48,31 @@ impl Runtime {
                     JobState::ConfirmationPending,
                 ],
             )
-            .await
-            .unwrap_or_default()
+            .await?
             .into_iter()
             .filter(|job| job.voice_channel_id == room.channel_id && !job.state.is_terminal())
             .map(|job| Self::public_job_view(&job))
             .collect::<Vec<_>>();
-        json!({
+        Ok(json!({
             "room": room.to_json(),
             "mode": session.as_ref().map(|value| value.mode.as_str()).unwrap_or("absent"),
             "assignedVoiceBotId": session.as_ref().map(|value| value.bot_id.as_str()).unwrap_or(""),
             "captureRunId": session.as_ref().map(|value| value.capture_run_id.as_str()).unwrap_or(""),
             "retentionPolicy": retention_policy,
-            "control": self.room_control_status(room),
+            "control": self.room_control_status(room).await?,
             "occupancy": occupancy,
             "livePublications": live_publications,
             "activeJobs": active_jobs,
             "session": session.map(|value| value.to_json()),
             "bots": self.bots.values().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
-        })
+        }))
     }
 
-    pub async fn status_payload(&self, room_identifier: Option<&str>) -> Value {
+    pub async fn status_payload(&self, room_identifier: Option<&str>) -> Result<Value> {
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
             return match self.room_for_identifier(Some(identifier)) {
                 Ok(room) => self.status_for_room(&room).await,
-                Err(error) => json!({"ok": false, "error": error.to_string()}),
+                Err(error) => Ok(json!({"ok": false, "error": error.to_string()})),
             };
         }
         let mut sessions = Vec::new();
@@ -87,8 +84,7 @@ impl Runtime {
             let occupancy = self
                 .timeline_store
                 .get_occupancy(&room.guild_id, &room.channel_id)
-                .await
-                .unwrap_or_else(|_| json!({}));
+                .await?;
             rooms.push(json!({
                 "roomId": room.room_id,
                 "guildId": room.guild_id,
@@ -97,17 +93,17 @@ impl Runtime {
                 "channelSlug": room.channel_slug,
                 "autoJoin": room.auto_join,
                 "activeSessionId": self.active_session_id_for_room(&room).unwrap_or_default(),
-                "control": self.room_control_status(&room),
+                "control": self.room_control_status(&room).await?,
                 "occupancy": occupancy,
             }));
         }
-        json!({
+        Ok(json!({
             "bots": self.bots.values().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
             "pool": self.capacity_payload().await,
             "sessions": sessions,
             "rooms": rooms,
-            "roomControls": self.room_controls_json(),
-        })
+            "roomControls": self.room_controls_json().await?,
+        }))
     }
 
     pub async fn capacity_payload(&self) -> Value {
@@ -221,10 +217,9 @@ impl Runtime {
 
     pub async fn persist_status_snapshot(&self) -> Result<()> {
         fs::create_dir_all(state_dir())?;
-        write_json_file(
-            &state_dir().join("status.json"),
-            &self.status_payload(None).await,
-        )
+        let mut payload = self.status_payload(None).await?;
+        remove_room_controls_from_status_snapshot(&mut payload);
+        write_json_file(&state_dir().join("status.json"), &payload)
     }
 
     pub(crate) fn load_status_snapshot(&mut self) {
@@ -256,6 +251,20 @@ impl Runtime {
                 if !session_id.is_empty() {
                     self.sessions.insert(session_id, session);
                 }
+            }
+        }
+    }
+}
+
+fn remove_room_controls_from_status_snapshot(payload: &mut Value) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.remove("roomControls");
+    if let Some(Value::Array(rooms)) = object.get_mut("rooms") {
+        for room in rooms {
+            if let Value::Object(room) = room {
+                room.remove("control");
             }
         }
     }

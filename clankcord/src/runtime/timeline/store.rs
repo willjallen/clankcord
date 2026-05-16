@@ -196,6 +196,15 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "room_controls",
+        &[
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
         "runtime_status",
         &[
             column("status_key", "text", false),
@@ -536,6 +545,10 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
         "publications",
         &["idx_publications_room_state", "publications_pkey"],
     ),
+    (
+        "room_controls",
+        &["idx_room_controls_updated", "room_controls_pkey"],
+    ),
     ("runtime_metadata", &["runtime_metadata_pkey"]),
     ("runtime_status", &["runtime_status_pkey"]),
     ("sessions", &["idx_sessions_active_room", "sessions_pkey"]),
@@ -571,6 +584,14 @@ impl TimelineStore {
               voice_channel_name TEXT NOT NULL DEFAULT '',
               voice_channel_slug TEXT NOT NULL DEFAULT '',
               updated_at_ms BIGINT NOT NULL,
+              PRIMARY KEY (guild_id, voice_channel_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS room_controls (
+              guild_id TEXT NOT NULL,
+              voice_channel_id TEXT NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL,
               PRIMARY KEY (guild_id, voice_channel_id)
             );
 
@@ -953,6 +974,8 @@ impl TimelineStore {
               ON timeline_events(speaker_user_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_voice_states_room_updated
               ON voice_states(guild_id, voice_channel_id, updated_at_ms DESC);
+            CREATE INDEX IF NOT EXISTS idx_room_controls_updated
+              ON room_controls(updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_discord_members_guild_normalized
               ON discord_members(guild_id, normalized_search);
             CREATE INDEX IF NOT EXISTS idx_timeline_kind_time

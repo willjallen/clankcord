@@ -243,7 +243,6 @@ fn test_runtime(
         guilds: BTreeMap::new(),
         rooms: BTreeMap::from([(room.room_id.clone(), room)]),
         control_config: ControlConfig::default(),
-        room_controls: BTreeMap::new(),
         sessions: BTreeMap::new(),
         bots: BTreeMap::new(),
         agents: AgentRuntime::default(),

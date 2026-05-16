@@ -3,6 +3,7 @@ mod events;
 mod jobs;
 mod maintenance;
 mod members;
+mod room_controls;
 mod store;
 mod transcripts;
 mod util;

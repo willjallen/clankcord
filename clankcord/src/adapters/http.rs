@@ -139,14 +139,18 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
         Ok(runtime) => runtime,
         Err(error) => return err(error),
     };
-    ok(runtime
+    match runtime
         .status_payload(
             query
                 .get("room")
                 .or_else(|| query.get("channel"))
                 .map(String::as_str),
         )
-        .await)
+        .await
+    {
+        Ok(payload) => ok(payload),
+        Err(error) => err(error),
+    }
 }
 
 async fn pool_status(State(state): State<AppState>) -> Response {
@@ -154,7 +158,10 @@ async fn pool_status(State(state): State<AppState>) -> Response {
         Ok(runtime) => runtime,
         Err(error) => return err(error),
     };
-    ok(runtime.status_payload(None).await)
+    match runtime.status_payload(None).await {
+        Ok(payload) => ok(payload),
+        Err(error) => err(error),
+    }
 }
 
 async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
@@ -167,7 +174,10 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
     if !guild.is_empty() && !channel.is_empty() {
         match runtime.resolve_room_scope(&guild, Some(&channel)) {
             Ok(room) => {
-                let mut payload = runtime.status_for_room(&room).await;
+                let mut payload = match runtime.status_for_room(&room).await {
+                    Ok(payload) => payload,
+                    Err(error) => return err(error),
+                };
                 if let Value::Object(object) = &mut payload {
                     let occupants = match state
                         .handle
@@ -184,9 +194,13 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
             Err(error) => err(error),
         }
     } else {
-        let mut payload = runtime
+        let mut payload = match runtime
             .status_payload(non_empty_string(channel).as_deref())
-            .await;
+            .await
+        {
+            Ok(payload) => payload,
+            Err(error) => return err(error),
+        };
         if let Value::Object(object) = &mut payload {
             let occupancy = match state.handle.voice_occupancy_snapshot().await {
                 Ok(occupancy) => occupancy,

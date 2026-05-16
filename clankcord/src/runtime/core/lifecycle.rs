@@ -18,7 +18,6 @@ impl Runtime {
             guilds: BTreeMap::new(),
             rooms: BTreeMap::new(),
             control_config: ControlConfig::default(),
-            room_controls: BTreeMap::new(),
             sessions: BTreeMap::new(),
             bots: BTreeMap::new(),
             agents: AgentRuntime::default(),
@@ -57,7 +56,6 @@ impl Runtime {
             .map(|room| (room.room_id.clone(), room))
             .collect();
         self.control_config = config::control_config();
-        self.load_room_controls();
         self.load_status_snapshot();
         Ok(())
     }

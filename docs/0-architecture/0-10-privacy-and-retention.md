@@ -23,13 +23,13 @@ The user-facing state is carried through durable or rendered fields. `control.li
 
 ## Pause, Resume, And Deafen
 
-`pause_listening` sets `listening_paused_until` on the room control state and appends `listening_paused`. The built-in room-placement automation reads that marker, treats the room as undesired for capture while the marker is active, and emits leave work for an assigned voice bot.
+`pause_listening` sets `listening_paused_until` on the Postgres room-control record and appends `listening_paused`. The built-in room-placement automation reads that marker from the timeline store, treats the room as undesired for capture while the marker is active, and emits leave work for an assigned voice bot.
 
 `resume_listening` clears `listening_paused_until`, appends `listening_resumed`, and creates an undeafen cue playback job for the active room when applicable.
 
 `deafen_listening` plays the deafen cue and sets the room pause marker for the manual leave cooldown duration. Voice capture drops packets while an active session is in `deafened_paused` mode, and room placement can release the voice bot according to the active controls.
 
-Room control timestamps are stored in runtime control state and pruned when they expire.
+Room control timestamps are stored in the `room_controls` table and pruned when they expire.
 
 ```text
 auto_join_suppressed_until
