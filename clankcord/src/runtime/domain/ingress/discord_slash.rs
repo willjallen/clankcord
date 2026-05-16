@@ -32,14 +32,8 @@ pub(crate) async fn prepare(
         .await?;
 
     match payload.command_name.as_str() {
-        "join" => Ok(JobDecision::WaitFor(vec![command_child(
-            payload,
-            CommandKind::JoinRoom,
-        )?])),
-        "leave" => Ok(JobDecision::WaitFor(vec![command_child(
-            payload,
-            CommandKind::LeaveRoom,
-        )?])),
+        "join" => queue_command_child(runtime, job, payload, CommandKind::JoinRoom).await,
+        "leave" => queue_command_child(runtime, job, payload, CommandKind::LeaveRoom).await,
         "feedback" => Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "feedback",
@@ -57,13 +51,28 @@ pub(crate) async fn prepare(
     }
 }
 
-fn command_child(payload: &DiscordSlashCommandPayload, command_kind: CommandKind) -> Result<Job> {
+async fn queue_command_child(
+    runtime: &mut Runtime,
+    job: &Job,
+    payload: &DiscordSlashCommandPayload,
+    command_kind: CommandKind,
+) -> Result<JobDecision> {
+    runtime
+        .create_command_job(command_request(payload, command_kind)?, Some(job))
+        .await?;
+    Ok(JobDecision::Wait)
+}
+
+fn command_request(
+    payload: &DiscordSlashCommandPayload,
+    command_kind: CommandKind,
+) -> Result<CommandRequest> {
     let target = slash_option_string(payload, &["room", "channel", "voice_channel", "target"]);
-    let command = CommandRequest::from_json(&json!({
+    CommandRequest::from_json(&json!({
         "action": "dispatch_now",
         "command_kind": command_kind.as_str(),
         "guild_id": payload.guild_id,
-        "voice_channel_id": target,
+        "voice_channel_id": "",
         "requested_by_user_id": payload.user_id,
         "requested_by_speaker_label": payload.username,
         "target_voice_channel_id": target,
@@ -71,13 +80,7 @@ fn command_child(payload: &DiscordSlashCommandPayload, command_kind: CommandKind
             "channel": target,
             "target_channel": target,
         },
-    }))?;
-    Ok(Job::command_request(
-        command.guild_id.clone(),
-        command.voice_channel_id.clone(),
-        command.requested_by_user_id.clone(),
-        command,
-    ))
+    }))
 }
 
 fn slash_option_string(payload: &DiscordSlashCommandPayload, names: &[&str]) -> String {

@@ -143,6 +143,7 @@ impl TimelineStore {
         sqlx::query("SELECT 1").execute(&self.pool).await?;
         self.create_tables().await?;
         self.create_indexes().await?;
+        self.assert_schema_invariants().await?;
         Ok(())
     }
 }
@@ -150,6 +151,414 @@ impl TimelineStore {
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
+
+#[derive(Debug, Clone, Copy)]
+struct TableSchema {
+    name: &'static str,
+    columns: &'static [ColumnSchema],
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ColumnSchema {
+    name: &'static str,
+    data_type: &'static str,
+    nullable: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ActualColumnSchema {
+    data_type: String,
+    nullable: bool,
+}
+
+const fn table(name: &'static str, columns: &'static [ColumnSchema]) -> TableSchema {
+    TableSchema { name, columns }
+}
+
+const fn column(name: &'static str, data_type: &'static str, nullable: bool) -> ColumnSchema {
+    ColumnSchema {
+        name,
+        data_type,
+        nullable,
+    }
+}
+
+const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
+    table(
+        "voice_rooms",
+        &[
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("guild_slug", "text", false),
+            column("voice_channel_name", "text", false),
+            column("voice_channel_slug", "text", false),
+            column("updated_at_ms", "bigint", false),
+        ],
+    ),
+    table(
+        "runtime_status",
+        &[
+            column("status_key", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "bot_states",
+        &[
+            column("bot_id", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "sessions",
+        &[
+            column("session_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("bot_id", "text", false),
+            column("capture_run_id", "text", false),
+            column("active", "boolean", false),
+            column("started_at_ms", "bigint", true),
+            column("ended_at_ms", "bigint", true),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "assignments",
+        &[
+            column("assignment_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("voice_bot_id", "text", false),
+            column("capture_run_id", "text", false),
+            column("state", "text", false),
+            column("assigned_at_ms", "bigint", true),
+            column("released_at_ms", "bigint", true),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "occupancy",
+        &[
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "voice_states",
+        &[
+            column("guild_id", "text", false),
+            column("user_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "discord_member_cache_refreshes",
+        &[
+            column("guild_id", "text", false),
+            column("refreshed_at_ms", "bigint", false),
+        ],
+    ),
+    table(
+        "discord_members",
+        &[
+            column("guild_id", "text", false),
+            column("user_id", "text", false),
+            column("username", "text", false),
+            column("global_name", "text", false),
+            column("nick", "text", false),
+            column("display_name", "text", false),
+            column("normalized_search", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "capture_runs",
+        &[
+            column("capture_run_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("voice_bot_id", "text", false),
+            column("started_at_ms", "bigint", true),
+            column("ended_at_ms", "bigint", true),
+            column("state", "text", false),
+            column("mode", "text", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "timeline_events",
+        &[
+            column("sequence", "bigint", false),
+            column("event_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("event_kind", "text", false),
+            column("started_at_ms", "bigint", true),
+            column("ended_at_ms", "bigint", true),
+            column("created_at_ms", "bigint", false),
+            column("capture_run_id", "text", false),
+            column("conversation_id", "text", false),
+            column("speaker_user_id", "text", false),
+            column("speaker_label", "text", false),
+            column("text", "text", false),
+            column("forgotten", "boolean", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "conversations",
+        &[
+            column("conversation_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("start_ms", "bigint", true),
+            column("end_ms", "bigint", true),
+            column("last_speech_at_ms", "bigint", true),
+            column("state", "text", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "windows",
+        &[
+            column("window_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("start_ms", "bigint", true),
+            column("end_ms", "bigint", true),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "publications",
+        &[
+            column("publication_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("window_id", "text", false),
+            column("state", "text", false),
+            column("created_at_ms", "bigint", true),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "authoritative_spans",
+        &[
+            column("span_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("window_id", "text", false),
+            column("publication_id", "text", false),
+            column("start_ms", "bigint", true),
+            column("end_ms", "bigint", true),
+            column("created_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
+        "runtime_metadata",
+        &[
+            column("key", "text", false),
+            column("value", "text", false),
+            column("updated_at_ms", "bigint", false),
+        ],
+    ),
+    table(
+        "jobs",
+        &[
+            column("job_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("kind", "text", false),
+            column("state", "text", false),
+            column("terminal", "boolean", false),
+            column("failed", "boolean", false),
+            column("ephemeral", "boolean", false),
+            column("cancellable", "boolean", false),
+            column("lane", "text", false),
+            column("ordering_key", "text", false),
+            column("ready_at_ms", "bigint", false),
+            column("created_at_ms", "bigint", false),
+            column("updated_at_ms", "bigint", false),
+            column("started_at_ms", "bigint", true),
+            column("completed_at_ms", "bigint", true),
+            column("gc_after_ms", "bigint", true),
+            column("root_job_id", "text", false),
+            column("parent_job_id", "text", true),
+            column("lineage_depth", "bigint", false),
+            column("requested_by_user_id", "text", false),
+            column("command_kind", "text", false),
+            column("source_job_id", "text", false),
+            column("stream_id", "text", false),
+            column("target_job_id", "text", false),
+            column("speaker_user_id", "text", false),
+            column("segment_end_ms", "bigint", true),
+        ],
+    ),
+    table(
+        "job_payloads",
+        &[
+            column("job_id", "text", false),
+            column("payload_blob", "bytea", false),
+        ],
+    ),
+    table(
+        "job_dependencies",
+        &[
+            column("parent_job_id", "text", false),
+            column("child_job_id", "text", false),
+            column("dependency_kind", "text", false),
+            column("created_at_ms", "bigint", false),
+            column("resolution_policy", "text", false),
+        ],
+    ),
+    table(
+        "automations",
+        &[
+            column("automation_id", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("state", "text", false),
+            column("idempotency_key", "text", false),
+            column("created_at_ms", "bigint", true),
+            column("updated_at_ms", "bigint", false),
+            column("expires_at_ms", "bigint", true),
+            column("fire_count", "bigint", false),
+            column("max_fires", "bigint", true),
+            column("payload_blob", "bytea", false),
+        ],
+    ),
+    table(
+        "agent_sessions",
+        &[
+            column("agent_session_id", "text", false),
+            column("codex_session_id", "text", false),
+            column("route_kind", "text", false),
+            column("route_key", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("dm_user_id", "text", false),
+            column("discord_thread_id", "text", false),
+            column("discord_parent_channel_id", "text", false),
+            column("text_target_kind", "text", false),
+            column("text_channel_id", "text", false),
+            column("text_user_id", "text", false),
+            column("state", "text", false),
+            column("created_at_ms", "bigint", false),
+            column("last_activity_at_ms", "bigint", false),
+            column("expires_at_ms", "bigint", false),
+            column("payload_blob", "bytea", false),
+        ],
+    ),
+];
+
+const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
+    (
+        "agent_sessions",
+        &[
+            "agent_sessions_pkey",
+            "idx_agent_sessions_codex",
+            "idx_agent_sessions_route",
+            "idx_agent_sessions_thread",
+        ],
+    ),
+    ("assignments", &["assignments_pkey"]),
+    (
+        "authoritative_spans",
+        &["authoritative_spans_pkey", "idx_spans_room_time"],
+    ),
+    (
+        "automations",
+        &[
+            "automations_pkey",
+            "idx_automations_idempotency",
+            "idx_automations_scope_state",
+        ],
+    ),
+    ("bot_states", &["bot_states_pkey"]),
+    (
+        "capture_runs",
+        &["capture_runs_pkey", "idx_capture_runs_room_time"],
+    ),
+    (
+        "conversations",
+        &["conversations_pkey", "idx_conversations_room_time"],
+    ),
+    (
+        "discord_member_cache_refreshes",
+        &["discord_member_cache_refreshes_pkey"],
+    ),
+    (
+        "discord_members",
+        &[
+            "discord_members_pkey",
+            "idx_discord_members_guild_normalized",
+        ],
+    ),
+    (
+        "job_dependencies",
+        &["idx_job_dependencies_child", "job_dependencies_pkey"],
+    ),
+    ("job_payloads", &["job_payloads_pkey"]),
+    (
+        "jobs",
+        &[
+            "idx_jobs_active_ordering",
+            "idx_jobs_active_visible_scope",
+            "idx_jobs_audio_segment_pending_speaker",
+            "idx_jobs_due_kind",
+            "idx_jobs_ephemeral_gc",
+            "idx_jobs_failed_visible",
+            "idx_jobs_kind_updated",
+            "idx_jobs_recent_visible",
+            "idx_jobs_scope_kind_updated",
+            "idx_jobs_scope_state_kind_updated",
+            "idx_jobs_state_updated",
+            "idx_jobs_text_delivery_source",
+            "idx_jobs_wake_stream_queued",
+            "jobs_pkey",
+        ],
+    ),
+    ("occupancy", &["occupancy_pkey"]),
+    (
+        "publications",
+        &["idx_publications_room_state", "publications_pkey"],
+    ),
+    ("runtime_metadata", &["runtime_metadata_pkey"]),
+    ("runtime_status", &["runtime_status_pkey"]),
+    ("sessions", &["idx_sessions_active_room", "sessions_pkey"]),
+    (
+        "timeline_events",
+        &[
+            "idx_timeline_capture_run_time",
+            "idx_timeline_conversation_time",
+            "idx_timeline_kind_time",
+            "idx_timeline_room_kind_time",
+            "idx_timeline_room_time",
+            "idx_timeline_speaker_time",
+            "timeline_events_event_id_key",
+            "timeline_events_pkey",
+        ],
+    ),
+    ("voice_rooms", &["voice_rooms_pkey"]),
+    (
+        "voice_states",
+        &["idx_voice_states_room_updated", "voice_states_pkey"],
+    ),
+    ("windows", &["windows_pkey"]),
+];
 
 impl TimelineStore {
     async fn create_tables(&self) -> Result<()> {
@@ -399,6 +808,133 @@ impl TimelineStore {
         )
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    async fn assert_schema_invariants(&self) -> Result<()> {
+        let rows = sqlx::query(
+            r#"
+            SELECT table_name, column_name, data_type, is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = current_schema()
+            ORDER BY table_name, ordinal_position
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let expected_tables = EXPECTED_TABLE_SCHEMAS
+            .iter()
+            .map(|schema| schema.name)
+            .collect::<BTreeSet<_>>();
+        let mut actual_tables: BTreeMap<String, BTreeMap<String, ActualColumnSchema>> =
+            BTreeMap::new();
+        for row in rows {
+            let table_name = row.get::<String, _>("table_name");
+            if !expected_tables.contains(table_name.as_str()) {
+                continue;
+            }
+            actual_tables.entry(table_name).or_default().insert(
+                row.get::<String, _>("column_name"),
+                ActualColumnSchema {
+                    data_type: row.get::<String, _>("data_type"),
+                    nullable: row.get::<String, _>("is_nullable") == "YES",
+                },
+            );
+        }
+
+        let mut problems = Vec::new();
+        for expected_table in EXPECTED_TABLE_SCHEMAS {
+            let Some(actual_columns) = actual_tables.get(expected_table.name) else {
+                problems.push(format!("missing table {}", expected_table.name));
+                continue;
+            };
+            let expected_columns = expected_table
+                .columns
+                .iter()
+                .map(|column| (column.name, *column))
+                .collect::<BTreeMap<_, _>>();
+            for expected_column in expected_table.columns {
+                let Some(actual_column) = actual_columns.get(expected_column.name) else {
+                    problems.push(format!(
+                        "{} missing column {}",
+                        expected_table.name, expected_column.name
+                    ));
+                    continue;
+                };
+                if actual_column.data_type != expected_column.data_type
+                    || actual_column.nullable != expected_column.nullable
+                {
+                    problems.push(format!(
+                        "{}.{} expected {} nullable={} got {} nullable={}",
+                        expected_table.name,
+                        expected_column.name,
+                        expected_column.data_type,
+                        expected_column.nullable,
+                        actual_column.data_type,
+                        actual_column.nullable
+                    ));
+                }
+            }
+            for actual_column in actual_columns.keys() {
+                if !expected_columns.contains_key(actual_column.as_str()) {
+                    problems.push(format!(
+                        "{} has stale column {}",
+                        expected_table.name, actual_column
+                    ));
+                }
+            }
+        }
+
+        let index_rows = sqlx::query(
+            r#"
+            SELECT tablename, indexname
+            FROM pg_indexes
+            WHERE schemaname = current_schema()
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let expected_indexes = EXPECTED_INDEXES
+            .iter()
+            .map(|(table, indexes)| {
+                (
+                    *table,
+                    indexes.iter().copied().collect::<BTreeSet<&'static str>>(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut actual_indexes: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for row in index_rows {
+            let table_name = row.get::<String, _>("tablename");
+            if !expected_tables.contains(table_name.as_str()) {
+                continue;
+            }
+            actual_indexes
+                .entry(table_name)
+                .or_default()
+                .insert(row.get::<String, _>("indexname"));
+        }
+        for (table, expected) in expected_indexes {
+            let actual = actual_indexes.get(table).cloned().unwrap_or_default();
+            for expected_index in &expected {
+                if !actual.contains(*expected_index) {
+                    problems.push(format!("{table} missing index {expected_index}"));
+                }
+            }
+            for actual_index in actual {
+                if !expected.contains(actual_index.as_str()) {
+                    problems.push(format!("{table} has stale index {actual_index}"));
+                }
+            }
+        }
+
+        if !problems.is_empty() {
+            anyhow::bail!(
+                "timeline database schema does not match the hard-cut runtime contract: {}",
+                problems.join("; ")
+            );
+        }
         Ok(())
     }
 

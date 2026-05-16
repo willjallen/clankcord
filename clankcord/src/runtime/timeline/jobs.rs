@@ -166,9 +166,6 @@ impl TimelineStore {
     }
 
     pub async fn update_job(&self, job: &Job) -> Result<()> {
-        if job.id.is_empty() || job.guild_id.is_empty() || job.voice_channel_id.is_empty() {
-            return Ok(());
-        }
         let payload = job.touched();
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &payload).await?;
