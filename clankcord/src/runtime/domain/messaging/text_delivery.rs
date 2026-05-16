@@ -39,18 +39,6 @@ impl Runtime {
                 .map(|job| job.requested_by_user_id.clone())
                 .unwrap_or_default();
         }
-        if let Some(source_job) = source.as_ref().filter(|job| job.kind == JobKind::AgentTask) {
-            let existing = self
-                .timeline_store
-                .list_text_delivery_jobs_for_source(&source_job.id)
-                .await?;
-            if !existing.is_empty() {
-                anyhow::bail!(
-                    "agent task {} already has a text delivery job",
-                    source_job.id
-                );
-            }
-        }
         Ok(Job::text_delivery(
             guild_id,
             voice_channel_id,

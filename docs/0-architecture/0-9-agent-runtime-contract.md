@@ -112,10 +112,10 @@ Codex final text is a control signal. Discord posts are created through Clankcor
 
 ```text
 RESPONSE_SUBMITTED
-    a text_delivery job exists for the source agent task
+    one or more text_delivery jobs exist for the source agent task
 
 NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
-DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.
+DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. A single agent task may create multiple text-delivery jobs, and the runtime verifies publication by looking for text-delivery jobs tied to the agent task.

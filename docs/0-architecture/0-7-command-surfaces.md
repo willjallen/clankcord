@@ -99,4 +99,4 @@ Discord text messages enter as `discord_text_message` jobs. Runtime ingress deci
 
 `responses send`, `responses dm`, `responses submit`, and `responses ask` create `text_delivery` jobs. `text_delivery` resolves the target to an agent session, agent-chat sink, concrete channel, or DM target, then creates `discord_text_send`.
 
-Agents publish visible responses through the CLI. The supported path is command submission, `text_delivery`, and `discord_text_send`, which keeps Discord delivery under runtime job state and records delivery metadata with the source job.
+Agents publish visible responses through the CLI. The supported path is command submission, `text_delivery`, and `discord_text_send`, which keeps Discord delivery under runtime job state and records delivery metadata with the source job. Each response submission creates a distinct `text_delivery` job, so one agent task can publish multiple messages.

@@ -16,6 +16,7 @@ fn agent_task_message_uses_compact_transcript_context() {
     assert!(message.contains(
         "do not publish the topic, answer, summary, result, or confirmation to a public channel"
     ));
+    assert!(message.contains("You may submit multiple visible responses for one job"));
     assert!(message.contains("RESPONSE_SUBMITTED"));
     assert!(message.contains("NO_RESPONSE_NEEDED"));
     assert!(message.contains("Final text is not a publication path"));

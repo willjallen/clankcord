@@ -41,14 +41,6 @@ impl TimelineStore {
         self.ensure_room(&job.guild_id, &job.voice_channel_id, "", "", "")
             .await?;
         let mut transaction = self.pool.begin().await?;
-        if job.kind == crate::runtime::JobKind::TextDelivery {
-            if let Some(existing) =
-                existing_agent_task_text_delivery_for_source(&mut transaction, &job).await?
-            {
-                transaction.commit().await?;
-                return Ok(existing);
-            }
-        }
         upsert_job_rows(&mut transaction, &job).await?;
         transaction.commit().await?;
         if !job.kind.is_ephemeral() {
@@ -882,44 +874,6 @@ impl TimelineStore {
             .map(|row| row.try_get::<String, _>("child_job_id"))
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
-}
-
-async fn existing_agent_task_text_delivery_for_source(
-    transaction: &mut sqlx::Transaction<'_, Postgres>,
-    job: &Job,
-) -> Result<Option<Job>> {
-    let source_job_id = source_job_id(job);
-    if source_job_id.trim().is_empty() {
-        return Ok(None);
-    }
-    let source_kind = sqlx::query("SELECT kind FROM jobs WHERE job_id = $1 FOR UPDATE")
-        .bind(&source_job_id)
-        .fetch_optional(transaction.as_mut())
-        .await?
-        .map(|row| row.try_get::<String, _>("kind"))
-        .transpose()?;
-    if source_kind.as_deref() != Some(crate::runtime::JobKind::AgentTask.as_str()) {
-        return Ok(None);
-    }
-    let row = sqlx::query(
-        r#"
-        SELECT p.payload_blob
-        FROM jobs j
-        JOIN job_payloads p ON p.job_id = j.job_id
-        WHERE j.kind = 'text_delivery'
-          AND j.source_job_id = $1
-        ORDER BY j.created_at_ms, j.job_id
-        LIMIT 1
-        "#,
-    )
-    .bind(&source_job_id)
-    .fetch_optional(transaction.as_mut())
-    .await?;
-    row.map(|row| -> Result<Job> {
-        let payload: Vec<u8> = row.try_get("payload_blob")?;
-        Job::decode(&payload)
-    })
-    .transpose()
 }
 
 fn push_filter_prefix(query: &mut QueryBuilder<'_, Postgres>, has_where: &mut bool) {

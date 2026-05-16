@@ -367,6 +367,70 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn timeline_allows_multiple_text_deliveries_for_one_agent_source() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let command = CommandRequest::from_json(&json!({
+        "command_kind": "agent_task",
+        "guild_id": "guild",
+        "voice_channel_id": "code",
+        "requested_by_user_id": "user-a",
+        "arguments": {"question": "fact check this"}
+    }))
+    .unwrap();
+    let mut source = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
+    source.id = "job_agent_source".to_string();
+    source.root_job_id = source.id.clone();
+    store.create_job(source).await.unwrap();
+
+    let first = Job::text_delivery(
+        "guild",
+        "code",
+        "user-a",
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            TextTarget::default(),
+            "first chunk",
+            "job_agent_source",
+            "user-a",
+            false,
+        ),
+    );
+    let first_id = first.id.clone();
+    let second = Job::text_delivery(
+        "guild",
+        "code",
+        "user-a",
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            TextTarget::default(),
+            "second chunk",
+            "job_agent_source",
+            "user-a",
+            false,
+        ),
+    );
+    let second_id = second.id.clone();
+
+    let created_first = store.create_job(first).await.unwrap();
+    let created_second = store.create_job(second).await.unwrap();
+
+    assert_eq!(created_first.id, first_id);
+    assert_eq!(created_second.id, second_id);
+    let deliveries = store
+        .list_text_delivery_jobs_for_source("job_agent_source")
+        .await
+        .unwrap();
+    let delivery_ids = deliveries
+        .iter()
+        .map(|job| job.id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(deliveries.len(), 2);
+    assert!(delivery_ids.contains(first_id.as_str()));
+    assert!(delivery_ids.contains(second_id.as_str()));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn timeline_reports_earliest_queued_ready_time() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
