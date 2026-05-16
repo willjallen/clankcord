@@ -14,7 +14,7 @@ pub async fn handle_slash_command(
     if !matches!(command.data.name.as_str(), "join" | "leave" | "feedback") {
         return;
     }
-    if let Err(error) = command.defer(&ctx.http).await {
+    if let Err(error) = command.defer_ephemeral(&ctx.http).await {
         log(&format!("slash command defer failed: {error}"));
     }
     let payload = slash_payload(&command);

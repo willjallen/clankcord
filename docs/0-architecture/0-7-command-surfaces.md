@@ -91,7 +91,7 @@ confirmation_required
 
 ## Discord Ingress
 
-Discord slash commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)`, `/leave` lowers to `command(leave_room)`, and `/feedback` completes with feedback output on the slash job. Unknown slash commands complete with `ignored_unknown_command`.
+Discord slash commands use Discord's ephemeral interaction response flow, so the acknowledgement and final edited response are visible only to the invoking user. The registered commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)`, `/leave` lowers to `command(leave_room)`, and `/feedback` appends a durable `feedback` timeline event with the submitted text before completing the slash job. A `discord_slash_command` job with another command name completes with `ignored_unknown_command`.
 
 Discord text messages enter as `discord_text_message` jobs. Runtime ingress decides whether the message belongs to a DM session, managed agent thread, top-level `agent-chat` channel, or unmanaged channel. DMs and managed threads become agent tasks. Top-level `agent-chat` messages complete as ignored ingress. The `agent_chat` target remains available as a response sink for `text_delivery`.
 

@@ -34,13 +34,7 @@ pub(crate) async fn prepare(
     match payload.command_name.as_str() {
         "join" => queue_command_child(runtime, job, payload, CommandKind::JoinRoom).await,
         "leave" => queue_command_child(runtime, job, payload, CommandKind::LeaveRoom).await,
-        "feedback" => Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-            &json!({
-                "kind": "feedback",
-                "status": "recorded",
-                "message": slash_option_string(payload, &["message", "text", "feedback"]),
-            }),
-        )?)),
+        "feedback" => record_feedback(runtime, job, payload).await,
         command => Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "discord_slash_command",
@@ -49,6 +43,43 @@ pub(crate) async fn prepare(
             }),
         )?)),
     }
+}
+
+async fn record_feedback(
+    runtime: &mut Runtime,
+    job: &Job,
+    payload: &DiscordSlashCommandPayload,
+) -> Result<JobDecision> {
+    let message = slash_option_string(payload, &["message"]);
+    runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.channel_id,
+            json!({
+                "event_kind": "feedback",
+                "kind": "feedback",
+                "job_id": job.id,
+                "interaction_id": payload.interaction_id,
+                "discord_channel_id": payload.channel_id,
+                "source": "discord_slash_command",
+                "speaker_user_id": payload.user_id,
+                "speaker_label": payload.username,
+                "speaker_username": payload.username,
+                "text": &message,
+                "feedback_message": &message,
+                "created_at": payload.created_at,
+                "timestamp": payload.created_at,
+            }),
+        )
+        .await?;
+    Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+        &json!({
+            "kind": "feedback",
+            "status": "recorded",
+            "message": message,
+        }),
+    )?))
 }
 
 async fn queue_command_child(
