@@ -6,8 +6,7 @@ use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::Result;
-use crate::config::slugify;
-use crate::runtime::util::first_non_empty;
+use crate::runtime::util::{first_non_empty, slugify};
 
 pub const PCM_SAMPLE_RATE: u32 = 48_000;
 pub const PCM_CHANNELS: u16 = 2;

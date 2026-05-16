@@ -1,25 +1,9 @@
 use std::collections::BTreeMap;
-use std::env;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-const TRUE_VALUES: &[&str] = &["1", "true", "yes", "on"];
-const FALSE_VALUES: &[&str] = &["0", "false", "no", "off"];
-
-pub fn env_bool(name: &str, default: bool) -> bool {
-    let Ok(raw) = env::var(name) else {
-        return default;
-    };
-    let value = raw.trim().to_lowercase();
-    if TRUE_VALUES.contains(&value.as_str()) {
-        true
-    } else if FALSE_VALUES.contains(&value.as_str()) {
-        false
-    } else {
-        default
-    }
-}
+use crate::config;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct DiagnosticsConfig {
@@ -30,13 +14,13 @@ pub struct DiagnosticsConfig {
 }
 
 impl DiagnosticsConfig {
-    pub fn from_env() -> Self {
-        let enabled = env_bool("CLANKCORD_VOICE_DIAGNOSTICS", false);
+    pub fn from_config() -> Self {
+        let configured = config::voice_diagnostics_config();
         Self {
-            enabled,
-            audio_stats: env_bool("CLANKCORD_VOICE_AUDIO_DIAGNOSTICS", enabled),
-            receiver: env_bool("CLANKCORD_VOICE_RECEIVER_DIAGNOSTICS", enabled),
-            event_paths: env_bool("CLANKCORD_VOICE_EVENT_PATH_DIAGNOSTICS", enabled),
+            enabled: configured.enabled,
+            audio_stats: configured.audio_stats,
+            receiver: configured.receiver,
+            event_paths: configured.event_paths,
         }
     }
 }

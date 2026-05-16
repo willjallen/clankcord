@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 
 mod common;
 
-use clankcord::config::string_field;
 use clankcord::runtime::domain::voice_capture::wake_activations::{
     execute, schedule_from_wake_event,
 };
@@ -17,6 +16,15 @@ use clankcord::runtime::{
 };
 
 use common::{dt, test_store};
+
+fn string_field(value: &Value, key: &str) -> String {
+    match value.get(key) {
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Bool(boolean)) => boolean.to_string(),
+        _ => String::new(),
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn wake_activation_builds_labeled_bundle_before_dispatch() {

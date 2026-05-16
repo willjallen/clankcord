@@ -5,11 +5,10 @@ use serde_json::{Map, Value, json};
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
+use crate::config;
 use crate::runtime::core::execution::RuntimeAdapterJobs;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
-
-const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
 
 const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 22] = [
     JobExecutionPolicy::runtime_exclusive(
@@ -237,7 +236,7 @@ where
         Self {
             adapter_jobs,
             timeline_store,
-            lanes: Arc::new(JobLanes::from_env()),
+            lanes: Arc::new(JobLanes::from_config()),
             notify: Arc::new(Notify::new()),
         }
     }
@@ -477,48 +476,17 @@ where
 }
 
 impl JobLanes {
-    fn from_env() -> Self {
+    fn from_config() -> Self {
+        let concurrency = config::job_concurrency();
         Self {
-            wake: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_WAKE_JOB_CONCURRENCY",
-                4,
-                32,
-            ))),
-            audio: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_AUDIO_JOB_CONCURRENCY",
-                32,
-                128,
-            ))),
-            voice_control: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_VOICE_CONTROL_JOB_CONCURRENCY",
-                32,
-                128,
-            ))),
-            discord_text: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_DISCORD_TEXT_JOB_CONCURRENCY",
-                12,
-                64,
-            ))),
-            refinement: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_REFINEMENT_JOB_CONCURRENCY",
-                4,
-                32,
-            ))),
-            agent: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_AGENT_JOB_CONCURRENCY",
-                4,
-                32,
-            ))),
-            maintenance: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_MAINTENANCE_JOB_CONCURRENCY",
-                1,
-                1,
-            ))),
-            async_jobs: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_ASYNC_JOB_CONCURRENCY",
-                16,
-                128,
-            ))),
+            wake: Arc::new(Semaphore::new(concurrency.wake.clamp(1, 32))),
+            audio: Arc::new(Semaphore::new(concurrency.audio.clamp(1, 128))),
+            voice_control: Arc::new(Semaphore::new(concurrency.voice_control.clamp(1, 128))),
+            discord_text: Arc::new(Semaphore::new(concurrency.discord_text.clamp(1, 64))),
+            refinement: Arc::new(Semaphore::new(concurrency.refinement.clamp(1, 32))),
+            agent: Arc::new(Semaphore::new(concurrency.agent.clamp(1, 32))),
+            maintenance: Arc::new(Semaphore::new(concurrency.maintenance.clamp(1, 1))),
+            async_jobs: Arc::new(Semaphore::new(concurrency.general_async.clamp(1, 128))),
         }
     }
 
@@ -548,32 +516,21 @@ fn take_permits(semaphore: &Arc<Semaphore>, max: usize) -> Vec<OwnedSemaphorePer
 }
 
 fn dispatch_batch_limit(policy: JobExecutionPolicy) -> usize {
+    let batch = config::job_batch_limits();
     match policy.lane {
-        JobLane::Wake => env_usize("CLANKCORD_WAKE_JOB_BATCH_LIMIT", 8, 64),
-        JobLane::Audio => env_usize("CLANKCORD_AUDIO_JOB_BATCH_LIMIT", 32, 128),
-        JobLane::VoiceControl => env_usize("CLANKCORD_VOICE_CONTROL_JOB_BATCH_LIMIT", 32, 128),
-        JobLane::DiscordText => env_usize("CLANKCORD_DISCORD_TEXT_JOB_BATCH_LIMIT", 12, 64),
-        JobLane::Refinement => env_usize("CLANKCORD_REFINEMENT_JOB_BATCH_LIMIT", 4, 32),
-        JobLane::Agent => env_usize("CLANKCORD_AGENT_JOB_BATCH_LIMIT", 4, 32),
-        JobLane::Maintenance => env_usize("CLANKCORD_MAINTENANCE_JOB_BATCH_LIMIT", 1, 1),
-        JobLane::GeneralAsync => env_usize("CLANKCORD_ASYNC_JOB_BATCH_LIMIT", 16, 128),
+        JobLane::Wake => batch.wake.clamp(1, 64),
+        JobLane::Audio => batch.audio.clamp(1, 128),
+        JobLane::VoiceControl => batch.voice_control.clamp(1, 128),
+        JobLane::DiscordText => batch.discord_text.clamp(1, 64),
+        JobLane::Refinement => batch.refinement.clamp(1, 32),
+        JobLane::Agent => batch.agent.clamp(1, 32),
+        JobLane::Maintenance => batch.maintenance.clamp(1, 1),
+        JobLane::GeneralAsync => batch.general_async.clamp(1, 128),
     }
 }
 
 fn dispatch_drain_max_passes() -> usize {
-    env_usize(
-        "CLANKCORD_DISPATCH_DRAIN_MAX_PASSES",
-        DEFAULT_DISPATCH_DRAIN_MAX_PASSES,
-        512,
-    )
-}
-
-fn env_usize(key: &str, default: usize, max: usize) -> usize {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(default)
-        .clamp(1, max)
+    config::dispatch_drain_max_passes()
 }
 
 fn scheduled_job_count(report: &Value) -> usize {

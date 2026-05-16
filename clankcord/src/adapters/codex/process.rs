@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
@@ -7,6 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::Result;
+use crate::config;
 use crate::runtime::util::non_empty;
 
 use super::output::{extract_codex_model, extract_codex_session_id};
@@ -19,9 +19,7 @@ pub(crate) struct CodexAdapter {
 impl Default for CodexAdapter {
     fn default() -> Self {
         Self {
-            executable: env::var("CLANKCORD_CODEX_BIN")
-                .or_else(|_| env::var("CODEX_BIN"))
-                .unwrap_or_else(|_| "codex".to_string()),
+            executable: config::codex_bin(),
         }
     }
 }
@@ -147,17 +145,15 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
         args.push(OsString::from("-m"));
         args.push(OsString::from(model));
     }
-    if let Some(sandbox) = env_value("CLANKCORD_CODEX_SANDBOX") {
+    if let Some(sandbox) = config::codex_sandbox() {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
     }
-    if truthy_env("CLANKCORD_CODEX_BYPASS_SANDBOX") {
+    if config::codex_bypass_sandbox() {
         args.push(OsString::from("--dangerously-bypass-approvals-and-sandbox"));
     } else {
         args.push(OsString::from("-a"));
-        args.push(OsString::from(
-            env_value("CLANKCORD_CODEX_APPROVAL_POLICY").unwrap_or_else(|| "never".to_string()),
-        ));
+        args.push(OsString::from(config::codex_approval_policy()));
     }
 
     args.push(OsString::from("exec"));
@@ -186,18 +182,4 @@ fn display_command(executable: &str, args: &[OsString]) -> String {
     let mut parts = vec![executable.to_string()];
     parts.extend(args.iter().map(|arg| arg.to_string_lossy().to_string()));
     parts.join(" ")
-}
-
-fn env_value(key: &str) -> Option<String> {
-    env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-}
-
-fn truthy_env(key: &str) -> bool {
-    env::var(key)
-        .ok()
-        .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
-        .unwrap_or(false)
 }

@@ -65,7 +65,7 @@ last_activity_at
 expires_at
 ```
 
-Voice sessions start in `starting` while the managed Discord thread is created. Once the thread child completes, the session becomes `active` and stores the channel target. DM sessions are created active with a DM target. Session expiry defaults to four hours through `CLANKCORD_AGENT_SESSION_EXPIRY_SECONDS`, clamped between 60 seconds and seven days.
+Voice sessions start in `starting` while the managed Discord thread is created. Once the thread child completes, the session becomes `active` and stores the channel target. DM sessions are created active with a DM target. Session expiry comes from `agents.session_expiry_seconds` in `config.toml`, clamped between 60 seconds and seven days.
 
 ## Voice Sessions
 
@@ -103,7 +103,7 @@ Empty messages, expired managed threads, top-level `agent-chat` messages, and un
 
 ## Agent Task
 
-`agent_task` is a blocking snapshot job on the `agent` lane. It validates the job and session identity, creates or reuses the session workspace under `CLANKCORD_AGENT_WORKSPACES_ROOT` or `/clankcord/state/agent-workspaces`, runs preflight checks, builds a prompt from the active job and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, and stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata.
+`agent_task` is a blocking snapshot job on the `agent` lane. It validates the job and session identity, creates or reuses the session workspace under `paths.agent_workspaces_root`, runs preflight checks, builds a prompt from the active job and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, and stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata.
 
 The detailed process contract is documented in [Agent Runtime Contract](0-9-agent-runtime-contract.md).
 

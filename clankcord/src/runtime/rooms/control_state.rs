@@ -4,8 +4,10 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::{read_json, room_controls_path, write_json};
-use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
+use crate::config::room_controls_path;
+use crate::runtime::timeline::{
+    isoformat_z, parse_instant, read_json_file, utc_now, write_json_file,
+};
 
 use crate::runtime::{RoomConfig, RoomControl, Runtime};
 
@@ -60,7 +62,7 @@ impl Runtime {
     }
 
     pub fn load_room_controls(&mut self) {
-        let payload = read_json(&room_controls_path(), json!({"rooms": {}}));
+        let payload = read_json_file(&room_controls_path(), json!({"rooms": {}}));
         let rooms_payload = payload
             .get("rooms")
             .or(Some(&payload))
@@ -78,7 +80,7 @@ impl Runtime {
     }
 
     pub fn save_room_controls(&self) -> Result<()> {
-        write_json(
+        write_json_file(
             &room_controls_path(),
             &json!({"updated_at": isoformat_z(None), "rooms": self.room_controls_json()}),
         )

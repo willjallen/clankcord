@@ -1,9 +1,8 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::string_field;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::util::{first_non_empty, single_child_of_kind};
+use crate::runtime::util::{first_non_empty, single_child_of_kind, string_field};
 use crate::runtime::{
     BinaryPayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState, Runtime,
     TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,

@@ -5,12 +5,12 @@ pub mod domain;
 pub mod jobs;
 pub mod refinement;
 pub mod rooms;
-pub mod runtime_config;
 pub mod service;
 pub mod timeline;
 pub(crate) mod util;
 pub mod views;
 
+pub use crate::config::{ControlConfig, GuildConfig};
 pub use agents::{
     AgentRuntime, AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
     thread_route_key, voice_route_key,
@@ -37,7 +37,6 @@ pub use jobs::{
     WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
-pub use runtime_config::{ControlConfig, GuildConfig};
 pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };

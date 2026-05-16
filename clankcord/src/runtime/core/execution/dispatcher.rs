@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::config;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::JobVisibility;
 use crate::runtime::timeline::{parse_instant, utc_now};
@@ -182,17 +183,9 @@ impl Runtime {
 }
 
 fn wake_probe_max_queue_age_seconds() -> i64 {
-    std::env::var("CLANKCORD_WAKE_PROBE_MAX_QUEUE_AGE_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(5)
-        .clamp(1, 60)
+    config::wake_probe_max_queue_age_seconds()
 }
 
 fn ephemeral_job_gc_batch_limit() -> usize {
-    std::env::var("CLANKCORD_EPHEMERAL_JOB_GC_BATCH_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(256)
-        .clamp(1, 1000)
+    config::ephemeral_job_gc_batch_limit()
 }

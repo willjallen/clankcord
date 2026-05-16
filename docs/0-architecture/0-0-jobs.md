@@ -99,26 +99,28 @@ discord_voice_join        voice:bot:<bot_id>
 room_agent_placement      room:placement:<guild>:<room>
 ```
 
-Lane capacity and scheduler batch size come from explicit environment variables.
+Lane capacity and scheduler batch size come from `config.toml`.
 
 ```text
-CLANKCORD_WAKE_JOB_CONCURRENCY
-CLANKCORD_AUDIO_JOB_CONCURRENCY
-CLANKCORD_VOICE_CONTROL_JOB_CONCURRENCY
-CLANKCORD_DISCORD_TEXT_JOB_CONCURRENCY
-CLANKCORD_REFINEMENT_JOB_CONCURRENCY
-CLANKCORD_AGENT_JOB_CONCURRENCY
-CLANKCORD_MAINTENANCE_JOB_CONCURRENCY
-CLANKCORD_ASYNC_JOB_CONCURRENCY
+[jobs.concurrency]
+wake
+audio
+voice_control
+discord_text
+refinement
+agent
+maintenance
+general_async
 
-CLANKCORD_WAKE_JOB_BATCH_LIMIT
-CLANKCORD_AUDIO_JOB_BATCH_LIMIT
-CLANKCORD_VOICE_CONTROL_JOB_BATCH_LIMIT
-CLANKCORD_DISCORD_TEXT_JOB_BATCH_LIMIT
-CLANKCORD_REFINEMENT_JOB_BATCH_LIMIT
-CLANKCORD_AGENT_JOB_BATCH_LIMIT
-CLANKCORD_MAINTENANCE_JOB_BATCH_LIMIT
-CLANKCORD_ASYNC_JOB_BATCH_LIMIT
+[jobs.batch]
+wake
+audio
+voice_control
+discord_text
+refinement
+agent
+maintenance
+general_async
 ```
 
 Every scheduling pass reads active ordering keys from the durable job table before claiming work. Latency analysis starts with the concrete thing on the path: lane capacity, ordering key contention, ready time, provider latency, adapter locks, database contention, artifact encoding, API calls, or configured timers.

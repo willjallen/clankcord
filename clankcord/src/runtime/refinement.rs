@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -7,16 +6,10 @@ use reqwest::blocking::multipart;
 use serde_json::Value;
 
 use crate::Result;
-use crate::adapters::discord::api::read_secret_value;
+use crate::config;
 use crate::runtime::timeline::{TimelineStore, isoformat_z, parse_instant, write_json_file};
 use crate::runtime::util::{first_value_string, string_array, string_field};
 use crate::runtime::{Job, JobOutput, JobState};
-
-pub const ELEVENLABS_STT_URL: &str = "https://api.elevenlabs.io/v1/speech-to-text";
-
-pub fn elevenlabs_api_key() -> String {
-    read_secret_value("ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY_FILE", "")
-}
 
 pub fn submit_elevenlabs_stt(
     audio_path: &Path,
@@ -26,9 +19,9 @@ pub fn submit_elevenlabs_stt(
     num_speakers: Option<usize>,
     webhook_metadata: Option<Value>,
 ) -> Result<Value> {
-    let api_key = elevenlabs_api_key();
+    let api_key = config::elevenlabs_api_key()?;
     if api_key.is_empty() {
-        anyhow::bail!("ELEVENLABS_API_KEY is not configured");
+        anyhow::bail!("ElevenLabs API key secret is not configured");
     }
     let mut form = multipart::Form::new()
         .text("model_id", model_id.to_string())
@@ -40,7 +33,7 @@ pub fn submit_elevenlabs_stt(
     if let Some(count) = num_speakers.filter(|count| *count > 0) {
         form = form.text("num_speakers", count.to_string());
     }
-    let webhook_url = env::var("ELEVENLABS_STT_WEBHOOK_URL").unwrap_or_default();
+    let webhook_url = config::elevenlabs_webhook_url();
     if !webhook_url.trim().is_empty() {
         form = form
             .text("webhook", "true")
@@ -60,14 +53,12 @@ pub fn submit_elevenlabs_stt(
         )
         .mime_str("audio/wav")?;
     let form = form.part("file", part);
-    let timeout = env::var("ELEVENLABS_STT_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(600);
     let response = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout))
+        .timeout(std::time::Duration::from_secs(
+            config::elevenlabs_timeout_seconds(),
+        ))
         .build()?
-        .post(ELEVENLABS_STT_URL)
+        .post(config::elevenlabs_stt_url())
         .header("xi-api-key", api_key)
         .multipart(form)
         .send()?
@@ -342,7 +333,7 @@ async fn run_refinement_job_inner(
         .len();
     let provider_payload = submit_elevenlabs_stt(
         &mixed_path,
-        &env::var("ELEVENLABS_STT_MODEL_ID").unwrap_or_else(|_| "scribe_v2".to_string()),
+        &config::elevenlabs_model_id(),
         true,
         "word",
         Some(speaker_count),

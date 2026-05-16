@@ -4,10 +4,18 @@ use serde_json::json;
 
 mod common;
 
-use clankcord::config::string_field;
 use clankcord::runtime::timeline::CaptureRunInput;
 
 use common::{append_speech, dt, test_store};
+
+fn string_field(value: &serde_json::Value, key: &str) -> String {
+    match value.get(key) {
+        Some(serde_json::Value::String(text)) => text.trim().to_string(),
+        Some(serde_json::Value::Number(number)) => number.to_string(),
+        Some(serde_json::Value::Bool(boolean)) => boolean.to_string(),
+        _ => String::new(),
+    }
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn refined_span_overlays_draft_render_and_search() {

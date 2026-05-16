@@ -10,9 +10,9 @@ mod util;
 pub use jobs::JobVisibility;
 pub use store::{CaptureRunInput, RenderedTranscript, SpeechEventInput, TimelineStore};
 pub use util::{
-    event_end, event_speaker, event_start, event_text, instant_ms_dt, instant_ms_str, isoformat_z,
-    ms_to_datetime, new_id, overlaps, parse_duration, parse_instant, read_json_file, read_wav_mono,
-    resolve_time_reference, sha256_file, utc_now, write_json_file,
+    event_end, event_speaker, event_start, event_text, format_timestamp_local, instant_ms_dt,
+    instant_ms_str, isoformat_z, ms_to_datetime, new_id, overlaps, parse_duration, parse_instant,
+    read_json_file, read_wav_mono, resolve_time_reference, sha256_file, utc_now, write_json_file,
 };
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
@@ -29,9 +29,8 @@ pub(crate) use sqlx::{Postgres, QueryBuilder, Row as SqlxRow};
 pub(crate) use uuid::Uuid;
 
 pub(crate) use crate::Result;
-pub(crate) use crate::config::{durable_dir, slugify};
 pub(crate) use crate::runtime::Job;
-pub(crate) use crate::runtime::util::{first_value_string, non_empty, string_field};
+pub(crate) use crate::runtime::util::{first_value_string, non_empty, slugify, string_field};
 
 pub(crate) use util::{
     SPEECH_KINDS, compact_timeline_payload, event_ended_ms, event_started_ms, excerpt,

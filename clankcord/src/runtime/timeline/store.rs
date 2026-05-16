@@ -1,4 +1,5 @@
 use super::*;
+use crate::config;
 
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -109,7 +110,7 @@ pub struct TimelineStore {
 
 impl TimelineStore {
     pub fn new(root: Option<PathBuf>) -> Result<Self> {
-        Self::new_with_database(root, database_url(), database_schema())
+        Self::new_with_database(root, config::database_url()?, config::database_schema())
     }
 
     pub fn new_with_database(
@@ -117,18 +118,9 @@ impl TimelineStore {
         database_url: String,
         database_schema: String,
     ) -> Result<Self> {
-        let configured = std::env::var("CLANKCORD_VOICE_MEMORY_ROOT")
-            .or_else(|_| std::env::var("VOICE_MEMORY_ROOT"))
-            .unwrap_or_default();
-        let root = root.unwrap_or_else(|| {
-            if !configured.trim().is_empty() {
-                PathBuf::from(configured)
-            } else {
-                durable_dir().join("clankcord").join("voice")
-            }
-        });
+        let root = root.unwrap_or_else(config::voice_memory_root);
         fs::create_dir_all(&root)?;
-        let mut pool_options = PgPoolOptions::new().max_connections(database_pool_size());
+        let mut pool_options = PgPoolOptions::new().max_connections(config::database_pool_size());
         if !database_schema.trim().is_empty() && database_schema != "public" {
             let schema = quote_identifier(&database_schema);
             pool_options = pool_options.after_connect(move |connection, _metadata| {
@@ -155,26 +147,8 @@ impl TimelineStore {
     }
 }
 
-fn database_url() -> String {
-    std::env::var("CLANKCORD_POSTGRES_URL")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .unwrap_or_else(|_| "postgres://clankcord:clankcord@127.0.0.1:54329/clankcord".to_string())
-}
-
-fn database_schema() -> String {
-    std::env::var("CLANKCORD_POSTGRES_SCHEMA").unwrap_or_else(|_| "public".to_string())
-}
-
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-fn database_pool_size() -> u32 {
-    std::env::var("CLANKCORD_POSTGRES_POOL_SIZE")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or(32)
-        .clamp(4, 128)
 }
 
 impl TimelineStore {

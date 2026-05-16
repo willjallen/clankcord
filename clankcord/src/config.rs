@@ -1,589 +1,679 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-use chrono::{DateTime, Datelike, Utc};
+use anyhow::Context;
 use chrono_tz::Tz;
-use regex::Regex;
-use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
-use url::Url;
+use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::adapters::discord::api::has_discord_bot_token;
 use crate::errors::discord_tool_error;
+use crate::runtime::rooms::RoomConfig;
 
-pub const VOICE_BINDING_PREFIX: &str = "managed:discord-voice:";
-pub const CONTROL_BINDING_PREFIX: &str = "managed:discord-control:";
-pub const MESSAGE_CHUNK_LIMIT: usize = 1800;
+pub const CONFIG_PATH: &str = "config.toml";
 
-pub fn durable_dir() -> PathBuf {
-    PathBuf::from(
-        env::var("CLANKCORD_DURABLE_DIR").unwrap_or_else(|_| "/clankcord/durable".to_string()),
-    )
+static APP_CONFIG: OnceLock<AppConfig> = OnceLock::new();
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppConfig {
+    pub paths: PathsConfig,
+    pub secrets: SecretsConfig,
+    pub time: TimeConfig,
+    pub api: ApiConfig,
+    pub postgres: PostgresConfig,
+    pub discord: DiscordConfig,
+    pub codex: CodexConfig,
+    pub agents: AgentsConfig,
+    pub pool: PoolConfig,
+    pub transcription: TranscriptionConfig,
+    pub stt: SttConfig,
+    pub wake: WakeConfig,
+    pub elevenlabs: ElevenLabsConfig,
+    pub voice: VoiceConfig,
+    pub jobs: JobsConfig,
+    pub control: ControlConfig,
+    pub guilds: Vec<GuildConfig>,
+    pub rooms: Vec<ConfiguredRoom>,
 }
 
-pub fn state_dir() -> PathBuf {
-    PathBuf::from(
-        env::var("CLANKCORD_STATE_DIR")
-            .unwrap_or_else(|_| "/clankcord/state/voice-pool".to_string()),
-    )
+#[derive(Debug, Clone, Deserialize)]
+pub struct PathsConfig {
+    pub state_dir: PathBuf,
+    pub room_controls_path: PathBuf,
+    pub voice_memory_root: PathBuf,
+    pub agent_workspaces_root: PathBuf,
 }
 
-pub fn config_path() -> PathBuf {
-    PathBuf::from(env::var("CLANKCORD_CONFIG_PATH").unwrap_or_else(|_| {
-        durable_dir()
-            .join("config")
-            .join("voice-pool.json")
-            .display()
-            .to_string()
-    }))
+#[derive(Debug, Clone, Deserialize)]
+pub struct SecretsConfig {
+    pub root: PathBuf,
 }
 
-pub fn rooms_path() -> PathBuf {
-    durable_dir()
-        .join("config")
-        .join("discord-voice")
-        .join("rooms.json")
+#[derive(Debug, Clone, Deserialize)]
+pub struct TimeConfig {
+    pub timezone: String,
 }
 
-pub fn control_config_path() -> PathBuf {
-    durable_dir().join("config").join("discord-control.json")
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiConfig {
+    pub host: String,
+    pub port: u16,
+    pub base_url: String,
+    pub timeout_seconds: u64,
 }
 
-pub fn tokens_path() -> PathBuf {
-    PathBuf::from(
-        env::var("CLANKCORD_BOT_TOKENS_PATH")
-            .unwrap_or_else(|_| state_dir().join("bot_tokens.txt").display().to_string()),
-    )
+#[derive(Debug, Clone, Deserialize)]
+pub struct PostgresConfig {
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub user: String,
+    pub password_secret: String,
+    pub schema: String,
+    pub pool_size: u32,
 }
 
-pub fn room_controls_path() -> PathBuf {
-    PathBuf::from(
-        env::var("CLANKCORD_ROOM_CONTROLS_PATH")
-            .unwrap_or_else(|_| state_dir().join("room-controls.json").display().to_string()),
-    )
+#[derive(Debug, Clone, Deserialize)]
+pub struct DiscordConfig {
+    pub api_base: String,
+    pub bot_token_secret: String,
+    pub voice_bot_tokens_secret: String,
+    pub member_cache_max_age_ms: i64,
 }
 
-pub fn read_json(path: &Path, fallback: Value) -> Value {
-    if !path.is_file() {
-        return fallback;
+#[derive(Debug, Clone, Deserialize)]
+pub struct CodexConfig {
+    pub bin: String,
+    pub home: PathBuf,
+    pub workdir: PathBuf,
+    pub task_model: String,
+    pub sandbox: String,
+    pub bypass_sandbox: bool,
+    pub approval_policy: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AgentsConfig {
+    pub session_expiry_seconds: i64,
+    pub thread_auto_archive_minutes: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PoolConfig {
+    pub idle_channel_name: String,
+    pub auto_join_enabled: bool,
+    pub manual_leave_cooldown_seconds: i64,
+    pub manual_join_hold_seconds: i64,
+    pub pause_release_seconds: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscriptionConfig {
+    pub silence_ms: i64,
+    pub max_segment_ms: i64,
+    pub minimum_utterance_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SttConfig {
+    pub base_url: String,
+    pub model: String,
+    pub language: String,
+    pub response_format: String,
+    pub include_logprobs: bool,
+    pub max_token_logprobs: usize,
+    pub timeout_seconds: u64,
+    pub drop_no_speech_probability: f64,
+    pub drop_avg_token_logprob: f64,
+    pub api_key_secret: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WakeConfig {
+    pub base_url: String,
+    pub timeout_seconds: u64,
+    pub api_key_secret: String,
+    pub probe_minimum_ms: i64,
+    pub probe_window_ms: i64,
+    pub probe_interval_ms: i64,
+    pub probe_max_queue_age_seconds: i64,
+    pub duplicate_overlap_grace_ms: i64,
+    pub activation: WakeActivationConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WakeActivationConfig {
+    pub lookback_seconds: i64,
+    pub min_post_seconds: i64,
+    pub speaker_idle_seconds: i64,
+    pub stt_flush_grace_seconds: i64,
+    pub max_window_seconds: i64,
+    pub additive_preempt_seconds: i64,
+    pub independent_after_seconds: i64,
+    pub stt_settle_seconds: i64,
+    pub active_capture_poll_ms: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ElevenLabsConfig {
+    pub api_key_secret: String,
+    pub stt_url: String,
+    pub webhook_url: String,
+    pub timeout_seconds: u64,
+    pub model_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceConfig {
+    pub sound: VoiceSoundConfig,
+    pub capture: VoiceCaptureConfig,
+    pub diagnostics: VoiceDiagnosticsConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceSoundConfig {
+    pub dir: PathBuf,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceCaptureConfig {
+    pub flush_interval_seconds: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VoiceDiagnosticsConfig {
+    pub enabled: bool,
+    pub audio_stats: bool,
+    pub receiver: bool,
+    pub event_paths: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct JobsConfig {
+    pub runtime_maintenance_interval_seconds: f64,
+    pub intake_queue_depth: usize,
+    pub ephemeral_gc_batch_limit: usize,
+    pub dispatch_drain_max_passes: usize,
+    pub concurrency: JobLaneConfig,
+    pub batch: JobLaneConfig,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct JobLaneConfig {
+    pub wake: usize,
+    pub audio: usize,
+    pub voice_control: usize,
+    pub discord_text: usize,
+    pub refinement: usize,
+    pub agent: usize,
+    pub maintenance: usize,
+    pub general_async: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct GuildConfig {
+    #[serde(default, alias = "guildId")]
+    pub guild_id: String,
+    #[serde(default, alias = "guildSlug")]
+    pub guild_slug: String,
+    #[serde(default, alias = "idleChannelId")]
+    pub idle_channel_id: String,
+    #[serde(default, alias = "idleChannelName")]
+    pub idle_channel_name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ControlConfig {
+    #[serde(default, alias = "guildId")]
+    pub guild_id: String,
+    #[serde(default, alias = "guildSlug")]
+    pub guild_slug: String,
+    #[serde(default, alias = "defaultVoiceRoomId")]
+    pub default_voice_room_id: String,
+    #[serde(default, alias = "botsChannelId")]
+    pub bots_channel_id: String,
+    #[serde(default, alias = "agentThreadsChannelId")]
+    pub agent_threads_channel_id: String,
+    #[serde(default, alias = "transcriptsForumId")]
+    pub transcripts_forum_id: String,
+    #[serde(default, alias = "threadAutoArchiveMinutes")]
+    pub thread_auto_archive_minutes: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConfiguredRoom {
+    #[serde(alias = "roomId")]
+    pub id: String,
+    #[serde(alias = "guildId")]
+    pub guild_id: String,
+    #[serde(alias = "guildSlug")]
+    pub guild_slug: String,
+    #[serde(alias = "channelId")]
+    pub channel_id: String,
+    #[serde(alias = "channelSlug")]
+    pub channel_slug: String,
+    #[serde(alias = "channelName")]
+    pub channel_name: String,
+    #[serde(alias = "autoJoin")]
+    pub auto_join: bool,
+}
+
+pub fn app_config() -> &'static AppConfig {
+    APP_CONFIG.get_or_init(|| {
+        let path = config_file_path()
+            .unwrap_or_else(|error| panic!("failed to locate {CONFIG_PATH}: {error:#}"));
+        load_app_config(&path)
+            .unwrap_or_else(|error| panic!("failed to load {}: {error:#}", path.display()))
+    })
+}
+
+fn config_file_path() -> Result<PathBuf> {
+    let mut dir = env::current_dir().context("resolving current directory")?;
+    loop {
+        let path = dir.join(CONFIG_PATH);
+        if path.is_file() {
+            return Ok(path);
+        }
+        if !dir.pop() {
+            anyhow::bail!("{CONFIG_PATH} was not found in the current directory or its parents");
+        }
     }
-    match fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-    {
-        Some(value) => value,
-        None => fallback,
-    }
 }
 
-pub fn write_json(path: &Path, payload: &Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+fn load_app_config(path: &Path) -> Result<AppConfig> {
+    let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let config = toml::from_str::<AppConfig>(&text)
+        .with_context(|| format!("parsing {}", path.display()))?;
+    validate_config(&config)?;
+    Ok(config)
+}
+
+fn validate_config(config: &AppConfig) -> Result<()> {
+    if config.rooms.is_empty() {
+        anyhow::bail!("config.toml must define at least one [[rooms]] entry");
     }
-    let text = serde_json::to_string_pretty(payload)? + "\n";
-    fs::write(path, text)?;
+    if config.guilds.is_empty() {
+        anyhow::bail!("config.toml must define at least one [[guilds]] entry");
+    }
+    if config.discord.bot_token_secret.trim().is_empty() {
+        anyhow::bail!("config.toml discord.bot_token_secret is required");
+    }
+    if config.discord.voice_bot_tokens_secret.trim().is_empty() {
+        anyhow::bail!("config.toml discord.voice_bot_tokens_secret is required");
+    }
+    if config.postgres.password_secret.trim().is_empty() {
+        anyhow::bail!("config.toml postgres.password_secret is required");
+    }
+    config
+        .time
+        .timezone
+        .parse::<Tz>()
+        .with_context(|| format!("invalid time.timezone `{}`", config.time.timezone))?;
     Ok(())
 }
 
-pub fn sha256_text(content: &str) -> String {
-    format!("{:x}", Sha256::digest(content.as_bytes()))
+pub fn state_dir() -> PathBuf {
+    app_config().paths.state_dir.clone()
 }
 
-pub fn slugify(value: &str) -> String {
-    let lower = value.to_lowercase();
-    let non_slug = Regex::new(r"[^a-z0-9]+").expect("valid slug regex");
-    let multi_dash = Regex::new(r"-{2,}").expect("valid slug regex");
-    let slug = non_slug.replace_all(&lower, "-");
-    multi_dash
-        .replace_all(slug.trim_matches('-'), "-")
-        .to_string()
+pub fn room_controls_path() -> PathBuf {
+    app_config().paths.room_controls_path.clone()
+}
+
+pub fn voice_memory_root() -> PathBuf {
+    app_config().paths.voice_memory_root.clone()
+}
+
+pub fn agent_workspaces_root() -> PathBuf {
+    app_config().paths.agent_workspaces_root.clone()
+}
+
+pub fn api_base_url() -> String {
+    app_config().api.base_url.trim_end_matches('/').to_string()
+}
+
+pub fn api_timeout_seconds() -> u64 {
+    app_config().api.timeout_seconds.max(5)
+}
+
+pub fn env_context_value(key: &str) -> Option<String> {
+    env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+pub fn http_addr() -> Result<SocketAddr> {
+    Ok(format!("{}:{}", app_config().api.host, app_config().api.port).parse()?)
 }
 
 pub fn local_tz() -> Tz {
-    env::var("CLANKCORD_TZ")
-        .unwrap_or_else(|_| "UTC".to_string())
+    app_config()
+        .time
+        .timezone
         .parse::<Tz>()
-        .unwrap_or(chrono_tz::UTC)
+        .expect("config timezone was validated")
 }
 
-pub fn format_timestamp_local(value: DateTime<Utc>, tz: Tz) -> BTreeMap<String, String> {
-    let local = value.with_timezone(&tz);
-    let unix = value.timestamp();
-    BTreeMap::from([
-        (
-            "iso".to_string(),
-            value.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        ),
-        ("local_iso".to_string(), local.to_rfc3339()),
-        ("discord_full".to_string(), format!("<t:{unix}:F>")),
-        ("discord_relative".to_string(), format!("<t:{unix}:R>")),
-        ("discord_short_time".to_string(), format!("<t:{unix}:T>")),
-        (
-            "display_date".to_string(),
-            local.format("%Y-%m-%d").to_string(),
-        ),
-        (
-            "display_time".to_string(),
-            local.format("%H:%M:%S").to_string(),
-        ),
-        (
-            "display_minute".to_string(),
-            local.format("%H:%M").to_string(),
-        ),
-        (
-            "display_started".to_string(),
-            local.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
-        ),
-        ("hour_slug".to_string(), local.format("%H").to_string()),
-        ("minute_slug".to_string(), local.format("%H-%M").to_string()),
-        (
-            "day_path".to_string(),
-            format!(
-                "{:04}/{:02}/{:02}",
-                local.year(),
-                local.month(),
-                local.day()
-            ),
-        ),
-    ])
+pub fn database_url() -> Result<String> {
+    let config = &app_config().postgres;
+    let password = required_secret(&config.password_secret, "postgres password")?;
+    Ok(format!(
+        "postgres://{}:{}@{}:{}/{}",
+        url_encode(&config.user),
+        url_encode(&password),
+        config.host,
+        config.port,
+        url_encode(&config.database)
+    ))
 }
 
-pub fn split_message_chunks(content: &str, limit: usize) -> Vec<String> {
-    let normalized = content.trim();
-    if normalized.is_empty() {
-        return Vec::new();
-    }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for line in normalized.lines() {
-        let line_text = format!("{line}\n");
-        if line_text.len() > limit {
-            if !current.is_empty() {
-                chunks.push(current.trim_end().to_string());
-                current.clear();
-            }
-            let mut start = 0;
-            while start < line_text.len() {
-                let end = (start + limit).min(line_text.len());
-                chunks.push(line_text[start..end].trim_end().to_string());
-                start = end;
-            }
-            continue;
-        }
-        if !current.is_empty() && current.len() + line_text.len() > limit {
-            chunks.push(current.trim_end().to_string());
-            current.clear();
-        }
-        current.push_str(&line_text);
-    }
-    if !current.is_empty() {
-        chunks.push(current.trim_end().to_string());
-    }
-    chunks
+pub fn database_schema() -> String {
+    app_config().postgres.schema.clone()
 }
 
-pub fn load_rooms_payload() -> Value {
-    match read_json(&rooms_path(), serde_json::json!({"rooms": []})) {
-        Value::Object(map) => Value::Object(map),
-        _ => serde_json::json!({"rooms": []}),
+pub fn database_pool_size() -> u32 {
+    app_config().postgres.pool_size.clamp(4, 128)
+}
+
+pub fn discord_api_base() -> String {
+    app_config()
+        .discord
+        .api_base
+        .trim_end_matches('/')
+        .to_string()
+}
+
+pub fn load_discord_bot_token() -> Result<String> {
+    required_secret(
+        &app_config().discord.bot_token_secret,
+        "Discord control bot token",
+    )
+}
+
+pub fn raw_voice_bot_token_lines() -> Result<Vec<String>> {
+    Ok(secret_value(&app_config().discord.voice_bot_tokens_secret)?
+        .lines()
+        .map(str::to_string)
+        .collect())
+}
+
+pub fn stt_transcriptions_base_url() -> Result<String> {
+    let base_url = app_config().stt.base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        Err(discord_tool_error("config.toml stt.base_url is not set"))
+    } else {
+        Ok(base_url.to_string())
     }
 }
 
-pub fn load_control_config() -> Value {
-    match read_json(&control_config_path(), Value::Object(Map::new())) {
-        Value::Object(map) => Value::Object(map),
-        _ => Value::Object(Map::new()),
+pub fn stt_model() -> String {
+    app_config().stt.model.trim().to_string()
+}
+
+pub fn stt_language() -> String {
+    app_config().stt.language.trim().to_string()
+}
+
+pub fn stt_response_format() -> String {
+    app_config().stt.response_format.trim().to_string()
+}
+
+pub fn stt_include_logprobs() -> bool {
+    app_config().stt.include_logprobs
+}
+
+pub fn stt_max_token_logprobs() -> usize {
+    app_config().stt.max_token_logprobs
+}
+
+pub fn stt_timeout_seconds() -> u64 {
+    app_config().stt.timeout_seconds
+}
+
+pub fn stt_drop_no_speech_threshold() -> f64 {
+    app_config().stt.drop_no_speech_probability
+}
+
+pub fn stt_drop_avg_token_logprob_threshold() -> f64 {
+    app_config().stt.drop_avg_token_logprob
+}
+
+pub fn stt_api_key() -> Result<String> {
+    optional_secret(&app_config().stt.api_key_secret)
+}
+
+pub fn wake_url() -> Result<String> {
+    let base_url = app_config().wake.base_url.trim().trim_end_matches('/');
+    if base_url.is_empty() {
+        return Err(discord_tool_error("config.toml wake.base_url is not set"));
+    }
+    if base_url.ends_with("/audio/wake") {
+        Ok(base_url.to_string())
+    } else {
+        Ok(format!("{base_url}/audio/wake"))
     }
 }
 
-pub fn iter_valid_voice_rooms() -> Vec<Value> {
-    let payload = load_rooms_payload();
-    payload
-        .get("rooms")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|room| {
-            let mut map = room.as_object()?.clone();
-            let guild_id = string_value(map.get("guildId")).trim().to_string();
-            let channel_id = string_value(map.get("channelId")).trim().to_string();
-            if guild_id.is_empty() || channel_id.is_empty() {
-                return None;
-            }
-            let channel_name = non_empty(
-                string_value(map.get("channelName")),
-                non_empty(string_value(map.get("channelSlug")), channel_id.clone()),
-            );
-            let channel_slug =
-                non_empty(string_value(map.get("channelSlug")), slugify(&channel_name));
-            map.insert("guildId".to_string(), Value::String(guild_id.clone()));
-            map.insert("channelId".to_string(), Value::String(channel_id));
-            map.insert(
-                "id".to_string(),
-                Value::String(string_value(map.get("id")).trim().to_string()),
-            );
-            map.insert("channelSlug".to_string(), Value::String(channel_slug));
-            map.insert("channelName".to_string(), Value::String(channel_name));
-            map.insert(
-                "guildSlug".to_string(),
-                Value::String(non_empty(
-                    string_value(map.get("guildSlug")),
-                    slugify(&guild_id),
-                )),
-            );
-            map.insert(
-                "accountId".to_string(),
-                Value::String(non_empty(
-                    string_value(map.get("accountId")),
-                    "default".to_string(),
-                )),
-            );
-            Some(Value::Object(map))
+pub fn wake_timeout_seconds() -> u64 {
+    app_config().wake.timeout_seconds.max(1)
+}
+
+pub fn wake_api_key() -> Result<String> {
+    optional_secret(&app_config().wake.api_key_secret)
+}
+
+pub fn wake_probe_max_queue_age_seconds() -> i64 {
+    app_config().wake.probe_max_queue_age_seconds.clamp(1, 60)
+}
+
+pub fn wake_duplicate_overlap_grace_ms() -> i64 {
+    app_config().wake.duplicate_overlap_grace_ms.max(0)
+}
+
+pub fn wake_activation_config() -> WakeActivationConfig {
+    app_config().wake.activation.clone()
+}
+
+pub fn elevenlabs_api_key() -> Result<String> {
+    optional_secret(&app_config().elevenlabs.api_key_secret)
+}
+
+pub fn elevenlabs_stt_url() -> String {
+    app_config().elevenlabs.stt_url.clone()
+}
+
+pub fn elevenlabs_webhook_url() -> String {
+    app_config().elevenlabs.webhook_url.trim().to_string()
+}
+
+pub fn elevenlabs_timeout_seconds() -> u64 {
+    app_config().elevenlabs.timeout_seconds
+}
+
+pub fn elevenlabs_model_id() -> String {
+    app_config().elevenlabs.model_id.clone()
+}
+
+pub fn codex_bin() -> String {
+    app_config().codex.bin.clone()
+}
+
+pub fn codex_home() -> PathBuf {
+    app_config().codex.home.clone()
+}
+
+pub fn codex_workdir() -> PathBuf {
+    app_config().codex.workdir.clone()
+}
+
+pub fn codex_task_model() -> Option<String> {
+    non_empty_option(&app_config().codex.task_model)
+}
+
+pub fn codex_sandbox() -> Option<String> {
+    non_empty_option(&app_config().codex.sandbox)
+}
+
+pub fn codex_bypass_sandbox() -> bool {
+    app_config().codex.bypass_sandbox
+}
+
+pub fn codex_approval_policy() -> String {
+    app_config().codex.approval_policy.clone()
+}
+
+pub fn agent_session_expiry_seconds() -> i64 {
+    app_config()
+        .agents
+        .session_expiry_seconds
+        .clamp(60, 7 * 24 * 60 * 60)
+}
+
+pub fn agent_thread_auto_archive_minutes() -> i64 {
+    app_config()
+        .agents
+        .thread_auto_archive_minutes
+        .clamp(60, 10080)
+}
+
+pub fn runtime_pool_config() -> PoolConfig {
+    app_config().pool.clone()
+}
+
+pub fn transcription_config() -> TranscriptionConfig {
+    app_config().transcription.clone()
+}
+
+pub fn voice_sound_dir() -> PathBuf {
+    app_config().voice.sound.dir.clone()
+}
+
+pub fn voice_sound_timeout_ms() -> u64 {
+    app_config().voice.sound.timeout_ms
+}
+
+pub fn voice_flush_interval_seconds() -> f64 {
+    app_config().voice.capture.flush_interval_seconds.max(0.001)
+}
+
+pub fn voice_diagnostics_config() -> VoiceDiagnosticsConfig {
+    app_config().voice.diagnostics.clone()
+}
+
+pub fn discord_member_cache_max_age_ms() -> i64 {
+    app_config().discord.member_cache_max_age_ms.max(0)
+}
+
+pub fn intake_queue_depth() -> usize {
+    app_config().jobs.intake_queue_depth.max(1)
+}
+
+pub fn runtime_maintenance_interval_ms() -> i64 {
+    let seconds = app_config()
+        .jobs
+        .runtime_maintenance_interval_seconds
+        .max(0.001);
+    (seconds * 1000.0).round() as i64
+}
+
+pub fn ephemeral_job_gc_batch_limit() -> usize {
+    app_config().jobs.ephemeral_gc_batch_limit.clamp(1, 1000)
+}
+
+pub fn dispatch_drain_max_passes() -> usize {
+    app_config().jobs.dispatch_drain_max_passes.clamp(1, 512)
+}
+
+pub fn job_concurrency() -> JobLaneConfig {
+    app_config().jobs.concurrency
+}
+
+pub fn job_batch_limits() -> JobLaneConfig {
+    app_config().jobs.batch
+}
+
+pub fn guild_configs() -> Vec<GuildConfig> {
+    app_config().guilds.clone()
+}
+
+pub fn control_config() -> ControlConfig {
+    app_config().control.clone()
+}
+
+pub fn room_configs() -> Vec<RoomConfig> {
+    app_config()
+        .rooms
+        .iter()
+        .map(|room| RoomConfig {
+            room_id: room.id.clone(),
+            guild_id: room.guild_id.clone(),
+            guild_slug: room.guild_slug.clone(),
+            channel_id: room.channel_id.clone(),
+            channel_slug: room.channel_slug.clone(),
+            channel_name: room.channel_name.clone(),
+            auto_join: room.auto_join,
         })
         .collect()
 }
 
-pub fn synthesize_room(identifier: &str) -> Result<Value> {
-    let mut raw = identifier.trim().to_string();
-    if raw.starts_with("<#") && raw.ends_with('>') {
-        raw = raw[2..raw.len() - 1].trim().to_string();
+pub fn configured_guild_ids() -> Vec<String> {
+    let mut guild_ids = BTreeMap::new();
+    for guild in &app_config().guilds {
+        insert_non_empty_key(&mut guild_ids, &guild.guild_id);
     }
-    if raw.is_empty() {
-        return Err(discord_tool_error(
-            "room is ambiguous; specify a room name or channel id",
-        ));
+    insert_non_empty_key(&mut guild_ids, &app_config().control.guild_id);
+    for room in &app_config().rooms {
+        insert_non_empty_key(&mut guild_ids, &room.guild_id);
     }
-    let control = load_control_config();
-    let guild_id = string_field(&control, "guildId");
-    let guild_slug = non_empty(
-        string_field(&control, "guildSlug"),
-        slugify(if guild_id.is_empty() {
-            "discord"
-        } else {
-            &guild_id
-        }),
-    );
-    let channel_id = if raw.chars().all(|ch| ch.is_ascii_digit()) {
-        raw.clone()
+    guild_ids.into_keys().collect()
+}
+
+fn insert_non_empty_key(map: &mut BTreeMap<String, ()>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() {
+        map.insert(value.to_string(), ());
+    }
+}
+
+fn secret_value(secret_name: &str) -> Result<String> {
+    let secret_name = secret_name.trim();
+    if secret_name.is_empty() {
+        return Ok(String::new());
+    }
+    let path = app_config().secrets.root.join(secret_name);
+    let value = fs::read_to_string(&path)
+        .with_context(|| format!("reading secret {}", path.display()))?
+        .trim()
+        .to_string();
+    Ok(value)
+}
+
+fn required_secret(secret_name: &str, label: &str) -> Result<String> {
+    let value = secret_value(secret_name)?;
+    if value.is_empty() {
+        anyhow::bail!("{label} secret `{secret_name}` is empty");
+    }
+    Ok(value)
+}
+
+fn optional_secret(secret_name: &str) -> Result<String> {
+    secret_value(secret_name)
+}
+
+fn non_empty_option(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        None
     } else {
-        String::new()
-    };
-    let channel_slug = non_empty(
-        slugify(&raw),
-        if !channel_id.is_empty() {
-            format!("channel-{channel_id}")
-        } else {
-            raw.to_lowercase()
-        },
-    );
-    Ok(serde_json::json!({
-        "id": raw,
-        "guildId": guild_id,
-        "guildSlug": guild_slug,
-        "channelId": channel_id,
-        "channelSlug": channel_slug,
-        "channelName": raw,
-        "accountId": "default"
-    }))
-}
-
-pub fn find_room(identifier: Option<&str>) -> Result<Value> {
-    let rooms = iter_valid_voice_rooms();
-    let mut wanted = identifier.unwrap_or("").trim().to_lowercase();
-    if wanted.is_empty() {
-        wanted = string_field(&load_control_config(), "defaultVoiceRoomId").to_lowercase();
-    }
-    if wanted.is_empty() {
-        if rooms.len() == 1 {
-            return Ok(rooms[0].clone());
-        }
-        return Err(discord_tool_error("room is required"));
-    }
-    let exact_matches: Vec<Value> = rooms
-        .iter()
-        .filter(|room| {
-            ["id", "channelId", "channelSlug", "channelName"]
-                .iter()
-                .any(|key| string_field(room, key).to_lowercase() == wanted)
-        })
-        .cloned()
-        .collect();
-    if exact_matches.len() == 1 {
-        return Ok(exact_matches[0].clone());
-    }
-    if exact_matches.len() > 1 {
-        return Err(discord_tool_error(format!(
-            "room is ambiguous: {}",
-            identifier.unwrap_or("")
-        )));
-    }
-    let prefix_matches: Vec<Value> = rooms
-        .iter()
-        .filter(|room| {
-            ["id", "channelSlug", "channelName"]
-                .iter()
-                .any(|key| string_field(room, key).to_lowercase().starts_with(&wanted))
-        })
-        .cloned()
-        .collect();
-    if prefix_matches.len() == 1 {
-        return Ok(prefix_matches[0].clone());
-    }
-    if prefix_matches.len() > 1 {
-        return Err(discord_tool_error(format!(
-            "room is ambiguous: {}",
-            identifier.unwrap_or("")
-        )));
-    }
-    synthesize_room(identifier.unwrap_or(""))
-}
-
-pub fn derive_stt_base_url(ollama_base_url: &str) -> String {
-    let Ok(mut parsed) = Url::parse(ollama_base_url.trim()) else {
-        return String::new();
-    };
-    if parsed.host_str().unwrap_or("").is_empty() {
-        return String::new();
-    }
-    let port = match parsed.port() {
-        None | Some(11434) => 8080,
-        Some(value) => value,
-    };
-    if parsed.set_port(Some(port)).is_err() {
-        return String::new();
-    }
-    parsed.set_path("/v1");
-    parsed.set_query(None);
-    parsed.set_fragment(None);
-    parsed.to_string().trim_end_matches('/').to_string()
-}
-
-pub fn load_stt_base_url() -> Result<String> {
-    let explicit = env::var("CLANKCORD_STT_BASE_URL").unwrap_or_default();
-    let explicit = explicit.trim().trim_end_matches('/').to_string();
-    if !explicit.is_empty() {
-        return Ok(explicit);
-    }
-    let derived = derive_stt_base_url(&env::var("CLANKCORD_OLLAMA_BASE_URL").unwrap_or_default());
-    if !derived.is_empty() {
-        return Ok(derived);
-    }
-    Err(discord_tool_error("CLANKCORD_STT_BASE_URL is not set"))
-}
-
-pub fn has_stt_configuration() -> bool {
-    load_stt_base_url().is_ok()
-}
-
-pub fn control_binding(control_config: &Value) -> Option<Value> {
-    let guild_id = string_field(control_config, "guildId");
-    let bots_channel_id = string_field(control_config, "botsChannelId");
-    if guild_id.is_empty() || bots_channel_id.is_empty() {
-        return None;
-    }
-    Some(serde_json::json!({
-        "type": "route",
-        "agentId": "control-plane",
-        "comment": format!("{CONTROL_BINDING_PREFIX}bots"),
-        "match": {
-            "channel": "discord",
-            "guildId": guild_id,
-            "peer": {"kind": "channel", "id": bots_channel_id}
-        }
-    }))
-}
-
-pub fn merge_bindings(existing_bindings: &[Value], control_config: &Value) -> Vec<Value> {
-    let mut merged: Vec<Value> = existing_bindings
-        .iter()
-        .filter(|binding| {
-            let comment = string_field(binding, "comment");
-            !comment.starts_with(VOICE_BINDING_PREFIX)
-                && !comment.starts_with(CONTROL_BINDING_PREFIX)
-        })
-        .cloned()
-        .collect();
-    if let Some(control) = control_binding(control_config) {
-        merged.push(control);
-    }
-    merged
-}
-
-pub fn default_autojoin_rooms(valid_rooms: &[Value]) -> Vec<Value> {
-    valid_rooms
-        .iter()
-        .filter(|room| {
-            non_empty(string_field(room, "accountId"), "default".to_string()) == "default"
-                && room.get("autoJoin").and_then(Value::as_bool) != Some(false)
-        })
-        .map(|room| serde_json::json!({"guildId": string_field(room, "guildId"), "channelId": string_field(room, "channelId")}))
-        .collect()
-}
-
-pub fn build_managed_gateway_config(
-    base_config: Value,
-    valid_rooms: Option<Vec<Value>>,
-    control_config: Option<Value>,
-    discord_enabled: Option<bool>,
-    audio_enabled: Option<bool>,
-) -> Value {
-    let mut config = base_config.as_object().cloned().unwrap_or_default();
-    let valid_rooms = valid_rooms.unwrap_or_else(iter_valid_voice_rooms);
-    let control_config = control_config.unwrap_or_else(load_control_config);
-    let discord_enabled = discord_enabled.unwrap_or_else(has_discord_bot_token);
-    let audio_enabled = audio_enabled.unwrap_or_else(has_stt_configuration);
-    let voice_enabled = discord_enabled && audio_enabled;
-
-    let mut channels = config
-        .remove("channels")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut discord = channels
-        .remove("discord")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut voice = discord
-        .remove("voice")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    voice.insert("enabled".to_string(), Value::Bool(voice_enabled));
-    voice.insert(
-        "autoJoin".to_string(),
-        Value::Array(default_autojoin_rooms(&valid_rooms)),
-    );
-    discord.insert("enabled".to_string(), Value::Bool(discord_enabled));
-    let existing_guilds = discord
-        .remove("guilds")
-        .unwrap_or_else(|| serde_json::json!({}));
-    discord.insert(
-        "guilds".to_string(),
-        merge_guild_channels(existing_guilds, &valid_rooms, &control_config),
-    );
-    discord.insert("voice".to_string(), Value::Object(voice));
-    channels.insert("discord".to_string(), Value::Object(discord));
-    config.insert("channels".to_string(), Value::Object(channels));
-
-    let mut tools = config
-        .remove("tools")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut media = tools
-        .remove("media")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    let mut audio = media
-        .remove("audio")
-        .and_then(|value| value.as_object().cloned())
-        .unwrap_or_default();
-    audio.insert("enabled".to_string(), Value::Bool(audio_enabled));
-    media.insert("audio".to_string(), Value::Object(audio));
-    tools.insert("media".to_string(), Value::Object(media));
-    config.insert("tools".to_string(), Value::Object(tools));
-
-    let existing_bindings = config
-        .remove("bindings")
-        .and_then(|value| value.as_array().cloned())
-        .unwrap_or_default();
-    config.insert(
-        "bindings".to_string(),
-        Value::Array(merge_bindings(&existing_bindings, &control_config)),
-    );
-    Value::Object(config)
-}
-
-pub fn merge_guild_channels(
-    existing_guilds: Value,
-    valid_rooms: &[Value],
-    control_config: &Value,
-) -> Value {
-    let mut merged = existing_guilds.as_object().cloned().unwrap_or_default();
-    for room in valid_rooms {
-        let guild_id = string_field(room, "guildId");
-        let channel_id = string_field(room, "channelId");
-        if guild_id.is_empty() || channel_id.is_empty() {
-            continue;
-        }
-        let mut guild_entry = merged
-            .remove(&guild_id)
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let guild_slug = string_field(room, "guildSlug");
-        if !guild_slug.is_empty() {
-            guild_entry.insert("slug".to_string(), Value::String(guild_slug));
-        }
-        let mut channels = guild_entry
-            .remove("channels")
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let mut channel_entry = channels
-            .remove(&channel_id)
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        channel_entry.remove("allow");
-        channel_entry.insert("enabled".to_string(), Value::Bool(true));
-        channels.insert(channel_id, Value::Object(channel_entry));
-        guild_entry.insert("channels".to_string(), Value::Object(channels));
-        merged.insert(guild_id, Value::Object(guild_entry));
-    }
-
-    let control_guild_id = string_field(control_config, "guildId");
-    if !control_guild_id.is_empty() {
-        let mut guild_entry = merged
-            .remove(&control_guild_id)
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        let guild_slug = string_field(control_config, "guildSlug");
-        if !guild_slug.is_empty() {
-            guild_entry.insert("slug".to_string(), Value::String(guild_slug));
-        }
-        let mut channels = guild_entry
-            .remove("channels")
-            .and_then(|value| value.as_object().cloned())
-            .unwrap_or_default();
-        for key in ["botsChannelId", "transcriptsForumId"] {
-            let channel_id = string_field(control_config, key);
-            if channel_id.is_empty() {
-                continue;
-            }
-            let mut channel_entry = channels
-                .remove(&channel_id)
-                .and_then(|value| value.as_object().cloned())
-                .unwrap_or_default();
-            channel_entry.remove("allow");
-            channel_entry.insert("enabled".to_string(), Value::Bool(true));
-            if key == "botsChannelId" {
-                channel_entry.insert("requireMention".to_string(), Value::Bool(false));
-            }
-            channels.insert(channel_id, Value::Object(channel_entry));
-        }
-        guild_entry.insert("channels".to_string(), Value::Object(channels));
-        merged.insert(control_guild_id, Value::Object(guild_entry));
-    }
-    Value::Object(merged)
-}
-
-pub fn string_value(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
+        Some(value.to_string())
     }
 }
 
-pub fn string_field(value: &Value, key: &str) -> String {
-    string_value(value.get(key))
-}
-
-pub fn non_empty(value: String, fallback: String) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        fallback
-    } else {
-        trimmed.to_string()
-    }
+fn url_encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }

@@ -3,12 +3,11 @@ use std::str::FromStr;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::{non_empty, string_field};
 use crate::runtime::{Job, JobState};
 
 use crate::runtime::Runtime;
 use crate::runtime::timeline::JobVisibility;
-use crate::runtime::util::{first_non_empty, preview};
+use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
 
 #[derive(Debug, Clone, Default)]
 pub struct JobsRequest {

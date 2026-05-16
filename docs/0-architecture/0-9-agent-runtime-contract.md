@@ -15,7 +15,7 @@ agent_task job
 
 ## Workspace
 
-Each persisted agent session has a writable directory under `CLANKCORD_AGENT_WORKSPACES_ROOT` or `/clankcord/state/agent-workspaces`. Codex runs with that directory as its current working directory. The directory holds notes, temporary files, command output, and intermediate artifacts. The source checkout is exposed through `CLANKCORD_REPO_DIR` when the runtime can resolve it.
+Each persisted agent session has a writable directory under `paths.agent_workspaces_root` from `config.toml`. Codex runs with that directory as its current working directory. The directory holds notes, temporary files, command output, and intermediate artifacts. The source checkout is exposed through `CLANKCORD_REPO_DIR`.
 
 Every invocation receives job and session context through environment variables.
 

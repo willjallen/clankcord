@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
 use crate::Result;
-use crate::config::{non_empty, slugify};
 use crate::errors::discord_tool_error;
 
+use crate::runtime::util::{non_empty, slugify};
 use crate::runtime::{RoomConfig, Runtime};
 
 impl Runtime {

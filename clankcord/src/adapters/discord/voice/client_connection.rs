@@ -1,6 +1,4 @@
 use std::collections::BTreeSet;
-use std::env;
-use std::fs;
 use std::io::Cursor;
 use std::path::Path;
 use std::sync::{Arc, Weak};
@@ -27,7 +25,7 @@ use crate::Result;
 use crate::adapters::discord::gateway::components;
 use crate::adapters::discord::voice::capture::VoiceData;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::config::tokens_path;
+use crate::config;
 use crate::runtime::VoiceBotStatus;
 
 pub(super) struct DiscordVoiceClient {
@@ -264,20 +262,7 @@ fn spawn_gateway_task(
 }
 
 fn raw_client_token_lines() -> Result<Vec<String>> {
-    let mut lines = Vec::new();
-    if let Ok(value) = env::var("CLANKCORD_BOT_TOKENS") {
-        lines.extend(value.lines().map(str::to_string));
-    }
-    let path = tokens_path();
-    if path.is_file() {
-        lines.extend(
-            fs::read_to_string(&path)
-                .with_context(|| format!("failed to read {}", path.display()))?
-                .lines()
-                .map(str::to_string),
-        );
-    }
-    Ok(lines)
+    config::raw_voice_bot_token_lines()
 }
 
 fn parse_client_token_specs(lines: Vec<String>) -> Result<Vec<(String, String)>> {

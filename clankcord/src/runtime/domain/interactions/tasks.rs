@@ -1,13 +1,12 @@
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
-use crate::config::non_empty;
+use crate::config;
 use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
@@ -16,7 +15,7 @@ use crate::runtime::jobs::{
 use crate::runtime::timeline::{
     JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
 };
-use crate::runtime::util::{first_non_empty, first_value_string, log, preview};
+use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
     Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload, TextTarget,
 };
@@ -645,10 +644,7 @@ pub fn agent_task_workdir(job: &Job) -> PathBuf {
 }
 
 fn agent_workspace_root() -> PathBuf {
-    env::var("CLANKCORD_AGENT_WORKSPACES_ROOT")
-        .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/clankcord/state/agent-workspaces"))
+    config::agent_workspaces_root()
 }
 
 fn agent_task_env(
@@ -656,9 +652,16 @@ fn agent_task_env(
     workdir: &std::path::Path,
     repo_dir: Option<&PathBuf>,
 ) -> BTreeMap<String, String> {
-    let mut vars = env::vars().collect::<BTreeMap<_, _>>();
-    vars.entry("CLANKCORD_API_BASE_URL".to_string())
-        .or_insert_with(|| "http://127.0.0.1:8091".to_string());
+    let mut vars = BTreeMap::new();
+    vars.insert("CLANKCORD_API_BASE_URL".to_string(), config::api_base_url());
+    vars.insert(
+        "CODEX_HOME".to_string(),
+        config::codex_home().display().to_string(),
+    );
+    vars.insert(
+        "HOME".to_string(),
+        config::codex_home().display().to_string(),
+    );
     vars.insert(
         "CLANKCORD_AGENT_WORKDIR".to_string(),
         workdir.display().to_string(),
@@ -686,25 +689,16 @@ fn agent_task_env(
 }
 
 fn agent_repo_dir() -> Option<PathBuf> {
-    env::var("CLANKCORD_CODEX_WORKDIR")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| env::current_dir().ok())
+    Some(config::codex_workdir())
 }
 
 fn agent_task_model() -> Option<String> {
-    env::var("CLANKCORD_AGENT_TASK_MODEL")
-        .or_else(|_| env::var("CLANKCORD_CODEX_MODEL"))
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    config::codex_task_model()
 }
 
 fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPreflightMetadata {
     let agent_env = envs.cloned().unwrap_or_default();
-    let codex_bin = env::var("CLANKCORD_CODEX_BIN")
-        .or_else(|_| env::var("CODEX_BIN"))
-        .unwrap_or_else(|_| "codex".to_string());
+    let codex_bin = config::codex_bin();
     let checks: Vec<Vec<String>> = vec![
         vec![codex_bin, "--version".to_string()],
         vec!["rg".to_string(), "--version".to_string()],

@@ -1,8 +1,9 @@
 use serde_json::Value;
 
 use crate::Result;
-use crate::config::string_value;
 use crate::runtime::{Job, JobKind};
+
+pub(crate) const MESSAGE_CHUNK_LIMIT: usize = 1800;
 
 pub fn log(message: &str) {
     eprintln!("[clankcord-voice] {message}");
@@ -18,6 +19,15 @@ pub(crate) fn first_non_empty<const N: usize>(values: [String; N]) -> String {
 
 pub(crate) fn string_field(value: &Value, key: &str) -> String {
     string_value(value.get(key))
+}
+
+pub(crate) fn string_value(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => text.trim().to_string(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Bool(boolean)) => boolean.to_string(),
+        _ => String::new(),
+    }
 }
 
 pub(crate) fn first_value_string(value: &Value, keys: &[&str]) -> String {
@@ -64,6 +74,50 @@ pub(crate) fn non_empty(value: String, default: String) -> String {
     } else {
         value.trim().to_string()
     }
+}
+
+pub(crate) fn slugify(value: &str) -> String {
+    let lower = value.to_lowercase();
+    let non_slug = regex::Regex::new(r"[^a-z0-9]+").expect("valid slug regex");
+    let multi_dash = regex::Regex::new(r"-{2,}").expect("valid slug regex");
+    let slug = non_slug.replace_all(&lower, "-");
+    multi_dash
+        .replace_all(slug.trim_matches('-'), "-")
+        .to_string()
+}
+
+pub(crate) fn split_message_chunks(content: &str, limit: usize) -> Vec<String> {
+    let normalized = content.trim();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for line in normalized.lines() {
+        let line_text = format!("{line}\n");
+        if line_text.len() > limit {
+            if !current.is_empty() {
+                chunks.push(current.trim_end().to_string());
+                current.clear();
+            }
+            let mut start = 0;
+            while start < line_text.len() {
+                let end = (start + limit).min(line_text.len());
+                chunks.push(line_text[start..end].trim_end().to_string());
+                start = end;
+            }
+            continue;
+        }
+        if !current.is_empty() && current.len() + line_text.len() > limit {
+            chunks.push(current.trim_end().to_string());
+            current.clear();
+        }
+        current.push_str(&line_text);
+    }
+    if !current.is_empty() {
+        chunks.push(current.trim_end().to_string());
+    }
+    chunks
 }
 
 pub(crate) fn preview(value: &str, limit: usize) -> String {

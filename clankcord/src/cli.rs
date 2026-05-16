@@ -1140,18 +1140,11 @@ fn submit_command(
 }
 
 fn api_base_url() -> String {
-    std::env::var("CLANKCORD_API_BASE_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8091".to_string())
-        .trim_end_matches('/')
-        .to_string()
+    crate::config::api_base_url()
 }
 
 fn api_timeout_seconds() -> u64 {
-    std::env::var("CLANKCORD_API_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(60)
-        .max(5)
+    crate::config::api_timeout_seconds()
 }
 
 fn api_request(
@@ -1344,10 +1337,7 @@ fn agent_context_requested_by(value: Option<String>) -> String {
 }
 
 fn env_value(key: &str) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+    crate::config::env_context_value(key)
 }
 
 fn query_pairs(payload: Option<&Value>) -> Vec<(String, String)> {

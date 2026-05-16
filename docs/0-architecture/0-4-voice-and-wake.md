@@ -129,7 +129,7 @@ independent activation threshold 45 seconds
 
 ## Playback
 
-Voice playback is a parent job that creates mute and play-audio children. Cue assets resolve from `CLANKCORD_VOICE_SOUND_DIR` or `/workspace/clankcord/res/audio`.
+Voice playback is a parent job that creates mute and play-audio children. Cue assets resolve from `voice.sound.dir` in `config.toml`.
 
 ```text
 discord_voice_playback(cue)

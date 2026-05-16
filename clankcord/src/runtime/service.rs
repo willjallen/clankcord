@@ -1,21 +1,17 @@
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::Result;
 use crate::adapters::discord::gateway::text::DiscordTextAdapter;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::config::{config_path, read_json};
+use crate::config;
 use crate::runtime::core::execution::RuntimeExecutor;
 use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
-
-const DEFAULT_INTAKE_QUEUE_DEPTH: usize = 256;
-const DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS: i64 = 500;
 
 type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
 
@@ -174,7 +170,7 @@ impl RuntimeService {
             Ok(_) => {}
             Err(error) => log(&format!("agent task recovery failed: {error}")),
         }
-        let (intake, intake_receiver) = mpsc::channel(DEFAULT_INTAKE_QUEUE_DEPTH);
+        let (intake, intake_receiver) = mpsc::channel(config::intake_queue_depth());
         let job_sink = RuntimeJobSink {
             intake: intake.clone(),
         };
@@ -185,7 +181,7 @@ impl RuntimeService {
         let executor = RuntimeExecutor::new(live_voice.clone(), timeline_store.clone());
         timeline_store
             .replace_runtime_maintenance_job(Job::runtime_maintenance(
-                runtime_maintenance_interval_ms(),
+                config::runtime_maintenance_interval_ms(),
             ))
             .await
             .context("replacing runtime maintenance job")?;
@@ -401,20 +397,11 @@ fn job_created_payload(job: Job) -> Value {
     json!({"kind": "job_created", "job_ids": [job.id.clone()], "job": job.to_value()})
 }
 
-fn runtime_maintenance_interval_ms() -> i64 {
-    let seconds = std::env::var("CLANKCORD_RUNTIME_MAINTENANCE_INTERVAL_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS as f64 / 1000.0)
-        .max(DEFAULT_RUNTIME_MAINTENANCE_INTERVAL_MS as f64 / 1000.0);
-    (seconds * 1000.0).round() as i64
-}
-
 pub async fn start_persistent_process() -> Result<()> {
     let service = RuntimeService::new()
         .await
         .context("creating runtime service")?;
-    let http_addr = http_addr().context("resolving HTTP bind address")?;
+    let http_addr = config::http_addr().context("resolving HTTP bind address")?;
     let handle = service.handle();
     service.spawn();
     crate::adapters::http::serve(handle, http_addr)
@@ -438,35 +425,5 @@ pub fn start_blocking() -> i32 {
             eprintln!("{error}");
             1
         }
-    }
-}
-
-fn http_addr() -> Result<SocketAddr> {
-    let payload = read_json(&config_path(), json!({}));
-    let api_config = payload
-        .get("api")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    let host = std::env::var("CLANKCORD_API_HOST")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| string_from_map(&api_config, "host", "0.0.0.0"));
-    let port = std::env::var("CLANKCORD_API_PORT")
-        .ok()
-        .and_then(|value| value.parse::<u16>().ok())
-        .unwrap_or_else(|| {
-            string_from_map(&api_config, "port", "8091")
-                .parse()
-                .unwrap_or(8091)
-        });
-    Ok(format!("{host}:{port}").parse()?)
-}
-
-fn string_from_map(map: &Map<String, Value>, key: &str, fallback: &str) -> String {
-    match map.get(key) {
-        Some(Value::String(value)) if !value.trim().is_empty() => value.trim().to_string(),
-        Some(Value::Number(value)) => value.to_string(),
-        _ => fallback.to_string(),
     }
 }

@@ -1,71 +1,17 @@
 use std::collections::BTreeMap;
-use std::env;
-use std::fs;
-use std::path::PathBuf;
 
 use anyhow::Context;
 use reqwest::blocking::Client;
 use serde_json::Value;
 
 use crate::Result;
+use crate::config::{discord_api_base, load_discord_bot_token};
 use crate::errors::discord_tool_error;
 use crate::runtime::util::string_field;
 
 pub const GUILD_TEXT_CHANNEL_TYPES: &[i64] = &[0, 5];
 pub const THREAD_CHANNEL_TYPES: &[i64] = &[10, 11, 12];
 pub const FORUM_CHANNEL_TYPE: i64 = 15;
-
-pub fn discord_api_base() -> String {
-    env::var("CLANKCORD_DISCORD_API_BASE")
-        .unwrap_or_else(|_| "https://discord.com/api/v10".to_string())
-        .trim_end_matches('/')
-        .to_string()
-}
-
-pub fn read_secret_value(env_key: &str, file_env_key: &str, default_secret_path: &str) -> String {
-    let value = env::var(env_key).unwrap_or_default().trim().to_string();
-    if !value.is_empty() {
-        return value;
-    }
-    let file_path = env::var(file_env_key)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    let file_path = if file_path.is_empty() {
-        default_secret_path.to_string()
-    } else {
-        file_path
-    };
-    if file_path.is_empty() {
-        return String::new();
-    }
-    let path = PathBuf::from(file_path);
-    if path.is_file() {
-        fs::read_to_string(path)
-            .unwrap_or_default()
-            .trim()
-            .to_string()
-    } else {
-        String::new()
-    }
-}
-
-pub fn load_discord_bot_token() -> Result<String> {
-    let token = read_secret_value(
-        "CLANKCORD_DISCORD_BOT_TOKEN",
-        "CLANKCORD_DISCORD_BOT_TOKEN_FILE",
-        "/run/secrets/clankcord_discord_bot_token",
-    );
-    if token.is_empty() {
-        Err(discord_tool_error("CLANKCORD_DISCORD_BOT_TOKEN is not set"))
-    } else {
-        Ok(token)
-    }
-}
-
-pub fn has_discord_bot_token() -> bool {
-    load_discord_bot_token().is_ok()
-}
 
 pub fn discord_request(
     method: &str,

@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::string_field;
 use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
@@ -14,7 +13,7 @@ use crate::runtime::{
 };
 
 use crate::runtime::Runtime;
-use crate::runtime::util::{first_non_empty, preview};
+use crate::runtime::util::{first_non_empty, preview, string_field};
 
 impl Runtime {
     pub async fn confirmation_context_for_command(

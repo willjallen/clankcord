@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::config;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, new_id, utc_now};
 use crate::runtime::{
@@ -9,7 +10,6 @@ use crate::runtime::{
     TextTarget, TextTargetKind, dm_route_key, voice_route_key,
 };
 
-const DEFAULT_AGENT_SESSION_EXPIRY_SECONDS: i64 = 4 * 60 * 60;
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
 
 impl Runtime {
@@ -277,19 +277,11 @@ impl Runtime {
 }
 
 fn agent_session_expiry_seconds() -> i64 {
-    std::env::var("CLANKCORD_AGENT_SESSION_EXPIRY_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(DEFAULT_AGENT_SESSION_EXPIRY_SECONDS)
-        .clamp(60, 7 * 24 * 60 * 60)
+    config::agent_session_expiry_seconds()
 }
 
 fn agent_thread_auto_archive_minutes() -> i64 {
-    std::env::var("CLANKCORD_AGENT_THREAD_AUTO_ARCHIVE_MINUTES")
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(1440)
-        .clamp(60, 10080)
+    config::agent_thread_auto_archive_minutes()
 }
 
 fn trim_thread_name(value: &str) -> String {

@@ -1,4 +1,3 @@
-use std::env;
 use std::path::Path;
 
 use anyhow::Context;
@@ -8,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::Result;
 use crate::adapters::stt::content_type_for_path;
-use crate::config::load_stt_base_url;
+use crate::config;
 use crate::runtime::util::{finite_number, number_or_null, string_field};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,31 +52,15 @@ impl WakeDetectionResult {
 }
 
 pub fn wake_url() -> Result<String> {
-    let base_url = env::var("CLANKCORD_WAKE_BASE_URL")
-        .ok()
-        .map(|value| value.trim().trim_end_matches('/').to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or(load_stt_base_url()?);
-    if base_url.ends_with("/audio/wake") {
-        Ok(base_url)
-    } else {
-        Ok(format!("{}/audio/wake", base_url.trim_end_matches('/')))
-    }
+    config::wake_url()
 }
 
 pub fn wake_timeout_seconds() -> u64 {
-    env::var("CLANKCORD_WAKE_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(30)
-        .max(1)
+    config::wake_timeout_seconds()
 }
 
-pub fn wake_api_key() -> String {
-    env::var("CLANKCORD_WAKE_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+pub fn wake_api_key() -> Result<String> {
+    config::wake_api_key()
 }
 
 pub fn parse_wake_payload(payload: &Value) -> WakeDetectionResult {
@@ -141,7 +124,7 @@ pub fn detect_wake_fileobj_sync(
         .timeout(std::time::Duration::from_secs(wake_timeout_seconds()))
         .build()?;
     let mut request = client.post(wake_url()?).multipart(form);
-    let api_key = wake_api_key();
+    let api_key = wake_api_key()?;
     if !api_key.is_empty() {
         request = request.bearer_auth(api_key);
     }

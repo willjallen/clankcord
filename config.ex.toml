@@ -1,0 +1,223 @@
+[paths]
+state_dir = "/clankcord/state"
+room_controls_path = "/clankcord/state/room-controls.json"
+voice_memory_root = "/clankcord/durable/clankcord/voice"
+agent_workspaces_root = "/clankcord/state/agent-workspaces"
+
+[secrets]
+root = "/run/secrets"
+
+[time]
+timezone = "UTC"
+
+[api]
+host = "0.0.0.0"
+port = 8091
+base_url = "http://127.0.0.1:8091"
+timeout_seconds = 60
+
+[postgres]
+host = "127.0.0.1"
+port = 54329
+database = "clankcord"
+user = "clankcord"
+password_secret = "clankcord_postgres_password"
+schema = "public"
+pool_size = 32
+
+[discord]
+api_base = "https://discord.com/api/v10"
+bot_token_secret = "clankcord_discord_bot_token"
+voice_bot_tokens_secret = "clankcord_discord_voice_bot_tokens"
+member_cache_max_age_ms = 3600000
+
+[codex]
+bin = "codex"
+home = "/codex"
+workdir = "/workspace/clankcord"
+task_model = ""
+sandbox = ""
+bypass_sandbox = false
+approval_policy = "never"
+
+[agents]
+session_expiry_seconds = 86400
+thread_auto_archive_minutes = 1440
+
+[pool]
+idle_channel_name = "idle"
+auto_join_enabled = false
+manual_leave_cooldown_seconds = 1200
+manual_join_hold_seconds = 3600
+pause_release_seconds = 1200
+
+[transcription]
+silence_ms = 1000
+max_segment_ms = 8000
+minimum_utterance_ms = 350
+
+[stt]
+base_url = "http://127.0.0.1:8080/v1"
+model = "large-v3"
+language = "en"
+response_format = "json"
+include_logprobs = true
+max_token_logprobs = 64
+timeout_seconds = 120
+drop_no_speech_probability = 0.7
+drop_avg_token_logprob = -0.8
+api_key_secret = ""
+
+[wake]
+base_url = "http://127.0.0.1:8080/v1"
+timeout_seconds = 30
+api_key_secret = ""
+probe_minimum_ms = 250
+probe_window_ms = 2000
+probe_interval_ms = 500
+probe_max_queue_age_seconds = 5
+duplicate_overlap_grace_ms = 750
+
+[wake.activation]
+lookback_seconds = 30
+min_post_seconds = 5
+speaker_idle_seconds = 3
+stt_flush_grace_seconds = 0
+max_window_seconds = 60
+additive_preempt_seconds = 10
+independent_after_seconds = 45
+stt_settle_seconds = 120
+active_capture_poll_ms = 500
+
+[elevenlabs]
+api_key_secret = "clankcord_elevenlabs_api_key"
+stt_url = "https://api.elevenlabs.io/v1/speech-to-text"
+webhook_url = ""
+timeout_seconds = 600
+model_id = "scribe_v2"
+
+[voice.sound]
+dir = "/workspace/clankcord/clankcord/assets/sounds"
+timeout_ms = 3000
+
+[voice.capture]
+flush_interval_seconds = 0.5
+
+[voice.diagnostics]
+enabled = false
+audio_stats = false
+receiver = false
+event_paths = false
+
+[jobs]
+runtime_maintenance_interval_seconds = 15.0
+intake_queue_depth = 256
+ephemeral_gc_batch_limit = 256
+dispatch_drain_max_passes = 64
+
+[jobs.concurrency]
+wake = 4
+audio = 32
+voice_control = 32
+discord_text = 12
+refinement = 4
+agent = 4
+maintenance = 1
+general_async = 16
+
+[jobs.batch]
+wake = 8
+audio = 32
+voice_control = 32
+discord_text = 12
+refinement = 4
+agent = 4
+maintenance = 1
+general_async = 16
+
+[control]
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+default_voice_room_id = "code-lounge"
+bots_channel_id = "1490626643012878417"
+agent_threads_channel_id = "1490627070387163217"
+transcripts_forum_id = "1490627070387163217"
+thread_auto_archive_minutes = 10080
+
+[[guilds]]
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+idle_channel_id = ""
+idle_channel_name = "idle"
+
+[[rooms]]
+id = "art-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1191913556019531986"
+channel_slug = "art-lounge"
+channel_name = "art-lounge"
+auto_join = false
+
+[[rooms]]
+id = "code-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1204188344993447956"
+channel_slug = "code-lounge"
+channel_name = "code-lounge"
+auto_join = false
+
+[[rooms]]
+id = "env-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1214269652411224104"
+channel_slug = "env-lounge"
+channel_name = "env-lounge"
+auto_join = false
+
+[[rooms]]
+id = "meeting"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1197609025769062430"
+channel_slug = "meeting"
+channel_name = "meeting"
+auto_join = false
+
+[[rooms]]
+id = "meetings"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "553025625737396288"
+channel_slug = "meetings"
+channel_name = "meetings"
+auto_join = false
+
+[[rooms]]
+id = "music-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1205999821043802212"
+channel_slug = "music-lounge"
+channel_name = "music-lounge"
+auto_join = false
+
+[[rooms]]
+id = "quiet-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1418667169906032793"
+channel_slug = "quiet-lounge"
+channel_name = "quiet-lounge"
+auto_join = false
+
+[[rooms]]
+id = "community-lounge"
+guild_id = "553018603226529802"
+guild_slug = "subsolar"
+channel_id = "1047398274484682802"
+channel_slug = "community-lounge"
+channel_name = "lounge"
+auto_join = false

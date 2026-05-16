@@ -1,4 +1,3 @@
-use std::env;
 use std::path::Path;
 
 use anyhow::Context;
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
 use crate::Result;
-use crate::config::load_stt_base_url;
+use crate::config;
 use crate::runtime::util::{finite_number, number_or_null};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -17,7 +16,7 @@ pub struct TranscriptionResult {
 }
 
 pub fn stt_transcriptions_url() -> Result<String> {
-    let base_url = load_stt_base_url()?.trim_end_matches('/').to_string();
+    let base_url = config::stt_transcriptions_base_url()?;
     if base_url.ends_with("/audio/transcriptions") {
         Ok(base_url)
     } else {
@@ -26,74 +25,39 @@ pub fn stt_transcriptions_url() -> Result<String> {
 }
 
 pub fn stt_model() -> String {
-    env::var("CLANKCORD_STT_MODEL")
-        .unwrap_or_else(|_| "large-v3".to_string())
-        .trim()
-        .to_string()
-        .chars()
-        .collect::<String>()
-        .if_empty("large-v3")
+    config::stt_model()
 }
 
 pub fn stt_language() -> String {
-    env::var("CLANKCORD_STT_LANGUAGE")
-        .unwrap_or_else(|_| "en".to_string())
-        .trim()
-        .to_string()
+    config::stt_language()
 }
 
 pub fn stt_response_format() -> String {
-    env::var("CLANKCORD_STT_RESPONSE_FORMAT")
-        .unwrap_or_else(|_| "json".to_string())
-        .trim()
-        .to_string()
-        .if_empty("json")
+    config::stt_response_format()
 }
 
 pub fn stt_include_logprobs() -> bool {
-    matches!(
-        env::var("CLANKCORD_STT_INCLUDE_LOGPROBS")
-            .unwrap_or_else(|_| "1".to_string())
-            .trim()
-            .to_lowercase()
-            .as_str(),
-        "1" | "true" | "yes" | "on"
-    )
+    config::stt_include_logprobs()
 }
 
 pub fn stt_max_token_logprobs() -> usize {
-    env::var("CLANKCORD_STT_MAX_TOKEN_LOGPROBS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(64)
+    config::stt_max_token_logprobs()
 }
 
 pub fn stt_timeout_seconds() -> u64 {
-    env::var("CLANKCORD_STT_TIMEOUT_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(120)
+    config::stt_timeout_seconds()
 }
 
 pub fn stt_drop_no_speech_threshold() -> f64 {
-    env::var("CLANKCORD_STT_DROP_NO_SPEECH_PROB")
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(0.7)
+    config::stt_drop_no_speech_threshold()
 }
 
 pub fn stt_drop_avg_token_logprob_threshold() -> f64 {
-    env::var("CLANKCORD_STT_DROP_AVG_TOKEN_LOGPROB")
-        .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(-0.8)
+    config::stt_drop_avg_token_logprob_threshold()
 }
 
-pub fn stt_api_key() -> String {
-    env::var("CLANKCORD_STT_API_KEY")
-        .unwrap_or_default()
-        .trim()
-        .to_string()
+pub fn stt_api_key() -> Result<String> {
+    config::stt_api_key()
 }
 
 pub fn content_type_for_path(path: &Path) -> String {
@@ -338,7 +302,7 @@ pub fn transcribe_fileobj_result_sync(
         .timeout(std::time::Duration::from_secs(stt_timeout_seconds()))
         .build()?;
     let mut request = client.post(stt_transcriptions_url()?).multipart(form);
-    let api_key = stt_api_key();
+    let api_key = stt_api_key()?;
     if !api_key.is_empty() {
         request = request.bearer_auth(api_key);
     }
@@ -367,19 +331,5 @@ fn type_name(value: &Value) -> &'static str {
         Value::String(_) => "str",
         Value::Array(_) => "list",
         Value::Object(_) => "dict",
-    }
-}
-
-trait IfEmpty {
-    fn if_empty(self, fallback: &str) -> String;
-}
-
-impl IfEmpty for String {
-    fn if_empty(self, fallback: &str) -> String {
-        if self.trim().is_empty() {
-            fallback.to_string()
-        } else {
-            self
-        }
     }
 }

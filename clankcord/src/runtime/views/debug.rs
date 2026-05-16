@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::env;
 use std::fs;
 use std::path::PathBuf;
 
@@ -10,14 +9,14 @@ use sqlx::Row;
 
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
-use crate::config::{non_empty, string_field};
+use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::timeline::{
     event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
     utc_now,
 };
-use crate::runtime::util::{first_non_empty, preview};
+use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
 use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -1509,10 +1508,7 @@ fn codex_auth_payload() -> Value {
 }
 
 fn codex_home() -> PathBuf {
-    env::var("CODEX_HOME")
-        .or_else(|_| env::var("HOME").map(|home| format!("{home}/.codex")))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(".codex"))
+    config::codex_home()
 }
 
 fn jwt_payload(token: &str) -> Value {

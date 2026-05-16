@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::adapters::discord::api::{create_dm_channel, discord_request};
-use crate::config::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::jobs::{DiscordPostMetadata, DiscordPostedMessageMetadata};
+use crate::runtime::util::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::{
     DiscordTextSendOutput, DiscordTextSendPayload, TextDeliveryKind, TextTargetKind,
 };

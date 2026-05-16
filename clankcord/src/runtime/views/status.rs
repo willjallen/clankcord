@@ -3,8 +3,9 @@ use std::fs;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::{format_timestamp_local, local_tz, read_json, state_dir, write_json};
+use crate::config::{local_tz, state_dir};
 
+use crate::runtime::timeline::{format_timestamp_local, read_json_file, write_json_file};
 use crate::runtime::util::first_non_empty;
 use crate::runtime::{JobState, RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
 
@@ -220,14 +221,14 @@ impl Runtime {
 
     pub async fn persist_status_snapshot(&self) -> Result<()> {
         fs::create_dir_all(state_dir())?;
-        write_json(
+        write_json_file(
             &state_dir().join("status.json"),
             &self.status_payload(None).await,
         )
     }
 
     pub(crate) fn load_status_snapshot(&mut self) {
-        let payload = read_json(&state_dir().join("status.json"), json!({}));
+        let payload = read_json_file(&state_dir().join("status.json"), json!({}));
         for bot in payload
             .get("bots")
             .and_then(Value::as_array)

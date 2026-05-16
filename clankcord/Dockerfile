@@ -34,15 +34,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl jq libopus0 postgresql-client ripgrep \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex@0.130.0 \
-    && mkdir -p /clankcord/durable /clankcord/state /codex /workspace \
-    && chmod -R 0777 /clankcord /codex /workspace
+    && mkdir -p /app /clankcord/durable /clankcord/state /codex /workspace \
+    && chmod -R 0777 /app /clankcord /codex /workspace
 
 COPY --from=builder /out/clankcord /usr/local/bin/clankcord
+COPY config.toml config.ex.toml /app/
 
-ENV CODEX_HOME=/codex
-ENV HOME=/codex
-ENV CLANKCORD_CODEX_BIN=codex
-ENV CLANKCORD_API_BASE_URL=http://127.0.0.1:8091
+WORKDIR /app
 
 EXPOSE 8091
 

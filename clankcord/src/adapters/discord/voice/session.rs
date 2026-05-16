@@ -312,7 +312,7 @@ impl SessionAudioPipeline {
                 "channels": artifact.channels,
                 "postProcessing": artifact.post_processing.clone(),
         });
-        if DiagnosticsConfig::from_env().audio_stats {
+        if DiagnosticsConfig::from_config().audio_stats {
             merge_object(&mut log_fields, analyze_pcm_bytes(pcm));
         }
         note_session_log(session, "captured-segment", log_fields);

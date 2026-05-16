@@ -99,6 +99,48 @@ pub fn isoformat_z(value: Option<DateTime<Utc>>) -> String {
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+pub fn format_timestamp_local(value: DateTime<Utc>, tz: chrono_tz::Tz) -> BTreeMap<String, String> {
+    let local = value.with_timezone(&tz);
+    let unix = value.timestamp();
+    BTreeMap::from([
+        (
+            "iso".to_string(),
+            value.to_rfc3339_opts(SecondsFormat::Millis, true),
+        ),
+        ("local_iso".to_string(), local.to_rfc3339()),
+        ("discord_full".to_string(), format!("<t:{unix}:F>")),
+        ("discord_relative".to_string(), format!("<t:{unix}:R>")),
+        ("discord_short_time".to_string(), format!("<t:{unix}:T>")),
+        (
+            "display_date".to_string(),
+            local.format("%Y-%m-%d").to_string(),
+        ),
+        (
+            "display_time".to_string(),
+            local.format("%H:%M:%S").to_string(),
+        ),
+        (
+            "display_minute".to_string(),
+            local.format("%H:%M").to_string(),
+        ),
+        (
+            "display_started".to_string(),
+            local.format("%Y-%m-%d %H:%M:%S %Z").to_string(),
+        ),
+        ("hour_slug".to_string(), local.format("%H").to_string()),
+        ("minute_slug".to_string(), local.format("%H-%M").to_string()),
+        (
+            "day_path".to_string(),
+            format!(
+                "{:04}/{:02}/{:02}",
+                chrono::Datelike::year(&local),
+                chrono::Datelike::month(&local),
+                chrono::Datelike::day(&local)
+            ),
+        ),
+    ])
+}
+
 pub fn parse_instant(raw: &str) -> Option<DateTime<Utc>> {
     let value = raw.trim();
     if value.is_empty() {

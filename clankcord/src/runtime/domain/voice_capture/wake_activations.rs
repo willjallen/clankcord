@@ -2,6 +2,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::config;
 use crate::runtime::timeline::{
     event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
 };
@@ -9,16 +10,6 @@ use crate::runtime::util::{first_value_string, non_empty};
 use crate::runtime::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
 };
-
-const DEFAULT_LOOKBACK_SECONDS: i64 = 30;
-const DEFAULT_MIN_POST_SECONDS: i64 = 5;
-const DEFAULT_IDLE_SECONDS: i64 = 3;
-const DEFAULT_STT_FLUSH_GRACE_SECONDS: i64 = 0;
-const DEFAULT_MAX_WINDOW_SECONDS: i64 = 60;
-const DEFAULT_STT_SETTLE_SECONDS: i64 = 120;
-const DEFAULT_ADDITIVE_PREEMPT_SECONDS: i64 = 10;
-const DEFAULT_INDEPENDENT_AFTER_SECONDS: i64 = 45;
-const ACTIVE_CAPTURE_POLL_MS: i64 = 500;
 
 #[derive(Debug, Clone, Copy)]
 struct CaptureHold {
@@ -137,6 +128,7 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
         }));
     }
 
+    let activation = config::wake_activation_config();
     let payload = WakeActivationPayload {
         activation_id: new_id("act"),
         guild_id: guild_id.clone(),
@@ -149,34 +141,13 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
         wake_ended_at: isoformat_z(Some(wake_ended_at)),
         latest_wake_event_id: wake_event_id,
         latest_wake_at: isoformat_z(Some(wake_started_at)),
-        lookback_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_LOOKBACK_SECONDS",
-            DEFAULT_LOOKBACK_SECONDS,
-        ),
-        min_post_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_MIN_POST_SECONDS",
-            DEFAULT_MIN_POST_SECONDS,
-        ),
-        speaker_idle_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_IDLE_SECONDS",
-            DEFAULT_IDLE_SECONDS,
-        ),
-        stt_flush_grace_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_STT_FLUSH_GRACE_SECONDS",
-            DEFAULT_STT_FLUSH_GRACE_SECONDS,
-        ),
-        max_window_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_MAX_SECONDS",
-            DEFAULT_MAX_WINDOW_SECONDS,
-        ),
-        additive_preempt_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_PREEMPT_SECONDS",
-            DEFAULT_ADDITIVE_PREEMPT_SECONDS,
-        ),
-        independent_after_seconds: env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_INDEPENDENT_AFTER_SECONDS",
-            DEFAULT_INDEPENDENT_AFTER_SECONDS,
-        ),
+        lookback_seconds: activation.lookback_seconds.max(0),
+        min_post_seconds: activation.min_post_seconds.max(0),
+        speaker_idle_seconds: activation.speaker_idle_seconds.max(0),
+        stt_flush_grace_seconds: activation.stt_flush_grace_seconds.max(0),
+        max_window_seconds: activation.max_window_seconds.max(0),
+        additive_preempt_seconds: activation.additive_preempt_seconds.max(0),
+        independent_after_seconds: activation.independent_after_seconds.max(0),
         amended_wake_event_ids: Vec::new(),
         replacement_of_job_ids: Vec::new(),
     };
@@ -299,16 +270,13 @@ async fn dispatch_after_stt_settles(
     now: DateTime<Utc>,
 ) -> Result<Value> {
     let settle_deadline = closed_at
-        + chrono::Duration::seconds(env_i64(
-            "CLANKCORD_WAKE_ACTIVATION_STT_SETTLE_SECONDS",
-            DEFAULT_STT_SETTLE_SECONDS,
-        ));
+        + chrono::Duration::seconds(config::wake_activation_config().stt_settle_seconds.max(0));
     if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at, closed_at).await? {
         if now < settle_deadline {
             let mut deferred = job.clone();
             deferred.state = JobState::Queued;
             deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(
-                now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS),
+                now + chrono::Duration::milliseconds(active_capture_poll_ms()),
                 settle_deadline,
             ))));
             runtime.timeline_store.update_job(&deferred).await?;
@@ -735,7 +703,7 @@ fn live_speaker_capture_hold(
     }
     let settled_at = last_pcm_at
         .map(|last_pcm_at| last_pcm_at + chrono::Duration::seconds(payload.speaker_idle_seconds))
-        .unwrap_or(now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS));
+        .unwrap_or(now + chrono::Duration::milliseconds(active_capture_poll_ms()));
     let has_live_audio =
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
     let waiting_for_idle = settled_at > now;
@@ -745,7 +713,7 @@ fn live_speaker_capture_hold(
     let next_run_at = if waiting_for_idle {
         settled_at
     } else {
-        now + chrono::Duration::milliseconds(ACTIVE_CAPTURE_POLL_MS)
+        now + chrono::Duration::milliseconds(active_capture_poll_ms())
     };
     Some(CaptureHold {
         reason: "waiting_for_live_speaker_audio",
@@ -943,10 +911,8 @@ fn strip_activation_separator(value: &str) -> &str {
         .trim()
 }
 
-fn env_i64(key: &str, fallback: i64) -> i64 {
-    std::env::var(key)
-        .ok()
-        .and_then(|value| value.parse::<i64>().ok())
-        .unwrap_or(fallback)
-        .max(0)
+fn active_capture_poll_ms() -> i64 {
+    config::wake_activation_config()
+        .active_capture_poll_ms
+        .max(1)
 }

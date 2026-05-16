@@ -4,12 +4,11 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::wakeword::detect_wake_file_sync;
+use crate::config;
 use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use crate::runtime::timeline::{event_end, event_start, isoformat_z, sha256_file};
 use crate::runtime::util::first_value_string;
 use crate::runtime::{Job, Runtime, WakeProbePayload};
-
-const DUPLICATE_OVERLAP_GRACE_MS: i64 = 750;
 
 pub(crate) async fn execute_probe_job(
     runtime: &Runtime,
@@ -133,9 +132,9 @@ async fn overlapping_wake_event(
 ) -> Result<Option<Value>> {
     let mut kinds = BTreeSet::new();
     kinds.insert("wake_detected".to_string());
-    let start =
-        payload.probe_start_time - chrono::Duration::milliseconds(DUPLICATE_OVERLAP_GRACE_MS);
-    let end = payload.probe_end_time + chrono::Duration::milliseconds(DUPLICATE_OVERLAP_GRACE_MS);
+    let grace = config::wake_duplicate_overlap_grace_ms();
+    let start = payload.probe_start_time - chrono::Duration::milliseconds(grace);
+    let end = payload.probe_end_time + chrono::Duration::milliseconds(grace);
     Ok(runtime
         .timeline_store
         .load_events(

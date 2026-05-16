@@ -5,8 +5,8 @@ use serenity::model::channel::Message;
 use serenity::model::gateway::GatewayIntents;
 
 use crate::Result;
-use crate::adapters::discord::api::load_discord_bot_token;
 use crate::adapters::discord::gateway::{components, registration, slash};
+use crate::config::load_discord_bot_token;
 use crate::runtime::{DiscordTextMessagePayload, Job, RuntimeJobSink, log};
 
 #[derive(Clone)]

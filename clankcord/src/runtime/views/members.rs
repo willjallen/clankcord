@@ -2,10 +2,9 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::discord::api::list_guild_members;
+use crate::config;
 use crate::errors::discord_tool_error;
 use crate::runtime::Runtime;
-
-const MEMBER_CACHE_MAX_AGE_MS: i64 = 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Default)]
 pub struct MemberSearchRequest {
@@ -115,7 +114,9 @@ impl Runtime {
             .discord_member_cache_age_ms(guild_id)
             .await?;
         let current_count = self.timeline_store.count_discord_members(guild_id).await?;
-        if age.is_some_and(|age| age < MEMBER_CACHE_MAX_AGE_MS) && current_count > 0 {
+        if age.is_some_and(|age| age < config::discord_member_cache_max_age_ms())
+            && current_count > 0
+        {
             return Ok(
                 json!({"refreshed": false, "ageMs": age.unwrap_or(0), "count": current_count}),
             );

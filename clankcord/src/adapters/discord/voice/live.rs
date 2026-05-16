@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::env;
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +22,7 @@ use crate::adapters::discord::voice::client_connection::{
 };
 use crate::adapters::discord::voice::session::WakeProbeConfig;
 use crate::adapters::discord::voice::types::LiveVoiceSession;
-use crate::config::{local_tz, read_json};
+use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
 use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
@@ -33,15 +32,6 @@ use crate::runtime::{
     DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, Job, JobOutput, JobPayload, Runtime,
     RuntimeJobSink, VoiceBotStatus, log,
 };
-
-const DEFAULT_FLUSH_INTERVAL_SECONDS: f64 = 0.5;
-const DEFAULT_SILENCE_MS: i64 = 1_000;
-const DEFAULT_MAX_SEGMENT_MS: i64 = 8_000;
-const DEFAULT_WAKE_PROBE_MINIMUM_MS: i64 = 500;
-const DEFAULT_WAKE_PROBE_WINDOW_MS: i64 = 2_500;
-const DEFAULT_WAKE_PROBE_INTERVAL_MS: i64 = 500;
-const DEFAULT_SOUND_ASSET_DIR: &str = "/workspace/clankcord/res/audio";
-const DEFAULT_PLAYBACK_TIMEOUT_MS: u64 = 10_000;
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
 
@@ -124,45 +114,12 @@ impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
 
 impl LiveVoiceAdapter {
     pub fn new(job_sink: RuntimeJobSink, timeline_store: TimelineStore) -> Self {
-        let payload = read_json(&crate::config::config_path(), json!({}));
-        let transcription = payload
-            .get("transcription")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let silence_ms = transcription
-            .get("silenceMs")
-            .and_then(Value::as_i64)
-            .unwrap_or(DEFAULT_SILENCE_MS);
-        let max_segment_ms = transcription
-            .get("maxSegmentMs")
-            .and_then(Value::as_i64)
-            .unwrap_or(DEFAULT_MAX_SEGMENT_MS);
-        let minimum_utterance_ms = transcription
-            .get("minimumUtteranceMs")
-            .and_then(Value::as_i64)
-            .unwrap_or(350);
-        let wake = payload
-            .get("wake")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
+        let transcription = transcription_config();
+        let wake = crate::config::app_config().wake.clone();
         let wake_probe = WakeProbeConfig {
-            minimum_ms: wake
-                .get("probeMinimumMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(DEFAULT_WAKE_PROBE_MINIMUM_MS)
-                .max(0),
-            window_ms: wake
-                .get("probeWindowMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(DEFAULT_WAKE_PROBE_WINDOW_MS)
-                .max(0),
-            interval_ms: wake
-                .get("probeIntervalMs")
-                .and_then(Value::as_i64)
-                .unwrap_or(DEFAULT_WAKE_PROBE_INTERVAL_MS)
-                .max(0),
+            minimum_ms: wake.probe_minimum_ms.max(0),
+            window_ms: wake.probe_window_ms.max(0),
+            interval_ms: wake.probe_interval_ms.max(0),
         };
         Self {
             job_sink,
@@ -170,10 +127,12 @@ impl LiveVoiceAdapter {
             voice_clients_lock: Mutex::new(BTreeMap::new()),
             capture_sessions_lock: Mutex::new(BTreeMap::new()),
             speaker_profiles_lock: Mutex::new(BTreeMap::new()),
-            flush_interval: Duration::from_millis((DEFAULT_FLUSH_INTERVAL_SECONDS * 1000.0) as u64),
-            silence_ms: silence_ms.max(0),
-            max_segment_ms: max_segment_ms.max(250),
-            minimum_utterance_ms: minimum_utterance_ms.max(0),
+            flush_interval: Duration::from_millis(
+                (crate::config::voice_flush_interval_seconds() * 1000.0) as u64,
+            ),
+            silence_ms: transcription.silence_ms.max(0),
+            max_segment_ms: transcription.max_segment_ms.max(250),
+            minimum_utterance_ms: transcription.minimum_utterance_ms.max(0),
             wake_probe,
             no_token_warning_logged: AtomicBool::new(false),
         }
@@ -837,17 +796,9 @@ fn voice_state_payload(state: &VoiceState) -> Value {
 }
 
 fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {
-    env::var("CLANKCORD_VOICE_SOUND_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOUND_ASSET_DIR))
-        .join(cue.asset_file_name())
+    crate::config::voice_sound_dir().join(cue.asset_file_name())
 }
 
 fn playback_timeout() -> Duration {
-    Duration::from_millis(
-        env::var("CLANKCORD_VOICE_SOUND_TIMEOUT_MS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_PLAYBACK_TIMEOUT_MS),
-    )
+    Duration::from_millis(crate::config::voice_sound_timeout_ms())
 }
