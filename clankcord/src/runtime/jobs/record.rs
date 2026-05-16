@@ -7,14 +7,16 @@ use crate::runtime::util::first_non_empty;
 
 use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{
-    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload,
-    CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,
-    DiscordTextSendPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, JobKind,
+    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
+    BinaryPayload, CommandPayload, CommandRequest, ConfirmationContext,
+    ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceJoinPayload,
+    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind,
     JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
     RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
-    RuntimeMaintenancePayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
+    TextDeliveryPayload, TranscriptPublicationPayload, VoiceStatusSyncPayload,
     WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
@@ -718,6 +720,81 @@ impl Job {
         )
     }
 
+    pub fn voice_status_sync(source_job_id: impl Into<String>) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::VoiceStatusSync(VoiceStatusSyncPayload {
+                source_job_id: source_job_id.into(),
+            }),
+        )
+    }
+
+    pub fn discord_voice_status_snapshot(source_job_id: impl Into<String>) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotPayload {
+                source_job_id: source_job_id.into(),
+            }),
+        )
+    }
+
+    pub fn automation_evaluation(source_job_id: impl Into<String>) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::AutomationEvaluation(AutomationEvaluationPayload {
+                source_job_id: source_job_id.into(),
+            }),
+        )
+    }
+
+    pub fn stale_wake_probe_sweep(source_job_id: impl Into<String>, max_age_seconds: i64) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::StaleWakeProbeSweep(StaleWakeProbeSweepPayload {
+                source_job_id: source_job_id.into(),
+                max_age_seconds,
+            }),
+        )
+    }
+
+    pub fn stale_running_job_sweep(source_job_id: impl Into<String>, timeout_minutes: i64) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::StaleRunningJobSweep(StaleRunningJobSweepPayload {
+                source_job_id: source_job_id.into(),
+                timeout_minutes,
+            }),
+        )
+    }
+
+    pub fn ephemeral_job_gc(source_job_id: impl Into<String>, batch_limit: usize) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::EphemeralJobGc(EphemeralJobGcPayload {
+                source_job_id: source_job_id.into(),
+                batch_limit,
+            }),
+        )
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>> {
         Ok(bincode::serialize(self)?)
     }
@@ -928,6 +1005,22 @@ impl Job {
     pub fn runtime_maintenance_payload(&self) -> Option<&RuntimeMaintenancePayload> {
         match &self.payload {
             JobPayload::RuntimeMaintenance(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn voice_status_sync_payload(&self) -> Option<&VoiceStatusSyncPayload> {
+        match &self.payload {
+            JobPayload::VoiceStatusSync(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_status_snapshot_payload(
+        &self,
+    ) -> Option<&DiscordVoiceStatusSnapshotPayload> {
+        match &self.payload {
+            JobPayload::DiscordVoiceStatusSnapshot(payload) => Some(payload),
             _ => None,
         }
     }

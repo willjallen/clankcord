@@ -10,14 +10,44 @@ use crate::runtime::core::execution::RuntimeAdapterJobs;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 22] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
         JobOrdering::None,
     ),
-    JobExecutionPolicy::runtime_environment(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::RuntimeMaintenance,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::VoiceStatusSync,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::adapter(
+        JobKind::DiscordVoiceStatusSnapshot,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::AutomationEvaluation,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::StaleWakeProbeSweep,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::StaleRunningJobSweep,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::EphemeralJobGc,
         JobLane::Maintenance,
         JobOrdering::RuntimeMaintenance,
     ),
@@ -163,15 +193,6 @@ impl JobExecutionPolicy {
             ordering,
         }
     }
-
-    const fn runtime_environment(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
-        Self {
-            kind,
-            executor: JobExecutor::RuntimeEnvironment,
-            lane,
-            ordering,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,7 +201,6 @@ enum JobExecutor {
     RuntimeSnapshot,
     AdapterAsync,
     BlockingSnapshot,
-    RuntimeEnvironment,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -332,7 +352,6 @@ where
                 JobExecutor::RuntimeSnapshot => self.spawn_runtime_snapshot_job(job, permit),
                 JobExecutor::AdapterAsync => self.spawn_adapter_job(job, permit),
                 JobExecutor::BlockingSnapshot => self.spawn_blocking_snapshot_job(job, permit),
-                JobExecutor::RuntimeEnvironment => self.spawn_runtime_environment_job(job, permit),
             }
         }
         Ok(json!({
@@ -437,37 +456,6 @@ where
                     "blocking job worker failed {job_id} ({kind}): {}",
                     error_chain(&error)
                 )),
-            }
-            drop(permit);
-            notify.notify_one();
-        });
-    }
-
-    fn spawn_runtime_environment_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let timeline_store = self.timeline_store.clone();
-        let adapter = self.adapter_jobs.clone();
-        let notify = self.notify.clone();
-        tokio::spawn(async move {
-            let job_id = job.id.clone();
-            let kind = job.kind;
-            let result = adapter
-                .execute_runtime_maintenance_job(timeline_store.clone(), job.clone())
-                .await;
-            let update = match result {
-                Ok(output) => match Runtime::from_store(timeline_store.clone()) {
-                    Ok(runtime) => runtime.complete_dispatched_job(&job_id, job, output).await,
-                    Err(error) => Err(error),
-                },
-                Err(error) => match Runtime::from_store(timeline_store.clone()) {
-                    Ok(runtime) => runtime.fail_dispatched_job(&job_id, job, error).await,
-                    Err(error) => Err(error),
-                },
-            };
-            if let Err(error) = update {
-                log(&format!(
-                    "runtime environment job worker failed {job_id} ({kind}): {}",
-                    error_chain(&error)
-                ));
             }
             drop(permit);
             notify.notify_one();

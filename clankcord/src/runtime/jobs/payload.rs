@@ -1066,6 +1066,39 @@ pub struct RuntimeMaintenancePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceStatusSyncPayload {
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceStatusSnapshotPayload {
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationEvaluationPayload {
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaleWakeProbeSweepPayload {
+    pub source_job_id: String,
+    pub max_age_seconds: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StaleRunningJobSweepPayload {
+    pub source_job_id: String,
+    pub timeout_minutes: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EphemeralJobGcPayload {
+    pub source_job_id: String,
+    pub batch_limit: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
     WakeActivation(WakeActivationPayload),
@@ -1089,6 +1122,12 @@ pub enum JobPayload {
     RuntimeControl(RuntimeControlPayload),
     WakeProbe(WakeProbePayload),
     RuntimeMaintenance(RuntimeMaintenancePayload),
+    VoiceStatusSync(VoiceStatusSyncPayload),
+    DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotPayload),
+    AutomationEvaluation(AutomationEvaluationPayload),
+    StaleWakeProbeSweep(StaleWakeProbeSweepPayload),
+    StaleRunningJobSweep(StaleRunningJobSweepPayload),
+    EphemeralJobGc(EphemeralJobGcPayload),
 }
 
 impl JobPayload {
@@ -1116,6 +1155,12 @@ impl JobPayload {
             Self::RuntimeControl(_) => JobKind::RuntimeControl,
             Self::WakeProbe(_) => JobKind::WakeProbe,
             Self::RuntimeMaintenance(_) => JobKind::RuntimeMaintenance,
+            Self::VoiceStatusSync(_) => JobKind::VoiceStatusSync,
+            Self::DiscordVoiceStatusSnapshot(_) => JobKind::DiscordVoiceStatusSnapshot,
+            Self::AutomationEvaluation(_) => JobKind::AutomationEvaluation,
+            Self::StaleWakeProbeSweep(_) => JobKind::StaleWakeProbeSweep,
+            Self::StaleRunningJobSweep(_) => JobKind::StaleRunningJobSweep,
+            Self::EphemeralJobGc(_) => JobKind::EphemeralJobGc,
         }
     }
 
@@ -1124,6 +1169,12 @@ impl JobPayload {
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
             Self::RuntimeMaintenance(_) => None,
+            Self::VoiceStatusSync(_) => None,
+            Self::DiscordVoiceStatusSnapshot(_) => None,
+            Self::AutomationEvaluation(_) => None,
+            Self::StaleWakeProbeSweep(_) => None,
+            Self::StaleRunningJobSweep(_) => None,
+            Self::EphemeralJobGc(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1151,6 +1202,12 @@ impl JobPayload {
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
             Self::RuntimeMaintenance(_) => None,
+            Self::VoiceStatusSync(_) => None,
+            Self::DiscordVoiceStatusSnapshot(_) => None,
+            Self::AutomationEvaluation(_) => None,
+            Self::StaleWakeProbeSweep(_) => None,
+            Self::StaleRunningJobSweep(_) => None,
+            Self::EphemeralJobGc(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1351,6 +1408,27 @@ impl JobPayload {
             }),
             Self::RuntimeMaintenance(payload) => json!({
                 "interval_ms": payload.interval_ms,
+            }),
+            Self::VoiceStatusSync(payload) => json!({
+                "source_job_id": payload.source_job_id,
+            }),
+            Self::DiscordVoiceStatusSnapshot(payload) => json!({
+                "source_job_id": payload.source_job_id,
+            }),
+            Self::AutomationEvaluation(payload) => json!({
+                "source_job_id": payload.source_job_id,
+            }),
+            Self::StaleWakeProbeSweep(payload) => json!({
+                "source_job_id": payload.source_job_id,
+                "max_age_seconds": payload.max_age_seconds,
+            }),
+            Self::StaleRunningJobSweep(payload) => json!({
+                "source_job_id": payload.source_job_id,
+                "timeout_minutes": payload.timeout_minutes,
+            }),
+            Self::EphemeralJobGc(payload) => json!({
+                "source_job_id": payload.source_job_id,
+                "batch_limit": payload.batch_limit,
             }),
             Self::WakeProbe(payload) => json!({
                 "guild_id": payload.guild_id,

@@ -31,7 +31,7 @@ A job has identity, scope, lifecycle, lineage, scheduling, and result data. The 
 
 The row uses stable projections for scheduling and filtering. The payload blob holds the typed Rust `Job` value. That split matters operationally: Postgres can claim ready work through indexed columns while handlers still recover the exact domain payload they were written for. JSON appears at the boundary and in rendered views; execution moves through Rust enums and structs.
 
-Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, agent session startup, agent tasks, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute control, runtime control, and runtime maintenance. High-volume internal kinds such as `audio_segment`, `wake_probe`, and `runtime_maintenance` use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
+Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, agent session startup, agent tasks, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
 
 ## Decisions
 
@@ -51,7 +51,7 @@ WaitFor(children)
     persists child jobs, records dependency edges, and marks the parent waiting
 ```
 
-Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Voice playback waits for mute and play-audio children. Confirmations, agent session startup, and publication jobs resume because child output determines the parent result.
+Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, and publication jobs resume because child output determines the parent result.
 
 ## Dependency Resolution
 
@@ -84,7 +84,7 @@ Some parents need their handler invoked again after child completion. The resolv
 
 The scheduler drains durable work in passes. A pass first resolves waiting parents whose children have reached terminal states. It then finds queued jobs whose ready time has arrived, claims them according to execution policy, and spawns workers. When a pass resolves or schedules anything, the dispatcher immediately runs another pass. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is due.
 
-Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapshot jobs execute domain code. Blocking snapshot jobs run provider, process, file, STT, wake, refinement, and Codex work outside async workers. Adapter jobs execute Discord IO. Runtime maintenance uses a runtime-environment bridge because it copies live adapter state into durable runtime state.
+Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapshot jobs execute domain code. Blocking snapshot jobs run provider, process, file, STT, wake, refinement, and Codex work outside async workers. Adapter jobs execute Discord IO. Runtime maintenance is runtime-domain work: `runtime_maintenance` schedules the next tick and submits ordinary background jobs; those jobs then run through the same lanes, ordering keys, dependencies, outputs, and failures as any other work.
 
 Lanes bound concurrency by class of work. Wake probes have separate capacity from audio transcription. Agent tasks have separate capacity from Discord text sends. Voice control has its own lane. Ordering keys serialize work that would race while allowing unrelated work to proceed.
 
@@ -97,6 +97,7 @@ discord_text_send         discord:text:<target-kind>:<target-id>
 voice playback/mute       voice:session:<session_id>
 discord_voice_join        voice:bot:<bot_id>
 room_agent_placement      room:placement:<guild>:<room>
+runtime background work   runtime:maintenance
 ```
 
 Lane capacity and scheduler batch size come from `config.toml`.

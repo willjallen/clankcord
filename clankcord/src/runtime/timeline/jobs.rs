@@ -760,6 +760,7 @@ impl TimelineStore {
                     | crate::runtime::JobKind::ConfirmationRequired
                     | crate::runtime::JobKind::AgentSessionStart
                     | crate::runtime::JobKind::TranscriptPublication
+                    | crate::runtime::JobKind::VoiceStatusSync
             ) {
                 parent.set_state(crate::runtime::JobState::Queued);
                 parent.next_run_at = None;
@@ -1172,7 +1173,13 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         crate::runtime::JobKind::AgentTask => "agent",
         crate::runtime::JobKind::DiscordTextMessage => "general_async",
         crate::runtime::JobKind::DiscordSlashCommand => "general_async",
-        crate::runtime::JobKind::RuntimeMaintenance => "maintenance",
+        crate::runtime::JobKind::RuntimeMaintenance
+        | crate::runtime::JobKind::VoiceStatusSync
+        | crate::runtime::JobKind::DiscordVoiceStatusSnapshot
+        | crate::runtime::JobKind::AutomationEvaluation
+        | crate::runtime::JobKind::StaleWakeProbeSweep
+        | crate::runtime::JobKind::StaleRunningJobSweep
+        | crate::runtime::JobKind::EphemeralJobGc => "maintenance",
         _ => "general_async",
     }
 }
@@ -1304,6 +1311,14 @@ fn job_ordering_key(job: &Job) -> String {
             format!("voice:session:{}", payload.session_id)
         }
         crate::runtime::JobPayload::RuntimeMaintenance(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::VoiceStatusSync(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::DiscordVoiceStatusSnapshot(_) => {
+            "runtime:maintenance".to_string()
+        }
+        crate::runtime::JobPayload::AutomationEvaluation(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::StaleWakeProbeSweep(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::StaleRunningJobSweep(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::EphemeralJobGc(_) => "runtime:maintenance".to_string(),
         _ => String::new(),
     }
 }
@@ -1325,6 +1340,14 @@ fn source_job_id(job: &Job) -> String {
         crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::VoiceStatusSync(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::DiscordVoiceStatusSnapshot(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::runtime::JobPayload::AutomationEvaluation(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::StaleWakeProbeSweep(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::StaleRunningJobSweep(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),
         _ => String::new(),
     }
 }

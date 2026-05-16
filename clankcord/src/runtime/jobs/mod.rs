@@ -8,20 +8,22 @@ pub use kind::{JobKind, JobState};
 pub use output::{
     AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordTextSendOutput,
     DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, JobCreatedOutput, JobFailure,
-    JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
-    TranscriptPublicationOutput,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, DiscordVoiceStatusSnapshotOutput,
+    JobCreatedOutput, JobFailure, JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
+    TextDeliveryOutput, TranscriptPublicationOutput,
 };
 pub use payload::{
-    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction,
-    CommandArguments, CommandKind, CommandPayload, CommandRequest, ConfirmationContext,
-    ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceJoinPayload,
-    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload, JobPayload, OpaqueValue,
+    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
+    BinaryPayload, CommandAction, CommandArguments, CommandKind, CommandPayload, CommandRequest,
+    ConfirmationContext, ConfirmationRequiredPayload, DiscordForumThreadCreatePayload,
+    DiscordSlashCommandPayload, DiscordTextMessagePayload, DiscordTextSendPayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload,
+    DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobPayload, OpaqueValue,
     RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
+    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind, TranscriptPublicationPayload, VoiceStatusSyncPayload,
     WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};

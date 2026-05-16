@@ -145,6 +145,12 @@ pub struct DiscordVoicePlayAudioOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceStatusSnapshotOutput {
+    pub bots: Vec<VoiceBotStatus>,
+    pub sessions: Vec<VoiceCaptureSessionStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobOutput {
     Empty,
     JobCreated(JobCreatedOutput),
@@ -160,6 +166,7 @@ pub enum JobOutput {
     DiscordVoicePlayback(DiscordVoicePlaybackOutput),
     DiscordVoiceMute(DiscordVoiceMuteOutput),
     DiscordVoicePlayAudio(DiscordVoicePlayAudioOutput),
+    DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotOutput),
     Record(BinaryPayload),
 }
 
@@ -341,6 +348,13 @@ impl JobOutput {
                 object.insert("duration_ms".to_string(), json!(output.duration_ms));
                 insert_non_empty(&mut object, "message", &output.message);
                 Value::Object(object)
+            }
+            Self::DiscordVoiceStatusSnapshot(output) => {
+                json!({
+                    "kind": "discord_voice_status_snapshot",
+                    "bots": output.bots.iter().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
+                    "sessions": output.sessions.iter().map(VoiceCaptureSessionStatus::to_json).collect::<Vec<_>>(),
+                })
             }
             Self::Record(payload) => payload.to_json(),
         }

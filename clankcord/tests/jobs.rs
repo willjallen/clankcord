@@ -1,17 +1,21 @@
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+use std::sync::Mutex;
 
 use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
+use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordTextMessagePayload, DiscordTextSendPayload,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
-    WakeActivationPayload, WakeProbePayload,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime,
+    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -143,6 +147,85 @@ async fn runtime_maintenance_job_is_ephemeral_and_round_trips() {
         500
     );
     assert_eq!(decoded.payload_value()["interval_ms"], json!(500));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_maintenance_submits_background_work_jobs() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let created = store
+        .create_job(Job::runtime_maintenance(500))
+        .await
+        .unwrap();
+    let mut running = created.clone();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let completed = store.get_job(&created.id).await.unwrap();
+    assert_eq!(completed.state, JobState::Complete);
+    let output = completed.metadata.output.unwrap().to_json();
+    assert_eq!(output["kind"], json!("runtime_maintenance"));
+    assert_eq!(
+        output["submitted_jobs"]
+            .as_array()
+            .map(|values| values.len())
+            .unwrap(),
+        5
+    );
+
+    let jobs = store
+        .list_jobs_with_visibility(None, None, JobVisibility::IncludeEphemeral)
+        .await
+        .unwrap();
+    let kinds = jobs.iter().map(|job| job.kind).collect::<BTreeSet<_>>();
+    assert!(kinds.contains(&JobKind::RuntimeMaintenance));
+    assert!(kinds.contains(&JobKind::VoiceStatusSync));
+    assert!(kinds.contains(&JobKind::AutomationEvaluation));
+    assert!(kinds.contains(&JobKind::StaleWakeProbeSweep));
+    assert!(kinds.contains(&JobKind::StaleRunningJobSweep));
+    assert!(kinds.contains(&JobKind::EphemeralJobGc));
+}
+
+fn initialize_test_config(root: &Path) {
+    static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CONFIG_LOCK.lock().unwrap();
+    let path = root.join("config");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(
+        path.join("config.toml"),
+        include_str!("../../config.ex.toml"),
+    )
+    .unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&path).unwrap();
+    let _ = clankcord::config::app_config();
+    std::env::set_current_dir(original_dir).unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maintenance_work_jobs_are_typed_ephemeral_jobs() {
+    let jobs = [
+        Job::voice_status_sync("job_source"),
+        Job::discord_voice_status_snapshot("job_source"),
+        Job::automation_evaluation("job_source"),
+        Job::stale_wake_probe_sweep("job_source", 15),
+        Job::stale_running_job_sweep("job_source", 30),
+        Job::ephemeral_job_gc("job_source", 500),
+    ];
+
+    for job in jobs {
+        let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+        assert_eq!(decoded.kind, job.kind);
+        assert!(decoded.kind.is_ephemeral());
+        assert_eq!(
+            decoded.payload_value()["source_job_id"],
+            json!("job_source")
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

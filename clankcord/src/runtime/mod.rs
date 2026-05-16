@@ -28,12 +28,14 @@ pub use jobs::{
     DiscordTextSendOutput, DiscordTextSendPayload, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
     DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload, DiscordVoiceMuteOutput,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job,
-    JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
+    DiscordVoiceStatusSnapshotOutput, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
+    Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState,
     RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementOutput,
     RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload,
-    RuntimeMaintenancePayload, TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload,
-    TextTarget, TextTargetKind, TranscriptPublicationOutput, TranscriptPublicationPayload,
+    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
+    TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationOutput, TranscriptPublicationPayload, VoiceStatusSyncPayload,
     WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};

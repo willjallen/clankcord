@@ -58,7 +58,7 @@ The dispatcher runs a hot drain loop. Each drain pass resolves waiting parents w
 
 Workers reconstruct a `Runtime` from the shared timeline store when they need domain behavior. That runtime view contains configuration, status snapshots, the automation registry, the agent runtime harness, and the timeline store. Live Discord voice clients remain in the live voice adapter because those are process capabilities, while jobs, room controls, events, automations, sessions, publications, and artifacts remain durable state.
 
-The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots and Postgres-backed room controls. Runtime-snapshot jobs work from a reconstructed runtime view. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Adapter async jobs perform Discord IO. Runtime maintenance uses a runtime-environment bridge to sync live adapter state into runtime state.
+The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots and Postgres-backed room controls. Runtime-snapshot jobs work from a reconstructed runtime view. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Adapter async jobs perform Discord IO. Runtime maintenance is runtime-domain work that submits concrete background jobs.
 
 ## Live Loops
 
@@ -66,17 +66,27 @@ The Discord text loop starts the gateway client for messages, slash commands, an
 
 The live voice loop ticks every 500 ms by default. It starts missing configured voice clients and asks active capture sessions to flush ready buffers. A flush can produce `audio_segment` jobs for STT and `wake_probe` jobs for wake detection. Those jobs enter through the same sink and scheduler as commands and Discord text work.
 
-Runtime maintenance is represented as `runtime_maintenance`. A maintenance run creates the next maintenance job, syncs live voice state from the adapter, evaluates built-in and stored automations, cancels stale wake probes, fails stale running non-agent jobs, and garbage-collects terminal ephemeral jobs.
+Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. The maintenance parent does not run sweeps, automations, or adapter synchronization inline.
 
 ```text
 runtime_maintenance
       |
       +--> schedule next maintenance run
-      +--> sync live voice status
-      +--> run automations
-      +--> cancel stale wake probes
-      +--> fail stale running jobs
-      +--> remove retained ephemeral terminal jobs
+      +--> voice_status_sync
+      +--> automation_evaluation
+      +--> stale_wake_probe_sweep
+      +--> stale_running_job_sweep
+      +--> ephemeral_job_gc
+```
+
+Voice status sync is the only maintenance path that needs live adapter state. The runtime parent creates a `discord_voice_status_snapshot` child, the Discord voice adapter returns bot and session status, and the parent resumes to commit that snapshot into durable runtime state.
+
+```text
+voice_status_sync
+      |
+      +--> discord_voice_status_snapshot
+      |
+      +--> commit bot and capture-session status
 ```
 
 ## HTTP

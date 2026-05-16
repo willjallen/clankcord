@@ -25,12 +25,12 @@ use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
-use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
+use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, Job, JobOutput, JobPayload, Runtime,
-    RuntimeJobSink, VoiceBotStatus, log,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
+    Job, JobOutput, JobPayload, RuntimeJobSink, VoiceBotStatus, log,
 };
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
@@ -84,27 +84,11 @@ impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
                 JobPayload::DiscordForumThreadCreate(payload) => Ok(
                     JobOutput::DiscordForumThreadCreate(forum_thread::create(payload).await?),
                 ),
+                JobPayload::DiscordVoiceStatusSnapshot(_) => Ok(
+                    JobOutput::DiscordVoiceStatusSnapshot(self.voice_status_snapshot().await),
+                ),
                 payload => anyhow::bail!(
                     "Discord voice adapter cannot execute {} jobs",
-                    payload.kind()
-                ),
-            }
-        })
-    }
-
-    fn execute_runtime_maintenance_job<'a>(
-        &'a self,
-        timeline_store: TimelineStore,
-        job: Job,
-    ) -> AdapterJobFuture<'a> {
-        Box::pin(async move {
-            match job.payload {
-                JobPayload::RuntimeMaintenance(payload) => {
-                    self.execute_runtime_maintenance(timeline_store, payload.interval_ms)
-                        .await
-                }
-                payload => anyhow::bail!(
-                    "runtime environment executor cannot execute {} jobs",
                     payload.kind()
                 ),
             }
@@ -461,43 +445,16 @@ impl LiveVoiceAdapter {
         Ok(())
     }
 
-    async fn execute_runtime_maintenance(
-        self: &Arc<Self>,
-        timeline_store: TimelineStore,
-        interval_ms: i64,
-    ) -> Result<JobOutput> {
-        let next_run_at = utc_now() + chrono::Duration::milliseconds(interval_ms);
-        let mut next = Job::runtime_maintenance(interval_ms);
-        next.next_run_at = Some(isoformat_z(Some(next_run_at)));
-        let next = timeline_store.create_job(next).await?;
-
-        let bots = self.bot_statuses().await;
-        let sessions = self.session_statuses().await;
-        Runtime::from_store(timeline_store.clone())?
-            .sync_voice_adapter_status(bots, sessions)
-            .await?;
-
-        let automation = {
-            let mut runtime = Runtime::from_store(timeline_store.clone())?;
-            runtime.run_automations().await?.to_json()
-        };
-        let maintenance = {
-            let runtime = Runtime::from_store(timeline_store.clone())?;
-            runtime.run_maintenance_tasks().await?
-        };
-
-        Ok(JobOutput::from_boundary_json(&json!({
-            "kind": "runtime_maintenance",
-            "automation": automation,
-            "maintenance": maintenance,
-            "next_job_id": next.id,
-            "next_run_at": next.next_run_at,
-        }))?)
-    }
-
     pub async fn bot_statuses(&self) -> Vec<VoiceBotStatus> {
         let clients = self.voice_clients_lock.lock().await;
         clients.values().map(DiscordVoiceClient::status).collect()
+    }
+
+    async fn voice_status_snapshot(&self) -> DiscordVoiceStatusSnapshotOutput {
+        DiscordVoiceStatusSnapshotOutput {
+            bots: self.bot_statuses().await,
+            sessions: self.session_statuses().await,
+        }
     }
 
     pub async fn session_statuses(&self) -> Vec<crate::runtime::VoiceCaptureSessionStatus> {

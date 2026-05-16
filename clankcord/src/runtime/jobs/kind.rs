@@ -29,6 +29,12 @@ pub enum JobKind {
     RuntimeControl,
     WakeProbe,
     RuntimeMaintenance,
+    VoiceStatusSync,
+    DiscordVoiceStatusSnapshot,
+    AutomationEvaluation,
+    StaleWakeProbeSweep,
+    StaleRunningJobSweep,
+    EphemeralJobGc,
 }
 
 impl JobKind {
@@ -56,6 +62,12 @@ impl JobKind {
             Self::RuntimeControl => "runtime_control",
             Self::WakeProbe => "wake_probe",
             Self::RuntimeMaintenance => "runtime_maintenance",
+            Self::VoiceStatusSync => "voice_status_sync",
+            Self::DiscordVoiceStatusSnapshot => "discord_voice_status_snapshot",
+            Self::AutomationEvaluation => "automation_evaluation",
+            Self::StaleWakeProbeSweep => "stale_wake_probe_sweep",
+            Self::StaleRunningJobSweep => "stale_running_job_sweep",
+            Self::EphemeralJobGc => "ephemeral_job_gc",
         }
     }
 
@@ -66,7 +78,15 @@ impl JobKind {
     pub fn is_ephemeral(self) -> bool {
         matches!(
             self,
-            Self::AudioSegment | Self::WakeProbe | Self::RuntimeMaintenance
+            Self::AudioSegment
+                | Self::WakeProbe
+                | Self::RuntimeMaintenance
+                | Self::VoiceStatusSync
+                | Self::DiscordVoiceStatusSnapshot
+                | Self::AutomationEvaluation
+                | Self::StaleWakeProbeSweep
+                | Self::StaleRunningJobSweep
+                | Self::EphemeralJobGc
         )
     }
 }
@@ -104,6 +124,12 @@ impl FromStr for JobKind {
             "runtime_control" => Ok(Self::RuntimeControl),
             "wake_probe" => Ok(Self::WakeProbe),
             "runtime_maintenance" => Ok(Self::RuntimeMaintenance),
+            "voice_status_sync" => Ok(Self::VoiceStatusSync),
+            "discord_voice_status_snapshot" => Ok(Self::DiscordVoiceStatusSnapshot),
+            "automation_evaluation" => Ok(Self::AutomationEvaluation),
+            "stale_wake_probe_sweep" => Ok(Self::StaleWakeProbeSweep),
+            "stale_running_job_sweep" => Ok(Self::StaleRunningJobSweep),
+            "ephemeral_job_gc" => Ok(Self::EphemeralJobGc),
             value => anyhow::bail!("unknown job kind: {value}"),
         }
     }

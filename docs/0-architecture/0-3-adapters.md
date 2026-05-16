@@ -17,18 +17,18 @@ adapter
 
 ## Adapter Jobs
 
-The runtime executor reaches adapters through the `RuntimeAdapterJobs` trait. In the live service, `Arc<LiveVoiceAdapter>` fulfills Discord voice and text jobs that require live Discord capabilities. It also executes the runtime-maintenance environment bridge, which copies process-local live voice state into durable runtime state.
+The runtime executor reaches adapters through the `RuntimeAdapterJobs` trait. In the live service, `Arc<LiveVoiceAdapter>` fulfills Discord voice and text jobs that require live Discord capabilities. It also returns a narrow Discord voice status snapshot when a runtime-owned maintenance job asks for live bot and capture-session state.
 
-The adapter job set includes Discord voice join and leave, mute, audio playback, text send, forum thread creation, and runtime maintenance. These jobs are still ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work; the executor simply chooses the adapter path for the side effect.
+The adapter job set includes Discord voice join and leave, mute, audio playback, voice status snapshot, text send, and forum thread creation. These jobs are still ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work; the executor simply chooses the adapter path for the side effect.
 
 ```text
 discord_voice_join
 discord_voice_leave
 discord_voice_mute
 discord_voice_play_audio
+discord_voice_status_snapshot
 discord_text_send
 discord_forum_thread_create
-runtime_maintenance
 ```
 
 ## HTTP

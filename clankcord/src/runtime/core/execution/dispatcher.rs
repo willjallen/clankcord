@@ -1,32 +1,12 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::timeline::JobVisibility;
-use crate::runtime::timeline::{parse_instant, utc_now};
 use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 
 use super::routes;
 
 impl Runtime {
-    pub(crate) async fn run_maintenance_tasks(&self) -> Result<Value> {
-        let stale_wake_probes = self
-            .timeline_store
-            .cancel_stale_wake_probe_jobs(wake_probe_max_queue_age_seconds())
-            .await?;
-        let timed_out = self.fail_stale_running_jobs().await?;
-        let ephemeral_gc = self
-            .timeline_store
-            .garbage_collect_ephemeral_jobs(ephemeral_job_gc_batch_limit())
-            .await?;
-        Ok(json!({
-            "staleWakeProbes": stale_wake_probes,
-            "timedOutJobs": timed_out,
-            "ephemeralJobGc": ephemeral_gc,
-        }))
-    }
-
     pub async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match routes::execute_runtime_async(self, &running).await {
@@ -149,43 +129,4 @@ impl Runtime {
         crate::runtime::log(&format!("job dispatch failed {job_id}: {error_text}"));
         Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
     }
-
-    async fn fail_stale_running_jobs(&self) -> Result<Vec<Value>> {
-        let now = utc_now();
-        let mut timed_out = Vec::new();
-        for mut job in self
-            .timeline_store
-            .list_jobs_with_visibility(
-                None,
-                Some(JobState::Running),
-                JobVisibility::IncludeEphemeral,
-            )
-            .await?
-        {
-            if job.kind == JobKind::AgentTask {
-                continue;
-            }
-            let updated_at = parse_instant(&job.updated_at);
-            if updated_at
-                .map(|value| (now - value).num_minutes() < 30)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            job.set_state(JobState::FailedTimeout);
-            job.metadata.error = "job exceeded stale running-job timeout".to_string();
-            job.metadata.timed_out_at = crate::runtime::timeline::isoformat_z(None);
-            self.timeline_store.update_job(&job).await?;
-            timed_out.push(job.to_value());
-        }
-        Ok(timed_out)
-    }
-}
-
-fn wake_probe_max_queue_age_seconds() -> i64 {
-    config::wake_probe_max_queue_age_seconds()
-}
-
-fn ephemeral_job_gc_batch_limit() -> usize {
-    config::ephemeral_job_gc_batch_limit()
 }

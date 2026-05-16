@@ -20,7 +20,7 @@ Postgres-backed timeline
 rendered CLI, HTTP, dashboard, and Discord views
 ```
 
-The persistent service starts an HTTP API, a Discord text gateway client, a pool of dedicated Discord voice clients, live capture loops, a hot dispatcher, and recurring runtime maintenance. The voice side buffers per-speaker PCM, writes ready WAV artifacts, and emits `wake_probe` and `audio_segment` jobs. Runtime jobs then handle wake activation, STT, transcript publication, room placement, response delivery, and agent sessions.
+The persistent service starts an HTTP API, a Discord text gateway client, a pool of dedicated Discord voice clients, live capture loops, a hot dispatcher, and recurring runtime maintenance jobs. The voice side buffers per-speaker PCM, writes ready WAV artifacts, and emits `wake_probe` and `audio_segment` jobs. Runtime jobs then handle wake activation, STT, transcript publication, room placement, response delivery, agent sessions, automation evaluation, voice status sync, stale-job sweeps, and ephemeral job garbage collection.
 
 Postgres is the durable store. It holds room state, voice state, capture runs, timeline events, jobs, dependency edges, automations, agent sessions, transcript windows, publications, authoritative spans, and query projections. Files are durable artifacts referenced by those records. Audio jobs reference WAV files with checksums. Agent jobs reference prompt, result, and raw-output files. Transcript publications reference draft, refined, mixed-audio, metadata, and speaker-alignment artifacts.
 

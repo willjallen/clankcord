@@ -14,6 +14,26 @@ use crate::runtime::{
 pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> Result<JobDecision> {
     match &job.payload {
         JobPayload::RuntimeControl(payload) => runtime_control::prepare(runtime, payload).await,
+        JobPayload::RuntimeMaintenance(payload) => {
+            runtime.prepare_runtime_maintenance_job(job, payload).await
+        }
+        JobPayload::VoiceStatusSync(_) => runtime.prepare_voice_status_sync_job(job).await,
+        JobPayload::AutomationEvaluation(_) => runtime.prepare_automation_evaluation_job(job).await,
+        JobPayload::StaleWakeProbeSweep(payload) => {
+            runtime
+                .prepare_stale_wake_probe_sweep_job(payload.max_age_seconds)
+                .await
+        }
+        JobPayload::StaleRunningJobSweep(payload) => {
+            runtime
+                .prepare_stale_running_job_sweep_job(payload.timeout_minutes)
+                .await
+        }
+        JobPayload::EphemeralJobGc(payload) => {
+            runtime
+                .prepare_ephemeral_job_gc_job(payload.batch_limit)
+                .await
+        }
         JobPayload::WakeActivation(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                 &wake_activations::execute(runtime, job, payload).await?,
