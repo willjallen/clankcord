@@ -36,7 +36,7 @@ Voice bots are audio capture workers. Agent work begins later, when wake activat
 
 Room placement decides whether a configured room needs a voice bot. The built-in placement automation reads configured rooms, room controls, active assignments, active capture sessions, active join and leave work, available bots, and duplicate voice-bot sessions. When a room needs a transition, it emits `room_agent_placement`. Active work for the same room suppresses duplicate placement jobs.
 
-Join starts by selecting a room and claiming an assignment in Postgres. The claim transaction selects a ready unassigned bot, creates the capture run, creates the `VoiceAssignment` in `joining`, appends `voice_bot_assigned`, and returns the selected assignment. The placement parent then creates a `discord_voice_join` child. The child joins Discord and creates the live capture session. When the child completes, the parent resumes, records the adapter's bot and session observations, marks the assignment `capturing`, commits occupancy state, optionally plays the join cue, and completes.
+Join starts by selecting a room and claiming an assignment in Postgres. The claim transaction selects a ready unassigned bot, creates the capture run, creates the `VoiceAssignment` in `joining`, appends `voice_bot_assigned`, and returns the selected assignment. The placement parent then creates a `discord_voice_join` child. The child creates the live capture session and joins Discord. The session debug notes record when Discord reports the bot's voice state and when the voice driver is ready, so the durable session row shows the gap between visible room presence and playable audio. When the child completes, the parent resumes, records the adapter's bot and session observations, marks the assignment `capturing`, commits occupancy state, optionally plays the join cue, and completes.
 
 ```text
 room_agent_placement(join)
@@ -126,7 +126,7 @@ The default timing model is:
 ```text
 lookback                         30 seconds
 minimum post-wake window          5 seconds
-speaker idle                      3 seconds
+speaker idle                      2 seconds
 max activation window            60 seconds
 STT settle deadline             120 seconds
 additive preempt                 10 seconds

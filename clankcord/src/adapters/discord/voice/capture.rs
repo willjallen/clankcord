@@ -255,6 +255,18 @@ impl LiveCaptureSession {
         self.session.metadata(tz)
     }
 
+    pub(super) fn set_debug_note(&mut self, key: &str, value: String) {
+        self.session.debug_notes.insert(key.to_string(), value);
+    }
+
+    pub(super) fn debug_note(&self, key: &str) -> Option<&str> {
+        self.session.debug_notes.get(key).map(String::as_str)
+    }
+
+    pub(super) fn debug_notes(&self) -> BTreeMap<String, String> {
+        self.session.debug_notes.clone()
+    }
+
     pub(super) fn discord_lookup_context(&self) -> (String, String) {
         (
             self.session.bot_id.clone(),

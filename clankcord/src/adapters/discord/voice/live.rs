@@ -4,7 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use serenity::model::gateway::Ready;
@@ -23,7 +23,7 @@ use crate::adapters::discord::voice::session::WakeProbeConfig;
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
-use crate::runtime::timeline::TimelineStore;
+use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
@@ -196,7 +196,6 @@ impl LiveVoiceAdapter {
             assignment_id: request.assignment_id.clone(),
             mode: "local_buffering".to_string(),
         };
-        let session_metadata = session.metadata(local_tz());
         self.capture_sessions_lock.lock().await.insert(
             session_id.clone(),
             Arc::new(Mutex::new(LiveCaptureSession::new(
@@ -206,6 +205,8 @@ impl LiveVoiceAdapter {
             ))),
         );
 
+        let join_started_at = utc_now();
+        let join_started = Instant::now();
         if let Err(error) = join_voice_channel(self, voice, &session_id, guild_id, channel_id).await
         {
             self.capture_sessions_lock.lock().await.remove(&session_id);
@@ -217,6 +218,8 @@ impl LiveVoiceAdapter {
             ))
             .context(format!("bot status after failure: {status:?}")));
         }
+        let join_completed_at = utc_now();
+        let join_total_ms = elapsed_ms(join_started.elapsed());
 
         let bot_status = {
             let mut clients = self.voice_clients_lock.lock().await;
@@ -233,7 +236,39 @@ impl LiveVoiceAdapter {
         if let Some(status) = &bot_status {
             self.persist_bot_status(status).await;
         }
+        let Some(session) = self.session(&session_id).await else {
+            anyhow::bail!("live capture session {session_id} missing after successful voice join");
+        };
+        let (session_metadata, debug_notes) = {
+            let mut live_session = session.lock().await;
+            live_session.set_debug_note("joinStartedAt", isoformat_z(Some(join_started_at)));
+            live_session.set_debug_note(
+                "joinStartedAtMs",
+                join_started_at.timestamp_millis().to_string(),
+            );
+            live_session.set_debug_note("joinReadyAt", isoformat_z(Some(join_completed_at)));
+            live_session.set_debug_note(
+                "joinReadyAtMs",
+                join_completed_at.timestamp_millis().to_string(),
+            );
+            live_session.set_debug_note("joinTotalMs", join_total_ms.to_string());
+            if let Some(bot_voice_state_at_ms) = live_session
+                .debug_note("botVoiceStateAtMs")
+                .and_then(|value| value.parse::<i64>().ok())
+            {
+                live_session.set_debug_note(
+                    "botVoiceStateToJoinReadyMs",
+                    (join_completed_at.timestamp_millis() - bot_voice_state_at_ms).to_string(),
+                );
+            }
+            (
+                live_session.metadata(local_tz()),
+                live_session.debug_notes(),
+            )
+        };
         self.persist_capture_session_status(&session_metadata).await;
+        self.persist_capture_session_debug_notes(&session_id, &debug_notes)
+            .await;
         Ok(DiscordVoiceJoinOutput {
             status: "assigned".to_string(),
             session: Some(session_metadata),
@@ -475,6 +510,22 @@ impl LiveVoiceAdapter {
         }
     }
 
+    async fn persist_capture_session_debug_notes(
+        &self,
+        session_id: &str,
+        notes: &BTreeMap<String, String>,
+    ) {
+        if let Err(error) = self
+            .timeline_store
+            .set_capture_session_debug_notes(session_id, notes)
+            .await
+        {
+            log(&format!(
+                "persisting capture session debug notes {session_id} failed: {error}"
+            ));
+        }
+    }
+
     async fn submit_capture_job(&self, job: crate::runtime::Job) {
         let job_id = job.id.clone();
         if let Err(error) = self.job_sink.submit(job).await {
@@ -546,7 +597,7 @@ impl LiveVoiceAdapter {
             }
         }
 
-        let status = {
+        let (status, joining_live_session_id) = {
             let mut clients = self.voice_clients_lock.lock().await;
             let Some(client) = clients.get_mut(bot_id) else {
                 return;
@@ -554,13 +605,44 @@ impl LiveVoiceAdapter {
             if client.user_id.is_empty() || client.user_id != user_id {
                 return;
             }
-            client.current_guild_id = guild_id;
-            client.current_channel_id = channel_id;
-            Some(client.status())
+            client.current_guild_id = guild_id.clone();
+            client.current_channel_id = channel_id.clone();
+            let joining_live_session_id = if client.joining_live_session_id.is_some()
+                && !client.current_channel_id.is_empty()
+            {
+                client.joining_live_session_id.clone()
+            } else {
+                None
+            };
+            (Some(client.status()), joining_live_session_id)
         };
+        if let Some(session_id) = joining_live_session_id {
+            self.note_bot_join_voice_state(&session_id, &channel_id)
+                .await;
+        }
         if let Some(status) = status {
             self.persist_bot_status(&status).await;
         }
+    }
+
+    async fn note_bot_join_voice_state(&self, session_id: &str, channel_id: &str) {
+        let Some(session) = self.session(session_id).await else {
+            return;
+        };
+        let now = utc_now();
+        let (status, debug_notes) = {
+            let mut live_session = session.lock().await;
+            live_session.set_debug_note("botVoiceStateAt", isoformat_z(Some(now)));
+            live_session.set_debug_note("botVoiceStateAtMs", now.timestamp_millis().to_string());
+            live_session.set_debug_note("botVoiceStateChannelId", channel_id.to_string());
+            (
+                live_session.metadata(local_tz()),
+                live_session.debug_notes(),
+            )
+        };
+        self.persist_capture_session_status(&status).await;
+        self.persist_capture_session_debug_notes(session_id, &debug_notes)
+            .await;
     }
 
     pub(super) async fn note_client_error(&self, bot_id: &str, error: &str) {
@@ -795,4 +877,8 @@ fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {
 
 fn playback_timeout() -> Duration {
     Duration::from_millis(crate::config::voice_sound_timeout_ms())
+}
+
+fn elapsed_ms(duration: Duration) -> i64 {
+    duration.as_millis().min(i64::MAX as u128) as i64
 }

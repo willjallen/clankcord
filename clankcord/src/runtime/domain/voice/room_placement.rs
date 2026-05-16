@@ -581,10 +581,14 @@ impl Runtime {
     async fn active_voice_join_for_room(&self, room: &RoomConfig) -> Result<Option<Job>> {
         Ok(self
             .timeline_store
-            .list_jobs_by_scope_kind(&room.guild_id, &room.channel_id, JobKind::DiscordVoiceJoin)
+            .list_active_jobs_by_scope_kind(
+                &room.guild_id,
+                &room.channel_id,
+                JobKind::DiscordVoiceJoin,
+            )
             .await?
             .into_iter()
-            .find(|job| !job.state.is_terminal()))
+            .next())
     }
 
     async fn active_assignments_for_room(&self, room: &RoomConfig) -> Result<Vec<VoiceAssignment>> {

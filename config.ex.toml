@@ -80,7 +80,7 @@ duplicate_overlap_grace_ms = 750
 [wake.activation]
 lookback_seconds = 30
 min_post_seconds = 5
-speaker_idle_seconds = 3
+speaker_idle_seconds = 2
 stt_flush_grace_seconds = 0
 max_window_seconds = 60
 additive_preempt_seconds = 10

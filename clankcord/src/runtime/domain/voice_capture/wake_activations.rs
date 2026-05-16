@@ -435,10 +435,10 @@ async fn activation_followup_target(
 ) -> Result<Option<Job>> {
     let jobs = runtime
         .timeline_store
-        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
+        .list_active_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
         .await?;
     let mut candidates = Vec::new();
-    for job in jobs.into_iter().filter(|job| !job.state.is_terminal()) {
+    for job in jobs {
         let Some(payload) = job.wake_activation_payload() else {
             continue;
         };

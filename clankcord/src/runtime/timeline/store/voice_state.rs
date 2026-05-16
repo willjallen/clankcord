@@ -54,7 +54,7 @@ impl TimelineStore {
         let updated_ms = instant_ms_dt(utc_now());
         sqlx::query(
             r#"
-            INSERT INTO capture_sessions(
+            INSERT INTO capture_sessions AS existing(
               session_id, assignment_id, capture_run_id, guild_id, voice_channel_id,
               bot_id, active, started_at_ms, ended_at_ms, updated_at_ms, payload_json
             )
@@ -69,7 +69,16 @@ impl TimelineStore {
               started_at_ms = EXCLUDED.started_at_ms,
               ended_at_ms = EXCLUDED.ended_at_ms,
               updated_at_ms = EXCLUDED.updated_at_ms,
-              payload_json = EXCLUDED.payload_json
+              payload_json = CASE
+                WHEN existing.payload_json ? 'debugNotes'
+                THEN jsonb_set(
+                  EXCLUDED.payload_json,
+                  '{debugNotes}',
+                  existing.payload_json->'debugNotes',
+                  true
+                )
+                ELSE EXCLUDED.payload_json
+              END
             "#,
         )
         .bind(&session.session_id)
@@ -81,6 +90,29 @@ impl TimelineStore {
         .bind(active)
         .bind(started_ms)
         .bind(ended_ms)
+        .bind(updated_ms)
+        .bind(payload)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_capture_session_debug_notes(
+        &self,
+        session_id: &str,
+        notes: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        let payload = serde_json::to_value(notes)?;
+        let updated_ms = instant_ms_dt(utc_now());
+        sqlx::query(
+            r#"
+            UPDATE capture_sessions
+            SET updated_at_ms = $2,
+                payload_json = jsonb_set(payload_json, '{debugNotes}', $3, true)
+            WHERE session_id = $1
+            "#,
+        )
+        .bind(session_id)
         .bind(updated_ms)
         .bind(payload)
         .execute(&self.pool)

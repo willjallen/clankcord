@@ -421,6 +421,32 @@ impl TimelineStore {
         decode_job_rows(rows)
     }
 
+    pub async fn list_active_jobs_by_scope_kind(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        kind: crate::runtime::JobKind,
+    ) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.guild_id = $1
+              AND j.voice_channel_id = $2
+              AND j.kind = $3
+              AND j.terminal = FALSE
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(kind.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
     pub async fn list_jobs_by_states(
         &self,
         guild_id: Option<&str>,
