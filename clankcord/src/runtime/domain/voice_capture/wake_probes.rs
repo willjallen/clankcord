@@ -5,9 +5,8 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::adapters::wakeword::detect_wake_file_sync;
 use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
-use crate::runtime::timeline::{
-    event_end, event_start, first_value_string, isoformat_z, sha256_file,
-};
+use crate::runtime::timeline::{event_end, event_start, isoformat_z, sha256_file};
+use crate::runtime::util::first_value_string;
 use crate::runtime::{Job, Runtime, WakeProbePayload};
 
 const DUPLICATE_OVERLAP_GRACE_MS: i64 = 750;

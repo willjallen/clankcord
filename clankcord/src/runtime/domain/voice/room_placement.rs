@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config::local_tz;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::timeline::{CaptureRunInput, first_value_string, isoformat_z, utc_now};
+use crate::runtime::timeline::{CaptureRunInput, isoformat_z, utc_now};
+use crate::runtime::util::{first_value_string, single_child_of_kind};
 
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
@@ -671,17 +672,6 @@ impl Runtime {
             Ok(None)
         }
     }
-}
-
-fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&Job> {
-    let matches = children
-        .iter()
-        .filter(|child| child.kind == kind)
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        anyhow::bail!("expected exactly one {kind} child, found {}", matches.len());
-    }
-    Ok(matches[0])
 }
 
 fn has_playback_child(children: &[Job], cue: DiscordVoicePlaybackCue) -> bool {

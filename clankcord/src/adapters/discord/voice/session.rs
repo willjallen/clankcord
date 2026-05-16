@@ -12,6 +12,7 @@ use crate::adapters::discord::voice::diagnostics::{DiagnosticsConfig, analyze_pc
 use crate::adapters::discord::voice::types::{
     LiveVoiceSession, SessionAudioSegment, SpeakerBuffer,
 };
+use crate::runtime::util::first_non_empty;
 use crate::runtime::{AudioSegmentPayload, WakeProbePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -321,7 +322,10 @@ impl SessionAudioPipeline {
             voice_channel_id: session.room.channel_id.clone(),
             voice_channel_name: session.room.channel_name.clone(),
             voice_channel_slug: session.room.channel_slug.clone(),
-            capture_run_id: non_empty(&session.capture_run_id, &session.session_id),
+            capture_run_id: first_non_empty([
+                session.capture_run_id.clone(),
+                session.session_id.clone(),
+            ]),
             voice_bot_id: session.bot_id.clone(),
             voice_bot_discord_user_id: session.bot_user_id.clone(),
             speaker_user_id: speaker_id.to_string(),
@@ -433,7 +437,10 @@ impl SessionAudioPipeline {
             voice_channel_id: session.room.channel_id.clone(),
             voice_channel_name: session.room.channel_name.clone(),
             voice_channel_slug: session.room.channel_slug.clone(),
-            capture_run_id: non_empty(&session.capture_run_id, &session.session_id),
+            capture_run_id: first_non_empty([
+                session.capture_run_id.clone(),
+                session.session_id.clone(),
+            ]),
             voice_bot_id: session.bot_id.clone(),
             voice_bot_discord_user_id: session.bot_user_id.clone(),
             speaker_user_id: speaker_id,
@@ -526,14 +533,6 @@ fn note_session_log(session: &mut LiveVoiceSession, action: &str, fields: Value)
         format!("last_{action}"),
         serde_json::to_string(&fields).unwrap_or_default(),
     );
-}
-
-fn non_empty(value: &str, default: &str) -> String {
-    if value.trim().is_empty() {
-        default.to_string()
-    } else {
-        value.trim().to_string()
-    }
 }
 
 pub(crate) fn monotonic_seconds() -> f64 {

@@ -6,9 +6,8 @@ use crate::Result;
 use crate::config::{
     config_path, load_control_config, non_empty, read_json, slugify, string_field, string_value,
 };
-use crate::runtime::timeline::{TimelineStore, utc_now};
+use crate::runtime::timeline::{TimelineStore, parse_duration, utc_now};
 
-use crate::runtime::util::parse_duration_seconds;
 use crate::runtime::{AgentRuntime, ControlConfig, GuildConfig, RoomConfig, Runtime};
 
 impl Runtime {
@@ -152,4 +151,18 @@ impl Runtime {
         self.load_status_snapshot();
         Ok(())
     }
+}
+
+fn parse_duration_seconds(value: Option<&Value>, current: i64) -> i64 {
+    let raw = string_value(value).trim().to_string();
+    if raw.is_empty() {
+        return current;
+    }
+    if let Some(duration) = parse_duration(&raw) {
+        return duration.num_seconds().abs();
+    }
+    raw.parse::<i64>()
+        .ok()
+        .map(|value| value.max(0))
+        .unwrap_or(current)
 }

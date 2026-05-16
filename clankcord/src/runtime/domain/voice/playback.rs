@@ -1,5 +1,6 @@
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::util::single_child_of_kind;
 use crate::runtime::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
     DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobState,
@@ -157,15 +158,4 @@ impl Runtime {
             .then_some(session.clone())
         })
     }
-}
-
-fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&Job> {
-    let matches = children
-        .iter()
-        .filter(|child| child.kind == kind)
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        anyhow::bail!("expected exactly one {kind} child, found {}", matches.len());
-    }
-    Ok(matches[0])
 }

@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 
 use crate::Result;
 use crate::config::slugify;
+use crate::runtime::util::first_non_empty;
 
 pub const PCM_SAMPLE_RATE: u32 = 48_000;
 pub const PCM_CHANNELS: u16 = 2;
@@ -38,10 +39,7 @@ pub fn write_segment_wav(
     pcm: &[u8],
 ) -> Result<SegmentAudioArtifact> {
     let wav_bytes = build_wav_bytes(pcm)?;
-    let speaker_slug = non_empty(
-        &slugify(&non_empty(speaker_label, speaker_id)),
-        &non_empty(speaker_id, "speaker"),
-    );
+    let speaker_slug = speaker_slug(speaker_id, speaker_label);
     let filename = format!(
         "{:06}-{}-{speaker_slug}.wav",
         segment_index,
@@ -76,10 +74,7 @@ pub fn write_wake_probe_wav(
     pcm: &[u8],
 ) -> Result<SegmentAudioArtifact> {
     let wav_bytes = build_wake_wav_bytes(pcm)?;
-    let speaker_slug = non_empty(
-        &slugify(&non_empty(speaker_label, speaker_id)),
-        &non_empty(speaker_id, "speaker"),
-    );
+    let speaker_slug = speaker_slug(speaker_id, speaker_label);
     let filename = format!(
         "{:06}-{}-{speaker_slug}.wav",
         probe_index,
@@ -162,10 +157,10 @@ fn sha256_bytes(bytes: &[u8]) -> String {
     format!("sha256:{:x}", hasher.finalize())
 }
 
-fn non_empty(value: &str, default: &str) -> String {
-    if value.trim().is_empty() {
-        default.to_string()
-    } else {
-        value.trim().to_string()
-    }
+fn speaker_slug(speaker_id: &str, speaker_label: &str) -> String {
+    let label = first_non_empty([speaker_label.to_string(), speaker_id.to_string()]);
+    first_non_empty([
+        slugify(&label),
+        first_non_empty([speaker_id.to_string(), "speaker".to_string()]),
+    ])
 }

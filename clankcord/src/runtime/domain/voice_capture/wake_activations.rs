@@ -3,9 +3,9 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::timeline::{
-    event_end, event_speaker, event_start, event_text, first_value_string, isoformat_z, new_id,
-    parse_instant, utc_now,
+    event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
 };
+use crate::runtime::util::{first_value_string, non_empty};
 use crate::runtime::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
 };
@@ -949,12 +949,4 @@ fn env_i64(key: &str, fallback: i64) -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(fallback)
         .max(0)
-}
-
-fn non_empty(value: String, fallback: String) -> String {
-    if value.trim().is_empty() {
-        fallback
-    } else {
-        value
-    }
 }

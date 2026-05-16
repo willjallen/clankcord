@@ -6,12 +6,11 @@ use crate::Result;
 use crate::config::{non_empty, string_field};
 use crate::errors::discord_tool_error;
 use crate::runtime::timeline::{
-    TimelineStore, event_text, first_value_string, isoformat_z, parse_instant,
-    resolve_time_reference, utc_now,
+    TimelineStore, event_text, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
 
 use crate::runtime::Runtime;
-use crate::runtime::util::first_non_empty;
+use crate::runtime::util::{first_non_empty, first_value_string};
 
 #[derive(Debug, Clone, Default)]
 pub struct TimelineTailRequest {

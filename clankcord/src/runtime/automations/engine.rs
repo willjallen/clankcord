@@ -11,9 +11,8 @@ use crate::runtime::automations::{
     AutomationScalar, AutomationState, AutomationTextTarget, AutomationTextTargetKind,
     AutomationTrigger,
 };
-use crate::runtime::timeline::{
-    event_start, first_value_string, isoformat_z, parse_instant, utc_now,
-};
+use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
+use crate::runtime::util::first_value_string;
 use crate::runtime::{
     CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
     TextTarget, TextTargetKind,

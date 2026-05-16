@@ -3,8 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::Context;
-use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Utc};
 use chrono_tz::Tz;
 use regex::Regex;
 use serde_json::{Map, Value};
@@ -51,27 +50,6 @@ pub fn rooms_path() -> PathBuf {
 
 pub fn control_config_path() -> PathBuf {
     durable_dir().join("config").join("discord-control.json")
-}
-
-pub fn transcript_root() -> PathBuf {
-    durable_dir()
-        .join("artifacts")
-        .join("transcripts")
-        .join("discord")
-}
-
-pub fn summary_root() -> PathBuf {
-    durable_dir()
-        .join("artifacts")
-        .join("summaries")
-        .join("discord")
-}
-
-pub fn publish_state_path() -> PathBuf {
-    PathBuf::from(
-        env::var("CLANKCORD_DISCORD_PUBLISH_STATE_PATH")
-            .unwrap_or_else(|_| "/clankcord/state/discord-sync/state.json".to_string()),
-    )
 }
 
 pub fn tokens_path() -> PathBuf {
@@ -129,16 +107,6 @@ pub fn local_tz() -> Tz {
         .unwrap_or_else(|_| "UTC".to_string())
         .parse::<Tz>()
         .unwrap_or(chrono_tz::UTC)
-}
-
-pub fn resolve_date(raw: Option<&str>, today: Option<NaiveDate>) -> Result<NaiveDate> {
-    let local_today = today.unwrap_or_else(|| Local::now().date_naive());
-    match raw.unwrap_or("").trim() {
-        "" | "today" => Ok(local_today),
-        "yesterday" => Ok(local_today - chrono::Duration::days(1)),
-        value => NaiveDate::parse_from_str(value, "%Y-%m-%d")
-            .with_context(|| format!("invalid date {value:?}")),
-    }
 }
 
 pub fn format_timestamp_local(value: DateTime<Utc>, tz: Tz) -> BTreeMap<String, String> {
@@ -618,17 +586,4 @@ pub fn non_empty(value: String, fallback: String) -> String {
     } else {
         trimmed.to_string()
     }
-}
-
-pub fn day_bounds(day: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
-    let tz = local_tz();
-    let start_local = tz
-        .with_ymd_and_hms(day.year(), day.month(), day.day(), 0, 0, 0)
-        .single()
-        .unwrap_or_else(|| {
-            Utc.from_utc_datetime(&day.and_hms_opt(0, 0, 0).unwrap())
-                .with_timezone(&tz)
-        });
-    let start = start_local.with_timezone(&Utc);
-    (start, start + chrono::Duration::days(1))
 }

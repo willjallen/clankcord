@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config::string_field;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::util::first_non_empty;
+use crate::runtime::util::{first_non_empty, single_child_of_kind};
 use crate::runtime::{
     BinaryPayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState, Runtime,
     TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
@@ -209,15 +209,4 @@ fn require_target_id(value: &str, label: &str, job: &Job) -> Result<()> {
         anyhow::bail!("text delivery job {} has no {label} target id", job.id);
     }
     Ok(())
-}
-
-fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&Job> {
-    let matches = children
-        .iter()
-        .filter(|child| child.kind == kind)
-        .collect::<Vec<_>>();
-    if matches.len() != 1 {
-        anyhow::bail!("expected exactly one {kind} child, found {}", matches.len());
-    }
-    Ok(matches[0])
 }

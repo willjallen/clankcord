@@ -7,9 +7,10 @@ use crate::Result;
 use crate::adapters::discord::api::{
     FORUM_CHANNEL_TYPE, GUILD_TEXT_CHANNEL_TYPES, get_channel, iter_channel_messages,
     list_active_guild_threads, list_forum_threads, list_guild_channels,
-    list_public_archived_threads, string_field,
+    list_public_archived_threads,
 };
 use crate::errors::discord_tool_error;
+use crate::runtime::util::{non_empty, string_field};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
@@ -433,12 +434,4 @@ fn dedupe_targets(targets: Vec<Value>) -> Vec<Value> {
         }
     }
     deduped.into_values().collect()
-}
-
-fn non_empty(value: String, fallback: String) -> String {
-    if value.trim().is_empty() {
-        fallback
-    } else {
-        value
-    }
 }

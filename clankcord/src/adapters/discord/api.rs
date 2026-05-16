@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::errors::discord_tool_error;
+use crate::runtime::util::string_field;
 
 pub const GUILD_TEXT_CHANNEL_TYPES: &[i64] = &[0, 5];
 pub const THREAD_CHANNEL_TYPES: &[i64] = &[10, 11, 12];
@@ -417,13 +418,4 @@ pub fn iter_channel_messages(channel_id: &str, page_limit: usize) -> Result<Vec<
         before = cursor;
     }
     Ok(messages)
-}
-
-pub fn string_field(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
 }

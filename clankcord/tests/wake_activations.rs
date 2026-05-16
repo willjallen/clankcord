@@ -5,10 +5,11 @@ use serde_json::{Value, json};
 
 mod common;
 
+use clankcord::config::string_field;
 use clankcord::runtime::domain::voice_capture::wake_activations::{
     execute, schedule_from_wake_event,
 };
-use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, string_field};
+use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
 use clankcord::runtime::{
     AgentRuntime, AgentSessionRecord, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue,
     Job, JobKind, JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats,

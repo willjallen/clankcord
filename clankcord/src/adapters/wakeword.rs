@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use crate::Result;
 use crate::adapters::stt::content_type_for_path;
 use crate::config::load_stt_base_url;
+use crate::runtime::util::{finite_number, number_or_null, string_field};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WakeDetectionResult {
@@ -145,28 +146,4 @@ pub fn detect_wake_fileobj_sync(
         request = request.bearer_auth(api_key);
     }
     parse_wake_response(request.send()?)
-}
-
-fn string_field(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn finite_number(value: Option<&Value>) -> Option<f64> {
-    match value {
-        Some(Value::Number(number)) => number.as_f64().filter(|number| number.is_finite()),
-        Some(Value::String(text)) => text.parse::<f64>().ok().filter(|number| number.is_finite()),
-        _ => None,
-    }
-}
-
-fn number_or_null(value: Option<f64>) -> Value {
-    value
-        .and_then(serde_json::Number::from_f64)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
 }

@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use serde_json::json;
 
 use crate::Result;
-use crate::adapters::discord::api::{discord_request, string_field};
+use crate::adapters::discord::api::discord_request;
 use crate::config::{config_path, load_control_config, load_rooms_payload, read_json};
+use crate::runtime::util::string_field;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCommandRegistration {

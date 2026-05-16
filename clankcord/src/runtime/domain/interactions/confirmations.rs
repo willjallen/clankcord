@@ -14,7 +14,7 @@ use crate::runtime::{
 };
 
 use crate::runtime::Runtime;
-use crate::runtime::util::{first_non_empty, preview, require_confirmation_actor};
+use crate::runtime::util::{first_non_empty, preview};
 
 impl Runtime {
     pub async fn confirmation_context_for_command(
@@ -330,4 +330,14 @@ impl Runtime {
         self.timeline_store.update_job(&job).await?;
         Ok(job.to_value())
     }
+}
+
+fn require_confirmation_actor(job: &Job, actor_user_id: &str) -> Result<()> {
+    let expected = job.requested_by_user_id.trim();
+    if !expected.is_empty() && actor_user_id.trim() != expected {
+        return Err(discord_tool_error(
+            "only the requesting user can approve or cancel this confirmation",
+        ));
+    }
+    Ok(())
 }

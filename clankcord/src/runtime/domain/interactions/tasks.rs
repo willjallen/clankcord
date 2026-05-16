@@ -14,9 +14,9 @@ use crate::runtime::jobs::{
     BinaryPayload,
 };
 use crate::runtime::timeline::{
-    JobVisibility, event_text, first_value_string, isoformat_z, parse_instant, set, utc_now,
+    JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
 };
-use crate::runtime::util::{first_non_empty, job_cancel_requested, log, preview};
+use crate::runtime::util::{first_non_empty, first_value_string, log, preview};
 use crate::runtime::{
     Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload, TextTarget,
 };
@@ -231,7 +231,7 @@ impl Runtime {
     ) -> Result<Value> {
         let mut latest = self.timeline_store.get_job(&job_id).await?;
         latest.metadata.set_agent_task(dispatch_result);
-        if job_cancel_requested(&latest) {
+        if latest.cancel_requested() {
             let cancelled_at = non_empty(
                 latest.cancelled_at.clone().unwrap_or_default(),
                 isoformat_z(None),
@@ -322,7 +322,7 @@ impl Runtime {
         let publish_unavailable_text =
             is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
         let mut latest = self.timeline_store.get_job(&job_id).await?;
-        if job_cancel_requested(&latest) {
+        if latest.cancel_requested() {
             let cancelled_at = non_empty(
                 latest.cancelled_at.clone().unwrap_or_default(),
                 isoformat_z(None),

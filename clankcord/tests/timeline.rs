@@ -4,7 +4,8 @@ use serde_json::json;
 
 mod common;
 
-use clankcord::runtime::timeline::{CaptureRunInput, string_field};
+use clankcord::config::string_field;
+use clankcord::runtime::timeline::CaptureRunInput;
 
 use common::{append_speech, dt, test_store};
 

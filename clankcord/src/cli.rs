@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::adapters::discord::messages::{read as read_messages, search as search_messages};
 use crate::errors::discord_tool_error;
-use crate::runtime::duration_to_seconds;
 
 #[derive(Debug, Parser)]
 #[command(name = "clankcord")]
@@ -1028,6 +1027,31 @@ fn read_cli_payload(stdin: bool, content: Option<String>) -> Result<String> {
         anyhow::bail!("provide --stdin or --content");
     };
     Ok(content)
+}
+
+fn duration_to_seconds(raw: &str) -> i64 {
+    let value = raw.trim().to_lowercase();
+    if value.ends_with("ms") {
+        return value[..value.len() - 2]
+            .parse::<f64>()
+            .map(|number| (number / 1000.0).max(0.0) as i64)
+            .unwrap_or(0);
+    }
+    let (number, multiplier) = if let Some(stripped) = value.strip_suffix('s') {
+        (stripped, 1.0)
+    } else if let Some(stripped) = value.strip_suffix('m') {
+        (stripped, 60.0)
+    } else if let Some(stripped) = value.strip_suffix('h') {
+        (stripped, 3600.0)
+    } else if let Some(stripped) = value.strip_suffix('d') {
+        (stripped, 86400.0)
+    } else {
+        (value.as_str(), 1.0)
+    };
+    number
+        .parse::<f64>()
+        .map(|number| (number * multiplier).max(0.0) as i64)
+        .unwrap_or(0)
 }
 
 fn confirmation_approve(args: ConfirmationApproveArgs) -> Result<i32> {

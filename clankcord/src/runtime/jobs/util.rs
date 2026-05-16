@@ -22,39 +22,6 @@ pub(crate) fn insert_i64_if_nonzero(object: &mut Map<String, Value>, key: &str, 
     }
 }
 
-pub(crate) fn first_non_empty<const N: usize>(values: [String; N]) -> String {
-    values
-        .into_iter()
-        .find(|value| !value.trim().is_empty())
-        .map(|value| value.trim().to_string())
-        .unwrap_or_default()
-}
-
-pub(crate) fn string_field(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
-}
-
-pub(crate) fn string_array(value: &Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 pub(crate) fn truthy(value: Option<&Value>, default: bool) -> bool {
     match value {
         Some(Value::Bool(value)) => *value,

@@ -1,8 +1,9 @@
 use serde_json::Value;
 
 use crate::Result;
-use crate::adapters::discord::api::{get_channel, iter_channel_messages, string_field};
+use crate::adapters::discord::api::{get_channel, iter_channel_messages};
 use crate::errors::discord_tool_error;
+use crate::runtime::util::{first_non_empty, string_field};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {
@@ -122,11 +123,4 @@ fn emit_json(payload: Value, format: &str, file: Option<&str>) -> Result<()> {
         println!("{rendered}");
     }
     Ok(())
-}
-
-fn first_non_empty<const N: usize>(values: [String; N]) -> String {
-    values
-        .into_iter()
-        .find(|value| !value.trim().is_empty())
-        .unwrap_or_default()
 }

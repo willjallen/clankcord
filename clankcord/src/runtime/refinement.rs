@@ -9,6 +9,7 @@ use serde_json::Value;
 use crate::Result;
 use crate::adapters::discord::api::read_secret_value;
 use crate::runtime::timeline::{TimelineStore, isoformat_z, parse_instant, write_json_file};
+use crate::runtime::util::{first_value_string, string_array, string_field};
 use crate::runtime::{Job, JobOutput, JobState};
 
 pub const ELEVENLABS_STT_URL: &str = "https://api.elevenlabs.io/v1/speech-to-text";
@@ -410,22 +411,6 @@ async fn run_refinement_job_inner(
     Ok(job.to_value())
 }
 
-fn string_field(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
-}
-
-fn first_value_string(value: &Value, keys: &[&str]) -> String {
-    keys.iter()
-        .map(|key| string_field(value, key))
-        .find(|value| !value.is_empty())
-        .unwrap_or_default()
-}
-
 fn first_number(value: &Value, keys: &[&str]) -> Option<f64> {
     keys.iter().find_map(|key| number_field(value, key))
 }
@@ -436,19 +421,4 @@ fn number_field(value: &Value, key: &str) -> Option<f64> {
         Some(Value::String(text)) => text.parse().ok(),
         _ => None,
     }
-}
-
-fn string_array(value: &Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|value| match value {
-            Value::String(text) => Some(text),
-            Value::Number(number) => Some(number.to_string()),
-            _ => None,
-        })
-        .collect()
 }

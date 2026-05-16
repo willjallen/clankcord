@@ -9,9 +9,10 @@ use serde_json::{Map, Number, Value, json};
 use crate::Result;
 use crate::runtime::rooms::RoomConfig;
 use crate::runtime::timeline::parse_duration;
+use crate::runtime::util::{first_non_empty, string_array, string_field};
 
 use super::JobKind;
-use super::util::{first_non_empty, insert_non_empty, string_array, string_field, truthy};
+use super::util::{insert_non_empty, truthy};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum OpaqueValue {

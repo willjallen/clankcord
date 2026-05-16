@@ -3,9 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use uuid::Uuid;
 
-use super::util::{
-    first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
-};
+use crate::runtime::util::first_non_empty;
+
+use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{
     AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload,
     CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,

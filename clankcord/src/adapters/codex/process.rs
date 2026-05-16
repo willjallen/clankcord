@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::Result;
+use crate::runtime::util::non_empty;
 
 use super::output::{extract_codex_model, extract_codex_session_id};
 
@@ -199,12 +200,4 @@ fn truthy_env(key: &str) -> bool {
         .ok()
         .map(|value| matches!(value.trim(), "1" | "true" | "TRUE" | "yes" | "YES"))
         .unwrap_or(false)
-}
-
-fn non_empty(primary: String, fallback: String) -> String {
-    if primary.trim().is_empty() {
-        fallback
-    } else {
-        primary
-    }
 }

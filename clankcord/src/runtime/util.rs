@@ -2,54 +2,13 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::config::string_value;
-use crate::errors::discord_tool_error;
-use crate::runtime::Job;
-use crate::runtime::timeline::parse_duration;
+use crate::runtime::{Job, JobKind};
 
 pub fn log(message: &str) {
     eprintln!("[clankcord-voice] {message}");
 }
 
-pub fn parse_duration_seconds(value: Option<&Value>, fallback: i64) -> i64 {
-    let raw = string_value(value).trim().to_string();
-    if raw.is_empty() {
-        return fallback;
-    }
-    if let Some(duration) = parse_duration(&raw) {
-        return duration.num_seconds().abs();
-    }
-    raw.parse::<i64>()
-        .ok()
-        .map(|value| value.max(0))
-        .unwrap_or(fallback)
-}
-
-pub fn duration_to_seconds(raw: &str) -> i64 {
-    let value = raw.trim().to_lowercase();
-    if value.ends_with("ms") {
-        return value[..value.len() - 2]
-            .parse::<f64>()
-            .map(|number| (number / 1000.0).max(0.0) as i64)
-            .unwrap_or(0);
-    }
-    let (number, multiplier) = if let Some(stripped) = value.strip_suffix('s') {
-        (stripped, 1.0)
-    } else if let Some(stripped) = value.strip_suffix('m') {
-        (stripped, 60.0)
-    } else if let Some(stripped) = value.strip_suffix('h') {
-        (stripped, 3600.0)
-    } else if let Some(stripped) = value.strip_suffix('d') {
-        (stripped, 86400.0)
-    } else {
-        (value.as_str(), 1.0)
-    };
-    number
-        .parse::<f64>()
-        .map(|number| (number * multiplier).max(0.0) as i64)
-        .unwrap_or(0)
-}
-
-pub fn first_non_empty<const N: usize>(values: [String; N]) -> String {
+pub(crate) fn first_non_empty<const N: usize>(values: [String; N]) -> String {
     values
         .into_iter()
         .find(|value| !value.trim().is_empty())
@@ -57,33 +16,67 @@ pub fn first_non_empty<const N: usize>(values: [String; N]) -> String {
         .unwrap_or_default()
 }
 
-pub(crate) fn update_object_fields<const N: usize>(
-    value: &mut Value,
-    fields: [(&str, Value); N],
-) -> Result<()> {
-    let map = value
-        .as_object_mut()
-        .ok_or_else(|| discord_tool_error("payload is not an object"))?;
-    for (key, field_value) in fields {
-        map.insert(key.to_string(), field_value);
-    }
-    Ok(())
+pub(crate) fn string_field(value: &Value, key: &str) -> String {
+    string_value(value.get(key))
 }
 
-pub(crate) fn job_cancel_requested(job: &Job) -> bool {
-    job.cancel_requested()
+pub(crate) fn first_value_string(value: &Value, keys: &[&str]) -> String {
+    keys.iter()
+        .map(|key| string_field(value, key))
+        .find(|value| !value.is_empty())
+        .unwrap_or_default()
 }
 
-pub(crate) fn require_confirmation_actor(job: &Job, actor_user_id: &str) -> Result<()> {
-    let expected = job.requested_by_user_id.trim();
-    if !expected.is_empty() && actor_user_id.trim() != expected {
-        return Err(discord_tool_error(
-            "only the requesting user can approve or cancel this confirmation",
-        ));
+pub(crate) fn string_array(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|value| match value {
+            Value::String(text) => Some(text.trim().to_string()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        })
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+pub(crate) fn finite_number(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(number)) => number.as_f64().filter(|number| number.is_finite()),
+        Some(Value::String(text)) => text.parse::<f64>().ok().filter(|number| number.is_finite()),
+        _ => None,
     }
-    Ok(())
+}
+
+pub(crate) fn number_or_null(value: Option<f64>) -> Value {
+    value
+        .and_then(serde_json::Number::from_f64)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+pub(crate) fn non_empty(value: String, default: String) -> String {
+    if value.trim().is_empty() {
+        default
+    } else {
+        value.trim().to_string()
+    }
 }
 
 pub(crate) fn preview(value: &str, limit: usize) -> String {
     value.trim().chars().take(limit).collect()
+}
+
+pub(crate) fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&Job> {
+    let matches = children
+        .iter()
+        .filter(|child| child.kind == kind)
+        .collect::<Vec<_>>();
+    if matches.len() != 1 {
+        anyhow::bail!("expected exactly one {kind} child, found {}", matches.len());
+    }
+    Ok(matches[0])
 }

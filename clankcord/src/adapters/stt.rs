@@ -8,6 +8,7 @@ use serde_json::{Map, Number, Value};
 
 use crate::Result;
 use crate::config::load_stt_base_url;
+use crate::runtime::util::{finite_number, number_or_null};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptionResult {
@@ -115,14 +116,6 @@ pub fn content_type_for_path(path: &Path) -> String {
     }
 }
 
-pub fn finite_number(value: Option<&Value>) -> Option<f64> {
-    match value {
-        Some(Value::Number(number)) => number.as_f64().filter(|number| number.is_finite()),
-        Some(Value::String(text)) => text.parse::<f64>().ok().filter(|number| number.is_finite()),
-        _ => None,
-    }
-}
-
 pub fn stt_no_speech_probability(metadata: Option<&Value>) -> Option<f64> {
     let Value::Object(map) = metadata? else {
         return None;
@@ -144,16 +137,6 @@ pub fn stt_avg_token_logprob(metadata: Option<&Value>) -> Option<f64> {
         .get("tokens")
         .and_then(Value::as_object)
         .and_then(|tokens| finite_number(tokens.get("avg_token_logprob")))
-}
-
-pub fn should_drop_no_speech_transcription(
-    metadata: Option<&Value>,
-    threshold: Option<f64>,
-) -> bool {
-    let Some(no_speech_prob) = stt_no_speech_probability(metadata) else {
-        return false;
-    };
-    no_speech_prob > threshold.unwrap_or_else(stt_drop_no_speech_threshold)
 }
 
 pub fn stt_drop_decision(
@@ -362,18 +345,6 @@ pub fn transcribe_fileobj_result_sync(
     parse_stt_response(request.send()?)
 }
 
-pub fn transcribe_wav_result_sync(wav_bytes: Vec<u8>) -> Result<TranscriptionResult> {
-    transcribe_fileobj_result_sync(wav_bytes, "segment.wav", "audio/wav")
-}
-
-pub fn transcribe_wav_sync(wav_bytes: Vec<u8>) -> Result<String> {
-    Ok(transcribe_wav_result_sync(wav_bytes)?.text)
-}
-
-pub fn transcribe_file_sync(path: &Path) -> Result<String> {
-    transcribe_file_result_sync(path).map(|result| result.text)
-}
-
 pub fn transcribe_file_result_sync(path: &Path) -> Result<TranscriptionResult> {
     let bytes =
         std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
@@ -382,13 +353,6 @@ pub fn transcribe_file_result_sync(path: &Path) -> Result<TranscriptionResult> {
         &path.file_name().unwrap_or_default().to_string_lossy(),
         &content_type_for_path(path),
     )
-}
-
-fn number_or_null(value: Option<f64>) -> Value {
-    value
-        .and_then(Number::from_f64)
-        .map(Value::Number)
-        .unwrap_or(Value::Null)
 }
 
 fn round4(value: f64) -> f64 {

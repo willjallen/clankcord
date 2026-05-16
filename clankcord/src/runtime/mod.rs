@@ -41,7 +41,7 @@ pub use runtime_config::{ControlConfig, GuildConfig};
 pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };
-pub use util::{duration_to_seconds, log};
+pub use util::log;
 pub use views::{
     ContextResolveRequest, DebugOverviewRequest, ForgetRequest, JobsRequest,
     ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest, MemberResolveRequest,

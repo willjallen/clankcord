@@ -1,10 +1,7 @@
 use super::*;
+use crate::runtime::util::{first_value_string, non_empty, string_field};
 
 pub(crate) const SPEECH_KINDS: &[&str] = &["speech_segment", "transcript"];
-
-pub fn json_dumps(payload: &Value) -> Result<String> {
-    serde_json::to_string(payload).map_err(Into::into)
-}
 
 pub(crate) fn set_default_string(payload: &mut Map<String, Value>, key: &str, value: &str) {
     if !payload.contains_key(key) || payload.get(key).is_some_and(value_is_empty) {
@@ -31,15 +28,6 @@ fn value_is_empty(value: &Value) -> bool {
     }
 }
 
-pub fn string_field(value: &Value, key: &str) -> String {
-    match value.get(key) {
-        Some(Value::String(text)) => text.trim().to_string(),
-        Some(Value::Number(number)) => number.to_string(),
-        Some(Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
-}
-
 pub(crate) fn string_field_map(map: &Map<String, Value>, key: &str) -> String {
     match map.get(key) {
         Some(Value::String(text)) => text.trim().to_string(),
@@ -54,21 +42,6 @@ pub(crate) fn first_string(map: &Map<String, Value>, keys: &[&str]) -> String {
         .map(|key| string_field_map(map, key))
         .find(|value| !value.is_empty())
         .unwrap_or_default()
-}
-
-pub fn first_value_string(value: &Value, keys: &[&str]) -> String {
-    keys.iter()
-        .map(|key| string_field(value, key))
-        .find(|value| !value.is_empty())
-        .unwrap_or_default()
-}
-
-pub(crate) fn non_empty(value: String, fallback: String) -> String {
-    if value.trim().is_empty() {
-        fallback
-    } else {
-        value.trim().to_string()
-    }
 }
 
 pub(crate) fn set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {

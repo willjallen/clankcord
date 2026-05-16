@@ -1,5 +1,6 @@
 use crate::Result;
-use crate::adapters::discord::api::{create_forum_thread, string_field};
+use crate::adapters::discord::api::create_forum_thread;
+use crate::runtime::util::string_field;
 use crate::runtime::{DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload};
 
 pub async fn create(

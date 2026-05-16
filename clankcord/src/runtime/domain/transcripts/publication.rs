@@ -7,7 +7,7 @@ use crate::Result;
 use crate::config::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::isoformat_z;
-use crate::runtime::util::{first_non_empty, preview, update_object_fields};
+use crate::runtime::util::{first_non_empty, preview};
 use crate::runtime::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, RoomConfig, Runtime, TextDeliveryKind, TextTarget, TextTargetKind,
@@ -291,4 +291,17 @@ impl Runtime {
         };
         Ok((room, name, header_lines.join("\n"), auto_archive))
     }
+}
+
+fn update_object_fields<const N: usize>(
+    value: &mut Value,
+    fields: [(&str, Value); N],
+) -> Result<()> {
+    let Some(map) = value.as_object_mut() else {
+        anyhow::bail!("payload is not an object");
+    };
+    for (key, field_value) in fields {
+        map.insert(key.to_string(), field_value);
+    }
+    Ok(())
 }
