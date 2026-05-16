@@ -794,7 +794,7 @@
 
     <div class="view active" x-show="activeView === 'timeline'">
       <section>
-        <h2><span>Timeline Events</span><small x-text="`${filteredTimelineEvents().length}/${timelineEvents.length}`"></small></h2>
+        <h2><span>Timeline Events</span><small x-text="`${timelinePageEvents().length}/${timelineEvents.length}`"></small></h2>
         <div class="filterbar">
           <label>Window
             <select x-model="filters.timelineSince" @change="filterChanged()">
@@ -807,24 +807,25 @@
             </select>
           </label>
           <label>Event Type
-            <select x-model="filters.timelineKind">
+            <select x-model="filters.timelineKind" @change="timelineFilterChanged()">
               <option value="">All</option>
               <template x-for="kind in timelineKinds()" :key="kind"><option :value="kind" x-text="kind"></option></template>
             </select>
           </label>
           <label>Channel
-            <select x-model="filters.timelineChannel">
+            <select x-model="filters.timelineChannel" @change="timelineFilterChanged()">
               <option value="">All</option>
               <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
             </select>
           </label>
-          <label>Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" autocomplete="off"></label>
+          <label>Search <input type="search" x-model.debounce.150ms="filters.timelineSearch" @input.debounce.150ms="timelineFilterChanged()" autocomplete="off"></label>
+          <button type="button" @click="clearTimelineFilters()">Clear</button>
         </div>
         <div class="table-wrap tall scroll-region">
           <table>
             <thead><tr><th>When</th><th>Event Type</th><th>Room</th><th>Speaker</th><th>Text / Detail</th><th>Id</th></tr></thead>
             <tbody>
-              <template x-for="event in filteredTimelineEvents()" :key="event.event_id || event.eventId || event.job_id">
+              <template x-for="event in timelinePageEvents()" :key="event.event_id || event.eventId || event.job_id">
                 <tr>
                   <td x-text="ago(eventWhen(event))"></td>
                   <td><span class="pill" :class="statusClass(eventKind(event))" x-text="eventKind(event)"></span></td>
@@ -836,7 +837,7 @@
               </template>
             </tbody>
           </table>
-          <div class="empty" x-show="!filteredTimelineEvents().length">No timeline events match.</div>
+          <div class="empty" x-show="!timelinePageEvents().length">No timeline events match.</div>
         </div>
       </section>
     </div>

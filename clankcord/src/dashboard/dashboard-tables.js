@@ -15,6 +15,7 @@
     if (!element) return null;
     if (!window.Tabulator) throw new Error('Tabulator is required by the dashboard');
     if (!tables.has(id)) {
+      const entry = { table: null, built: false, pendingData: null };
       const table = new window.Tabulator(element, {
         data: [],
         columns,
@@ -26,9 +27,26 @@
         placeholder: 'No rows match the current filters.',
       });
       table.on('rowClick', rowClick);
-      tables.set(id, table);
+      table.on('tableBuilt', () => {
+        entry.built = true;
+        if (entry.pendingData) {
+          table.replaceData(entry.pendingData);
+          entry.pendingData = null;
+        }
+      });
+      entry.table = table;
+      tables.set(id, entry);
     }
     return tables.get(id);
+  }
+
+  function replaceData(entry, rows) {
+    if (!entry) return;
+    if (entry.built) {
+      entry.table.replaceData(rows);
+    } else {
+      entry.pendingData = rows;
+    }
   }
 
   function pillFormatter(field) {
@@ -50,7 +68,7 @@
       { title: 'Updated', field: 'updatedAgo', width: 115 },
       { title: 'Detail', field: 'detail', minWidth: 360, formatter: 'textarea', headerFilter: 'input' },
     ], (_event, row) => app.selectExplorerRecord('job', row.getData().__record));
-    if (table) table.replaceData(app.jobExplorerRows());
+    replaceData(table, app.jobExplorerRows());
   }
 
   function renderTimeline(app) {
@@ -62,7 +80,7 @@
       { title: 'Detail', field: 'detail', minWidth: 420, formatter: 'textarea', headerFilter: 'input' },
       { title: 'Id', field: 'id', width: 180, headerFilter: 'input' },
     ], (_event, row) => app.selectExplorerRecord('event', row.getData().__record));
-    if (table) table.replaceData(app.timelineExplorerRows());
+    replaceData(table, app.timelineExplorerRows());
   }
 
   function render(app) {

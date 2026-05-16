@@ -120,6 +120,20 @@ window.dashboard = function dashboard() {
       this.scheduleRenderInteractive();
     },
 
+    timelineFilterChanged() {
+      storeJson(filterStorageKey, this.filters);
+      this.scheduleRenderInteractive();
+    },
+
+    clearTimelineFilters() {
+      Object.assign(this.filters, {
+        timelineKind: '',
+        timelineChannel: '',
+        timelineSearch: '',
+      });
+      this.timelineFilterChanged();
+    },
+
     ...window.ClankDashboardExplorer.methods,
 
     jsonUrl() {
@@ -586,13 +600,17 @@ window.dashboard = function dashboard() {
       return Array.from(new Set(this.timelineEvents.map((event) => this.eventKind(event)).filter(Boolean))).sort();
     },
 
-    filteredTimelineEvents() {
+    filteredTimelineEvents(options = {}) {
+      const includeGlobal = options.global !== false;
       const kind = this.filters.timelineKind;
       const channel = this.filters.timelineChannel;
-      const globalKind = this.filters.globalEventKind;
-      const globalChannel = this.filters.globalRoom;
-      const globalGuild = this.filters.globalGuild;
-      const queries = [this.filters.timelineSearch, this.filters.globalSearch]
+      const globalKind = includeGlobal ? this.filters.globalEventKind : '';
+      const globalChannel = includeGlobal ? this.filters.globalRoom : '';
+      const globalGuild = includeGlobal ? this.filters.globalGuild : '';
+      const queries = [
+        this.filters.timelineSearch,
+        includeGlobal ? this.filters.globalSearch : '',
+      ]
         .map((value) => textValue(value).trim().toLowerCase())
         .filter(Boolean);
       return this.timelineEvents.filter((event) => {
@@ -613,6 +631,10 @@ window.dashboard = function dashboard() {
         ].join(' ').toLowerCase();
         return queries.every((query) => haystack.includes(query));
       });
+    },
+
+    timelinePageEvents() {
+      return this.filteredTimelineEvents({ global: false });
     },
 
     filteredTranscriptEvents() {
