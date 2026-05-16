@@ -2,6 +2,7 @@ use serde_json::json;
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::domain::ingress::discord_slash;
 use crate::runtime::domain::ingress::discord_text;
 use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
@@ -66,6 +67,54 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
             "job payload {} is not handled by async dispatcher",
             payload.kind()
         ),
+    }
+}
+
+pub(crate) async fn execute_runtime_async_with_external_api<A>(
+    runtime: &mut Runtime,
+    job: &Job,
+    external_api: &A,
+) -> Result<JobDecision>
+where
+    A: RuntimeExternalApi,
+{
+    match &job.payload {
+        JobPayload::DiscordTextSend(payload) => {
+            runtime
+                .execute_discord_text_send_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordForumThreadCreate(payload) => {
+            runtime
+                .execute_discord_forum_thread_create_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceJoin(payload) => {
+            runtime
+                .execute_discord_voice_join_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceLeave(payload) => {
+            runtime
+                .execute_discord_voice_leave_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceMute(payload) => {
+            runtime
+                .execute_discord_voice_mute_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoicePlayAudio(payload) => {
+            runtime
+                .execute_discord_voice_play_audio_job(payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceStatusSnapshot(_) => {
+            runtime
+                .execute_discord_voice_status_snapshot_job(external_api)
+                .await
+        }
+        _ => execute_runtime_async(runtime, job).await,
     }
 }
 

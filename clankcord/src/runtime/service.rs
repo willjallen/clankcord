@@ -7,13 +7,14 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::Result;
 use crate::adapters::discord::gateway::text::DiscordTextAdapter;
+use crate::adapters::discord::runtime_api::DiscordRuntimeApi;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::runtime::core::execution::RuntimeExecutor;
 use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
-type ServiceRuntimeExecutor = RuntimeExecutor<Arc<LiveVoiceAdapter>>;
+type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
@@ -178,7 +179,10 @@ impl RuntimeService {
             job_sink.clone(),
             timeline_store.clone(),
         ));
-        let executor = RuntimeExecutor::new(live_voice.clone(), timeline_store.clone());
+        let executor = RuntimeExecutor::new(
+            DiscordRuntimeApi::new(live_voice.clone()),
+            timeline_store.clone(),
+        );
         timeline_store
             .replace_runtime_maintenance_job(Job::runtime_maintenance(
                 config::runtime_maintenance_interval_ms(),

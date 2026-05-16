@@ -2,6 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 
 use super::routes;
@@ -10,6 +11,21 @@ impl Runtime {
     pub async fn dispatch_claimed_runtime_job(&mut self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match routes::execute_runtime_async(self, &running).await {
+            Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,
+            Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
+        }
+    }
+
+    pub(crate) async fn dispatch_claimed_runtime_job_with_external_api<A>(
+        &mut self,
+        running: Job,
+        external_api: &A,
+    ) -> Result<Value>
+    where
+        A: RuntimeExternalApi,
+    {
+        let job_id = running.id.clone();
+        match routes::execute_runtime_async_with_external_api(self, &running, external_api).await {
             Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,
             Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
         }

@@ -462,14 +462,14 @@ Job scheduling policy must be centralized. The scheduler should know, for each j
 ```text
 job kind              executor            lane            ordering
 RuntimeControl        runtime exclusive   general async   none
-DiscordVoiceMute      adapter async       voice control   voice session
-DiscordVoicePlayAudio adapter async       voice control   voice session
+DiscordVoiceMute      runtime snapshot    voice control   voice session
+DiscordVoicePlayAudio runtime snapshot    voice control   voice session
 DiscordVoicePlayback  runtime snapshot    voice control   voice session
 WakeProbe             blocking snapshot   wake            wake stream
 WakeActivation        runtime snapshot    general async   none
 RoomAgentPlacement    runtime exclusive   general async   none
-DiscordVoiceJoin      adapter async       voice control   voice session
-DiscordVoiceLeave     adapter async       voice control   voice session
+DiscordVoiceJoin      runtime snapshot    voice control   voice session
+DiscordVoiceLeave     runtime snapshot    voice control   voice session
 Command               runtime exclusive   general async   none
 Response              blocking snapshot   response        none
 RefineTranscript      blocking snapshot   refinement      none

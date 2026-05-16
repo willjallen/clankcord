@@ -119,7 +119,7 @@ NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
-Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and Discord text adapter jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
+Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and domain-executed Discord text jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
 
 ## Recovery
 

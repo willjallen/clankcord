@@ -324,7 +324,7 @@ The schema accepts this action:
 {"kind": "sound.play", "name": "fart"}
 ```
 
-The runtime currently records an action failure for `sound.play` until a sound adapter job exists. Do not use it for user-visible behavior yet unless that runtime support has been added.
+The runtime currently records an action failure for `sound.play` until a sound playback job exists. Do not use it for user-visible behavior yet unless that runtime support has been added.
 
 ## Examples
 
@@ -454,7 +454,7 @@ clankcord rooms occupants <voice-channel-id> --guild <guild-id>
 - Using room names instead of Discord IDs in durable specs.
 - Forgetting that default expiry is one shot. Set `max_fires` higher only when recurring behavior is intended.
 - Writing a condition path that does not exist in the trigger context. Inspect `clankcord status`, `clankcord timeline tail`, or `clankcord jobs get` first.
-- Using `sound.play` before the sound adapter job exists.
+- Using `sound.play` before the sound playback job exists.
 
 ## Agent Workflow
 

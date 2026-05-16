@@ -1,7 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
-use std::sync::Mutex;
 
 use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
@@ -19,7 +16,7 @@ use clankcord::runtime::{
 };
 
 mod common;
-use common::test_store;
+use common::{initialize_test_config, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
@@ -188,22 +185,6 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     assert!(kinds.contains(&JobKind::StaleWakeProbeSweep));
     assert!(kinds.contains(&JobKind::StaleRunningJobSweep));
     assert!(kinds.contains(&JobKind::EphemeralJobGc));
-}
-
-fn initialize_test_config(root: &Path) {
-    static CONFIG_LOCK: Mutex<()> = Mutex::new(());
-    let _guard = CONFIG_LOCK.lock().unwrap();
-    let path = root.join("config");
-    fs::create_dir_all(&path).unwrap();
-    fs::write(
-        path.join("config.toml"),
-        include_str!("../../config.ex.toml"),
-    )
-    .unwrap();
-    let original_dir = std::env::current_dir().unwrap();
-    std::env::set_current_dir(&path).unwrap();
-    let _ = clankcord::config::app_config();
-    std::env::set_current_dir(original_dir).unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -1,8 +1,8 @@
 # Adapters
 
-Adapters are Clankcord's boundary with external systems. They speak HTTP, Discord gateway and voice protocols, Discord text and forum APIs, local file and audio mechanics, STT providers, wake-detection providers, and the Codex process interface. Runtime domain code owns policy and orchestration. Adapters translate external events into jobs and fulfill adapter-shaped jobs when the scheduler routes work to them.
+Adapters are Clankcord's boundary with external systems. They speak HTTP, Discord gateway and voice protocols, Discord text and forum APIs, local file and audio mechanics, STT providers, wake-detection providers, and the Codex process interface. Runtime domain code owns policy, orchestration, and job execution. Adapters translate external events into runtime requests and expose typed API functions for domain handlers.
 
-The boundary is narrow by design. Intake adapters receive outside events and submit typed runtime jobs. Effect adapters expose a focused API or execute concrete adapter jobs. The runtime owns routing, retries, state transitions, confirmations, timeline authority, and follow-up job creation. The adapter owns the mechanics of the outside system.
+The boundary is narrow by design. Intake adapters receive outside events and submit typed runtime jobs. Effect adapters expose focused APIs for the concrete outside-system operations. The runtime owns routing, retries, state transitions, confirmations, timeline authority, and follow-up job creation. The adapter owns the mechanics of the outside system.
 
 ```text
 external system
@@ -12,14 +12,14 @@ adapter
       |
       +--> submit typed job to runtime intake
       |
-      +--> fulfill adapter job claimed by scheduler
+      +--> expose typed API called by domain jobs
 ```
 
-## Adapter Jobs
+## Adapter APIs
 
-The runtime executor reaches adapters through the `RuntimeAdapterJobs` trait. In the live service, `Arc<LiveVoiceAdapter>` fulfills Discord voice and text jobs that require live Discord capabilities. It also returns a narrow Discord voice status snapshot when a runtime-owned maintenance job asks for live bot and capture-session state.
+The runtime executor routes every claimed job to a domain handler. When a handler needs Discord IO, it calls the typed Discord runtime API. In the live service, `DiscordRuntimeApi` delegates voice operations and status snapshots to `LiveVoiceAdapter`, and delegates Discord text and forum operations to the gateway API modules.
 
-The adapter job set includes Discord voice join and leave, mute, audio playback, voice status snapshot, text send, and forum thread creation. These jobs are still ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work; the executor simply chooses the adapter path for the side effect.
+Discord IO jobs remain ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work. Their execution semantics live in `runtime/domain/**`; the adapter API performs the external operation requested by that domain handler.
 
 ```text
 discord_voice_join
@@ -41,11 +41,11 @@ The CLI uses HTTP when it is talking to a running service. That keeps command-li
 
 The Discord gateway adapter owns text gateway mechanics. It starts the Serenity client, receives messages and interactions, registers slash commands, handles component buttons, sends concrete Discord messages, and creates managed forum threads. Gateway code also acknowledges or defers Discord interactions when the protocol requires it.
 
-Once the gateway has translated a protocol event into a runtime request, the runtime takes over. Slash commands become `discord_slash_command` jobs. Text messages become `discord_text_message` jobs. Confirmation buttons become runtime-control jobs. Response delivery becomes `discord_text_send` only after the `text_delivery` parent resolves the target.
+Once the gateway has translated a protocol event into a runtime request, the runtime takes over. Slash commands become `discord_slash_command` jobs. Text messages become `discord_text_message` jobs. Confirmation buttons become runtime-control jobs. Response delivery becomes `discord_text_send` only after the `text_delivery` parent resolves the target. The domain handler for `discord_text_send` calls the Discord text API to perform the post.
 
 ## Discord Voice
 
-Discord voice integration owns Songbird wiring, voice-state tracking, RTP packet capture, per-user buffering, silence handling, WAV artifact creation, wake-probe artifact creation, audio playback, and voice connection mechanics. The live voice adapter holds the process-local handles it needs: the job sink, the timeline store used for maintenance and voice-state recording, live Discord voice clients, active capture sessions, and the speaker profile cache.
+Discord voice integration owns Songbird wiring, voice-state tracking, RTP packet capture, per-user buffering, silence handling, WAV artifact creation, wake-probe artifact creation, audio playback, and voice connection mechanics. The live voice adapter holds the process-local handles it needs: the job sink, the timeline store used for voice-state recording, live Discord voice clients, active capture sessions, and the speaker profile cache.
 
 By the time the adapter submits an `audio_segment` job, the WAV artifact exists and is ready for STT. The payload carries path, checksum, timing, speaker identity, capture run, and audio format metadata. Wake probes follow the same pattern with rolling WAV artifacts and stream metadata.
 
@@ -53,4 +53,4 @@ By the time the adapter submits an `audio_segment` job, the WAV artifact exists 
 
 STT and wake detection are provider boundaries. Runtime handlers call the STT adapter while fulfilling `audio_segment` jobs, then write accepted speech into the timeline. Wake probes call the wake provider, append `wake_detected` events for positive detections, and schedule wake activation through runtime jobs.
 
-Codex integration is a process adapter. Runtime agent code builds the prompt, chooses the working directory, sets environment variables, passes the prior Codex session id when present, captures stdout, stderr, JSONL output, timeout state, and usage metadata, then stores typed process results on the agent task. Discord authority lives in Clankcord response commands, `text_delivery`, and Discord text adapter jobs.
+Codex integration is a process adapter. Runtime agent code builds the prompt, chooses the working directory, sets environment variables, passes the prior Codex session id when present, captures stdout, stderr, JSONL output, timeout state, and usage metadata, then stores typed process results on the agent task. Discord authority lives in Clankcord response commands, `text_delivery`, and domain-executed Discord text jobs.

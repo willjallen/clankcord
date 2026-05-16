@@ -14,7 +14,6 @@ use serenity::model::voice::VoiceState;
 use tokio::sync::Mutex;
 
 use crate::Result;
-use crate::adapters::discord::gateway::{forum_thread, text_send};
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
@@ -24,13 +23,12 @@ use crate::adapters::discord::voice::session::WakeProbeConfig;
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
-use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
     DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
-    Job, JobOutput, JobPayload, RuntimeJobSink, VoiceBotStatus, log,
+    RuntimeJobSink, VoiceBotStatus, log,
 };
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
@@ -59,40 +57,6 @@ impl fmt::Debug for LiveVoiceAdapter {
             .field("minimum_utterance_ms", &self.minimum_utterance_ms)
             .field("wake_probe", &self.wake_probe)
             .finish_non_exhaustive()
-    }
-}
-
-impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
-    fn execute_adapter_job<'a>(&'a self, job: Job) -> AdapterJobFuture<'a> {
-        Box::pin(async move {
-            match job.payload {
-                JobPayload::DiscordVoiceJoin(payload) => Ok(JobOutput::DiscordVoiceJoin(
-                    LiveVoiceAdapter::join_assigned_room(self, payload).await?,
-                )),
-                JobPayload::DiscordVoiceLeave(payload) => Ok(JobOutput::DiscordVoiceLeave(
-                    LiveVoiceAdapter::finish_session(self, payload).await?,
-                )),
-                JobPayload::DiscordVoiceMute(payload) => Ok(JobOutput::DiscordVoiceMute(
-                    LiveVoiceAdapter::set_session_mute(self, payload).await?,
-                )),
-                JobPayload::DiscordVoicePlayAudio(payload) => Ok(JobOutput::DiscordVoicePlayAudio(
-                    LiveVoiceAdapter::play_session_cue(self, payload).await?,
-                )),
-                JobPayload::DiscordTextSend(payload) => {
-                    Ok(JobOutput::DiscordTextSend(text_send::send(payload).await?))
-                }
-                JobPayload::DiscordForumThreadCreate(payload) => Ok(
-                    JobOutput::DiscordForumThreadCreate(forum_thread::create(payload).await?),
-                ),
-                JobPayload::DiscordVoiceStatusSnapshot(_) => Ok(
-                    JobOutput::DiscordVoiceStatusSnapshot(self.voice_status_snapshot().await),
-                ),
-                payload => anyhow::bail!(
-                    "Discord voice adapter cannot execute {} jobs",
-                    payload.kind()
-                ),
-            }
-        })
     }
 }
 
@@ -172,7 +136,7 @@ impl LiveVoiceAdapter {
         }
     }
 
-    async fn join_assigned_room(
+    pub(crate) async fn join_assigned_room(
         self: &Arc<Self>,
         request: DiscordVoiceJoinPayload,
     ) -> Result<DiscordVoiceJoinOutput> {
@@ -282,7 +246,7 @@ impl LiveVoiceAdapter {
         Some(client.status())
     }
 
-    async fn finish_session(
+    pub(crate) async fn finish_session(
         self: &Arc<Self>,
         request: DiscordVoiceLeavePayload,
     ) -> Result<DiscordVoiceLeaveOutput> {
@@ -337,7 +301,7 @@ impl LiveVoiceAdapter {
         })
     }
 
-    async fn set_session_mute(
+    pub(crate) async fn set_session_mute(
         self: &Arc<Self>,
         request: DiscordVoiceMutePayload,
     ) -> Result<DiscordVoiceMuteOutput> {
@@ -375,7 +339,7 @@ impl LiveVoiceAdapter {
         })
     }
 
-    async fn play_session_cue(
+    pub(crate) async fn play_session_cue(
         self: &Arc<Self>,
         request: DiscordVoicePlayAudioPayload,
     ) -> Result<DiscordVoicePlayAudioOutput> {
@@ -450,7 +414,7 @@ impl LiveVoiceAdapter {
         clients.values().map(DiscordVoiceClient::status).collect()
     }
 
-    async fn voice_status_snapshot(&self) -> DiscordVoiceStatusSnapshotOutput {
+    pub(crate) async fn voice_status_snapshot(&self) -> DiscordVoiceStatusSnapshotOutput {
         DiscordVoiceStatusSnapshotOutput {
             bots: self.bot_statuses().await,
             sessions: self.session_statuses().await,

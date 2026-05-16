@@ -493,7 +493,7 @@ fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Resul
             ),
         )),
         AutomationAction::SoundPlay { name } => anyhow::bail!(
-            "automation action sound.play is not executable until the sound adapter job exists: {name}"
+            "automation action sound.play is not executable until a sound playback job exists: {name}"
         ),
     }
 }

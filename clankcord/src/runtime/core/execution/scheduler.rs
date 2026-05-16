@@ -6,7 +6,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
 use crate::config;
-use crate::runtime::core::execution::RuntimeAdapterJobs;
+use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
@@ -26,7 +26,7 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
         JobLane::Maintenance,
         JobOrdering::RuntimeMaintenance,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoiceStatusSnapshot,
         JobLane::Maintenance,
         JobOrdering::RuntimeMaintenance,
@@ -51,12 +51,12 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
         JobLane::Maintenance,
         JobOrdering::RuntimeMaintenance,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoiceMute,
         JobLane::VoiceControl,
         JobOrdering::VoiceTarget,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoicePlayAudio,
         JobLane::VoiceControl,
         JobOrdering::VoiceTarget,
@@ -82,12 +82,12 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
         JobLane::GeneralAsync,
         JobOrdering::VoiceTarget,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoiceJoin,
         JobLane::VoiceControl,
         JobOrdering::VoiceTarget,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoiceLeave,
         JobLane::VoiceControl,
         JobOrdering::VoiceTarget,
@@ -127,12 +127,12 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
         JobLane::GeneralAsync,
         JobOrdering::TextTarget,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordTextSend,
         JobLane::DiscordText,
         JobOrdering::TextTarget,
     ),
-    JobExecutionPolicy::adapter(
+    JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordForumThreadCreate,
         JobLane::DiscordText,
         JobOrdering::TextTarget,
@@ -176,15 +176,6 @@ impl JobExecutionPolicy {
         }
     }
 
-    const fn adapter(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
-        Self {
-            kind,
-            executor: JobExecutor::AdapterAsync,
-            lane,
-            ordering,
-        }
-    }
-
     const fn blocking_snapshot(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
         Self {
             kind,
@@ -199,7 +190,6 @@ impl JobExecutionPolicy {
 enum JobExecutor {
     RuntimeExclusive,
     RuntimeSnapshot,
-    AdapterAsync,
     BlockingSnapshot,
 }
 
@@ -229,9 +219,9 @@ enum JobOrdering {
 #[derive(Clone)]
 pub(crate) struct RuntimeExecutor<E>
 where
-    E: RuntimeAdapterJobs + Clone + Send + Sync + 'static,
+    E: RuntimeExternalApi + Clone + Send + Sync + 'static,
 {
-    adapter_jobs: E,
+    external_api: E,
     timeline_store: TimelineStore,
     lanes: Arc<JobLanes>,
     notify: Arc<Notify>,
@@ -250,11 +240,11 @@ struct JobLanes {
 
 impl<E> RuntimeExecutor<E>
 where
-    E: RuntimeAdapterJobs + Clone + Send + Sync + 'static,
+    E: RuntimeExternalApi + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(adapter_jobs: E, timeline_store: TimelineStore) -> Self {
+    pub(crate) fn new(external_api: E, timeline_store: TimelineStore) -> Self {
         Self {
-            adapter_jobs,
+            external_api,
             timeline_store,
             lanes: Arc::new(JobLanes::from_config()),
             notify: Arc::new(Notify::new()),
@@ -350,7 +340,6 @@ where
             match policy.executor {
                 JobExecutor::RuntimeExclusive => self.spawn_runtime_exclusive_job(job, permit),
                 JobExecutor::RuntimeSnapshot => self.spawn_runtime_snapshot_job(job, permit),
-                JobExecutor::AdapterAsync => self.spawn_adapter_job(job, permit),
                 JobExecutor::BlockingSnapshot => self.spawn_blocking_snapshot_job(job, permit),
             }
         }
@@ -364,13 +353,18 @@ where
 
     fn spawn_runtime_exclusive_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
+        let external_api = self.external_api.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = {
                 match Runtime::from_store(timeline_store) {
-                    Ok(mut runtime) => runtime.dispatch_claimed_runtime_job(job).await,
+                    Ok(mut runtime) => {
+                        runtime
+                            .dispatch_claimed_runtime_job_with_external_api(job, &external_api)
+                            .await
+                    }
                     Err(error) => Err(error),
                 }
             };
@@ -387,48 +381,24 @@ where
 
     fn spawn_runtime_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
+        let external_api = self.external_api.clone();
         let notify = self.notify.clone();
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = {
                 match Runtime::from_store(timeline_store) {
-                    Ok(mut runtime) => runtime.dispatch_claimed_runtime_job(job).await,
+                    Ok(mut runtime) => {
+                        runtime
+                            .dispatch_claimed_runtime_job_with_external_api(job, &external_api)
+                            .await
+                    }
                     Err(error) => Err(error),
                 }
             };
             if let Err(error) = result {
                 log(&format!(
                     "runtime-snapshot job worker failed {job_id} ({kind}): {}",
-                    error_chain(&error)
-                ));
-            }
-            drop(permit);
-            notify.notify_one();
-        });
-    }
-
-    fn spawn_adapter_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let timeline_store = self.timeline_store.clone();
-        let adapter = self.adapter_jobs.clone();
-        let notify = self.notify.clone();
-        tokio::spawn(async move {
-            let job_id = job.id.clone();
-            let kind = job.kind;
-            let result = adapter.execute_adapter_job(job.clone()).await;
-            let update = match result {
-                Ok(output) => match Runtime::from_store(timeline_store.clone()) {
-                    Ok(runtime) => runtime.complete_dispatched_job(&job_id, job, output).await,
-                    Err(error) => Err(error),
-                },
-                Err(error) => match Runtime::from_store(timeline_store.clone()) {
-                    Ok(runtime) => runtime.fail_dispatched_job(&job_id, job, error).await,
-                    Err(error) => Err(error),
-                },
-            };
-            if let Err(error) = update {
-                log(&format!(
-                    "adapter job worker failed {job_id} ({kind}): {}",
                     error_chain(&error)
                 ));
             }

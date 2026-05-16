@@ -8,11 +8,12 @@ use clankcord::runtime::{
 };
 
 mod common;
-use common::{test_state_dir, test_store};
+use common::{initialize_test_config, test_state_dir, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn join_room_placement_creates_discord_voice_join_child_job() {
     let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
@@ -50,6 +51,7 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
 #[tokio::test(flavor = "current_thread")]
 async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() {
     let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
@@ -100,6 +102,7 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
 #[tokio::test(flavor = "current_thread")]
 async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() {
     let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
@@ -142,6 +145,7 @@ async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() 
 #[tokio::test(flavor = "current_thread")]
 async fn room_placement_resume_commits_discord_voice_join_output() {
     let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();

@@ -1,82 +1,10 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::maintenance::definitions::evaluate_maintenance_job_definitions;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
 use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime, RuntimeMaintenancePayload};
-
-const STALE_RUNNING_JOB_TIMEOUT_MINUTES: i64 = 30;
-
-trait BackgroundRule {
-    fn name(&self) -> &'static str;
-    fn evaluate(&self, source_job: &Job) -> Vec<Job>;
-}
-
-struct VoiceStatusRule;
-struct AutomationEvaluationRule;
-struct StaleWakeProbeSweepRule;
-struct StaleRunningJobSweepRule;
-struct EphemeralJobGcRule;
-
-impl BackgroundRule for VoiceStatusRule {
-    fn name(&self) -> &'static str {
-        "voice_status"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::voice_status_sync(source_job.id.clone())]
-    }
-}
-
-impl BackgroundRule for AutomationEvaluationRule {
-    fn name(&self) -> &'static str {
-        "automation_evaluation"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::automation_evaluation(source_job.id.clone())]
-    }
-}
-
-impl BackgroundRule for StaleWakeProbeSweepRule {
-    fn name(&self) -> &'static str {
-        "stale_wake_probe_sweep"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::stale_wake_probe_sweep(
-            source_job.id.clone(),
-            config::wake_probe_max_queue_age_seconds(),
-        )]
-    }
-}
-
-impl BackgroundRule for StaleRunningJobSweepRule {
-    fn name(&self) -> &'static str {
-        "stale_running_job_sweep"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::stale_running_job_sweep(
-            source_job.id.clone(),
-            STALE_RUNNING_JOB_TIMEOUT_MINUTES,
-        )]
-    }
-}
-
-impl BackgroundRule for EphemeralJobGcRule {
-    fn name(&self) -> &'static str {
-        "ephemeral_job_gc"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::ephemeral_job_gc(
-            source_job.id.clone(),
-            config::ephemeral_job_gc_batch_limit(),
-        )]
-    }
-}
 
 impl Runtime {
     pub(crate) async fn prepare_runtime_maintenance_job(
@@ -86,10 +14,10 @@ impl Runtime {
     ) -> Result<JobDecision> {
         let next = self.schedule_next_runtime_maintenance(payload).await?;
         let mut submitted = Vec::new();
-        for (rule_name, rule_job) in evaluate_background_rules(job) {
-            let created = self.timeline_store.create_job(rule_job).await?;
+        for (definition_name, definition_job) in evaluate_maintenance_job_definitions(job) {
+            let created = self.timeline_store.create_job(definition_job).await?;
             submitted.push(json!({
-                "rule": rule_name,
+                "definition": definition_name,
                 "job_id": created.id,
                 "job_kind": created.kind.as_str(),
             }));
@@ -249,26 +177,4 @@ impl Runtime {
         }
         Ok(timed_out)
     }
-}
-
-fn evaluate_background_rules(source_job: &Job) -> Vec<(&'static str, Job)> {
-    background_rules()
-        .into_iter()
-        .flat_map(|rule| {
-            let name = rule.name();
-            rule.evaluate(source_job)
-                .into_iter()
-                .map(move |job| (name, job))
-        })
-        .collect()
-}
-
-fn background_rules() -> Vec<Box<dyn BackgroundRule>> {
-    vec![
-        Box::new(VoiceStatusRule),
-        Box::new(AutomationEvaluationRule),
-        Box::new(StaleWakeProbeSweepRule),
-        Box::new(StaleRunningJobSweepRule),
-        Box::new(EphemeralJobGcRule),
-    ]
 }

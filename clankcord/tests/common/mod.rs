@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use chrono::{TimeZone, Utc};
 use serde_json::Value;
@@ -14,6 +14,34 @@ use clankcord::runtime::{RoomConfig, VoiceCaptureSessionStatus};
 
 const LOCAL_TEST_POSTGRES_URL: &str =
     "postgres://clankcord_test:clankcord_test@127.0.0.1:54330/clankcord_test";
+
+pub(crate) fn initialize_test_config(root: &Path) {
+    static CONFIG_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = CONFIG_LOCK.lock().unwrap();
+    let path = root.join("config");
+    std::fs::create_dir_all(&path).unwrap();
+    let config = include_str!("../../../config.ex.toml")
+        .replace(
+            "state_dir = \"/clankcord/state\"",
+            &format!("state_dir = \"{}\"", root.join("state").display()),
+        )
+        .replace(
+            "voice_memory_root = \"/clankcord/durable/clankcord/voice\"",
+            &format!("voice_memory_root = \"{}\"", root.join("voice").display()),
+        )
+        .replace(
+            "agent_workspaces_root = \"/clankcord/state/agent-workspaces\"",
+            &format!(
+                "agent_workspaces_root = \"{}\"",
+                root.join("agent-workspaces").display()
+            ),
+        );
+    std::fs::write(path.join("config.toml"), config).unwrap();
+    let original_dir = std::env::current_dir().unwrap();
+    std::env::set_current_dir(&path).unwrap();
+    let _ = clankcord::config::app_config();
+    std::env::set_current_dir(original_dir).unwrap();
+}
 
 pub(crate) fn dt(
     year: i32,

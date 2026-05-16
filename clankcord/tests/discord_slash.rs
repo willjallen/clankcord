@@ -7,7 +7,7 @@ use clankcord::runtime::{
 };
 
 mod common;
-use common::{dt, test_store};
+use common::{dt, initialize_test_config, test_store};
 
 #[test]
 fn discord_slash_command_job_round_trips() {
@@ -35,6 +35,7 @@ fn discord_slash_command_job_round_trips() {
 #[tokio::test(flavor = "current_thread")]
 async fn feedback_slash_records_durable_timeline_event() {
     let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
     let job = store

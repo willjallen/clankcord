@@ -190,7 +190,7 @@ agent/tool surface Response request
 ```
 
 `JobKind::Response` is removed. The runtime tracks `TextDelivery` routing jobs and concrete
-`DiscordTextSend` adapter jobs.
+`DiscordTextSend` jobs.
 
 ## Implementation Order
 

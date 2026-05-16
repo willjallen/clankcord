@@ -58,7 +58,7 @@ The dispatcher runs a hot drain loop. Each drain pass resolves waiting parents w
 
 Workers reconstruct a `Runtime` from the shared timeline store when they need domain behavior. That runtime view contains configuration, status snapshots, the automation registry, the agent runtime harness, and the timeline store. Live Discord voice clients remain in the live voice adapter because those are process capabilities, while jobs, room controls, events, automations, sessions, publications, and artifacts remain durable state.
 
-The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots and Postgres-backed room controls. Runtime-snapshot jobs work from a reconstructed runtime view. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Adapter async jobs perform Discord IO. Runtime maintenance is runtime-domain work that submits concrete background jobs.
+The scheduler uses execution modes to route work through the correct environment. Runtime-exclusive jobs mutate runtime-owned state snapshots and Postgres-backed room controls. Runtime-snapshot jobs work from a reconstructed runtime view and may call typed adapter APIs for Discord IO. Blocking snapshot jobs cover provider calls, process execution, file work, STT, wake detection, refinement, and Codex. Runtime maintenance is runtime-domain work that submits concrete background jobs.
 
 ## Live Loops
 
@@ -79,7 +79,7 @@ runtime_maintenance
       +--> ephemeral_job_gc
 ```
 
-Voice status sync is the only maintenance path that needs live adapter state. The runtime parent creates a `discord_voice_status_snapshot` child, the Discord voice adapter returns bot and session status, and the parent resumes to commit that snapshot into durable runtime state.
+Voice status sync is the only maintenance path that needs live adapter state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state.
 
 ```text
 voice_status_sync
