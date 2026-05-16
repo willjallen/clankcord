@@ -107,8 +107,8 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
         r#"
         INSERT INTO agent_sessions(
           agent_session_id, codex_session_id, route_kind, route_key, guild_id, voice_channel_id,
-          dm_user_id, discord_thread_id, discord_parent_channel_id, response_sink_kind,
-          response_channel_id, response_user_id, state, created_at_ms, last_activity_at_ms,
+          dm_user_id, discord_thread_id, discord_parent_channel_id, text_target_kind,
+          text_channel_id, text_user_id, state, created_at_ms, last_activity_at_ms,
           expires_at_ms, payload_blob
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
@@ -121,9 +121,9 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
           dm_user_id = EXCLUDED.dm_user_id,
           discord_thread_id = EXCLUDED.discord_thread_id,
           discord_parent_channel_id = EXCLUDED.discord_parent_channel_id,
-          response_sink_kind = EXCLUDED.response_sink_kind,
-          response_channel_id = EXCLUDED.response_channel_id,
-          response_user_id = EXCLUDED.response_user_id,
+          text_target_kind = EXCLUDED.text_target_kind,
+          text_channel_id = EXCLUDED.text_channel_id,
+          text_user_id = EXCLUDED.text_user_id,
           state = EXCLUDED.state,
           created_at_ms = EXCLUDED.created_at_ms,
           last_activity_at_ms = EXCLUDED.last_activity_at_ms,
@@ -140,9 +140,9 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
     .bind(&record.dm_user_id)
     .bind(&record.discord_thread_id)
     .bind(&record.discord_parent_channel_id)
-    .bind(record.response_sink.kind.as_str())
-    .bind(&record.response_sink.channel_id)
-    .bind(&record.response_sink.user_id)
+    .bind(record.text_target.kind.as_str())
+    .bind(&record.text_target.channel_id)
+    .bind(&record.text_target.user_id)
     .bind(record.state.as_str())
     .bind(created_at_ms)
     .bind(last_activity_at_ms)

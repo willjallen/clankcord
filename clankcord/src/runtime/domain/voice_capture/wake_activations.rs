@@ -355,20 +355,14 @@ async fn dispatch_after_stt_settles(
     }
 
     let command = activation_agent_task_command(payload, &request_events, closed_at)?;
-    let session = runtime
-        .ensure_voice_agent_session(
+    let agent_job = runtime
+        .agent_session_start_or_task_job(
             &payload.guild_id,
             &payload.voice_channel_id,
             &payload.speaker_user_id,
+            command,
         )
         .await?;
-    let agent_job = Job::agent_task_for_session(
-        session.agent_session_id,
-        session.guild_id,
-        session.voice_channel_id,
-        payload.speaker_user_id.clone(),
-        command,
-    );
     let created_job = runtime
         .timeline_store
         .create_child_job(job, agent_job)

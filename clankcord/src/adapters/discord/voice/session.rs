@@ -9,7 +9,9 @@ use crate::adapters::discord::voice::artifacts::{
     write_segment_wav, write_wake_probe_wav,
 };
 use crate::adapters::discord::voice::diagnostics::{DiagnosticsConfig, analyze_pcm_bytes};
-use crate::adapters::discord::voice::types::{SessionAudioSegment, SpeakerBuffer, VoiceSession};
+use crate::adapters::discord::voice::types::{
+    LiveVoiceSession, SessionAudioSegment, SpeakerBuffer,
+};
 use crate::runtime::{AudioSegmentPayload, WakeProbePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -59,7 +61,7 @@ impl SessionAudioPipeline {
 
     pub fn handle_pcm_packet(
         &self,
-        session: Option<&mut VoiceSession>,
+        session: Option<&mut LiveVoiceSession>,
         user_id: &str,
         label: &str,
         username: &str,
@@ -107,7 +109,7 @@ impl SessionAudioPipeline {
 
     pub fn handle_silence_packet(
         &self,
-        session: Option<&mut VoiceSession>,
+        session: Option<&mut LiveVoiceSession>,
         user_id: &str,
         label: &str,
         username: &str,
@@ -140,7 +142,7 @@ impl SessionAudioPipeline {
 
     pub fn handle_empty_pcm_packet(
         &self,
-        session: Option<&mut VoiceSession>,
+        session: Option<&mut LiveVoiceSession>,
         user_id: &str,
         label: &str,
         username: &str,
@@ -180,7 +182,7 @@ impl SessionAudioPipeline {
 
     pub fn handle_speaking_state(
         &self,
-        session: Option<&mut VoiceSession>,
+        session: Option<&mut LiveVoiceSession>,
         user_id: &str,
         label: &str,
         username: &str,
@@ -217,7 +219,7 @@ impl SessionAudioPipeline {
 
     pub fn close_speaker_segment(
         &self,
-        session: &mut VoiceSession,
+        session: &mut LiveVoiceSession,
         user_id: &str,
     ) -> Result<AudioPipelineOutcome> {
         let Some(speaker) = session.buffers.get_mut(user_id) else {
@@ -255,7 +257,7 @@ impl SessionAudioPipeline {
 
     pub fn flush_speaker(
         &self,
-        session: &mut VoiceSession,
+        session: &mut LiveVoiceSession,
         user_id: &str,
     ) -> Result<AudioPipelineOutcome> {
         self.close_speaker_segment(session, user_id)
@@ -264,7 +266,7 @@ impl SessionAudioPipeline {
     #[allow(clippy::too_many_arguments)]
     pub fn capture_segment(
         &self,
-        session: &mut VoiceSession,
+        session: &mut LiveVoiceSession,
         segment_index: i64,
         speaker_id: &str,
         label: &str,
@@ -343,7 +345,7 @@ impl SessionAudioPipeline {
 
     pub fn capture_wake_probe(
         &self,
-        session: &mut VoiceSession,
+        session: &mut LiveVoiceSession,
         user_id: &str,
         config: WakeProbeConfig,
         now_monotonic: f64,
@@ -464,15 +466,15 @@ fn merge_object(target: &mut Value, extra: Value) {
     }
 }
 
-fn active_session(session: Option<&mut VoiceSession>) -> Option<&mut VoiceSession> {
+fn active_session(session: Option<&mut LiveVoiceSession>) -> Option<&mut LiveVoiceSession> {
     session.filter(|session| session.ended_at.is_none() && !session.finalizing)
 }
 
-fn note_packet_debug(session: &mut VoiceSession, key: &str) {
+fn note_packet_debug(session: &mut LiveVoiceSession, key: &str) {
     *session.packet_debug.entry(key.to_string()).or_insert(0) += 1;
 }
 
-fn next_segment_index(session: &mut VoiceSession) -> i64 {
+fn next_segment_index(session: &mut LiveVoiceSession) -> i64 {
     let segment_index = session.segment_counter;
     session.segment_counter += 1;
     segment_index
@@ -519,7 +521,7 @@ fn pcm_bytes_for_duration_ms(duration_ms: i64) -> usize {
     bytes - (bytes % pcm_frame_bytes())
 }
 
-fn note_session_log(session: &mut VoiceSession, action: &str, fields: Value) {
+fn note_session_log(session: &mut LiveVoiceSession, action: &str, fields: Value) {
     session.debug_notes.insert(
         format!("last_{action}"),
         serde_json::to_string(&fields).unwrap_or_default(),

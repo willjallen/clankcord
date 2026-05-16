@@ -18,7 +18,7 @@ use crate::runtime::timeline::{
 };
 use crate::runtime::util::{first_non_empty, job_cancel_requested, log, preview};
 use crate::runtime::{
-    Job, JobKind, JobState, ResponseKind, ResponsePayload, ResponseSink, Runtime,
+    Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload, TextTarget,
 };
 
 const AGENT_UNAVAILABLE_MESSAGE: &str =
@@ -34,8 +34,8 @@ impl Runtime {
             .into_iter()
             .filter(|job| job.kind == JobKind::AgentTask)
         {
-            let submitted_responses = self.response_jobs_for_source(&job.id).await?;
-            if !submitted_responses.is_empty() {
+            let submitted_text_deliveries = self.text_delivery_jobs_for_source(&job.id).await?;
+            if !submitted_text_deliveries.is_empty() {
                 let mut completed = job.clone();
                 completed.mark_complete();
                 completed.metadata.agent_task_mut().response_text =
@@ -44,7 +44,7 @@ impl Runtime {
                 recovered.push(json!({
                     "dispatched": true,
                     "job": completed.to_value(),
-                    "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+                    "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
                     "recovered": true,
                 }));
                 continue;
@@ -256,14 +256,14 @@ impl Runtime {
                 .await?;
             return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
         }
-        let submitted_responses = self.response_jobs_for_source(&latest.id).await?;
-        if !submitted_responses.is_empty() {
+        let submitted_text_deliveries = self.text_delivery_jobs_for_source(&latest.id).await?;
+        if !submitted_text_deliveries.is_empty() {
             latest.mark_complete();
             self.timeline_store.update_job(&latest).await?;
             return Ok(json!({
                 "dispatched": true,
                 "job": latest.to_value(),
-                "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+                "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
             }));
         }
         let response_text = latest
@@ -274,7 +274,7 @@ impl Runtime {
         let response_text = response_text.trim();
         if response_text == "RESPONSE_SUBMITTED" {
             anyhow::bail!(
-                "agent task reported RESPONSE_SUBMITTED but no response job exists for source job {job_id}"
+                "agent task reported RESPONSE_SUBMITTED but no text delivery job exists for source job {job_id}"
             );
         }
         if response_text == "NO_RESPONSE_NEEDED" {
@@ -297,16 +297,16 @@ impl Runtime {
             return Ok(json!({"dispatched": true, "job": latest.to_value(), "response": "none"}));
         }
         if response_text.is_empty() {
-            anyhow::bail!("agent task completed without submitting a response job");
+            anyhow::bail!("agent task completed without submitting a text delivery job");
         }
         anyhow::bail!(
-            "agent task returned final text instead of submitting a response job or NO_RESPONSE_NEEDED"
+            "agent task returned final text instead of submitting a text delivery job or NO_RESPONSE_NEEDED"
         )
     }
 
-    async fn response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
+    async fn text_delivery_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
         self.timeline_store
-            .list_response_jobs_for_source(source_job_id)
+            .list_text_delivery_jobs_for_source(source_job_id)
             .await
     }
 
@@ -319,7 +319,7 @@ impl Runtime {
         let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
         let is_infrastructure_error = infrastructure_error.is_some();
         let error_text = error.to_string();
-        let publish_unavailable_response =
+        let publish_unavailable_text =
             is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
         let mut latest = self.timeline_store.get_job(&job_id).await?;
         if job_cancel_requested(&latest) {
@@ -333,8 +333,8 @@ impl Runtime {
             self.timeline_store.update_job(&latest).await?;
             return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
         }
-        let submitted_responses = self.response_jobs_for_source(&job_id).await?;
-        if !submitted_responses.is_empty() {
+        let submitted_text_deliveries = self.text_delivery_jobs_for_source(&job_id).await?;
+        if !submitted_text_deliveries.is_empty() {
             latest.mark_complete();
             latest.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
             latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
@@ -342,7 +342,7 @@ impl Runtime {
             return Ok(json!({
                 "dispatched": true,
                 "job": latest.to_value(),
-                "submitted_responses": submitted_responses.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+                "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
                 "error_after_response": error_text,
             }));
         }
@@ -362,8 +362,8 @@ impl Runtime {
         } else {
             JobState::Queued
         });
-        let response_job = if publish_unavailable_response {
-            self.agent_unavailable_response_job(&latest).await?
+        let text_delivery_job = if publish_unavailable_text {
+            self.agent_unavailable_text_delivery_job(&latest).await?
         } else {
             None
         };
@@ -375,22 +375,26 @@ impl Runtime {
             "dispatched": false,
             "job": latest.to_value(),
             "error": error_text,
-            "response_job": response_job.map(|job| job.to_value()),
+            "text_delivery_job": text_delivery_job.map(|job| job.to_value()),
         }))
     }
 
-    async fn agent_unavailable_response_job(&self, job: &Job) -> Result<Option<Job>> {
-        if !self.response_jobs_for_source(&job.id).await?.is_empty() {
+    async fn agent_unavailable_text_delivery_job(&self, job: &Job) -> Result<Option<Job>> {
+        if !self
+            .text_delivery_jobs_for_source(&job.id)
+            .await?
+            .is_empty()
+        {
             return Ok(None);
         }
         let requested_by_user_id = agent_task_requester_id(job);
-        let response = Job::response(
+        let response = Job::text_delivery(
             job.guild_id.clone(),
             job.voice_channel_id.clone(),
             requested_by_user_id.clone(),
-            ResponsePayload::new(
-                ResponseKind::Message,
-                ResponseSink::default(),
+            TextDeliveryPayload::new(
+                TextDeliveryKind::Message,
+                TextTarget::default(),
                 AGENT_UNAVAILABLE_MESSAGE,
                 job.id.clone(),
                 requested_by_user_id,

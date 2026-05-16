@@ -41,9 +41,9 @@ impl TimelineStore {
         self.ensure_room(&job.guild_id, &job.voice_channel_id, "", "", "")
             .await?;
         let mut transaction = self.pool.begin().await?;
-        if job.kind == crate::runtime::JobKind::Response {
+        if job.kind == crate::runtime::JobKind::TextDelivery {
             if let Some(existing) =
-                existing_agent_task_response_for_source(&mut transaction, &job).await?
+                existing_agent_task_text_delivery_for_source(&mut transaction, &job).await?
             {
                 transaction.commit().await?;
                 return Ok(existing);
@@ -570,7 +570,10 @@ impl TimelineStore {
         decode_job_rows(query.build().fetch_all(&self.pool).await?)
     }
 
-    pub async fn list_response_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
+    pub async fn list_text_delivery_jobs_for_source(
+        &self,
+        source_job_id: &str,
+    ) -> Result<Vec<Job>> {
         if source_job_id.trim().is_empty() {
             return Ok(Vec::new());
         }
@@ -579,7 +582,7 @@ impl TimelineStore {
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.kind = 'response'
+            WHERE j.kind = 'text_delivery'
               AND j.source_job_id = $1
             ORDER BY j.updated_at_ms DESC, j.job_id DESC
             "#,
@@ -737,6 +740,10 @@ impl TimelineStore {
                 parent_summary.kind,
                 crate::runtime::JobKind::RoomAgentPlacement
                     | crate::runtime::JobKind::DiscordVoicePlayback
+                    | crate::runtime::JobKind::TextDelivery
+                    | crate::runtime::JobKind::ConfirmationRequired
+                    | crate::runtime::JobKind::AgentSessionStart
+                    | crate::runtime::JobKind::TranscriptPublication
             ) {
                 parent.set_state(crate::runtime::JobState::Queued);
                 parent.next_run_at = None;
@@ -880,7 +887,7 @@ impl TimelineStore {
     }
 }
 
-async fn existing_agent_task_response_for_source(
+async fn existing_agent_task_text_delivery_for_source(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
     job: &Job,
 ) -> Result<Option<Job>> {
@@ -902,7 +909,7 @@ async fn existing_agent_task_response_for_source(
         SELECT p.payload_blob
         FROM jobs j
         JOIN job_payloads p ON p.job_id = j.job_id
-        WHERE j.kind = 'response'
+        WHERE j.kind = 'text_delivery'
           AND j.source_job_id = $1
         ORDER BY j.created_at_ms, j.job_id
         LIMIT 1
@@ -1177,10 +1184,16 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::DiscordVoicePlayback
         | crate::runtime::JobKind::DiscordVoiceMute
         | crate::runtime::JobKind::DiscordVoicePlayAudio => "voice_control",
-        crate::runtime::JobKind::Response => "response",
+        crate::runtime::JobKind::TextDelivery
+        | crate::runtime::JobKind::ConfirmationRequired
+        | crate::runtime::JobKind::AgentSessionStart
+        | crate::runtime::JobKind::TranscriptPublication => "general_async",
+        crate::runtime::JobKind::DiscordTextSend
+        | crate::runtime::JobKind::DiscordForumThreadCreate => "discord_text",
         crate::runtime::JobKind::RefineTranscript => "refinement",
         crate::runtime::JobKind::AgentTask => "agent",
         crate::runtime::JobKind::DiscordTextMessage => "general_async",
+        crate::runtime::JobKind::DiscordSlashCommand => "general_async",
         crate::runtime::JobKind::RuntimeMaintenance => "maintenance",
         _ => "general_async",
     }
@@ -1217,6 +1230,73 @@ fn job_ordering_key(job: &Job) -> String {
             } else {
                 format!("discord:text:{}", normalize_key_part(&payload.channel_id))
             }
+        }
+        crate::runtime::JobPayload::DiscordSlashCommand(payload) => {
+            if payload.guild_id.trim().is_empty() {
+                format!("discord:slash:dm:{}", normalize_key_part(&payload.user_id))
+            } else {
+                format!(
+                    "discord:slash:{}:{}",
+                    normalize_key_part(&payload.guild_id),
+                    normalize_key_part(&payload.channel_id)
+                )
+            }
+        }
+        crate::runtime::JobPayload::TextDelivery(payload) => {
+            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+                payload.target.user_id.as_str()
+            } else {
+                payload.target.channel_id.as_str()
+            };
+            if payload.source_job_id.trim().is_empty() {
+                format!(
+                    "text:target:{}:{}",
+                    payload.target.kind.as_str(),
+                    normalize_key_part(target_id),
+                )
+            } else {
+                format!("text:source:{}", normalize_key_part(&payload.source_job_id))
+            }
+        }
+        crate::runtime::JobPayload::DiscordTextSend(payload) => {
+            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+                payload.target.user_id.as_str()
+            } else {
+                payload.target.channel_id.as_str()
+            };
+            format!(
+                "discord:text:{}:{}",
+                payload.target.kind.as_str(),
+                normalize_key_part(target_id)
+            )
+        }
+        crate::runtime::JobPayload::DiscordForumThreadCreate(payload) => {
+            format!(
+                "discord:forum_thread:{}",
+                normalize_key_part(&payload.parent_channel_id)
+            )
+        }
+        crate::runtime::JobPayload::ConfirmationRequired(payload) => {
+            if payload.confirmation.delivery == "dm" {
+                format!(
+                    "discord:confirmation:dm:{}",
+                    normalize_key_part(&payload.command.requested_by_user_id)
+                )
+            } else {
+                format!(
+                    "discord:confirmation:channel:{}",
+                    normalize_key_part(&job.voice_channel_id)
+                )
+            }
+        }
+        crate::runtime::JobPayload::AgentSessionStart(payload) => {
+            voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
+        }
+        crate::runtime::JobPayload::TranscriptPublication(payload) => {
+            format!(
+                "publication:{}",
+                normalize_key_part(&payload.publication_id)
+            )
         }
         crate::runtime::JobPayload::RoomAgentPlacement(payload) => {
             let room_key = if payload.room_id.trim().is_empty() {
@@ -1259,7 +1339,11 @@ fn voice_agent_route_ordering_key(guild_id: &str, voice_channel_id: &str) -> Str
 
 fn source_job_id(job: &Job) -> String {
     match &job.payload {
-        crate::runtime::JobPayload::Response(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::DiscordTextSend(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::DiscordForumThreadCreate(payload) => {
+            payload.source_job_id.clone()
+        }
         crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => payload.source_job_id.clone(),

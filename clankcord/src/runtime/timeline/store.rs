@@ -412,9 +412,9 @@ impl TimelineStore {
               dm_user_id TEXT NOT NULL DEFAULT '',
               discord_thread_id TEXT NOT NULL DEFAULT '',
               discord_parent_channel_id TEXT NOT NULL DEFAULT '',
-              response_sink_kind TEXT NOT NULL DEFAULT '',
-              response_channel_id TEXT NOT NULL DEFAULT '',
-              response_user_id TEXT NOT NULL DEFAULT '',
+              text_target_kind TEXT NOT NULL DEFAULT '',
+              text_channel_id TEXT NOT NULL DEFAULT '',
+              text_user_id TEXT NOT NULL DEFAULT '',
               state TEXT NOT NULL DEFAULT '',
               created_at_ms BIGINT NOT NULL,
               last_activity_at_ms BIGINT NOT NULL,
@@ -486,9 +486,9 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
               ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
               WHERE kind = 'wake_probe' AND state = 'queued';
-            CREATE INDEX IF NOT EXISTS idx_jobs_response_source
+            CREATE INDEX IF NOT EXISTS idx_jobs_text_delivery_source
               ON jobs(source_job_id, updated_at_ms DESC, job_id)
-              WHERE kind = 'response';
+              WHERE kind = 'text_delivery';
             CREATE INDEX IF NOT EXISTS idx_jobs_audio_segment_pending_speaker
               ON jobs(guild_id, voice_channel_id, speaker_user_id, segment_end_ms, job_id)
               WHERE kind = 'audio_segment' AND terminal = FALSE;

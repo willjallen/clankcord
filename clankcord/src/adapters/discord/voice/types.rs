@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::discord::voice::diagnostics::default_packet_debug;
 use crate::config::format_timestamp_local;
 use crate::runtime::{
-    ArtifactStatus, RoomConfig, RuntimeSessionStatus, SessionArtifacts, SessionCaptureStats,
-    SessionSpeakerCaptureStats,
+    ArtifactStatus, RoomConfig, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
+    VoiceCaptureSessionStatus,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -76,7 +76,7 @@ pub struct SessionAudioSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct VoiceSession {
+pub struct LiveVoiceSession {
     pub session_id: String,
     pub room: RoomConfig,
     pub bot_id: String,
@@ -126,8 +126,8 @@ pub struct VoiceSession {
     pub mode: String,
 }
 
-impl VoiceSession {
-    pub fn metadata(&self, tz: Tz) -> RuntimeSessionStatus {
+impl LiveVoiceSession {
+    pub fn metadata(&self, tz: Tz) -> VoiceCaptureSessionStatus {
         let started = format_timestamp_local(self.started_at, tz);
         let ended = self.ended_at.map(|value| format_timestamp_local(value, tz));
         let recording_path = self.session_dir.join("recording.mp3");
@@ -163,7 +163,7 @@ impl VoiceSession {
                 )
             })
             .collect::<BTreeMap<_, _>>();
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: self.session_id.clone(),
             room_id: self.room.room_id.clone(),
             guild_id: self.room.guild_id.clone(),

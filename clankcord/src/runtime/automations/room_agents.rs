@@ -2,7 +2,7 @@ use crate::Result;
 use crate::runtime::automations::{Automation, AutomationContext, AutomationOutput};
 use crate::runtime::{
     DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, Runtime,
-    RuntimeBotStatus, RuntimeSessionStatus,
+    VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 
 pub(crate) struct RoomAgentPlacementAutomation;
@@ -122,7 +122,7 @@ fn has_available_voice_bot(runtime: &Runtime) -> bool {
     runtime.bots.values().any(voice_bot_available)
 }
 
-fn voice_bot_available(bot: &RuntimeBotStatus) -> bool {
+fn voice_bot_available(bot: &VoiceBotStatus) -> bool {
     bot.ready && bot.joining_session_id.is_empty() && bot.assigned_session_id.is_empty()
 }
 
@@ -160,7 +160,7 @@ fn room_identifier_matches(value: &str, room: &RoomConfig) -> bool {
 
 fn has_active_session_leave_job(
     context: &AutomationContext<'_>,
-    session: &RuntimeSessionStatus,
+    session: &VoiceCaptureSessionStatus,
 ) -> bool {
     context.has_active_job_in_guild(JobKind::DiscordVoiceLeave, &session.guild_id, |job| {
         job.discord_voice_leave_payload()
@@ -168,7 +168,7 @@ fn has_active_session_leave_job(
     })
 }
 
-fn duplicate_session_leave_job(session: &RuntimeSessionStatus) -> Job {
+fn duplicate_session_leave_job(session: &VoiceCaptureSessionStatus) -> Job {
     Job::discord_voice_leave(
         session.guild_id.clone(),
         session.voice_channel_id.clone(),

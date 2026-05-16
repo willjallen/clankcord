@@ -8,9 +8,9 @@ use chrono::{TimeZone, Utc};
 use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 
-use clankcord::adapters::discord::voice::types::VoiceSession;
+use clankcord::adapters::discord::voice::types::LiveVoiceSession;
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
-use clankcord::runtime::{RoomConfig, RuntimeSessionStatus};
+use clankcord::runtime::{RoomConfig, VoiceCaptureSessionStatus};
 
 const LOCAL_TEST_POSTGRES_URL: &str =
     "postgres://clankcord_test:clankcord_test@127.0.0.1:54330/clankcord_test";
@@ -118,8 +118,8 @@ fn assert_test_database_url(value: &str) {
     );
 }
 
-pub(crate) fn test_voice_session(raw_root: &Path) -> VoiceSession {
-    VoiceSession {
+pub(crate) fn test_voice_session(raw_root: &Path) -> LiveVoiceSession {
+    LiveVoiceSession {
         session_id: "cap_test".to_string(),
         room: RoomConfig {
             room_id: "code-lounge".to_string(),
@@ -167,6 +167,6 @@ pub(crate) fn merge_json(base: &Value, extra: Value) -> Value {
 }
 
 #[allow(dead_code)]
-pub(crate) fn ended(session: &mut RuntimeSessionStatus) {
+pub(crate) fn ended(session: &mut VoiceCaptureSessionStatus) {
     session.mark_ended(clankcord::runtime::timeline::isoformat_z(None));
 }

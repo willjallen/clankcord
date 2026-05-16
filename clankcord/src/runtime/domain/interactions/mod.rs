@@ -1,5 +1,6 @@
 mod agent_sessions;
 mod commands;
+mod confirmations;
 mod policy;
 mod tasks;
 

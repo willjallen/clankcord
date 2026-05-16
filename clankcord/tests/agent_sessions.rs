@@ -1,12 +1,11 @@
 use chrono::{SecondsFormat, TimeZone, Utc};
 
+mod common;
+
 use clankcord::runtime::{
     AgentSessionRecord, AgentSessionRecordState, DiscordTextMessagePayload, Job, JobKind,
-    ResponseSinkKind, voice_route_key,
+    TextTargetKind, voice_route_key,
 };
-
-#[path = "../tests/common/mod.rs"]
-mod common;
 
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_records_route_by_voice_and_thread() {
@@ -35,8 +34,8 @@ async fn agent_session_records_route_by_voice_and_thread() {
         .unwrap()
         .unwrap();
     assert_eq!(by_route.agent_session_id, "ags_test");
-    assert_eq!(by_route.response_sink.kind, ResponseSinkKind::Channel);
-    assert_eq!(by_route.response_sink.channel_id, "thread-1");
+    assert_eq!(by_route.text_target.kind, TextTargetKind::Channel);
+    assert_eq!(by_route.text_target.channel_id, "thread-1");
 
     let by_thread = store
         .agent_session_for_thread("thread-1")

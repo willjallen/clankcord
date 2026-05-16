@@ -1,10 +1,12 @@
 use serenity::async_trait;
 use serenity::client::{Client, Context, EventHandler};
+use serenity::model::application::Interaction;
 use serenity::model::channel::Message;
 use serenity::model::gateway::GatewayIntents;
 
 use crate::Result;
 use crate::adapters::discord::api::load_discord_bot_token;
+use crate::adapters::discord::gateway::{components, registration, slash};
 use crate::runtime::{DiscordTextMessagePayload, Job, RuntimeJobSink, log};
 
 #[derive(Clone)]
@@ -33,6 +35,11 @@ impl DiscordTextAdapter {
                 return Ok(());
             }
         };
+        if let Err(error) = registration::register_slash_commands() {
+            log(&format!(
+                "discord slash command registration failed: {error}"
+            ));
+        }
         let intents = GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::DIRECT_MESSAGES
@@ -54,6 +61,19 @@ struct DiscordTextGatewayHandler {
 
 #[async_trait]
 impl EventHandler for DiscordTextGatewayHandler {
+    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+        match interaction {
+            Interaction::Command(command) => {
+                slash::handle_slash_command(self.job_sink.clone(), ctx, command).await;
+            }
+            Interaction::Component(component) => {
+                components::handle_component_interaction(self.job_sink.clone(), ctx, component)
+                    .await;
+            }
+            _ => {}
+        }
+    }
+
     async fn message(&self, _ctx: Context, message: Message) {
         if message.author.bot {
             return;

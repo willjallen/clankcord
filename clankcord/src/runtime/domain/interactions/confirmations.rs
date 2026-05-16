@@ -3,12 +3,15 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::adapters::discord::api::discord_request;
 use crate::config::string_field;
 use crate::errors::discord_tool_error;
+use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::isoformat_z;
-use crate::runtime::{CommandRequest, ConfirmationContext, Job, JobKind, JobState};
+use crate::runtime::{
+    BinaryPayload, CommandRequest, ConfirmationContext, DiscordTextSendPayload, Job, JobKind,
+    JobOutput, JobState, TextDeliveryKind, TextTarget, TextTargetKind,
+};
 
 use crate::runtime::Runtime;
 use crate::runtime::util::{first_non_empty, preview, require_confirmation_actor};
@@ -73,7 +76,7 @@ impl Runtime {
         })
     }
 
-    pub async fn post_confirmation_card(&self, job: &mut Job) -> Result<()> {
+    pub(crate) async fn prepare_confirmation_required_job(&self, job: &Job) -> Result<JobDecision> {
         let command = job
             .command()
             .cloned()
@@ -84,88 +87,127 @@ impl Runtime {
             command.requested_by_user_id.clone(),
             job.requested_by_user_id.clone(),
         ]);
-        let channel_id = if sensitive {
+        let target = if sensitive {
             if requested_user_id.is_empty() {
-                let confirmation = job.metadata.confirmation_mut();
+                let mut failed = job.clone();
+                let confirmation = failed.metadata.confirmation_mut();
                 confirmation.delivery = delivery.to_string();
                 confirmation.post_error =
                     "sensitive confirmation is missing requester user id".to_string();
-                self.timeline_store.update_job(job).await?;
-                return Ok(());
+                let error = confirmation.post_error.clone();
+                self.timeline_store.update_job(&failed).await?;
+                return Ok(JobDecision::fail(error));
             }
-            let dm = discord_request(
-                "POST",
-                "/users/@me/channels",
-                Some(&json!({"recipient_id": requested_user_id})),
-                None,
-                None,
-                30,
-            );
-            match dm {
-                Ok(payload) => string_field(&payload, "id"),
-                Err(error) => {
-                    let confirmation = job.metadata.confirmation_mut();
-                    confirmation.delivery = delivery.to_string();
-                    confirmation.post_error = error.to_string();
-                    self.timeline_store.update_job(job).await?;
-                    return Ok(());
-                }
+            TextTarget {
+                kind: TextTargetKind::Dm,
+                channel_id: String::new(),
+                user_id: requested_user_id.clone(),
             }
         } else {
-            self.control_config.bots_channel_id.clone()
+            TextTarget {
+                kind: TextTargetKind::Channel,
+                channel_id: self.control_config.bots_channel_id.clone(),
+                user_id: String::new(),
+            }
         };
-        if channel_id.is_empty() {
-            let confirmation = job.metadata.confirmation_mut();
+        if target.kind == TextTargetKind::Channel && target.channel_id.trim().is_empty() {
+            let mut failed = job.clone();
+            let confirmation = failed.metadata.confirmation_mut();
             confirmation.delivery = delivery.to_string();
             confirmation.post_error = "botsChannelId is not configured".to_string();
-            self.timeline_store.update_job(job).await?;
-            return Ok(());
+            let error = confirmation.post_error.clone();
+            self.timeline_store.update_job(&failed).await?;
+            return Ok(JobDecision::fail(error));
         }
-        let content = self.confirmation_card_content(job, &command);
-        let body = json!({
-            "content": content,
-            "allowed_mentions": {"parse": []},
-            "components": [{
-                "type": 1,
-                "components": [
-                    {
-                        "type": 2,
-                        "style": 3,
-                        "label": "Approve",
-                        "custom_id": format!("clankcord_voice_confirm:{}", job.id),
-                    },
-                    {
-                        "type": 2,
-                        "style": 4,
-                        "label": "Cancel",
-                        "custom_id": format!("clankcord_voice_cancel:{}", job.id),
-                    },
-                ],
-            }],
-        });
-        match discord_request(
-            "POST",
-            &format!("/channels/{channel_id}/messages"),
-            Some(&body),
-            None,
-            None,
-            30,
-        ) {
-            Ok(response) => {
-                let confirmation = job.metadata.confirmation_mut();
-                confirmation.delivery = delivery.to_string();
-                confirmation.channel_id = channel_id;
-                confirmation.message_id = string_field(&response, "id");
-            }
-            Err(error) => {
-                let confirmation = job.metadata.confirmation_mut();
-                confirmation.delivery = delivery.to_string();
-                confirmation.channel_id = channel_id;
-                confirmation.post_error = error.to_string();
-            }
+
+        let children = self.timeline_store.list_child_jobs(&job.id).await?;
+        if children.iter().any(|child| !child.state.is_terminal()) {
+            return Ok(JobDecision::Wait);
         }
-        self.timeline_store.update_job(job).await?;
-        Ok(())
+        if let Some(failed) = children
+            .iter()
+            .find(|child| child.state != JobState::Complete)
+        {
+            let mut latest = self.timeline_store.get_job(&job.id).await?;
+            let confirmation = latest.metadata.confirmation_mut();
+            confirmation.delivery = delivery.to_string();
+            confirmation.post_error = format!(
+                "confirmation post dependency {} ended as {}: {}",
+                failed.id, failed.state, failed.metadata.error
+            );
+            let error = confirmation.post_error.clone();
+            self.timeline_store.update_job(&latest).await?;
+            return Ok(JobDecision::fail(error));
+        }
+        if let Some(child) = children
+            .iter()
+            .find(|child| child.kind == JobKind::DiscordTextSend)
+        {
+            let Some(JobOutput::DiscordTextSend(output)) = child.metadata.output.clone() else {
+                return Ok(JobDecision::fail(format!(
+                    "confirmation post child {} completed without text send output",
+                    child.id
+                )));
+            };
+            let mut latest = self.timeline_store.get_job(&job.id).await?;
+            let (channel_id, message_id) = {
+                let confirmation = latest.metadata.confirmation_mut();
+                confirmation.delivery = delivery.to_string();
+                confirmation.channel_id = output.discord_post.channel_id;
+                confirmation.message_id = output
+                    .discord_post
+                    .messages
+                    .first()
+                    .map(|message| message.message_id.clone())
+                    .unwrap_or_default();
+                (
+                    confirmation.channel_id.clone(),
+                    confirmation.message_id.clone(),
+                )
+            };
+            latest.set_state(JobState::ConfirmationPending);
+            self.timeline_store.update_job(&latest).await?;
+            return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                &json!({
+                    "kind": "confirmation_posted",
+                    "job_id": latest.id,
+                    "delivery": delivery,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                }),
+            )?));
+        }
+
+        Ok(JobDecision::WaitFor(vec![Job::discord_text_send(
+            job.guild_id.clone(),
+            job.voice_channel_id.clone(),
+            requested_user_id.clone(),
+            DiscordTextSendPayload {
+                intent: TextDeliveryKind::Message,
+                target,
+                content: self.confirmation_card_content(job, &command),
+                source_job_id: job.id.clone(),
+                requested_by_user_id: String::new(),
+                allowed_mentions: BinaryPayload::from_json(&json!({"parse": []}))?,
+                components: BinaryPayload::from_json(&json!([{
+                    "type": 1,
+                    "components": [
+                        {
+                            "type": 2,
+                            "style": 3,
+                            "label": "Approve",
+                            "custom_id": format!("clankcord_voice_confirm:{}", job.id),
+                        },
+                        {
+                            "type": 2,
+                            "style": 4,
+                            "label": "Cancel",
+                            "custom_id": format!("clankcord_voice_cancel:{}", job.id),
+                        },
+                    ],
+                }]))?,
+            },
+        )]))
     }
 
     pub fn confirmation_card_content(&self, job: &Job, command: &CommandRequest) -> String {

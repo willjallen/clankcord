@@ -11,7 +11,7 @@ use crate::runtime::{Job, JobKind, Runtime, log};
 
 const DEFAULT_DISPATCH_DRAIN_MAX_PASSES: usize = 64;
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 16] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 22] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -73,7 +73,41 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 16] = [
         JobLane::GeneralAsync,
         JobOrdering::IngressRoute,
     ),
-    JobExecutionPolicy::blocking_snapshot(JobKind::Response, JobLane::Response, JobOrdering::None),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::DiscordSlashCommand,
+        JobLane::GeneralAsync,
+        JobOrdering::IngressRoute,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::TextDelivery,
+        JobLane::GeneralAsync,
+        JobOrdering::TextTarget,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::ConfirmationRequired,
+        JobLane::GeneralAsync,
+        JobOrdering::TextTarget,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::AgentSessionStart,
+        JobLane::GeneralAsync,
+        JobOrdering::AgentSession,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::TranscriptPublication,
+        JobLane::GeneralAsync,
+        JobOrdering::TextTarget,
+    ),
+    JobExecutionPolicy::adapter(
+        JobKind::DiscordTextSend,
+        JobLane::DiscordText,
+        JobOrdering::TextTarget,
+    ),
+    JobExecutionPolicy::adapter(
+        JobKind::DiscordForumThreadCreate,
+        JobLane::DiscordText,
+        JobOrdering::TextTarget,
+    ),
     JobExecutionPolicy::blocking_snapshot(
         JobKind::RefineTranscript,
         JobLane::Refinement,
@@ -154,9 +188,9 @@ enum JobExecutor {
 enum JobLane {
     GeneralAsync,
     VoiceControl,
+    DiscordText,
     Wake,
     Audio,
-    Response,
     Refinement,
     Agent,
     Maintenance,
@@ -168,6 +202,7 @@ enum JobOrdering {
     VoiceTarget,
     WakeStream,
     IngressRoute,
+    TextTarget,
     AgentSession,
     RuntimeMaintenance,
 }
@@ -187,7 +222,7 @@ struct JobLanes {
     wake: Arc<Semaphore>,
     audio: Arc<Semaphore>,
     voice_control: Arc<Semaphore>,
-    response: Arc<Semaphore>,
+    discord_text: Arc<Semaphore>,
     refinement: Arc<Semaphore>,
     agent: Arc<Semaphore>,
     maintenance: Arc<Semaphore>,
@@ -459,8 +494,8 @@ impl JobLanes {
                 32,
                 128,
             ))),
-            response: Arc::new(Semaphore::new(env_usize(
-                "CLANKCORD_RESPONSE_JOB_CONCURRENCY",
+            discord_text: Arc::new(Semaphore::new(env_usize(
+                "CLANKCORD_DISCORD_TEXT_JOB_CONCURRENCY",
                 12,
                 64,
             ))),
@@ -491,9 +526,9 @@ impl JobLanes {
         match lane {
             JobLane::GeneralAsync => self.async_jobs.clone(),
             JobLane::VoiceControl => self.voice_control.clone(),
+            JobLane::DiscordText => self.discord_text.clone(),
             JobLane::Wake => self.wake.clone(),
             JobLane::Audio => self.audio.clone(),
-            JobLane::Response => self.response.clone(),
             JobLane::Refinement => self.refinement.clone(),
             JobLane::Agent => self.agent.clone(),
             JobLane::Maintenance => self.maintenance.clone(),
@@ -517,7 +552,7 @@ fn dispatch_batch_limit(policy: JobExecutionPolicy) -> usize {
         JobLane::Wake => env_usize("CLANKCORD_WAKE_JOB_BATCH_LIMIT", 8, 64),
         JobLane::Audio => env_usize("CLANKCORD_AUDIO_JOB_BATCH_LIMIT", 32, 128),
         JobLane::VoiceControl => env_usize("CLANKCORD_VOICE_CONTROL_JOB_BATCH_LIMIT", 32, 128),
-        JobLane::Response => env_usize("CLANKCORD_RESPONSE_JOB_BATCH_LIMIT", 12, 64),
+        JobLane::DiscordText => env_usize("CLANKCORD_DISCORD_TEXT_JOB_BATCH_LIMIT", 12, 64),
         JobLane::Refinement => env_usize("CLANKCORD_REFINEMENT_JOB_BATCH_LIMIT", 4, 32),
         JobLane::Agent => env_usize("CLANKCORD_AGENT_JOB_BATCH_LIMIT", 4, 32),
         JobLane::Maintenance => env_usize("CLANKCORD_MAINTENANCE_JOB_BATCH_LIMIT", 1, 1),

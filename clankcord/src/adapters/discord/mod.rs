@@ -1,4 +1,4 @@
 pub mod api;
+pub mod gateway;
 pub mod messages;
-pub mod text;
 pub mod voice;

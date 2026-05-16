@@ -3,7 +3,7 @@ use crate::runtime::core::execution::JobDecision;
 use crate::runtime::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
     DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobState,
-    RoomConfig, Runtime, RuntimeSessionStatus,
+    RoomConfig, Runtime, VoiceCaptureSessionStatus,
 };
 
 impl Runtime {
@@ -85,7 +85,7 @@ impl Runtime {
 
     pub(crate) fn voice_playback_job_for_session(
         &self,
-        session: &RuntimeSessionStatus,
+        session: &VoiceCaptureSessionStatus,
         requested_by_user_id: &str,
         cue: DiscordVoicePlaybackCue,
         reason: &str,
@@ -149,7 +149,7 @@ impl Runtime {
         &self,
         guild_id: &str,
         voice_channel_id: &str,
-    ) -> Option<RuntimeSessionStatus> {
+    ) -> Option<VoiceCaptureSessionStatus> {
         self.sessions.values().find_map(|session| {
             (session.guild_id == guild_id
                 && session.voice_channel_id == voice_channel_id

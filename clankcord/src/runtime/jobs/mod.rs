@@ -6,19 +6,23 @@ mod util;
 
 pub use kind::{JobKind, JobState};
 pub use output::{
+    AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordTextSendOutput,
     DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
     DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, JobCreatedOutput, JobFailure,
-    JobOutput, ResponseOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
+    JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
+    TranscriptPublicationOutput,
 };
 pub use payload::{
-    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction, CommandArguments,
-    CommandKind, CommandPayload, CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
-    DiscordTextMessagePayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
-    DiscordVoicePlaybackPayload, JobPayload, OpaqueValue, RefineTranscriptPayload, ResponseKind,
-    ResponsePayload, ResponseSink, ResponseSinkKind, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
-    RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
+    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandAction,
+    CommandArguments, CommandKind, CommandPayload, CommandRequest, ConfirmationContext,
+    ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceJoinPayload,
+    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload, JobPayload, OpaqueValue,
+    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

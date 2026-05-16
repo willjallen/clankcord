@@ -5,6 +5,30 @@ use serde_json::{Value, json};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct VoiceBotStatus {
+    pub bot_id: String,
+    pub ready: bool,
+    pub joining_session_id: String,
+    pub assigned_session_id: String,
+    pub current_guild_id: String,
+    pub current_channel_id: String,
+    pub last_error: String,
+    pub pending_disconnect_events: i64,
+    pub pending_disconnect_until: i64,
+    pub user_id: String,
+    pub username: String,
+    pub gateway_running: bool,
+    pub receive_backend: String,
+}
+
+impl VoiceBotStatus {
+    pub fn to_json(&self) -> Value {
+        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ArtifactStatus {
     pub path: String,
     pub exists: bool,
@@ -45,7 +69,7 @@ pub struct SessionCaptureStats {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct RuntimeSessionStatus {
+pub struct VoiceCaptureSessionStatus {
     pub session_id: String,
     pub room_id: String,
     pub guild_id: String,
@@ -76,7 +100,7 @@ pub struct RuntimeSessionStatus {
     pub artifacts: SessionArtifacts,
 }
 
-impl RuntimeSessionStatus {
+impl VoiceCaptureSessionStatus {
     pub fn mark_ended(&mut self, ended_at: String) {
         self.ended_at = ended_at;
         self.active = false;

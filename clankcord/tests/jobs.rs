@@ -4,12 +4,14 @@ use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
 use clankcord::runtime::{
-    AudioSegmentPayload, BinaryPayload, CommandRequest, DiscordTextMessagePayload,
+    AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
+    DiscordForumThreadCreatePayload, DiscordTextMessagePayload, DiscordTextSendPayload,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, ResponseKind, ResponsePayload,
-    ResponseSinkKind, RoomConfig, WakeActivationPayload, WakeProbePayload,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -185,28 +187,109 @@ async fn job_lineage_allows_arbitrary_dag_depth_metadata() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn response_payload_is_a_first_class_binary_job() {
-    let payload = ResponsePayload::from_json(&json!({
-        "response_kind": "question",
-        "sink": "agent-chat",
+async fn text_delivery_payload_is_a_first_class_binary_job() {
+    let payload = TextDeliveryPayload::from_json(&json!({
+        "intent": "question",
+        "target": "agent_chat",
         "source_job_id": "job_source",
         "requested_by_user_id": "user-a",
         "content": "Do you mean the last 20 minutes?",
         "extra_boundary_field": {"kept": true}
     }))
     .unwrap();
-    let job = Job::response("guild", "code", "user-a", payload);
+    let job = Job::text_delivery("guild", "code", "user-a", payload);
     let decoded = Job::decode(&job.encode().unwrap()).unwrap();
 
-    assert_eq!(decoded.kind, JobKind::Response);
-    let response = decoded.response_payload().unwrap();
-    assert_eq!(response.response_kind, ResponseKind::Question);
-    assert_eq!(response.sink.kind, ResponseSinkKind::AgentChat);
-    assert_eq!(response.source_job_id, "job_source");
+    assert_eq!(decoded.kind, JobKind::TextDelivery);
+    let delivery = decoded.text_delivery_payload().unwrap();
+    assert_eq!(delivery.intent, TextDeliveryKind::Question);
+    assert_eq!(delivery.target.kind, TextTargetKind::AgentChat);
+    assert_eq!(delivery.source_job_id, "job_source");
     assert_eq!(
-        response.to_json()["extra_boundary_field"]["kept"],
+        delivery.to_json()["extra_boundary_field"]["kept"],
         json!(true)
     );
+}
+
+#[test]
+fn discord_text_io_jobs_round_trip() {
+    let text = Job::discord_text_send(
+        "guild",
+        "code",
+        "user-a",
+        DiscordTextSendPayload {
+            intent: TextDeliveryKind::Message,
+            target: TextTarget {
+                kind: TextTargetKind::Channel,
+                channel_id: "thread-1".to_string(),
+                user_id: String::new(),
+            },
+            content: "Approve this?".to_string(),
+            source_job_id: "job_source".to_string(),
+            requested_by_user_id: String::new(),
+            allowed_mentions: BinaryPayload::from_json(&json!({"parse": []})).unwrap(),
+            components: BinaryPayload::from_json(&json!([{"type": 1}])).unwrap(),
+        },
+    );
+    let decoded = Job::decode(&text.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordTextSend);
+    assert_eq!(decoded.payload.to_json()["components"][0]["type"], 1);
+
+    let thread = Job::discord_forum_thread_create(
+        "guild",
+        "code",
+        "user-a",
+        DiscordForumThreadCreatePayload {
+            parent_channel_id: "forum-1".to_string(),
+            name: "agent code ags_1".to_string(),
+            content: "# Agent Session".to_string(),
+            auto_archive_minutes: 1440,
+            source_job_id: "job_source".to_string(),
+        },
+    );
+    let decoded = Job::decode(&thread.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordForumThreadCreate);
+    assert_eq!(decoded.payload.to_json()["parent_channel_id"], "forum-1");
+}
+
+#[test]
+fn agent_session_start_and_publication_jobs_round_trip() {
+    let command = CommandRequest::agent_task(
+        "guild".to_string(),
+        "code".to_string(),
+        "user-a".to_string(),
+        "follow up".to_string(),
+    );
+    let session = Job::agent_session_start(
+        "guild",
+        "code",
+        "user-a",
+        AgentSessionStartPayload {
+            agent_session_id: "ags_1".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            discord_parent_channel_id: "agent-threads".to_string(),
+            requested_by_user_id: "user-a".to_string(),
+            command,
+        },
+    );
+    let decoded = Job::decode(&session.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::AgentSessionStart);
+    assert_eq!(decoded.payload.to_json()["agent_session_id"], "ags_1");
+
+    let publication = Job::transcript_publication(
+        "guild",
+        "code",
+        "user-a",
+        TranscriptPublicationPayload {
+            publication_id: "pub_1".to_string(),
+            live: false,
+            refined_queued: true,
+        },
+    );
+    let decoded = Job::decode(&publication.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::TranscriptPublication);
+    assert_eq!(decoded.payload.to_json()["refined_queued"], true);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -247,9 +330,9 @@ async fn wake_activation_payload_is_a_first_class_binary_job() {
 async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
-    let due = Job::response("guild", "code", "user-a", response_payload("due"));
+    let due = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("due"));
     let due_id = due.id.clone();
-    let mut future = Job::response("guild", "code", "user-a", response_payload("future"));
+    let mut future = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("future"));
     let future_id = future.id.clone();
     future.next_run_at =
         Some((Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true));
@@ -259,7 +342,7 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
 
     let mut blocked = BTreeSet::new();
     let claimed = store
-        .claim_due_jobs(JobKind::Response, 8, &mut blocked)
+        .claim_due_jobs(JobKind::TextDelivery, 8, &mut blocked)
         .await
         .unwrap();
 
@@ -276,7 +359,7 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     );
     assert!(
         store
-            .claim_due_jobs(JobKind::Response, 8, &mut BTreeSet::new())
+            .claim_due_jobs(JobKind::TextDelivery, 8, &mut BTreeSet::new())
             .await
             .unwrap()
             .is_empty()
@@ -289,8 +372,9 @@ async fn timeline_reports_earliest_queued_ready_time() {
     let store = test_store(&raw.path().join("voice")).await;
     let early = Utc::now() + Duration::seconds(30);
     let late = early + Duration::seconds(30);
-    let mut early_job = Job::response("guild", "code", "user-a", response_payload("early"));
-    let mut late_job = Job::response("guild", "code", "user-a", response_payload("late"));
+    let mut early_job =
+        Job::text_delivery("guild", "code", "user-a", text_delivery_payload("early"));
+    let mut late_job = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("late"));
     early_job.next_run_at = Some(early.to_rfc3339_opts(SecondsFormat::Millis, true));
     late_job.next_run_at = Some(late.to_rfc3339_opts(SecondsFormat::Millis, true));
 
@@ -518,15 +602,15 @@ async fn timeline_child_jobs_are_stored_as_dependency_edges() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
     let parent = store
-        .create_job(Job::response(
+        .create_job(Job::text_delivery(
             "guild",
             "code",
             "user-a",
-            response_payload("parent"),
+            text_delivery_payload("parent"),
         ))
         .await
         .unwrap();
-    let child = Job::response("guild", "code", "user-a", response_payload("child"));
+    let child = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("child"));
     let child_id = child.id.clone();
 
     store.create_child_job(&parent, child).await.unwrap();
@@ -695,10 +779,10 @@ async fn discord_voice_jobs_are_first_class_binary_jobs() {
     ));
 }
 
-fn response_payload(content: &str) -> ResponsePayload {
-    ResponsePayload::from_json(&json!({
-        "response_kind": "message",
-        "sink": "stdout",
+fn text_delivery_payload(content: &str) -> TextDeliveryPayload {
+    TextDeliveryPayload::from_json(&json!({
+        "intent": "message",
+        "target": "agent_chat",
         "requested_by_user_id": "user-a",
         "content": content,
     }))

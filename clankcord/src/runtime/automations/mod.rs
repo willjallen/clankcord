@@ -8,6 +8,6 @@ pub use engine::{AutomationJob, AutomationRun};
 pub use manual::AUTOMATION_SPEC_MANUAL;
 pub use spec::{
     AutomationAction, AutomationCondition, AutomationConditionOp, AutomationExpiry,
-    AutomationOwner, AutomationRecord, AutomationResponseSink, AutomationResponseSinkKind,
-    AutomationScalar, AutomationScope, AutomationSpec, AutomationState, AutomationTrigger,
+    AutomationOwner, AutomationRecord, AutomationScalar, AutomationScope, AutomationSpec,
+    AutomationState, AutomationTextTarget, AutomationTextTargetKind, AutomationTrigger,
 };

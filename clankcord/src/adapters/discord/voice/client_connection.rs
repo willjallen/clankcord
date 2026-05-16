@@ -24,10 +24,11 @@ use songbird::{Config as SongbirdConfig, Songbird};
 use tokio::task::JoinHandle;
 
 use crate::Result;
+use crate::adapters::discord::gateway::components;
 use crate::adapters::discord::voice::capture::VoiceData;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::tokens_path;
-use crate::runtime::RuntimeBotStatus;
+use crate::runtime::VoiceBotStatus;
 
 pub(super) struct DiscordVoiceClient {
     pub(super) bot_id: String,
@@ -107,8 +108,8 @@ impl DiscordVoiceClient {
         self.shard_manager.shutdown_all().await;
     }
 
-    pub(super) fn status(&self) -> RuntimeBotStatus {
-        RuntimeBotStatus {
+    pub(super) fn status(&self) -> VoiceBotStatus {
+        VoiceBotStatus {
             bot_id: self.bot_id.clone(),
             ready: self.ready,
             joining_session_id: self.joining_session_id.clone().unwrap_or_default(),
@@ -428,7 +429,7 @@ impl EventHandler for DiscordGatewayHandler {
             return;
         };
         if let Some(adapter) = self.adapter.upgrade() {
-            adapter.handle_component_interaction(ctx, component).await;
+            components::handle_component_interaction(adapter.job_sink(), ctx, component).await;
         }
     }
 }

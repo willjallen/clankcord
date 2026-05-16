@@ -292,14 +292,14 @@ impl AutomationExpiry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AutomationAction {
-    ResponseSend {
-        sink: AutomationResponseSink,
+    TextSend {
+        sink: AutomationTextTarget,
         content: String,
     },
     AgentTaskStart {
         prompt: String,
-        #[serde(default, alias = "responseSink")]
-        response_sink: Option<AutomationResponseSink>,
+        #[serde(default, alias = "textTarget")]
+        text_target: Option<AutomationTextTarget>,
     },
     SoundPlay {
         name: String,
@@ -313,7 +313,7 @@ pub enum AutomationAction {
 impl AutomationAction {
     fn validate(&self) -> Result<()> {
         match self {
-            Self::ResponseSend { sink, content } => {
+            Self::TextSend { sink, content } => {
                 sink.validate()?;
                 if content.trim().is_empty() {
                     anyhow::bail!("response.send action requires content");
@@ -322,12 +322,12 @@ impl AutomationAction {
             }
             Self::AgentTaskStart {
                 prompt,
-                response_sink,
+                text_target,
             } => {
                 if prompt.trim().is_empty() {
                     anyhow::bail!("agent_task.start action requires prompt");
                 }
-                if let Some(sink) = response_sink {
+                if let Some(sink) = text_target {
                     sink.validate()?;
                 }
                 Ok(())
@@ -342,8 +342,8 @@ impl AutomationAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct AutomationResponseSink {
-    pub kind: AutomationResponseSinkKind,
+pub struct AutomationTextTarget {
+    pub kind: AutomationTextTargetKind,
     #[serde(
         default,
         alias = "channel_id",
@@ -354,14 +354,14 @@ pub struct AutomationResponseSink {
     pub id: String,
 }
 
-impl AutomationResponseSink {
+impl AutomationTextTarget {
     fn validate(&self) -> Result<()> {
         if matches!(
             self.kind,
-            AutomationResponseSinkKind::Channel | AutomationResponseSinkKind::Dm
+            AutomationTextTargetKind::Channel | AutomationTextTargetKind::Dm
         ) && self.id.trim().is_empty()
         {
-            anyhow::bail!("channel and dm response sinks require id");
+            anyhow::bail!("channel and dm text targets require id");
         }
         Ok(())
     }
@@ -369,7 +369,7 @@ impl AutomationResponseSink {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum AutomationResponseSinkKind {
+pub enum AutomationTextTargetKind {
     AgentChat,
     Channel,
     Dm,
@@ -1063,7 +1063,7 @@ fn validate_action_boundary(index: usize, value: &Value) -> Result<()> {
             let Some(sink) = object.get("sink") else {
                 anyhow::bail!("{path}.sink is required for response.send");
             };
-            validate_response_sink_boundary(&format!("{path}.sink"), sink)
+            validate_text_target_boundary(&format!("{path}.sink"), sink)
         }
         "agent_task.start" | "agent_task_start" => {
             if object
@@ -1074,10 +1074,10 @@ fn validate_action_boundary(index: usize, value: &Value) -> Result<()> {
                 anyhow::bail!("{path}.prompt is required for agent_task.start");
             }
             if let Some(sink) = object
-                .get("response_sink")
-                .or_else(|| object.get("responseSink"))
+                .get("text_target")
+                .or_else(|| object.get("textTarget"))
             {
-                validate_response_sink_boundary(&format!("{path}.response_sink"), sink)?;
+                validate_text_target_boundary(&format!("{path}.text_target"), sink)?;
             }
             Ok(())
         }
@@ -1096,7 +1096,7 @@ fn validate_action_boundary(index: usize, value: &Value) -> Result<()> {
     }
 }
 
-fn validate_response_sink_boundary(path: &str, value: &Value) -> Result<()> {
+fn validate_text_target_boundary(path: &str, value: &Value) -> Result<()> {
     let kind = validate_kind(
         &format!("{path}.kind"),
         value,
@@ -1253,7 +1253,7 @@ fn normalize_action(value: &Value) -> Value {
     let kind = value_kind(value);
     let payload = object_without_kind(value);
     match kind.as_str() {
-        "response.send" | "response_send" => json!({"ResponseSend": payload}),
+        "response.send" | "response_send" => json!({"TextSend": payload}),
         "agent_task.start" | "agent_task_start" => json!({"AgentTaskStart": payload}),
         "sound.play" | "sound_play" => json!({"SoundPlay": payload}),
         "transcript.start_live" | "transcript_start_live" => {

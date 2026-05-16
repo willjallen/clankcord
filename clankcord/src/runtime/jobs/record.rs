@@ -7,13 +7,15 @@ use super::util::{
     first_non_empty, insert_i64_if_nonzero, insert_non_empty, insert_optional_string,
 };
 use super::{
-    AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload, CommandRequest,
-    ConfirmationContext, ConfirmationRequiredPayload, DiscordTextMessagePayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, JobKind, JobOutput, JobPayload,
-    JobState, RefineTranscriptPayload, ResponsePayload, RoomAgentPlacementAction,
+    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, BinaryPayload, CommandPayload,
+    CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
+    DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,
+    DiscordTextSendPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, JobKind,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
     RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
-    RuntimeMaintenancePayload, WakeActivationPayload, WakeProbePayload,
+    RuntimeMaintenancePayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -423,6 +425,16 @@ impl Job {
         )
     }
 
+    pub fn discord_slash_command(payload: DiscordSlashCommandPayload) -> Self {
+        Self::new(
+            payload.guild_id.clone(),
+            payload.channel_id.clone(),
+            payload.user_id.clone(),
+            JobState::Queued,
+            JobPayload::DiscordSlashCommand(payload),
+        )
+    }
+
     pub fn wake_activation(payload: WakeActivationPayload) -> Self {
         Self::new(
             payload.guild_id.clone(),
@@ -433,18 +445,78 @@ impl Job {
         )
     }
 
-    pub fn response(
+    pub fn text_delivery(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
-        payload: ResponsePayload,
+        payload: TextDeliveryPayload,
     ) -> Self {
         Self::new(
             guild_id,
             voice_channel_id,
             requested_by_user_id,
             JobState::Queued,
-            JobPayload::Response(payload),
+            JobPayload::TextDelivery(payload),
+        )
+    }
+
+    pub fn discord_text_send(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordTextSendPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordTextSend(payload),
+        )
+    }
+
+    pub fn discord_forum_thread_create(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordForumThreadCreatePayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordForumThreadCreate(payload),
+        )
+    }
+
+    pub fn agent_session_start(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: AgentSessionStartPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::AgentSessionStart(payload),
+        )
+    }
+
+    pub fn transcript_publication(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: TranscriptPublicationPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::TranscriptPublication(payload),
         )
     }
 
@@ -479,7 +551,7 @@ impl Job {
             guild_id,
             voice_channel_id,
             requested_by_user_id,
-            JobState::ConfirmationPending,
+            JobState::Queued,
             JobPayload::ConfirmationRequired(ConfirmationRequiredPayload {
                 command,
                 confirmation,
@@ -769,9 +841,37 @@ impl Job {
         }
     }
 
-    pub fn response_payload(&self) -> Option<&ResponsePayload> {
+    pub fn text_delivery_payload(&self) -> Option<&TextDeliveryPayload> {
         match &self.payload {
-            JobPayload::Response(payload) => Some(payload),
+            JobPayload::TextDelivery(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_text_send_payload(&self) -> Option<&DiscordTextSendPayload> {
+        match &self.payload {
+            JobPayload::DiscordTextSend(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_forum_thread_create_payload(&self) -> Option<&DiscordForumThreadCreatePayload> {
+        match &self.payload {
+            JobPayload::DiscordForumThreadCreate(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn agent_session_start_payload(&self) -> Option<&AgentSessionStartPayload> {
+        match &self.payload {
+            JobPayload::AgentSessionStart(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn transcript_publication_payload(&self) -> Option<&TranscriptPublicationPayload> {
+        match &self.payload {
+            JobPayload::TranscriptPublication(payload) => Some(payload),
             _ => None,
         }
     }

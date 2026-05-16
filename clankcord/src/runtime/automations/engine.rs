@@ -8,15 +8,15 @@ use crate::Result;
 use crate::runtime::automations::room_agents::RoomAgentPlacementAutomation;
 use crate::runtime::automations::{
     AutomationAction, AutomationCondition, AutomationConditionOp, AutomationRecord,
-    AutomationResponseSink, AutomationResponseSinkKind, AutomationScalar, AutomationState,
+    AutomationScalar, AutomationState, AutomationTextTarget, AutomationTextTargetKind,
     AutomationTrigger,
 };
 use crate::runtime::timeline::{
     event_start, first_value_string, isoformat_z, parse_instant, utc_now,
 };
 use crate::runtime::{
-    CommandRequest, Job, JobKind, JobState, ResponseKind, ResponsePayload, ResponseSink,
-    ResponseSinkKind, Runtime,
+    CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind,
 };
 
 pub(crate) trait Automation: Send + Sync {
@@ -449,13 +449,13 @@ fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Resul
     let voice_channel_id = record.spec.scope.voice_channel_id.clone();
     let requested_by_user_id = automation_requested_by(record);
     match action {
-        AutomationAction::ResponseSend { sink, content } => Ok(Job::response(
+        AutomationAction::TextSend { sink, content } => Ok(Job::text_delivery(
             guild_id,
             voice_channel_id,
             requested_by_user_id.clone(),
-            ResponsePayload::new(
-                ResponseKind::Message,
-                response_sink(sink)?,
+            TextDeliveryPayload::new(
+                TextDeliveryKind::Message,
+                text_target(sink)?,
                 content.clone(),
                 record.automation_id.clone(),
                 requested_by_user_id,
@@ -485,21 +485,21 @@ fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Resul
     }
 }
 
-fn response_sink(sink: &AutomationResponseSink) -> Result<ResponseSink> {
+fn text_target(sink: &AutomationTextTarget) -> Result<TextTarget> {
     Ok(match sink.kind {
-        AutomationResponseSinkKind::AgentChat => ResponseSink {
-            kind: ResponseSinkKind::AgentChat,
-            ..ResponseSink::default()
+        AutomationTextTargetKind::AgentChat => TextTarget {
+            kind: TextTargetKind::AgentChat,
+            ..TextTarget::default()
         },
-        AutomationResponseSinkKind::Channel => ResponseSink {
-            kind: ResponseSinkKind::Channel,
+        AutomationTextTargetKind::Channel => TextTarget {
+            kind: TextTargetKind::Channel,
             channel_id: sink.id.clone(),
-            ..ResponseSink::default()
+            ..TextTarget::default()
         },
-        AutomationResponseSinkKind::Dm => ResponseSink {
-            kind: ResponseSinkKind::Dm,
+        AutomationTextTargetKind::Dm => TextTarget {
+            kind: TextTargetKind::Dm,
             user_id: sink.id.clone(),
-            ..ResponseSink::default()
+            ..TextTarget::default()
         },
     })
 }

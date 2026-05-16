@@ -37,14 +37,13 @@ impl Runtime {
                 command,
                 confirmation_context,
             );
-            let mut job = if let Some(parent_job) = parent_job {
+            let job = if let Some(parent_job) = parent_job {
                 self.timeline_store
                     .create_child_job(parent_job, job)
                     .await?
             } else {
                 self.timeline_store.create_job(job).await?
             };
-            self.post_confirmation_card(&mut job).await?;
             return Ok(json!({
                 "kind": "confirmation_required",
                 "job_ids": [job.id.clone()],
@@ -307,20 +306,15 @@ impl Runtime {
                 if !job_kind.is_agent_task() {
                     anyhow::bail!("unsupported queued job kind: {job_kind}");
                 }
-                let session = self
-                    .ensure_voice_agent_session(
+                let requested_by_user_id = command.requested_by_user_id.clone();
+                let job = self
+                    .agent_session_start_or_task_job(
                         &guild_id,
                         &channel_id,
-                        &command.requested_by_user_id,
+                        &requested_by_user_id,
+                        command,
                     )
                     .await?;
-                let job = Job::agent_task_for_session(
-                    session.agent_session_id,
-                    session.guild_id,
-                    session.voice_channel_id,
-                    command.requested_by_user_id.clone(),
-                    command,
-                );
                 Ok(JobDecision::WaitFor(vec![job]))
             }
         }

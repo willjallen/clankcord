@@ -939,9 +939,9 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
         "POST",
         "/v1/voice/responses",
         Some(json!({
-            "response_kind": response_kind,
+            "intent": response_kind,
             "source_job_id": agent_context_job(args.job),
-            "sink": args.sink,
+            "target": args.sink,
             "guild_id": agent_context_guild(args.guild),
             "voice_channel_id": agent_context_channel(args.channel),
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
@@ -986,9 +986,9 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
         "POST",
         "/v1/voice/responses",
         Some(json!({
-            "response_kind": "message",
+            "intent": "message",
             "source_job_id": agent_context_job(args.job),
-            "sink": format!("dm:{user_id}"),
+            "target": format!("dm:{user_id}"),
             "guild_id": guild_id,
             "voice_channel_id": agent_context_channel(args.channel),
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),

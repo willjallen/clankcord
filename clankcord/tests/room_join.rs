@@ -4,7 +4,7 @@ use clankcord::runtime::timeline::utc_now;
 use clankcord::runtime::{
     AgentRuntime, ControlConfig, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
     DiscordVoicePlaybackCue, Job, JobKind, JobOutput, JobState, RoomAgentPlacementAction,
-    RoomConfig, Runtime, RuntimeBotStatus, RuntimeSessionStatus,
+    RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 
 mod common;
@@ -106,26 +106,26 @@ async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() 
     let mut runtime = test_runtime(store, room.clone());
     runtime.sessions.insert(
         "cap_newer".to_string(),
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: "cap_newer".to_string(),
             guild_id: room.guild_id.clone(),
             voice_channel_id: room.channel_id.clone(),
             bot_id: "clanky-vc2".to_string(),
             started_at: "2026-05-15T00:00:02.000Z".to_string(),
             active: true,
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         },
     );
     runtime.sessions.insert(
         "cap_older".to_string(),
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: "cap_older".to_string(),
             guild_id: room.guild_id.clone(),
             voice_channel_id: room.channel_id.clone(),
             bot_id: "clanky-vc1".to_string(),
             started_at: "2026-05-15T00:00:01.000Z".to_string(),
             active: true,
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         },
     );
 
@@ -176,7 +176,7 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     completed_child.mark_complete();
     completed_child.metadata.output = Some(JobOutput::DiscordVoiceJoin(DiscordVoiceJoinOutput {
         status: "assigned".to_string(),
-        session: Some(RuntimeSessionStatus {
+        session: Some(VoiceCaptureSessionStatus {
             session_id: "cap_1".to_string(),
             room_id: room.room_id.clone(),
             guild_id: room.guild_id.clone(),
@@ -187,13 +187,13 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
             capture_run_id: "cap_1".to_string(),
             assignment_id: "assign_1".to_string(),
             active: true,
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         }),
-        bot_status: Some(RuntimeBotStatus {
+        bot_status: Some(VoiceBotStatus {
             bot_id: "clanky-vc1".to_string(),
             ready: true,
             assigned_session_id: "cap_1".to_string(),
-            ..RuntimeBotStatus::default()
+            ..VoiceBotStatus::default()
         }),
         message: String::new(),
     }));
@@ -268,16 +268,16 @@ fn test_room() -> RoomConfig {
     }
 }
 
-fn ready_bot() -> RuntimeBotStatus {
+fn ready_bot() -> VoiceBotStatus {
     ready_bot_with("clanky-vc1", "bot-user")
 }
 
-fn ready_bot_with(bot_id: &str, user_id: &str) -> RuntimeBotStatus {
-    RuntimeBotStatus {
+fn ready_bot_with(bot_id: &str, user_id: &str) -> VoiceBotStatus {
+    VoiceBotStatus {
         bot_id: bot_id.to_string(),
         ready: true,
         user_id: user_id.to_string(),
         username: bot_id.to_string(),
-        ..RuntimeBotStatus::default()
+        ..VoiceBotStatus::default()
     }
 }

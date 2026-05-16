@@ -9,7 +9,7 @@ use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoicePlaybackCue, Job, JobKind, JobOutput, JobState,
     RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload, RoomConfig,
-    Runtime, RuntimeBotStatus, RuntimeSessionStatus,
+    Runtime, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 
 impl Runtime {
@@ -542,8 +542,8 @@ impl Runtime {
 
     pub(crate) async fn sync_voice_adapter_status(
         &mut self,
-        bots: Vec<RuntimeBotStatus>,
-        sessions: Vec<crate::runtime::RuntimeSessionStatus>,
+        bots: Vec<VoiceBotStatus>,
+        sessions: Vec<VoiceCaptureSessionStatus>,
     ) -> Result<()> {
         let active_session_ids = sessions
             .iter()
@@ -596,7 +596,7 @@ impl Runtime {
         self.persist_status_snapshot().await
     }
 
-    fn available_voice_bot(&self) -> Option<RuntimeBotStatus> {
+    fn available_voice_bot(&self) -> Option<VoiceBotStatus> {
         self.bots
             .values()
             .find(|status| {
@@ -641,7 +641,7 @@ impl Runtime {
         &mut self,
         result: DiscordVoiceLeaveOutput,
         reason: &str,
-    ) -> Result<Option<RuntimeSessionStatus>> {
+    ) -> Result<Option<VoiceCaptureSessionStatus>> {
         for job in result.audio_jobs {
             self.timeline_store.create_job(job).await?;
         }

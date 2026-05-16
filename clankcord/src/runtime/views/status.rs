@@ -6,7 +6,7 @@ use crate::Result;
 use crate::config::{format_timestamp_local, local_tz, read_json, state_dir, write_json};
 
 use crate::runtime::util::first_non_empty;
-use crate::runtime::{JobState, RoomConfig, Runtime, RuntimeBotStatus, RuntimeSessionStatus};
+use crate::runtime::{JobState, RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
 
 impl Runtime {
     pub async fn status_for_room(&self, room: &RoomConfig) -> Value {
@@ -66,7 +66,7 @@ impl Runtime {
             "livePublications": live_publications,
             "activeJobs": active_jobs,
             "session": session.map(|value| value.to_json()),
-            "bots": self.bots.values().map(RuntimeBotStatus::to_json).collect::<Vec<_>>(),
+            "bots": self.bots.values().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
         })
     }
 
@@ -101,7 +101,7 @@ impl Runtime {
             }));
         }
         json!({
-            "bots": self.bots.values().map(RuntimeBotStatus::to_json).collect::<Vec<_>>(),
+            "bots": self.bots.values().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
             "pool": self.capacity_payload().await,
             "sessions": sessions,
             "rooms": rooms,
@@ -131,7 +131,10 @@ impl Runtime {
             .map(|session| session.session_id)
     }
 
-    pub(crate) fn active_sessions_for_room(&self, room: &RoomConfig) -> Vec<RuntimeSessionStatus> {
+    pub(crate) fn active_sessions_for_room(
+        &self,
+        room: &RoomConfig,
+    ) -> Vec<VoiceCaptureSessionStatus> {
         let mut sessions = self
             .sessions
             .values()
@@ -154,17 +157,14 @@ impl Runtime {
     pub fn duplicate_voice_bot_sessions_for_room(
         &self,
         room: &RoomConfig,
-    ) -> Vec<RuntimeSessionStatus> {
+    ) -> Vec<VoiceCaptureSessionStatus> {
         self.active_sessions_for_room(room)
             .into_iter()
             .skip(1)
             .collect()
     }
 
-    pub(crate) fn voice_bot_currently_in_room(
-        &self,
-        room: &RoomConfig,
-    ) -> Option<RuntimeBotStatus> {
+    pub(crate) fn voice_bot_currently_in_room(&self, room: &RoomConfig) -> Option<VoiceBotStatus> {
         self.bots
             .values()
             .find(|status| {
@@ -182,8 +182,8 @@ impl Runtime {
 
     async fn enrich_session_status(
         &self,
-        mut session: RuntimeSessionStatus,
-    ) -> RuntimeSessionStatus {
+        mut session: VoiceCaptureSessionStatus,
+    ) -> VoiceCaptureSessionStatus {
         let capture_run_id = first_non_empty([
             session.capture_run_id.clone(),
             session.session_id.clone(),
@@ -234,7 +234,7 @@ impl Runtime {
             .cloned()
             .unwrap_or_default()
         {
-            if let Ok(bot) = serde_json::from_value::<RuntimeBotStatus>(bot) {
+            if let Ok(bot) = serde_json::from_value::<VoiceBotStatus>(bot) {
                 if !bot.bot_id.trim().is_empty() {
                     self.bots.insert(bot.bot_id.clone(), bot);
                 }
@@ -246,7 +246,7 @@ impl Runtime {
             .cloned()
             .unwrap_or_default()
         {
-            if let Ok(session) = serde_json::from_value::<RuntimeSessionStatus>(session) {
+            if let Ok(session) = serde_json::from_value::<VoiceCaptureSessionStatus>(session) {
                 let session_id = first_non_empty([
                     session.session_id.clone(),
                     session.capture_run_id.clone(),

@@ -226,7 +226,7 @@ async fn response_submit(State(state): State<AppState>, Json(payload): Json<Valu
             Ok(runtime) => runtime,
             Err(error) => return err(error),
         };
-        match runtime.response_job_from_value(&payload).await {
+        match runtime.text_delivery_job_from_value(&payload).await {
             Ok(job) => job,
             Err(error) => return err(error),
         }

@@ -8,9 +8,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use serenity::builder::EditInteractionResponse;
-use serenity::client::Context;
-use serenity::model::application::ComponentInteraction;
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Member;
 use serenity::model::id::{GuildId, UserId};
@@ -18,13 +15,14 @@ use serenity::model::voice::VoiceState;
 use tokio::sync::Mutex;
 
 use crate::Result;
+use crate::adapters::discord::gateway::{forum_thread, text_send};
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
     load_client_token_specs, parse_discord_id, play_voice_file, set_voice_mute,
 };
 use crate::adapters::discord::voice::session::WakeProbeConfig;
-use crate::adapters::discord::voice::types::VoiceSession;
+use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, read_json};
 use crate::errors::discord_tool_error;
 use crate::runtime::core::execution::{AdapterJobFuture, RuntimeAdapterJobs};
@@ -33,7 +31,7 @@ use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
     DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, Job, JobOutput, JobPayload, Runtime,
-    RuntimeBotStatus, RuntimeControlAction, RuntimeJobSink, log,
+    RuntimeJobSink, VoiceBotStatus, log,
 };
 
 const DEFAULT_FLUSH_INTERVAL_SECONDS: f64 = 0.5;
@@ -90,6 +88,12 @@ impl RuntimeAdapterJobs for Arc<LiveVoiceAdapter> {
                 JobPayload::DiscordVoicePlayAudio(payload) => Ok(JobOutput::DiscordVoicePlayAudio(
                     LiveVoiceAdapter::play_session_cue(self, payload).await?,
                 )),
+                JobPayload::DiscordTextSend(payload) => {
+                    Ok(JobOutput::DiscordTextSend(text_send::send(payload).await?))
+                }
+                JobPayload::DiscordForumThreadCreate(payload) => Ok(
+                    JobOutput::DiscordForumThreadCreate(forum_thread::create(payload).await?),
+                ),
                 payload => anyhow::bail!(
                     "Discord voice adapter cannot execute {} jobs",
                     payload.kind()
@@ -179,6 +183,10 @@ impl LiveVoiceAdapter {
         self.flush_interval
     }
 
+    pub(super) fn job_sink(&self) -> RuntimeJobSink {
+        self.job_sink.clone()
+    }
+
     pub async fn start_missing_clients(self: &Arc<Self>) -> Result<()> {
         let specs = load_client_token_specs()?;
         if specs.is_empty() {
@@ -240,7 +248,7 @@ impl LiveVoiceAdapter {
         let guild_id = parse_discord_id("guild_id", &room.guild_id)?;
         let channel_id = parse_discord_id("channel_id", &room.channel_id)?;
         fs::create_dir_all(request.session_dir.join("minutes"))?;
-        let session = VoiceSession {
+        let session = LiveVoiceSession {
             session_id: session_id.clone(),
             room: room.clone(),
             bot_id: request.bot_id.clone(),
@@ -323,7 +331,7 @@ impl LiveVoiceAdapter {
         })
     }
 
-    async fn mark_join_failed(&self, bot_id: &str, error: &str) -> Option<RuntimeBotStatus> {
+    async fn mark_join_failed(&self, bot_id: &str, error: &str) -> Option<VoiceBotStatus> {
         let mut clients = self.voice_clients_lock.lock().await;
         let client = clients.get_mut(bot_id)?;
         client.joining_session_id = None;
@@ -528,12 +536,12 @@ impl LiveVoiceAdapter {
         }))?)
     }
 
-    pub async fn bot_statuses(&self) -> Vec<RuntimeBotStatus> {
+    pub async fn bot_statuses(&self) -> Vec<VoiceBotStatus> {
         let clients = self.voice_clients_lock.lock().await;
         clients.values().map(DiscordVoiceClient::status).collect()
     }
 
-    pub async fn session_statuses(&self) -> Vec<crate::runtime::RuntimeSessionStatus> {
+    pub async fn session_statuses(&self) -> Vec<crate::runtime::VoiceCaptureSessionStatus> {
         let sessions = {
             let sessions = self.capture_sessions_lock.lock().await;
             sessions.values().cloned().collect::<Vec<_>>()
@@ -623,58 +631,6 @@ impl LiveVoiceAdapter {
             }
         }
         log(&format!("bot {bot_id} error: {error}"));
-    }
-
-    pub(super) async fn handle_component_interaction(
-        self: &Arc<Self>,
-        ctx: Context,
-        component: ComponentInteraction,
-    ) {
-        let custom_id = component.data.custom_id.trim().to_string();
-        let action = if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_confirm:") {
-            ("approve", job_id.trim().to_string())
-        } else if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_cancel:") {
-            ("cancel", job_id.trim().to_string())
-        } else {
-            return;
-        };
-        let actor_user_id = component.user.id.get().to_string();
-        if let Err(error) = component.defer(&ctx.http).await {
-            log(&format!("confirmation interaction defer failed: {error}"));
-        }
-        let control_action = if action.0 == "approve" {
-            RuntimeControlAction::ApproveConfirmation
-        } else {
-            RuntimeControlAction::CancelConfirmation
-        };
-        let result = self
-            .job_sink
-            .submit_runtime_control_for_target(&action.1, control_action, actor_user_id)
-            .await;
-        let content = match result {
-            Ok(_) if action.0 == "approve" => {
-                format!("Clanky voice confirmation `{}` approval queued.", action.1)
-            }
-            Ok(_) => format!(
-                "Clanky voice confirmation `{}` cancellation queued.",
-                action.1
-            ),
-            Err(error) => format!(
-                "Could not complete Clanky voice confirmation `{}`: {}",
-                action.1, error
-            ),
-        };
-        if let Err(error) = component
-            .edit_response(
-                &ctx.http,
-                EditInteractionResponse::new()
-                    .content(clipped_text(&content, 1900))
-                    .components(Vec::new()),
-            )
-            .await
-        {
-            log(&format!("confirmation interaction finish failed: {error}"));
-        }
     }
 
     pub(super) async fn handle_speaking_state(
@@ -810,14 +766,6 @@ impl LiveVoiceAdapter {
             .await
             .insert(profile.id.clone(), profile);
     }
-}
-
-fn clipped_text(content: &str, limit: usize) -> String {
-    let mut clipped = content.chars().take(limit).collect::<String>();
-    if clipped.len() < content.len() {
-        clipped.push_str("...");
-    }
-    clipped
 }
 
 fn capture_user_from_member(member: &Member) -> CaptureUser {

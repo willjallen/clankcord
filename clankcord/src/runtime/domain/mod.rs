@@ -1,8 +1,6 @@
-pub(crate) mod audio_segments;
-mod confirmations;
+pub(crate) mod ingress;
 pub mod interactions;
-mod publication;
-pub(crate) mod responses;
-pub(crate) mod text_messages;
-pub mod wake_activations;
-pub(crate) mod wake_probes;
+pub(crate) mod messaging;
+pub(crate) mod transcripts;
+pub(crate) mod voice;
+pub mod voice_capture;

@@ -2,11 +2,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use serde_json::{Map, Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::Result;
-use crate::adapters::discord::text::DiscordTextAdapter;
+use crate::adapters::discord::gateway::text::DiscordTextAdapter;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config::{config_path, read_json};
 use crate::runtime::core::execution::RuntimeExecutor;
@@ -156,10 +157,13 @@ pub struct RuntimeService {
 
 impl RuntimeService {
     pub async fn new() -> Result<Self> {
-        let mut runtime = Runtime::new()?;
+        let mut runtime = Runtime::new().context("constructing runtime")?;
         let timeline_store = runtime.timeline_store.clone();
-        timeline_store.initialize().await?;
-        runtime.start().await?;
+        timeline_store
+            .initialize()
+            .await
+            .context("initializing timeline store")?;
+        runtime.start().await.context("starting runtime domain")?;
         match runtime.recover_interrupted_agent_tasks().await {
             Ok(recovered) if !recovered.is_empty() => {
                 log(&format!(
@@ -183,7 +187,8 @@ impl RuntimeService {
             .replace_runtime_maintenance_job(Job::runtime_maintenance(
                 runtime_maintenance_interval_ms(),
             ))
-            .await?;
+            .await
+            .context("replacing runtime maintenance job")?;
         Ok(Self {
             handle: RuntimeHandle {
                 live_voice,
@@ -406,11 +411,15 @@ fn runtime_maintenance_interval_ms() -> i64 {
 }
 
 pub async fn start_persistent_process() -> Result<()> {
-    let service = RuntimeService::new().await?;
-    let http_addr = http_addr()?;
+    let service = RuntimeService::new()
+        .await
+        .context("creating runtime service")?;
+    let http_addr = http_addr().context("resolving HTTP bind address")?;
     let handle = service.handle();
     service.spawn();
-    crate::adapters::http::serve(handle, http_addr).await
+    crate::adapters::http::serve(handle, http_addr)
+        .await
+        .context("serving HTTP API")
 }
 
 pub fn start_blocking() -> i32 {
@@ -421,7 +430,7 @@ pub fn start_blocking() -> i32 {
         Ok(runtime) => match runtime.block_on(start_persistent_process()) {
             Ok(()) => 0,
             Err(error) => {
-                eprintln!("{error}");
+                eprintln!("{}", error_chain(&error));
                 1
             }
         },

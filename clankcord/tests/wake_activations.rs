@@ -5,12 +5,14 @@ use serde_json::{Value, json};
 
 mod common;
 
-use clankcord::runtime::domain::wake_activations::{execute, schedule_from_wake_event};
+use clankcord::runtime::domain::voice_capture::wake_activations::{
+    execute, schedule_from_wake_event,
+};
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, string_field};
 use clankcord::runtime::{
     AgentRuntime, AgentSessionRecord, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue,
-    Job, JobKind, JobState, Runtime, RuntimeSessionStatus, SessionCaptureStats,
-    SessionSpeakerCaptureStats,
+    Job, JobKind, JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats,
+    VoiceCaptureSessionStatus,
 };
 
 use common::{dt, test_store};
@@ -367,13 +369,13 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     insert_agent_session(&runtime.timeline_store).await;
     runtime.sessions.insert(
         "cap_test".to_string(),
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
             voice_channel_id: "code".to_string(),
             active: true,
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         },
     );
     let start = dt(2026, 5, 12, 16, 0, 0);
@@ -447,7 +449,7 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime.sessions.insert(
         "cap_test".to_string(),
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
@@ -471,7 +473,7 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
                 )]),
                 ..SessionCaptureStats::default()
             },
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         },
     );
 
@@ -556,13 +558,13 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     insert_agent_session(&runtime.timeline_store).await;
     runtime.sessions.insert(
         "cap_test".to_string(),
-        RuntimeSessionStatus {
+        VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
             voice_channel_id: "code".to_string(),
             active: true,
-            ..RuntimeSessionStatus::default()
+            ..VoiceCaptureSessionStatus::default()
         },
     );
     let now = Utc::now();

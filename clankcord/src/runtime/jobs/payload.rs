@@ -626,12 +626,12 @@ pub struct WakeActivationPayload {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResponseKind {
+pub enum TextDeliveryKind {
     Message,
     Question,
 }
 
-impl ResponseKind {
+impl TextDeliveryKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Message => "message",
@@ -640,76 +640,73 @@ impl ResponseKind {
     }
 }
 
-impl FromStr for ResponseKind {
+impl FromStr for TextDeliveryKind {
     type Err = anyhow::Error;
 
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
-            "" | "message" | "submit" => Ok(Self::Message),
-            "question" | "ask" => Ok(Self::Question),
-            value => anyhow::bail!("unknown response kind: {value}"),
+            "message" => Ok(Self::Message),
+            "question" => Ok(Self::Question),
+            value => anyhow::bail!("unknown text delivery kind: {value}"),
         }
     }
 }
 
-impl Default for ResponseKind {
+impl Default for TextDeliveryKind {
     fn default() -> Self {
         Self::Message
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ResponseSinkKind {
+pub enum TextTargetKind {
     AgentSession,
     AgentChat,
     Channel,
     Dm,
-    Stdout,
 }
 
-impl ResponseSinkKind {
+impl TextTargetKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::AgentSession => "session",
             Self::AgentChat => "agent_chat",
             Self::Channel => "channel",
             Self::Dm => "dm",
-            Self::Stdout => "stdout",
         }
     }
 }
 
-impl FromStr for ResponseSinkKind {
+impl FromStr for TextTargetKind {
     type Err = anyhow::Error;
 
     fn from_str(raw: &str) -> Result<Self> {
         match raw.trim() {
-            "session" | "agent_session" | "agent-session" => Ok(Self::AgentSession),
-            "" | "agent_chat" | "agent-chat" => Ok(Self::AgentChat),
+            "session" => Ok(Self::AgentSession),
+            "agent_chat" => Ok(Self::AgentChat),
             "channel" => Ok(Self::Channel),
             "dm" => Ok(Self::Dm),
-            "stdout" => Ok(Self::Stdout),
             value if value.starts_with("dm:") => Ok(Self::Dm),
             value if value.starts_with("channel:") => Ok(Self::Channel),
-            value => anyhow::bail!("unknown response sink: {value}"),
+            value => anyhow::bail!("unknown text target: {value}"),
         }
     }
 }
 
-impl Default for ResponseSinkKind {
+impl Default for TextTargetKind {
     fn default() -> Self {
         Self::AgentSession
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub struct ResponseSink {
-    pub kind: ResponseSinkKind,
+pub struct TextTarget {
+    pub kind: TextTargetKind,
     pub channel_id: String,
     pub user_id: String,
 }
 
-impl ResponseSink {
+impl TextTarget {
     pub fn from_json(value: Option<&Value>) -> Result<Self> {
         let Some(value) = value else {
             return Ok(Self::default());
@@ -719,7 +716,7 @@ impl ResponseSink {
         }
         let raw_kind = string_field(value, "kind");
         let mut sink = Self {
-            kind: ResponseSinkKind::from_str(&raw_kind)?,
+            kind: TextTargetKind::from_str(&raw_kind)?,
             channel_id: string_field(value, "channel_id"),
             user_id: string_field(value, "user_id"),
         };
@@ -735,7 +732,7 @@ impl ResponseSink {
     pub fn from_string(raw: &str) -> Result<Self> {
         let raw = raw.trim();
         let mut sink = Self {
-            kind: ResponseSinkKind::from_str(raw)?,
+            kind: TextTargetKind::from_str(raw)?,
             ..Self::default()
         };
         if let Some(channel_id) = raw.strip_prefix("channel:") {
@@ -759,9 +756,9 @@ impl ResponseSink {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResponsePayload {
-    pub response_kind: ResponseKind,
-    pub sink: ResponseSink,
+pub struct TextDeliveryPayload {
+    pub intent: TextDeliveryKind,
+    pub target: TextTarget,
     pub content: String,
     pub source_job_id: String,
     pub requested_by_user_id: String,
@@ -769,18 +766,18 @@ pub struct ResponsePayload {
     opaque: BinaryPayload,
 }
 
-impl ResponsePayload {
+impl TextDeliveryPayload {
     pub fn new(
-        response_kind: ResponseKind,
-        sink: ResponseSink,
+        intent: TextDeliveryKind,
+        target: TextTarget,
         content: impl Into<String>,
         source_job_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
         expects_reply: bool,
     ) -> Self {
         Self {
-            response_kind,
-            sink,
+            intent,
+            target,
             content: content.into(),
             source_job_id: source_job_id.into(),
             requested_by_user_id: requested_by_user_id.into(),
@@ -791,28 +788,18 @@ impl ResponsePayload {
 
     pub fn from_json(value: &Value) -> Result<Self> {
         if !value.is_object() {
-            anyhow::bail!("response must be a JSON object at the boundary");
+            anyhow::bail!("text delivery must be a JSON object at the boundary");
         }
-        let response_kind = ResponseKind::from_str(&first_non_empty([
-            string_field(value, "response_kind"),
-            string_field(value, "kind"),
-        ]))?;
+        let intent = TextDeliveryKind::from_str(&string_field(value, "intent"))?;
         Ok(Self {
-            response_kind,
-            sink: ResponseSink::from_json(value.get("sink"))?,
+            intent,
+            target: TextTarget::from_json(value.get("target"))?,
             content: string_field(value, "content"),
-            source_job_id: first_non_empty([
-                string_field(value, "source_job_id"),
-                string_field(value, "job_id"),
-                string_field(value, "job"),
-            ]),
-            requested_by_user_id: first_non_empty([
-                string_field(value, "requested_by_user_id"),
-                string_field(value, "user_id"),
-            ]),
+            source_job_id: string_field(value, "source_job_id"),
+            requested_by_user_id: string_field(value, "requested_by_user_id"),
             expects_reply: truthy(
                 value.get("expects_reply"),
-                response_kind == ResponseKind::Question,
+                intent == TextDeliveryKind::Question,
             ),
             opaque: BinaryPayload::from_json(value)?,
         })
@@ -821,10 +808,10 @@ impl ResponsePayload {
     pub fn to_json(&self) -> Value {
         let mut map = object_from_payload(&self.opaque);
         map.insert(
-            "response_kind".to_string(),
-            Value::String(self.response_kind.as_str().to_string()),
+            "intent".to_string(),
+            Value::String(self.intent.as_str().to_string()),
         );
-        map.insert("sink".to_string(), self.sink.to_json());
+        map.insert("target".to_string(), self.target.to_json());
         insert_non_empty(&mut map, "content", &self.content);
         insert_non_empty(&mut map, "source_job_id", &self.source_job_id);
         insert_non_empty(&mut map, "requested_by_user_id", &self.requested_by_user_id);
@@ -836,8 +823,38 @@ impl ResponsePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordTextSendPayload {
+    pub intent: TextDeliveryKind,
+    pub target: TextTarget,
+    pub content: String,
+    pub source_job_id: String,
+    pub requested_by_user_id: String,
+    pub allowed_mentions: BinaryPayload,
+    pub components: BinaryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordForumThreadCreatePayload {
+    pub parent_channel_id: String,
+    pub name: String,
+    pub content: String,
+    pub auto_archive_minutes: i64,
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
     pub agent_session_id: String,
+    pub command: CommandRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionStartPayload {
+    pub agent_session_id: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub discord_parent_channel_id: String,
+    pub requested_by_user_id: String,
     pub command: CommandRequest,
 }
 
@@ -855,9 +872,37 @@ pub struct DiscordTextMessagePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordSlashCommandPayload {
+    pub interaction_id: String,
+    pub interaction_token: String,
+    pub application_id: String,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub user_id: String,
+    pub username: String,
+    pub command_name: String,
+    pub options: BinaryPayload,
+    pub created_at: String,
+    pub response_visibility: String,
+}
+
+impl DiscordSlashCommandPayload {
+    pub fn options_json(&self) -> Value {
+        self.options.to_json()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RefineTranscriptPayload {
     pub window_id: String,
     pub publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptPublicationPayload {
+    pub publication_id: String,
+    pub live: bool,
+    pub refined_queued: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1025,7 +1070,12 @@ pub enum JobPayload {
     WakeActivation(WakeActivationPayload),
     AgentTask(AgentTaskPayload),
     DiscordTextMessage(DiscordTextMessagePayload),
-    Response(ResponsePayload),
+    DiscordSlashCommand(DiscordSlashCommandPayload),
+    TextDelivery(TextDeliveryPayload),
+    DiscordTextSend(DiscordTextSendPayload),
+    DiscordForumThreadCreate(DiscordForumThreadCreatePayload),
+    AgentSessionStart(AgentSessionStartPayload),
+    TranscriptPublication(TranscriptPublicationPayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
     Command(CommandPayload),
@@ -1047,7 +1097,12 @@ impl JobPayload {
             Self::WakeActivation(_) => JobKind::WakeActivation,
             Self::AgentTask(_) => JobKind::AgentTask,
             Self::DiscordTextMessage(_) => JobKind::DiscordTextMessage,
-            Self::Response(_) => JobKind::Response,
+            Self::DiscordSlashCommand(_) => JobKind::DiscordSlashCommand,
+            Self::TextDelivery(_) => JobKind::TextDelivery,
+            Self::DiscordTextSend(_) => JobKind::DiscordTextSend,
+            Self::DiscordForumThreadCreate(_) => JobKind::DiscordForumThreadCreate,
+            Self::AgentSessionStart(_) => JobKind::AgentSessionStart,
+            Self::TranscriptPublication(_) => JobKind::TranscriptPublication,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
             Self::Command(_) => JobKind::Command,
@@ -1071,7 +1126,12 @@ impl JobPayload {
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::DiscordTextMessage(_) => None,
-            Self::Response(_) => None,
+            Self::DiscordSlashCommand(_) => None,
+            Self::TextDelivery(_) => None,
+            Self::DiscordTextSend(_) => None,
+            Self::DiscordForumThreadCreate(_) => None,
+            Self::AgentSessionStart(payload) => Some(&payload.command),
+            Self::TranscriptPublication(_) => None,
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::Command(payload) => Some(&payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -1093,7 +1153,12 @@ impl JobPayload {
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::DiscordTextMessage(_) => None,
-            Self::Response(_) => None,
+            Self::DiscordSlashCommand(_) => None,
+            Self::TextDelivery(_) => None,
+            Self::DiscordTextSend(_) => None,
+            Self::DiscordForumThreadCreate(_) => None,
+            Self::AgentSessionStart(payload) => Some(&mut payload.command),
+            Self::TranscriptPublication(_) => None,
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::Command(payload) => Some(&mut payload.command),
             Self::RoomAgentPlacement(_) => None,
@@ -1177,7 +1242,49 @@ impl JobPayload {
                 "created_at": payload.created_at,
                 "referenced_message_id": payload.referenced_message_id,
             }),
-            Self::Response(payload) => payload.to_json(),
+            Self::DiscordSlashCommand(payload) => json!({
+                "interaction_id": payload.interaction_id,
+                "interaction_token": payload.interaction_token,
+                "application_id": payload.application_id,
+                "guild_id": payload.guild_id,
+                "channel_id": payload.channel_id,
+                "user_id": payload.user_id,
+                "username": payload.username,
+                "command_name": payload.command_name,
+                "options": payload.options.to_json(),
+                "created_at": payload.created_at,
+                "response_visibility": payload.response_visibility,
+            }),
+            Self::TextDelivery(payload) => payload.to_json(),
+            Self::DiscordTextSend(payload) => json!({
+                "intent": payload.intent.as_str(),
+                "target": payload.target.to_json(),
+                "content": payload.content,
+                "source_job_id": payload.source_job_id,
+                "requested_by_user_id": payload.requested_by_user_id,
+                "allowed_mentions": payload.allowed_mentions.to_json(),
+                "components": payload.components.to_json(),
+            }),
+            Self::DiscordForumThreadCreate(payload) => json!({
+                "parent_channel_id": payload.parent_channel_id,
+                "name": payload.name,
+                "content": payload.content,
+                "auto_archive_minutes": payload.auto_archive_minutes,
+                "source_job_id": payload.source_job_id,
+            }),
+            Self::AgentSessionStart(payload) => json!({
+                "agent_session_id": payload.agent_session_id,
+                "guild_id": payload.guild_id,
+                "voice_channel_id": payload.voice_channel_id,
+                "discord_parent_channel_id": payload.discord_parent_channel_id,
+                "requested_by_user_id": payload.requested_by_user_id,
+                "command": payload.command.to_json(),
+            }),
+            Self::TranscriptPublication(payload) => json!({
+                "publication_id": payload.publication_id,
+                "live": payload.live,
+                "refined_queued": payload.refined_queued,
+            }),
             Self::RefineTranscript(payload) => json!({
                 "window_id": payload.window_id,
                 "publication_id": payload.publication_id,

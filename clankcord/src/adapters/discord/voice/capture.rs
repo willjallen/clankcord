@@ -8,8 +8,8 @@ use crate::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use crate::adapters::discord::voice::session::{
     AudioPipelineOutcome, SessionAudioPipeline, WakeProbeConfig, monotonic_seconds,
 };
-use crate::adapters::discord::voice::types::VoiceSession;
-use crate::runtime::{Job, RuntimeSessionStatus, log};
+use crate::adapters::discord::voice::types::LiveVoiceSession;
+use crate::runtime::{Job, VoiceCaptureSessionStatus, log};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaptureUser {
@@ -228,7 +228,7 @@ impl VoiceCaptureSink {
 }
 
 pub(super) struct LiveCaptureSession {
-    session: VoiceSession,
+    session: LiveVoiceSession,
     pipeline: SessionAudioPipeline,
     wake_probe: WakeProbeConfig,
     sink: VoiceCaptureSink,
@@ -237,7 +237,7 @@ pub(super) struct LiveCaptureSession {
 
 impl LiveCaptureSession {
     pub(super) fn new(
-        session: VoiceSession,
+        session: LiveVoiceSession,
         minimum_utterance_ms: i64,
         wake_probe: WakeProbeConfig,
     ) -> Self {
@@ -251,7 +251,7 @@ impl LiveCaptureSession {
         }
     }
 
-    pub(super) fn metadata(&self, tz: Tz) -> RuntimeSessionStatus {
+    pub(super) fn metadata(&self, tz: Tz) -> VoiceCaptureSessionStatus {
         self.session.metadata(tz)
     }
 
@@ -437,7 +437,7 @@ impl LiveCaptureSession {
 
 pub(super) struct FinishedCaptureSession {
     pub(super) session_id: String,
-    pub(super) metadata: RuntimeSessionStatus,
+    pub(super) metadata: VoiceCaptureSessionStatus,
     pub(super) bot_id: String,
     pub(super) guild_id: String,
     pub(super) voice_channel_id: String,
@@ -500,7 +500,7 @@ fn default_has_packet() -> bool {
 
 struct SessionCaptureHandler<'a> {
     pipeline: SessionAudioPipeline,
-    session: &'a mut VoiceSession,
+    session: &'a mut LiveVoiceSession,
 }
 
 impl VoiceCaptureHandler for SessionCaptureHandler<'_> {

@@ -52,10 +52,6 @@ impl Runtime {
                 }
             }
             JobKind::AgentTask => self.dispatch_claimed_agent_task_job(running).await,
-            JobKind::Response => match routes::execute_response(self, &running).await {
-                Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
-                Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
-            },
             kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
         }
     }
@@ -97,7 +93,10 @@ impl Runtime {
             Err(_) => fallback_job.clone(),
         };
         latest.metadata.output = Some(output.clone());
-        if latest.state != JobState::Waiting && latest.state != JobState::Queued {
+        if latest.state != JobState::Waiting
+            && latest.state != JobState::Queued
+            && latest.state != JobState::ConfirmationPending
+        {
             latest.mark_complete();
         }
         self.timeline_store.update_job(&latest).await?;

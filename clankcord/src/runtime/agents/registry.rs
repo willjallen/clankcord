@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::adapters::codex::CodexAdapter;
 use crate::runtime::agents::AgentRole;
-use crate::runtime::jobs::{ResponseSink, ResponseSinkKind};
+use crate::runtime::jobs::{TextTarget, TextTargetKind};
 use crate::runtime::timeline::isoformat_z;
 
 #[derive(Debug, Clone, Default)]
@@ -110,7 +110,7 @@ pub struct AgentSessionRecord {
     pub dm_user_id: String,
     pub discord_thread_id: String,
     pub discord_parent_channel_id: String,
-    pub response_sink: ResponseSink,
+    pub text_target: TextTarget,
     pub state: AgentSessionRecordState,
     pub created_at: String,
     pub last_activity_at: String,
@@ -141,14 +141,48 @@ impl AgentSessionRecord {
             guild_id,
             voice_channel_id,
             dm_user_id: String::new(),
-            response_sink: ResponseSink {
-                kind: ResponseSinkKind::Channel,
+            text_target: TextTarget {
+                kind: TextTargetKind::Channel,
                 channel_id: discord_thread_id.clone(),
                 user_id: String::new(),
             },
             discord_thread_id,
             discord_parent_channel_id,
             state: AgentSessionRecordState::Active,
+            last_activity_at: created_at.clone(),
+            created_at,
+            expires_at: expires_at.into(),
+        }
+    }
+
+    pub fn new_voice_starting(
+        agent_session_id: impl Into<String>,
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        discord_parent_channel_id: impl Into<String>,
+        created_at: impl Into<String>,
+        expires_at: impl Into<String>,
+    ) -> Self {
+        let agent_session_id = agent_session_id.into();
+        let guild_id = guild_id.into();
+        let voice_channel_id = voice_channel_id.into();
+        let created_at = created_at.into();
+        Self {
+            agent_session_id,
+            codex_session_id: String::new(),
+            route_kind: AgentSessionRouteKind::Voice,
+            route_key: voice_route_key(&guild_id, &voice_channel_id),
+            guild_id,
+            voice_channel_id,
+            dm_user_id: String::new(),
+            discord_thread_id: String::new(),
+            discord_parent_channel_id: discord_parent_channel_id.into(),
+            text_target: TextTarget {
+                kind: TextTargetKind::Channel,
+                channel_id: String::new(),
+                user_id: String::new(),
+            },
+            state: AgentSessionRecordState::Starting,
             last_activity_at: created_at.clone(),
             created_at,
             expires_at: expires_at.into(),
@@ -174,8 +208,8 @@ impl AgentSessionRecord {
             dm_user_id: user_id.clone(),
             discord_thread_id: String::new(),
             discord_parent_channel_id: String::new(),
-            response_sink: ResponseSink {
-                kind: ResponseSinkKind::Dm,
+            text_target: TextTarget {
+                kind: TextTargetKind::Dm,
                 channel_id: String::new(),
                 user_id,
             },
@@ -205,7 +239,7 @@ impl AgentSessionRecord {
             "dm_user_id": self.dm_user_id,
             "discord_thread_id": self.discord_thread_id,
             "discord_parent_channel_id": self.discord_parent_channel_id,
-            "response_sink": self.response_sink.to_json(),
+            "text_target": self.text_target.to_json(),
             "state": self.state.as_str(),
             "created_at": self.created_at,
             "last_activity_at": self.last_activity_at,

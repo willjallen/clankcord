@@ -2,11 +2,9 @@ use serde_json::json;
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::audio_segments;
-use crate::runtime::domain::responses;
-use crate::runtime::domain::text_messages;
-use crate::runtime::domain::wake_activations;
-use crate::runtime::domain::wake_probes;
+use crate::runtime::domain::ingress::discord_slash;
+use crate::runtime::domain::ingress::discord_text;
+use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
 use crate::runtime::refinement::run_refinement_job;
 use crate::runtime::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
@@ -23,7 +21,20 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
         }
         JobPayload::Command(_) => commands::prepare(runtime, job).await,
         JobPayload::DiscordTextMessage(payload) => {
-            text_messages::prepare(runtime, job, payload).await
+            discord_text::prepare(runtime, job, payload).await
+        }
+        JobPayload::DiscordSlashCommand(payload) => {
+            discord_slash::prepare(runtime, job, payload).await
+        }
+        JobPayload::TextDelivery(payload) => runtime.prepare_text_delivery_job(job, payload).await,
+        JobPayload::ConfirmationRequired(_) => runtime.prepare_confirmation_required_job(job).await,
+        JobPayload::AgentSessionStart(payload) => {
+            runtime.prepare_agent_session_start_job(job, payload).await
+        }
+        JobPayload::TranscriptPublication(payload) => {
+            runtime
+                .prepare_transcript_publication_job(job, payload)
+                .await
         }
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::prepare(runtime, job, payload).await
@@ -33,16 +44,6 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
         }
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
-            payload.kind()
-        ),
-    }
-}
-
-pub(crate) async fn execute_response(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
-    match &job.payload {
-        JobPayload::Response(payload) => responses::execute(runtime, job, payload).await,
-        payload => anyhow::bail!(
-            "job payload {} is not handled by response executor",
             payload.kind()
         ),
     }
@@ -61,7 +62,7 @@ pub(crate) async fn execute_refine_transcript(runtime: &Runtime, job: &Job) -> R
 pub(crate) async fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
     match &job.payload {
         JobPayload::AudioSegment(payload) => Ok(JobOutput::from_boundary_json(
-            &audio_segments::execute_segment_job(runtime, job, payload).await?,
+            &segments::execute_segment_job(runtime, job, payload).await?,
         )?),
         payload => anyhow::bail!(
             "job payload {} is not handled by audio executor",

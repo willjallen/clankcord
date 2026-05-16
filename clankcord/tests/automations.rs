@@ -3,13 +3,12 @@ use std::collections::BTreeMap;
 use serde_json::{Value, json};
 
 use clankcord::runtime::automations::{
-    AutomationAction, AutomationResponseSinkKind, AutomationSpec, AutomationState,
-    AutomationTrigger,
+    AutomationAction, AutomationSpec, AutomationState, AutomationTextTargetKind, AutomationTrigger,
 };
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    AgentRuntime, CommandRequest, ControlConfig, Job, JobKind, JobState, ResponseKind,
-    ResponsePayload, ResponseSink, ResponseSinkKind, Runtime,
+    AgentRuntime, CommandRequest, ControlConfig, Job, JobKind, JobState, Runtime, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 mod common;
@@ -35,10 +34,10 @@ async fn automation_spec_lowers_boundary_json_to_typed_structs() {
 
     assert_eq!(spec.expiry.max_fires, Some(1));
     assert_eq!(spec.scope.guild_id, "guild");
-    let AutomationAction::ResponseSend { sink, content } = &spec.actions[0] else {
+    let AutomationAction::TextSend { sink, content } = &spec.actions[0] else {
         panic!("expected response action");
     };
-    assert_eq!(sink.kind, AutomationResponseSinkKind::AgentChat);
+    assert_eq!(sink.kind, AutomationTextTargetKind::AgentChat);
     assert_eq!(content, "Timer done.");
 }
 
@@ -87,7 +86,7 @@ async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
         "actions": [{
             "kind": "agent_task.start",
             "prompt": "Do the follow-up work.",
-            "responseSink": {"kind": "channel", "channelId": "agent-thread"}
+            "textTarget": {"kind": "channel", "channelId": "agent-thread"}
         }]
     }))
     .unwrap();
@@ -95,13 +94,13 @@ async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
     assert_eq!(spec.idempotency_key, "job_1:camel");
     assert_eq!(spec.expiry.max_fires, Some(2));
     let AutomationAction::AgentTaskStart {
-        response_sink: Some(sink),
+        text_target: Some(sink),
         ..
     } = &spec.actions[0]
     else {
         panic!("expected agent task action with response sink");
     };
-    assert_eq!(sink.kind, AutomationResponseSinkKind::Channel);
+    assert_eq!(sink.kind, AutomationTextTargetKind::Channel);
     assert_eq!(sink.id, "agent-thread");
 }
 
@@ -377,7 +376,7 @@ async fn runtime_loads_active_automations_after_restart() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stored_event_automation_emits_response_job_once_and_expires() {
+async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     insert_agent_source_job(&store).await;
@@ -402,8 +401,8 @@ async fn stored_event_automation_emits_response_job_once_and_expires() {
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
-    let payload = job.response_payload().unwrap();
-    assert_eq!(payload.sink.kind, ResponseSinkKind::AgentChat);
+    let payload = job.text_delivery_payload().unwrap();
+    assert_eq!(payload.target.kind, TextTargetKind::AgentChat);
     assert_eq!(payload.content, "Blake joined.");
     assert_eq!(payload.source_job_id, record.automation_id);
     assert!(!runtime.automations.contains_key(&record.automation_id));
@@ -467,7 +466,7 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
-    let payload = job.response_payload().unwrap();
+    let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.content, "Blake left.");
     assert!(!runtime.automations.contains_key(&record.automation_id));
 }
@@ -518,9 +517,9 @@ async fn overlap_automation_can_match_current_room_participants() {
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
-    let payload = job.response_payload().unwrap();
-    assert_eq!(payload.sink.kind, ResponseSinkKind::Dm);
-    assert_eq!(payload.sink.user_id, "user-a");
+    let payload = job.text_delivery_payload().unwrap();
+    assert_eq!(payload.target.kind, TextTargetKind::Dm);
+    assert_eq!(payload.target.user_id, "user-a");
     assert_eq!(payload.content, "Reminder: talk to Blake about Woven.");
     assert!(!runtime.automations.contains_key(&record.automation_id));
 }
@@ -628,33 +627,33 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
         "idempotency_key": "job_1:job-followup",
         "trigger": {
             "kind": "job",
-            "job_kinds": ["response"],
+            "job_kinds": ["text_delivery"],
             "states": ["complete"]
         },
         "condition": {"kind": "true"},
         "actions": [{
             "kind": "agent_task.start",
-            "prompt": "Summarize the completed response job."
+            "prompt": "Summarize the completed text delivery job."
         }]
     })))
     .unwrap();
     store.create_automation(spec).await.unwrap();
-    let mut completed_response = Job::response(
+    let mut completed_delivery = Job::text_delivery(
         "guild",
         "code",
         "user-a",
-        ResponsePayload::new(
-            ResponseKind::Message,
-            ResponseSink::default(),
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            TextTarget::default(),
             "done",
             "source-job",
             "user-a",
             false,
         ),
     );
-    completed_response = store.create_job(completed_response).await.unwrap();
-    completed_response.mark_complete();
-    store.update_job(&completed_response).await.unwrap();
+    completed_delivery = store.create_job(completed_delivery).await.unwrap();
+    completed_delivery.mark_complete();
+    store.update_job(&completed_delivery).await.unwrap();
     let mut runtime = test_runtime(store);
     runtime.load_automation_registry().await.unwrap();
 
@@ -667,7 +666,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     assert_eq!(job.kind, JobKind::Command);
     assert_eq!(
         job.command().unwrap().arguments.request,
-        "Summarize the completed response job."
+        "Summarize the completed text delivery job."
     );
 }
 
