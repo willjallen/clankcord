@@ -875,17 +875,31 @@ window.dashboard = function dashboard() {
       return [];
     },
 
-    timelineFilterValues(field) {
+    timelineFilterOptionIds(field) {
+      return this.timelineFilterOptionRows(field).map((option) => option.id).filter(Boolean);
+    },
+
+    rawTimelineFilterValues(field) {
       const values = Array.isArray(this.filters[field]) ? this.filters[field] : [];
       return this.normalizeTimelineFilterValues(field, values);
     },
 
     normalizeTimelineFilterValues(field, values) {
-      const unique = Array.from(new Set(values.filter(Boolean)));
-      if (field === 'timelineRecordTypes' && unique.length === this.timelineRecordTypeOptions().length) {
-        return [];
-      }
-      return unique;
+      const options = new Set(this.timelineFilterOptionIds(field));
+      return Array.from(new Set(values.filter((value) => options.has(value))));
+    },
+
+    timelineFilterValues(field) {
+      const explicit = this.rawTimelineFilterValues(field);
+      if (explicit.length) return explicit;
+      return this.timelineFilterOptionIds(field);
+    },
+
+    effectiveTimelineFilterValues(field) {
+      const selected = this.timelineFilterValues(field);
+      const options = this.timelineFilterOptionIds(field);
+      if (!selected.length || selected.length === options.length) return [];
+      return selected;
     },
 
     timelineFilterSelected(field, value) {
@@ -902,17 +916,18 @@ window.dashboard = function dashboard() {
       this.timelineLocalFilterChanged();
     },
 
-    clearTimelineFilterValue(field) {
-      this.filters[field] = [];
+    selectAllTimelineFilterValues(field) {
+      this.filters[field] = this.timelineFilterOptionIds(field);
       this.lastSubwindowScrollAt = Date.now();
       this.timelineLocalFilterChanged();
     },
 
     timelineFilterSummary(field) {
       const values = this.timelineFilterValues(field);
-      if (!values.length) return 'All';
+      const total = this.timelineFilterOptionIds(field).length;
+      if (!values.length || values.length === total) return 'All';
       if (values.length === 1) return this.short(this.timelineFilterDisplay(field, values[0]), 22);
-      return `${values.length} selected`;
+      return `${values.length}/${total} selected`;
     },
 
     timelineFilterDisplay(field, value) {
@@ -925,10 +940,130 @@ window.dashboard = function dashboard() {
       return value;
     },
 
+    timelineSearchTerms() {
+      return textValue(this.filters.timelineSearch)
+        .trim()
+        .split(/\s+/)
+        .map((term) => term.replace(/^\/+/, '').toLowerCase())
+        .filter(Boolean);
+    },
+
+    recordMatchesTimelineSearch(recordType, record) {
+      const terms = this.timelineSearchTerms();
+      if (!terms.length) return true;
+      const field = this.filters.timelineSearchField || 'all';
+      const values = recordType === 'job'
+        ? this.jobTimelineSearchValues(record, field)
+        : this.eventTimelineSearchValues(record, field);
+      const haystack = values.join(' ').toLowerCase();
+      return terms.every((term) => haystack.includes(term));
+    },
+
+    eventTimelineSearchValues(event, field) {
+      if (field === 'all') {
+        return [
+          this.eventId(event),
+          this.eventTimelineSearchValues(event, 'detail'),
+          this.eventTimelineSearchValues(event, 'feedback'),
+          this.eventTimelineSearchValues(event, 'kind'),
+          this.eventTimelineSearchValues(event, 'job_kind'),
+          this.eventTimelineSearchValues(event, 'state'),
+          this.eventTimelineSearchValues(event, 'command'),
+          this.eventTimelineSearchValues(event, 'room'),
+          this.eventTimelineSearchValues(event, 'actor'),
+        ].flat().filter(Boolean);
+      }
+      if (field === 'detail') {
+        return [
+          event?.text,
+          event?.feedback_message,
+          event?.reason,
+          event?.quality,
+          this.eventDetail(event),
+          ...this.eventResultSearchValues(event),
+        ].filter(Boolean);
+      }
+      if (field === 'feedback') {
+        const kind = this.eventKind(event);
+        return kind === 'feedback' ? this.eventTimelineSearchValues(event, 'detail').concat([kind]) : [];
+      }
+      if (field === 'kind') return [this.eventKind(event)];
+      if (field === 'job_kind') return [event?.job_kind].filter(Boolean);
+      if (field === 'state') return [event?.state].filter(Boolean);
+      if (field === 'command') return [event?.command_kind].filter(Boolean);
+      if (field === 'room') {
+        return [
+          event?.guild_slug,
+          this.eventGuildId(event),
+          this.eventChannelName(event),
+          this.eventChannelId(event),
+          event?.voice_channel_slug,
+        ].filter(Boolean);
+      }
+      if (field === 'actor') {
+        return [
+          this.eventSpeaker(event),
+          event?.speaker_username,
+          event?.speaker_user_id,
+        ].filter(Boolean);
+      }
+      return [];
+    },
+
+    eventResultSearchValues(event) {
+      const values = [];
+      ['result', 'command_result', 'command_response'].forEach((key) => {
+        const result = event?.[key] || {};
+        ['kind', 'status', 'reason', 'action', 'message', 'summary'].forEach((field) => {
+          if (result[field] !== undefined && result[field] !== null) values.push(String(result[field]));
+        });
+      });
+      return values;
+    },
+
+    jobTimelineSearchValues(job, field) {
+      if (field === 'all') {
+        return [
+          job?.job_id,
+          job?.root_job_id,
+          job?.parent_job_id,
+          this.jobTimelineSearchValues(job, 'detail'),
+          this.jobTimelineSearchValues(job, 'kind'),
+          this.jobTimelineSearchValues(job, 'job_kind'),
+          this.jobTimelineSearchValues(job, 'state'),
+          this.jobTimelineSearchValues(job, 'command'),
+          this.jobTimelineSearchValues(job, 'room'),
+          this.jobTimelineSearchValues(job, 'actor'),
+        ].flat().filter(Boolean);
+      }
+      if (field === 'detail') return [this.jobDetail(job)].filter(Boolean);
+      if (field === 'feedback') return [];
+      if (field === 'kind') return ['job'];
+      if (field === 'job_kind') return [job?.kind].filter(Boolean);
+      if (field === 'state') return [job?.state].filter(Boolean);
+      if (field === 'command') {
+        return [
+          this.commandKind(job),
+          job?.payload?.command?.command_kind,
+          job?.payload?.command?.arguments?.action,
+        ].filter(Boolean);
+      }
+      if (field === 'room') {
+        return [
+          job?.guild_id,
+          job?.voice_channel_id,
+          this.roomLabel(job?.voice_channel_id),
+        ].filter(Boolean);
+      }
+      if (field === 'actor') return [job?.requested_by_user_id].filter(Boolean);
+      return [];
+    },
+
     filteredTimelineEvents(options = {}) {
       const includeGlobal = options.global !== false;
-      const kinds = this.timelineFilterValues('timelineKinds');
-      const channels = this.timelineFilterValues('timelineChannels');
+      const kinds = this.effectiveTimelineFilterValues('timelineKinds');
+      const states = this.effectiveTimelineFilterValues('timelineJobStates');
+      const channels = this.effectiveTimelineFilterValues('timelineChannels');
       const globalKind = includeGlobal ? this.filters.globalEventKind : '';
       const globalChannel = includeGlobal ? this.filters.globalRoom : '';
       const globalGuild = includeGlobal ? this.filters.globalGuild : '';
@@ -940,10 +1075,12 @@ window.dashboard = function dashboard() {
       return this.timelineEvents.filter((event) => {
         if (!this.timelineTimeMatches(Date.parse(this.eventWhen(event)) || 0)) return false;
         if (kinds.length && !kinds.includes(this.eventKind(event)) && !kinds.includes(event?.job_kind)) return false;
+        if (states.length && !states.includes(event?.state)) return false;
         if (globalKind && this.eventKind(event) !== globalKind) return false;
         if (channels.length && !channels.includes(this.eventChannelId(event))) return false;
         if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
         if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
+        if (!this.recordMatchesTimelineSearch('event', event)) return false;
         if (!queries.length) return true;
         const haystack = [
           this.eventKind(event),
@@ -963,7 +1100,7 @@ window.dashboard = function dashboard() {
     },
 
     timelinePageRecords() {
-      const recordTypes = this.timelineFilterValues('timelineRecordTypes');
+      const recordTypes = this.effectiveTimelineFilterValues('timelineRecordTypes');
       const events = recordTypes.includes('job') && !recordTypes.includes('event')
         ? []
         : this.timelinePageEvents().map((event) => this.timelineEventRecord(event));
@@ -985,17 +1122,15 @@ window.dashboard = function dashboard() {
     },
 
     filteredTimelineJobs() {
-      const kinds = this.timelineFilterValues('timelineKinds');
-      const states = this.timelineFilterValues('timelineJobStates');
-      const channels = this.timelineFilterValues('timelineChannels');
-      if (textValue(this.filters.timelineSearch).trim() && !this.timelineEvents.length) {
-        return [];
-      }
+      const kinds = this.effectiveTimelineFilterValues('timelineKinds');
+      const states = this.effectiveTimelineFilterValues('timelineJobStates');
+      const channels = this.effectiveTimelineFilterValues('timelineChannels');
       return this.allJobs().filter((job) => {
         if (!this.timelineTimeMatches(Date.parse(this.jobTime(job)) || 0)) return false;
         if (kinds.length && !kinds.includes(job.kind)) return false;
         if (states.length && !states.includes(job.state)) return false;
         if (channels.length && !channels.includes(job.voice_channel_id)) return false;
+        if (!this.recordMatchesTimelineSearch('job', job)) return false;
         return true;
       });
     },
