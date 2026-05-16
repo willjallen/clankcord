@@ -71,7 +71,7 @@ When a voice transition is slow, inspect the concrete operation on the path: ada
 
 ## Capture Pipeline
 
-`LiveCaptureSession` receives Discord voice packets. It filters voice bot users, resolves speaker profiles, records voice-state updates for human users, buffers per-speaker PCM, preserves decode-loss frames as silence where appropriate, and flushes ready speaker buffers by maximum segment duration or silence timeout.
+`LiveCaptureSession` receives Discord voice packets. It filters voice bot users, resolves speaker profiles, records voice-state updates for human users, buffers per-speaker PCM, preserves decode-loss frames as silence where appropriate, commits live capture stats for active sessions, and flushes ready speaker buffers by maximum segment duration or silence timeout.
 
 Each flush writes a per-speaker WAV artifact and emits an `audio_segment` job. The same capture path writes rolling wake-probe WAV artifacts and emits `wake_probe` jobs. By the time either job reaches the scheduler, the referenced artifact exists and the payload carries enough metadata to verify and interpret it.
 
@@ -117,7 +117,7 @@ audio_checksum
 
 ## Wake Activation
 
-`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, waits for live audio and pending `audio_segment` STT work, closes the request window, plays an acknowledgement cue, and creates `agent_session_start` or `agent_task` when usable request text exists.
+`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, waits for pending `audio_segment` STT work, closes the request window, plays an acknowledgement cue, and creates `agent_session_start` or `agent_task` when usable request text exists.
 
 Follow-up wakes can amend an activation before work has spawned. Inside the preempt window, replacement logic can cancel still-cancellable activation work and schedule preempt cue playback. When the request window closes without usable text, the runtime records `wake_activation_no_request`.
 

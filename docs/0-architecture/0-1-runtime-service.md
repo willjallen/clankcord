@@ -64,7 +64,7 @@ The scheduler uses execution modes to route work through the correct environment
 
 The Discord text loop starts the gateway client for messages, slash commands, and component interactions. Gateway code handles Discord protocol requirements such as interaction acknowledgements, then submits durable runtime jobs through the job sink. The runtime decides how messages, slash commands, confirmations, and deliveries affect Clankcord state.
 
-The live voice loop ticks every 500 ms by default. It starts missing configured voice clients and asks active capture sessions to flush ready buffers. A flush can produce `audio_segment` jobs for STT and `wake_probe` jobs for wake detection. Those jobs enter through the same sink and scheduler as commands and Discord text work.
+The live voice loop ticks every 500 ms by default. It starts missing configured voice clients, asks active capture sessions to flush ready buffers, and commits current capture-session stats into Postgres. A flush can produce `audio_segment` jobs for STT and `wake_probe` jobs for wake detection. Those jobs enter through the same sink and scheduler as commands and Discord text work.
 
 Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, and adapter synchronization run as child background jobs.
 
@@ -79,7 +79,7 @@ runtime_maintenance
       +--> ephemeral_job_gc
 ```
 
-Voice status sync is the only maintenance path that needs live adapter state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state.
+Voice status sync is the maintenance path that reconciles adapter state with durable runtime state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state. The live capture loop also commits per-session capture stats while audio is flowing so wake activation can read current speaker activity, buffered audio bytes, and last PCM timestamps.
 
 ```text
 voice_status_sync

@@ -410,13 +410,18 @@ impl LiveVoiceAdapter {
                 .collect::<Vec<_>>()
         };
         let mut audio_jobs = Vec::new();
+        let mut statuses = Vec::new();
         for (_session_id, session) in sessions {
             let mut live_session = session.lock().await;
             audio_jobs
                 .extend(live_session.flush_ready_buffers(self.max_segment_ms, self.silence_ms));
+            statuses.push(live_session.metadata(local_tz()));
         }
         for job in audio_jobs {
-            self.job_sink.submit_detached(job);
+            self.submit_capture_job(job).await;
+        }
+        for status in statuses {
+            self.persist_capture_session_status(&status).await;
         }
         Ok(())
     }
@@ -467,6 +472,13 @@ impl LiveVoiceAdapter {
                 "persisting capture session status {} failed: {error}",
                 status.session_id
             ));
+        }
+    }
+
+    async fn submit_capture_job(&self, job: crate::runtime::Job) {
+        let job_id = job.id.clone();
+        if let Err(error) = self.job_sink.submit(job).await {
+            log(&format!("capture job submission failed {job_id}: {error}"));
         }
     }
 
@@ -597,10 +609,16 @@ impl LiveVoiceAdapter {
         let Some(session) = session else {
             return;
         };
-        let mut live_session = session.lock().await;
-        for job in live_session.note_client_disconnect(user_id) {
-            self.job_sink.submit_detached(job);
+        let (jobs, status) = {
+            let mut live_session = session.lock().await;
+            let jobs = live_session.note_client_disconnect(user_id);
+            let status = live_session.metadata(local_tz());
+            (jobs, status)
+        };
+        for job in jobs {
+            self.submit_capture_job(job).await;
         }
+        self.persist_capture_session_status(&status).await;
     }
 
     pub(super) async fn handle_voice_tick(
