@@ -5,9 +5,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use clankcord::runtime::timeline::{TimelineStore, utc_now};
-use clankcord::runtime::{
-    AgentRuntime, ControlConfig, RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus,
-};
+use clankcord::runtime::{AgentRuntime, ControlConfig, RoomConfig, Runtime};
 
 mod common;
 use common::test_store;
@@ -94,9 +92,6 @@ fn test_runtime(timeline_store: TimelineStore, room: RoomConfig) -> Runtime {
         guilds: BTreeMap::new(),
         rooms: BTreeMap::from([(room.room_id.clone(), room)]),
         control_config: ControlConfig::default(),
-        sessions: BTreeMap::<String, VoiceCaptureSessionStatus>::new(),
-        bots: BTreeMap::<String, VoiceBotStatus>::new(),
-        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

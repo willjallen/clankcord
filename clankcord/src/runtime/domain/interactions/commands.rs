@@ -197,6 +197,7 @@ impl Runtime {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
                 let session = self
                     .active_session_for_channel(&room.guild_id, &room.channel_id)
+                    .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!("room {} has no active voice session to mute", room.room_id)
                     })?;
@@ -217,6 +218,7 @@ impl Runtime {
                 let room = self.room_for_identifier(Some(&target_room_identifier))?;
                 let session = self
                     .active_session_for_channel(&room.guild_id, &room.channel_id)
+                    .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!(
                             "room {} has no active voice session for playback",

@@ -102,6 +102,42 @@ impl TimelineStore {
         self.list_capture_sessions(true).await
     }
 
+    pub async fn list_active_capture_sessions_for_room(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+    ) -> Result<Vec<VoiceCaptureSessionStatus>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT payload_json
+            FROM capture_sessions
+            WHERE active = TRUE AND guild_id = $1 AND voice_channel_id = $2
+            ORDER BY started_at_ms, session_id
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                serde_json::from_value(json_value(&row, "payload_json")?).map_err(Into::into)
+            })
+            .collect()
+    }
+
+    pub async fn get_capture_session_status(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<VoiceCaptureSessionStatus>> {
+        let row = sqlx::query("SELECT payload_json FROM capture_sessions WHERE session_id = $1")
+            .bind(session_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|row| serde_json::from_value(json_value(&row, "payload_json")?).map_err(Into::into))
+            .transpose()
+    }
+
     pub async fn list_capture_sessions(
         &self,
         active_only: bool,
@@ -127,6 +163,29 @@ impl TimelineStore {
     pub async fn list_active_voice_assignments(&self) -> Result<Vec<VoiceAssignment>> {
         self.list_voice_assignments_by_states(ACTIVE_ASSIGNMENT_STATES)
             .await
+    }
+
+    pub async fn list_active_voice_assignments_for_room(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+    ) -> Result<Vec<VoiceAssignment>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT payload_json
+            FROM assignments
+            WHERE guild_id = $1 AND voice_channel_id = $2 AND state = ANY($3)
+            ORDER BY COALESCE(assigned_at_ms, updated_at_ms), assignment_id
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .bind(ACTIVE_ASSIGNMENT_STATES)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| decode_voice_assignment(json_value(&row, "payload_json")?))
+            .collect()
     }
 
     pub async fn list_voice_assignments_by_states(

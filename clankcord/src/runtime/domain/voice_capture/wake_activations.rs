@@ -229,7 +229,7 @@ pub async fn execute(
         }));
     }
 
-    if let Some(hold) = activation_voice_capture_hold(runtime, payload, latest_wake_at, now)
+    if let Some(hold) = activation_voice_capture_hold(runtime, payload, latest_wake_at, now).await?
         && now < hard_cap
     {
         let next_run_at = std::cmp::min(hold.next_run_at, hard_cap);
@@ -676,30 +676,33 @@ fn activation_window_closed_at(
         .max()
 }
 
-fn activation_voice_capture_hold(
+async fn activation_voice_capture_hold(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
     now: DateTime<Utc>,
-) -> Option<CaptureHold> {
-    live_speaker_capture_hold(runtime, payload, latest_wake_at, now)
+) -> Result<Option<CaptureHold>> {
+    live_speaker_capture_hold(runtime, payload, latest_wake_at, now).await
 }
 
-fn live_speaker_capture_hold(
+async fn live_speaker_capture_hold(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
     latest_wake_at: DateTime<Utc>,
     now: DateTime<Utc>,
-) -> Option<CaptureHold> {
-    let session =
-        runtime.active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)?;
-    let speaker = session
-        .capture_stats
-        .speakers
-        .get(&payload.speaker_user_id)?;
+) -> Result<Option<CaptureHold>> {
+    let session = runtime
+        .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
+        .await?;
+    let Some(session) = session else {
+        return Ok(None);
+    };
+    let Some(speaker) = session.capture_stats.speakers.get(&payload.speaker_user_id) else {
+        return Ok(None);
+    };
     let last_pcm_at = parse_instant(&speaker.last_pcm_at);
     if last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at < latest_wake_at) {
-        return None;
+        return Ok(None);
     }
     let settled_at = last_pcm_at
         .map(|last_pcm_at| last_pcm_at + chrono::Duration::seconds(payload.speaker_idle_seconds))
@@ -708,17 +711,17 @@ fn live_speaker_capture_hold(
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
     let waiting_for_idle = settled_at > now;
     if !has_live_audio && !waiting_for_idle {
-        return None;
+        return Ok(None);
     }
     let next_run_at = if waiting_for_idle {
         settled_at
     } else {
         now + chrono::Duration::milliseconds(active_capture_poll_ms())
     };
-    Some(CaptureHold {
+    Ok(Some(CaptureHold {
         reason: "waiting_for_live_speaker_audio",
         next_run_at,
-    })
+    }))
 }
 
 async fn has_pending_speaker_audio_segment(

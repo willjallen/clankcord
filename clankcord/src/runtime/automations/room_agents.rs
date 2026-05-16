@@ -1,7 +1,9 @@
 use crate::Result;
-use crate::runtime::automations::{Automation, AutomationContext, AutomationOutput};
+use crate::runtime::automations::{
+    Automation, AutomationContext, AutomationOutput, AutomationVoiceState,
+};
 use crate::runtime::{
-    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, Runtime,
+    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig,
     VoiceCaptureSessionStatus,
 };
 
@@ -14,10 +16,11 @@ impl Automation for RoomAgentPlacementAutomation {
 
     fn evaluate(&self, context: &AutomationContext<'_>) -> Result<AutomationOutput> {
         let runtime = context.runtime();
-        let available_bot = has_available_voice_bot(runtime);
+        let voice_state = context.voice_state();
+        let available_bot = has_available_voice_bot(voice_state);
         let mut output = AutomationOutput::empty();
         for room in runtime.known_rooms() {
-            for duplicate in runtime.duplicate_voice_bot_sessions_for_room(&room) {
+            for duplicate in duplicate_voice_bot_sessions_for_room(voice_state, &room) {
                 if !has_active_session_leave_job(context, &duplicate) {
                     output.emit(duplicate_session_leave_job(&duplicate));
                 }
@@ -48,7 +51,7 @@ struct RoomAgentPlacementDecision {
 impl RoomAgentPlacementDecision {
     fn evaluate(context: &AutomationContext<'_>, room: &RoomConfig, available_bot: bool) -> Self {
         let runtime = context.runtime();
-        let voice_bot_present = runtime.room_has_voice_bot_presence(room);
+        let voice_bot_present = room_has_voice_bot_presence(context.voice_state(), room);
         let auto_suppressed =
             context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
         let manual_hold =
@@ -119,14 +122,60 @@ fn leave_reason(auto_suppressed: bool, listening_paused: bool) -> &'static str {
     }
 }
 
-fn has_available_voice_bot(runtime: &Runtime) -> bool {
-    runtime.bots.values().any(|bot| {
+fn has_available_voice_bot(voice_state: &AutomationVoiceState) -> bool {
+    voice_state.bots.iter().any(|bot| {
         bot.ready
-            && !runtime
+            && !voice_state
                 .assignments
-                .values()
+                .iter()
                 .any(|assignment| assignment.is_active() && assignment.voice_bot_id == bot.bot_id)
     })
+}
+
+fn duplicate_voice_bot_sessions_for_room(
+    voice_state: &AutomationVoiceState,
+    room: &RoomConfig,
+) -> Vec<VoiceCaptureSessionStatus> {
+    active_sessions_for_room(voice_state, room)
+        .into_iter()
+        .skip(1)
+        .collect()
+}
+
+fn room_has_voice_bot_presence(voice_state: &AutomationVoiceState, room: &RoomConfig) -> bool {
+    voice_state.assignments.iter().any(|assignment| {
+        assignment.is_active()
+            && assignment.guild_id == room.guild_id
+            && assignment.voice_channel_id == room.channel_id
+    }) || !active_sessions_for_room(voice_state, room).is_empty()
+        || voice_state.bots.iter().any(|status| {
+            status.ready
+                && status.current_guild_id == room.guild_id
+                && status.current_channel_id == room.channel_id
+        })
+}
+
+fn active_sessions_for_room(
+    voice_state: &AutomationVoiceState,
+    room: &RoomConfig,
+) -> Vec<VoiceCaptureSessionStatus> {
+    let mut sessions = voice_state
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.active
+                && session.ended_at.trim().is_empty()
+                && session.guild_id == room.guild_id
+                && session.voice_channel_id == room.channel_id
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| {
+        left.started_at
+            .cmp(&right.started_at)
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    sessions
 }
 
 fn has_active_placement_job(

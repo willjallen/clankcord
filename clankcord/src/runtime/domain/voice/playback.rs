@@ -114,7 +114,10 @@ impl Runtime {
         reason: &str,
         source_job_id: &str,
     ) -> Result<Option<Job>> {
-        let Some(session) = self.active_session_for_channel(guild_id, voice_channel_id) else {
+        let Some(session) = self
+            .active_session_for_channel(guild_id, voice_channel_id)
+            .await?
+        else {
             return Ok(None);
         };
         let job = self.voice_playback_job_for_session(
@@ -146,16 +149,16 @@ impl Runtime {
         .await
     }
 
-    pub(crate) fn active_session_for_channel(
+    pub(crate) async fn active_session_for_channel(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
-    ) -> Option<VoiceCaptureSessionStatus> {
-        self.sessions.values().find_map(|session| {
-            (session.guild_id == guild_id
-                && session.voice_channel_id == voice_channel_id
-                && session.ended_at.trim().is_empty())
-            .then_some(session.clone())
-        })
+    ) -> Result<Option<VoiceCaptureSessionStatus>> {
+        Ok(self
+            .timeline_store
+            .list_active_capture_sessions_for_room(guild_id, voice_channel_id)
+            .await?
+            .into_iter()
+            .next())
     }
 }

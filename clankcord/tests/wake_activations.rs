@@ -374,19 +374,20 @@ async fn wake_followup_before_execution_amends_existing_activation() {
 async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.timeline_store).await;
-    runtime.sessions.insert(
-        "cap_test".to_string(),
-        VoiceCaptureSessionStatus {
+    runtime
+        .timeline_store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
             voice_channel_id: "code".to_string(),
             active: true,
             ..VoiceCaptureSessionStatus::default()
-        },
-    );
+        })
+        .await
+        .unwrap();
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
         &runtime.timeline_store,
@@ -456,9 +457,9 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
         .await
         .unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    runtime.sessions.insert(
-        "cap_test".to_string(),
-        VoiceCaptureSessionStatus {
+    runtime
+        .timeline_store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
@@ -483,8 +484,9 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
                 ..SessionCaptureStats::default()
             },
             ..VoiceCaptureSessionStatus::default()
-        },
-    );
+        })
+        .await
+        .unwrap();
 
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -565,17 +567,18 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
     insert_agent_session(&runtime.timeline_store).await;
-    runtime.sessions.insert(
-        "cap_test".to_string(),
-        VoiceCaptureSessionStatus {
+    runtime
+        .timeline_store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
             channel_id: "code".to_string(),
             voice_channel_id: "code".to_string(),
             active: true,
             ..VoiceCaptureSessionStatus::default()
-        },
-    );
+        })
+        .await
+        .unwrap();
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(10);
     let request_started_at = wake_started_at + chrono::Duration::seconds(1);
@@ -846,9 +849,6 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
         guilds: BTreeMap::new(),
         rooms: BTreeMap::new(),
         control_config: ControlConfig::default(),
-        sessions: BTreeMap::new(),
-        bots: BTreeMap::new(),
-        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,

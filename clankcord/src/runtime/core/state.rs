@@ -4,10 +4,7 @@ use chrono::{DateTime, Utc};
 
 use crate::runtime::automations::AutomationRecord;
 use crate::runtime::timeline::TimelineStore;
-use crate::runtime::{
-    AgentRuntime, ControlConfig, GuildConfig, RoomConfig, VoiceAssignment, VoiceBotStatus,
-    VoiceCaptureSessionStatus,
-};
+use crate::runtime::{AgentRuntime, ControlConfig, GuildConfig, RoomConfig};
 
 #[derive(Debug, Clone)]
 pub struct Runtime {
@@ -15,9 +12,6 @@ pub struct Runtime {
     pub guilds: BTreeMap<String, GuildConfig>,
     pub rooms: BTreeMap<String, RoomConfig>,
     pub control_config: ControlConfig,
-    pub sessions: BTreeMap<String, VoiceCaptureSessionStatus>,
-    pub bots: BTreeMap<String, VoiceBotStatus>,
-    pub assignments: BTreeMap<String, VoiceAssignment>,
     pub agents: AgentRuntime,
     pub automations: BTreeMap<String, AutomationRecord>,
     pub timeline_store: TimelineStore,

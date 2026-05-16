@@ -4,7 +4,7 @@ use crate::Result;
 use crate::config::local_tz;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
-use crate::runtime::util::{first_non_empty, first_value_string, single_child_of_kind};
+use crate::runtime::util::{first_non_empty, single_child_of_kind};
 
 use crate::runtime::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
@@ -65,7 +65,7 @@ impl Runtime {
                 true,
             )
             .await?;
-            for assignment in self.active_assignments_for_room(&room) {
+            for assignment in self.active_assignments_for_room(&room).await? {
                 let _ = self
                     .timeline_store
                     .mark_voice_assignment_leaving(&assignment.assignment_id, "manual_leave")
@@ -76,7 +76,7 @@ impl Runtime {
                 json!({"action": "leave", "status": "ok", "roomId": room.room_id, "results": results}),
             );
         }
-        for assignment in self.assignments.values() {
+        for assignment in self.timeline_store.list_active_voice_assignments().await? {
             let _ = self
                 .timeline_store
                 .mark_voice_assignment_leaving(&assignment.assignment_id, "manual_leave_all")
@@ -115,8 +115,13 @@ impl Runtime {
         requested_by_user_id: &str,
         reason: &str,
     ) -> Result<JobDecision> {
-        if let Some(assignment) = self.active_assignments_for_room(&room).into_iter().next() {
-            let session = self.session_for_assignment(&assignment);
+        if let Some(assignment) = self
+            .active_assignments_for_room(&room)
+            .await?
+            .into_iter()
+            .next()
+        {
+            let session = self.session_for_assignment(&assignment).await?;
             let status = if assignment.state == "joining" {
                 "already_joining"
             } else {
@@ -138,7 +143,7 @@ impl Runtime {
                 },
             )));
         }
-        if let Some(bot) = self.voice_bot_currently_in_room(&room) {
+        if let Some(bot) = self.voice_bot_currently_in_room_from_store(&room).await? {
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                 RoomAgentPlacementOutput {
                     action: RoomAgentPlacementAction::Join,
@@ -202,12 +207,11 @@ impl Runtime {
                     reason: reason.to_string(),
                     session: None,
                     sessions: Vec::new(),
-                    bots: self.bots.values().cloned().collect(),
+                    bots: self.timeline_store.list_voice_bot_states().await?,
                     message: "No configured Discord voice bot is ready and unassigned.".to_string(),
                 },
             )));
         };
-        self.refresh_voice_state_from_store().await?;
         let started_at = parse_instant(&assignment.assigned_at).unwrap_or_else(utc_now);
         let session_dir = session_directory(self, &room, started_at, &assignment.capture_run_id);
 
@@ -252,7 +256,6 @@ impl Runtime {
                     "updated_at": isoformat_z(None),
                 }))
                 .await?;
-            self.refresh_voice_state_from_store().await?;
             Ok(JobOutput::RoomAgentPlacement(RoomAgentPlacementOutput {
                 action: RoomAgentPlacementAction::Join,
                 status: result.status,
@@ -267,7 +270,6 @@ impl Runtime {
                 message: String::new(),
             }))
         } else {
-            self.refresh_voice_state_from_store().await?;
             Ok(JobOutput::RoomAgentPlacement(RoomAgentPlacementOutput {
                 action: RoomAgentPlacementAction::Join,
                 status: result.status,
@@ -330,11 +332,16 @@ impl Runtime {
                 true,
             )
             .await?;
-            if let Some(assignment) = self.active_assignments_for_room(&room).into_iter().next() {
+            if let Some(assignment) = self
+                .active_assignments_for_room(&room)
+                .await?
+                .into_iter()
+                .next()
+            {
                 self.timeline_store
                     .mark_voice_assignment_leaving(&assignment.assignment_id, "manual_leave")
                     .await?;
-                if let Some(session) = self.session_for_assignment(&assignment) {
+                if let Some(session) = self.session_for_assignment(&assignment).await? {
                     return Ok(JobDecision::WaitFor(vec![
                         self.voice_playback_job_for_session(
                             &session,
@@ -373,11 +380,35 @@ impl Runtime {
         }
 
         let mut requests = Vec::new();
-        for session in self.sessions.values().cloned() {
-            if !session.assignment_id.trim().is_empty() {
-                self.timeline_store
-                    .mark_voice_assignment_leaving(&session.assignment_id, "manual_leave_all")
-                    .await?;
+        let mut requested_sessions = std::collections::BTreeSet::new();
+        for assignment in self.timeline_store.list_active_voice_assignments().await? {
+            self.timeline_store
+                .mark_voice_assignment_leaving(&assignment.assignment_id, "manual_leave_all")
+                .await?;
+            if let Some(session) = self.session_for_assignment(&assignment).await? {
+                requested_sessions.insert(session.session_id.clone());
+                requests.push(self.voice_playback_job_for_session(
+                    &session,
+                    requested_by_user_id,
+                    DiscordVoicePlaybackCue::Leave,
+                    "manual_leave_all",
+                    source_job_id,
+                ));
+            } else {
+                requests.push(Job::discord_voice_leave(
+                    assignment.guild_id.clone(),
+                    assignment.voice_channel_id.clone(),
+                    requested_by_user_id,
+                    DiscordVoiceLeavePayload {
+                        session_id: assignment.capture_run_id.clone(),
+                        reason: "manual_leave_all".to_string(),
+                    },
+                ));
+            }
+        }
+        for session in self.timeline_store.list_active_capture_sessions().await? {
+            if requested_sessions.contains(&session.session_id) {
+                continue;
             }
             requests.push(self.voice_playback_job_for_session(
                 &session,
@@ -524,7 +555,6 @@ impl Runtime {
                         }
                     }
                 }
-                self.refresh_voice_state_from_store().await?;
                 Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                     RoomAgentPlacementOutput {
                         action: RoomAgentPlacementAction::Leave,
@@ -544,48 +574,6 @@ impl Runtime {
         }
     }
 
-    pub(crate) async fn sync_voice_adapter_status(
-        &mut self,
-        bots: Vec<VoiceBotStatus>,
-        sessions: Vec<VoiceCaptureSessionStatus>,
-    ) -> Result<()> {
-        self.timeline_store.upsert_voice_bot_states(&bots).await?;
-        self.timeline_store
-            .upsert_capture_session_statuses(&sessions)
-            .await?;
-        let active_session_ids = sessions
-            .iter()
-            .filter(|session| session.active)
-            .map(|session| session.session_id.clone())
-            .collect::<std::collections::BTreeSet<_>>();
-        let stored_sessions = self.timeline_store.list_active_capture_sessions().await?;
-        for session in stored_sessions {
-            if active_session_ids.contains(&session.session_id) {
-                continue;
-            }
-            let capture_run_id = first_value_string(
-                &session.to_json(),
-                &["capture_run_id", "captureRunId", "session_id", "sessionId"],
-            );
-            self.timeline_store
-                .mark_capture_session_ended(&session.session_id, utc_now())
-                .await?;
-            if !capture_run_id.trim().is_empty() {
-                self.timeline_store
-                    .close_capture_run(
-                        &session.guild_id,
-                        &session.voice_channel_id,
-                        &capture_run_id,
-                        Some(utc_now()),
-                        "adapter_sync_missing",
-                        "ended",
-                    )
-                    .await?;
-            }
-        }
-        self.refresh_voice_state_from_store().await
-    }
-
     async fn active_voice_join_for_room(&self, room: &RoomConfig) -> Result<Option<Job>> {
         Ok(self
             .timeline_store
@@ -595,37 +583,45 @@ impl Runtime {
             .find(|job| !job.state.is_terminal()))
     }
 
-    fn active_assignments_for_room(&self, room: &RoomConfig) -> Vec<VoiceAssignment> {
-        let mut assignments = self
-            .assignments
-            .values()
-            .filter(|assignment| {
-                assignment.is_active()
-                    && assignment.guild_id == room.guild_id
-                    && assignment.voice_channel_id == room.channel_id
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        assignments.sort_by(|left, right| {
-            left.assigned_at
-                .cmp(&right.assigned_at)
-                .then_with(|| left.assignment_id.cmp(&right.assignment_id))
-        });
-        assignments
+    async fn active_assignments_for_room(&self, room: &RoomConfig) -> Result<Vec<VoiceAssignment>> {
+        self.timeline_store
+            .list_active_voice_assignments_for_room(&room.guild_id, &room.channel_id)
+            .await
     }
 
-    fn session_for_assignment(
+    async fn session_for_assignment(
         &self,
         assignment: &VoiceAssignment,
-    ) -> Option<VoiceCaptureSessionStatus> {
-        self.sessions
-            .values()
+    ) -> Result<Option<VoiceCaptureSessionStatus>> {
+        Ok(self
+            .timeline_store
+            .list_active_capture_sessions_for_room(
+                &assignment.guild_id,
+                &assignment.voice_channel_id,
+            )
+            .await?
+            .into_iter()
             .find(|session| {
                 session.assignment_id == assignment.assignment_id
                     || session.capture_run_id == assignment.capture_run_id
                     || session.session_id == assignment.capture_run_id
-            })
-            .cloned()
+            }))
+    }
+
+    async fn voice_bot_currently_in_room_from_store(
+        &self,
+        room: &RoomConfig,
+    ) -> Result<Option<VoiceBotStatus>> {
+        Ok(self
+            .timeline_store
+            .list_voice_bot_states()
+            .await?
+            .into_iter()
+            .find(|status| {
+                status.ready
+                    && status.current_guild_id == room.guild_id
+                    && status.current_channel_id == room.channel_id
+            }))
     }
 
     async fn commit_finished_room_session(
@@ -681,17 +677,18 @@ impl Runtime {
             self.timeline_store
                 .upsert_capture_session_status(&session)
                 .await?;
-            self.refresh_voice_state_from_store().await?;
             Ok(Some(session))
-        } else if let Some(mut session) = self.sessions.get(&result.session_id).cloned() {
+        } else if let Some(mut session) = self
+            .timeline_store
+            .get_capture_session_status(&result.session_id)
+            .await?
+        {
             session.mark_ended(isoformat_z(None));
             self.timeline_store
                 .upsert_capture_session_status(&session)
                 .await?;
-            self.refresh_voice_state_from_store().await?;
             Ok(Some(session))
         } else {
-            self.refresh_voice_state_from_store().await?;
             Ok(None)
         }
     }

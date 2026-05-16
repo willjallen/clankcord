@@ -15,7 +15,8 @@ use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now}
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
     CommandRequest, Job, JobKind, JobState, RoomControl, Runtime, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind, VoiceAssignment, VoiceBotStatus,
+    VoiceCaptureSessionStatus,
 };
 
 pub(crate) trait Automation: Send + Sync {
@@ -27,6 +28,7 @@ pub(crate) struct AutomationContext<'a> {
     runtime: &'a Runtime,
     active_jobs: &'a [Job],
     room_controls: &'a BTreeMap<String, RoomControl>,
+    voice_state: &'a AutomationVoiceState,
 }
 
 impl<'a> AutomationContext<'a> {
@@ -34,16 +36,22 @@ impl<'a> AutomationContext<'a> {
         runtime: &'a Runtime,
         active_jobs: &'a [Job],
         room_controls: &'a BTreeMap<String, RoomControl>,
+        voice_state: &'a AutomationVoiceState,
     ) -> Self {
         Self {
             runtime,
             active_jobs,
             room_controls,
+            voice_state,
         }
     }
 
     pub(crate) fn runtime(&self) -> &'a Runtime {
         self.runtime
+    }
+
+    pub(crate) fn voice_state(&self) -> &'a AutomationVoiceState {
+        self.voice_state
     }
 
     pub(crate) fn has_active_job_in_guild(
@@ -67,6 +75,13 @@ impl<'a> AutomationContext<'a> {
             key,
         )
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AutomationVoiceState {
+    pub bots: Vec<VoiceBotStatus>,
+    pub sessions: Vec<VoiceCaptureSessionStatus>,
+    pub assignments: Vec<VoiceAssignment>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,6 +141,23 @@ impl AutomationRunner {
     async fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
         runtime.prune_expired_room_controls().await?;
         let room_controls = runtime.timeline_store.list_room_controls().await?;
+        let voice_state = AutomationVoiceState {
+            bots: runtime
+                .timeline_store
+                .list_voice_bot_states()
+                .await
+                .context("loading voice bot states for automation evaluation")?,
+            sessions: runtime
+                .timeline_store
+                .list_active_capture_sessions()
+                .await
+                .context("loading active capture sessions for automation evaluation")?,
+            assignments: runtime
+                .timeline_store
+                .list_active_voice_assignments()
+                .await
+                .context("loading active voice assignments for automation evaluation")?,
+        };
 
         let mut active_jobs = runtime
             .timeline_store
@@ -139,7 +171,8 @@ impl AutomationRunner {
         for automation in &self.automations {
             let automation_name = automation.name();
             let jobs = {
-                let context = AutomationContext::new(runtime, &active_jobs, &room_controls);
+                let context =
+                    AutomationContext::new(runtime, &active_jobs, &room_controls, &voice_state);
                 automation
                     .evaluate(&context)
                     .with_context(|| format!("evaluating automation {automation_name}"))?
@@ -172,7 +205,6 @@ impl AutomationRunner {
 
 impl Runtime {
     pub async fn run_automations(&mut self) -> Result<AutomationRun> {
-        self.refresh_voice_state_from_store().await?;
         self.load_automation_registry().await?;
         AutomationRunner::runtime_default().run(self).await
     }

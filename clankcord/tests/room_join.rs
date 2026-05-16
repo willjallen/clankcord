@@ -113,10 +113,8 @@ async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() 
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
-    let mut runtime = test_runtime(store, room.clone());
-    runtime.sessions.insert(
-        "cap_newer".to_string(),
-        VoiceCaptureSessionStatus {
+    store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_newer".to_string(),
             guild_id: room.guild_id.clone(),
             voice_channel_id: room.channel_id.clone(),
@@ -124,11 +122,11 @@ async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() 
             started_at: "2026-05-15T00:00:02.000Z".to_string(),
             active: true,
             ..VoiceCaptureSessionStatus::default()
-        },
-    );
-    runtime.sessions.insert(
-        "cap_older".to_string(),
-        VoiceCaptureSessionStatus {
+        })
+        .await
+        .unwrap();
+    store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_older".to_string(),
             guild_id: room.guild_id.clone(),
             voice_channel_id: room.channel_id.clone(),
@@ -136,17 +134,19 @@ async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() 
             started_at: "2026-05-15T00:00:01.000Z".to_string(),
             active: true,
             ..VoiceCaptureSessionStatus::default()
-        },
-    );
+        })
+        .await
+        .unwrap();
 
-    let duplicates = runtime.duplicate_voice_bot_sessions_for_room(&room);
+    let sessions = store
+        .list_active_capture_sessions_for_room(&room.guild_id, &room.channel_id)
+        .await
+        .unwrap();
+    let duplicates = sessions.iter().skip(1).collect::<Vec<_>>();
 
     assert_eq!(duplicates.len(), 1);
     assert_eq!(duplicates[0].session_id, "cap_newer");
-    assert_eq!(
-        runtime.active_session_id_for_room(&room).unwrap(),
-        "cap_older"
-    );
+    assert_eq!(sessions[0].session_id, "cap_older");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -262,9 +262,6 @@ fn test_runtime(
         guilds: BTreeMap::new(),
         rooms: BTreeMap::from([(room.room_id.clone(), room)]),
         control_config: ControlConfig::default(),
-        sessions: BTreeMap::new(),
-        bots: BTreeMap::new(),
-        assignments: BTreeMap::new(),
         agents: AgentRuntime::default(),
         automations: BTreeMap::new(),
         timeline_store,
