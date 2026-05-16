@@ -134,11 +134,15 @@ async fn healthz(State(state): State<AppState>) -> Response {
         Ok(sessions) => sessions,
         Err(error) => return err(error),
     };
+    let rooms = match runtime.timeline_store.list_room_configs().await {
+        Ok(rooms) => rooms,
+        Err(error) => return err(error),
+    };
     ok(json!({
         "ok": true,
         "botsObserved": bots.len(),
         "activeSessions": sessions.len(),
-        "roomsConfigured": runtime.rooms.len(),
+        "roomsConfigured": rooms.len(),
     }))
 }
 
@@ -180,7 +184,7 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
     let guild = query_str(&query, &["guild"]);
     let channel = query_str(&query, &["channel"]);
     if !guild.is_empty() && !channel.is_empty() {
-        match runtime.resolve_room_scope(&guild, Some(&channel)) {
+        match runtime.resolve_room_scope(&guild, Some(&channel)).await {
             Ok(room) => {
                 let mut payload = match runtime.status_for_room(&room).await {
                     Ok(payload) => payload,
@@ -232,7 +236,7 @@ async fn room_occupants(
             "guild and room/channel are required",
         ));
     }
-    match runtime.resolve_room_scope(&guild, Some(&channel)) {
+    match runtime.resolve_room_scope(&guild, Some(&channel)).await {
         Ok(room) => match state
             .handle
             .room_occupants(&room.guild_id, &room.channel_id)

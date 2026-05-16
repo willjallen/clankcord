@@ -10,9 +10,8 @@ use clankcord::runtime::domain::voice_capture::wake_activations::{
 };
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
 use clankcord::runtime::{
-    AgentRuntime, AgentSessionRecord, AudioSegmentPayload, ControlConfig, DiscordVoicePlaybackCue,
-    Job, JobKind, JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats,
-    VoiceCaptureSessionStatus,
+    AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobState,
+    Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
 };
 
 use common::{dt, test_store};
@@ -844,19 +843,7 @@ async fn wake_followup_after_independent_threshold_schedules_separate_activation
 }
 
 fn test_runtime(timeline_store: TimelineStore) -> Runtime {
-    Runtime {
-        started_at: dt(2026, 5, 12, 15, 0, 0),
-        guilds: BTreeMap::new(),
-        rooms: BTreeMap::new(),
-        control_config: ControlConfig::default(),
-        agents: AgentRuntime::default(),
-        automations: BTreeMap::new(),
-        timeline_store,
-        auto_join_enabled: true,
-        manual_leave_cooldown_seconds: 20 * 60,
-        manual_join_hold_seconds: 60 * 60,
-        pause_release_seconds: 20 * 60,
-    }
+    Runtime::from_store(timeline_store).unwrap()
 }
 
 async fn insert_agent_session(store: &TimelineStore) {

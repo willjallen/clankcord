@@ -188,7 +188,8 @@ impl Runtime {
         let (_room, name, header, auto_archive) = self
             .publication_thread_request(&publication, payload)
             .await?;
-        let forum_id = self.control_config.transcripts_forum_id.clone();
+        let control = self.timeline_store.control_config().await?;
+        let forum_id = control.transcripts_forum_id;
         if forum_id.trim().is_empty() {
             anyhow::bail!("transcriptsForumId is not configured");
         }
@@ -248,7 +249,9 @@ impl Runtime {
     ) -> Result<(RoomConfig, String, String, i64)> {
         let guild_id = string_field(publication, "guild_id");
         let channel_id = string_field(publication, "voice_channel_id");
-        let room = self.room_for_channel_ids(&guild_id, &channel_id, None);
+        let room = self
+            .room_for_channel_ids(&guild_id, &channel_id, None)
+            .await?;
         let window = self
             .timeline_store
             .get_window(&string_field(publication, "window_id"))
@@ -287,7 +290,11 @@ impl Runtime {
             "This transcript may contain local STT errors until refinement completes.".to_string(),
         );
         let auto_archive = {
-            let configured = self.control_config.thread_auto_archive_minutes;
+            let configured = self
+                .timeline_store
+                .control_config()
+                .await?
+                .thread_auto_archive_minutes;
             if configured > 0 { configured } else { 1440 }
         };
         Ok((room, name, header_lines.join("\n"), auto_archive))

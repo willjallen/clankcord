@@ -9,6 +9,7 @@ use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 
 use clankcord::adapters::discord::voice::types::LiveVoiceSession;
+use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
 use clankcord::runtime::{RoomConfig, VoiceCaptureSessionStatus};
 
@@ -109,6 +110,42 @@ pub(crate) async fn test_store(root: &Path) -> TimelineStore {
     let store =
         TimelineStore::new_with_database(Some(root.to_path_buf()), database_url, schema).unwrap();
     store.initialize().await.unwrap();
+    store
+        .write_runtime_config_snapshot(
+            &PoolConfig {
+                idle_channel_name: String::new(),
+                auto_join_enabled: true,
+                manual_leave_cooldown_seconds: 20 * 60,
+                manual_join_hold_seconds: 60 * 60,
+                pause_release_seconds: 20 * 60,
+            },
+            &ControlConfig {
+                guild_id: "guild".to_string(),
+                guild_slug: "guild".to_string(),
+                default_voice_room_id: "code-lounge".to_string(),
+                bots_channel_id: "bots".to_string(),
+                agent_threads_channel_id: "agent-threads".to_string(),
+                transcripts_forum_id: "transcripts".to_string(),
+                thread_auto_archive_minutes: 1440,
+            },
+            &[GuildConfig {
+                guild_id: "guild".to_string(),
+                guild_slug: "guild".to_string(),
+                idle_channel_id: String::new(),
+                idle_channel_name: String::new(),
+            }],
+            &[RoomConfig {
+                room_id: "code-lounge".to_string(),
+                guild_id: "guild".to_string(),
+                guild_slug: "guild".to_string(),
+                channel_id: "code".to_string(),
+                channel_slug: "code-lounge".to_string(),
+                channel_name: "Code Lounge".to_string(),
+                auto_join: true,
+            }],
+        )
+        .await
+        .unwrap();
     store
 }
 

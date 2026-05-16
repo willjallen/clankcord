@@ -1,5 +1,9 @@
 pub(crate) mod execution;
 mod lifecycle;
-mod state;
 
-pub use state::Runtime;
+use crate::runtime::timeline::TimelineStore;
+
+#[derive(Debug, Clone)]
+pub struct Runtime {
+    pub timeline_store: TimelineStore,
+}

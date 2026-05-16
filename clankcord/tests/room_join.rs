@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use clankcord::runtime::timeline::utc_now;
 use clankcord::runtime::{
-    AgentRuntime, ControlConfig, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
-    DiscordVoicePlaybackCue, Job, JobKind, JobOutput, JobState, RoomAgentPlacementAction,
-    RoomConfig, Runtime, VoiceBotStatus, VoiceCaptureSessionStatus,
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
+    JobOutput, JobState, RoomAgentPlacementAction, RoomConfig, Runtime, VoiceBotStatus,
+    VoiceCaptureSessionStatus,
 };
 
 mod common;
@@ -255,21 +253,9 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
 
 fn test_runtime(
     timeline_store: clankcord::runtime::timeline::TimelineStore,
-    room: RoomConfig,
+    _room: RoomConfig,
 ) -> Runtime {
-    Runtime {
-        started_at: utc_now(),
-        guilds: BTreeMap::new(),
-        rooms: BTreeMap::from([(room.room_id.clone(), room)]),
-        control_config: ControlConfig::default(),
-        agents: AgentRuntime::default(),
-        automations: BTreeMap::new(),
-        timeline_store,
-        auto_join_enabled: true,
-        manual_leave_cooldown_seconds: 20 * 60,
-        manual_join_hold_seconds: 60 * 60,
-        pause_release_seconds: 20 * 60,
-    }
+    Runtime::from_store(timeline_store).unwrap()
 }
 
 fn test_room() -> RoomConfig {

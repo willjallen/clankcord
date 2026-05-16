@@ -1,13 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use clankcord::runtime::{
-    AgentRuntime, BinaryPayload, ControlConfig, DiscordSlashCommandPayload, Job, JobKind, Runtime,
-};
+use clankcord::runtime::{BinaryPayload, DiscordSlashCommandPayload, Job, JobKind, Runtime};
 
 mod common;
-use common::{dt, initialize_test_config, test_store};
+use common::{initialize_test_config, test_store};
 
 #[test]
 fn discord_slash_command_job_round_trips() {
@@ -82,17 +80,5 @@ async fn feedback_slash_records_durable_timeline_event() {
 }
 
 fn test_runtime(timeline_store: clankcord::runtime::timeline::TimelineStore) -> Runtime {
-    Runtime {
-        started_at: dt(2026, 5, 12, 15, 0, 0),
-        guilds: BTreeMap::new(),
-        rooms: BTreeMap::new(),
-        control_config: ControlConfig::default(),
-        agents: AgentRuntime::default(),
-        automations: BTreeMap::new(),
-        timeline_store,
-        auto_join_enabled: true,
-        manual_leave_cooldown_seconds: 20 * 60,
-        manual_join_hold_seconds: 60 * 60,
-        pause_release_seconds: 20 * 60,
-    }
+    Runtime::from_store(timeline_store).unwrap()
 }

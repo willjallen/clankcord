@@ -7,7 +7,9 @@ use std::process::Command;
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
 use crate::config;
-use crate::runtime::agents::{AgentInfrastructureError, AgentInvocationRequest, AgentRole};
+use crate::runtime::agents::{
+    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
+};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     BinaryPayload,
@@ -155,7 +157,7 @@ impl Runtime {
         task_metadata.preflight = Some(preflight.clone());
         prepared.metadata.set_agent_task(task_metadata);
         self.timeline_store.update_job(&prepared).await?;
-        let invocation = self.agents.invoke(AgentInvocationRequest {
+        let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
             role: AgentRole::Task,
             session_key,
             job_id: latest.id.clone(),

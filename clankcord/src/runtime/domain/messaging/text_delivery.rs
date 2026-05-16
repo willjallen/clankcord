@@ -148,7 +148,8 @@ impl Runtime {
                 Ok(payload.target.clone())
             }
             TextTargetKind::AgentChat => {
-                let channel_id = self.control_config.bots_channel_id.trim();
+                let control = self.timeline_store.control_config().await?;
+                let channel_id = control.bots_channel_id.trim();
                 if channel_id.is_empty() {
                     anyhow::bail!("botsChannelId is not configured");
                 }

@@ -160,6 +160,15 @@ impl RuntimeService {
             .initialize()
             .await
             .context("initializing timeline store")?;
+        timeline_store
+            .write_runtime_config_snapshot(
+                &config::runtime_pool_config(),
+                &config::control_config(),
+                &config::guild_configs(),
+                &config::room_configs(),
+            )
+            .await
+            .context("writing runtime config snapshot")?;
         runtime.start().await.context("starting runtime domain")?;
         match runtime.recover_interrupted_agent_tasks().await {
             Ok(recovered) if !recovered.is_empty() => {

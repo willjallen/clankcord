@@ -100,7 +100,7 @@ pub struct AgentsConfig {
     pub thread_auto_archive_minutes: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PoolConfig {
     pub idle_channel_name: String,
     pub auto_join_enabled: bool,

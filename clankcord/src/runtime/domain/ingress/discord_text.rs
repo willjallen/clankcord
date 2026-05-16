@@ -37,7 +37,13 @@ pub(crate) async fn prepare(
             )?));
         }
         session
-    } else if payload.channel_id == runtime.control_config.bots_channel_id {
+    } else if payload.channel_id
+        == runtime
+            .timeline_store
+            .control_config()
+            .await?
+            .bots_channel_id
+    {
         return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "discord_text_message",

@@ -71,7 +71,7 @@ impl Runtime {
 
     pub async fn status_payload(&self, room_identifier: Option<&str>) -> Result<Value> {
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-            return match self.room_for_identifier(Some(identifier)) {
+            return match self.room_for_identifier(Some(identifier)).await {
                 Ok(room) => self.status_for_room(&room).await,
                 Err(error) => Ok(json!({"ok": false, "error": error.to_string()})),
             };
@@ -84,7 +84,7 @@ impl Runtime {
             sessions.push(self.enrich_session_status(session).await.to_json());
         }
         let mut rooms = Vec::new();
-        for room in self.known_rooms() {
+        for room in self.known_rooms().await? {
             let occupancy = self
                 .timeline_store
                 .get_occupancy(&room.guild_id, &room.channel_id)

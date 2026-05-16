@@ -8,7 +8,6 @@ pub mod rooms;
 pub mod service;
 pub mod timeline;
 pub(crate) mod util;
-pub mod views;
 
 pub use crate::config::{ControlConfig, GuildConfig};
 pub use agents::{
@@ -42,10 +41,10 @@ pub use rooms::{RoomConfig, RoomControl};
 pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };
-pub use util::log;
-pub use views::{
+pub use timeline::views::{
     ContextResolveRequest, DebugOverviewRequest, ForgetRequest, JobsRequest,
     ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest, MemberResolveRequest,
     MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
     SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
 };
+pub use util::log;

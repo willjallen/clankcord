@@ -39,7 +39,8 @@ impl Runtime {
                 command,
             ));
         }
-        let parent_channel_id = self.control_config.agent_threads_channel_id.trim();
+        let control = self.timeline_store.control_config().await?;
+        let parent_channel_id = control.agent_threads_channel_id.trim();
         if parent_channel_id.is_empty() {
             anyhow::bail!("agentThreadsChannelId is not configured");
         }

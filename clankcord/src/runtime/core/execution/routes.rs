@@ -214,20 +214,23 @@ mod room_agents {
         match payload.action {
             RoomAgentPlacementAction::Join => {
                 let room = if !target_room_identifier.trim().is_empty() {
-                    runtime.room_for_identifier(Some(target_room_identifier))?
+                    runtime
+                        .room_for_identifier(Some(target_room_identifier))
+                        .await?
                 } else if !job.guild_id.trim().is_empty() {
-                    runtime.resolve_room_scope(&job.guild_id, None)?
+                    runtime.resolve_room_scope(&job.guild_id, None).await?
                 } else {
-                    runtime.room_for_identifier(None)?
+                    runtime.room_for_identifier(None).await?
                 };
                 runtime
                     .prepare_join_room_jobs(room, &job.requested_by_user_id, &payload.reason)
                     .await
             }
             RoomAgentPlacementAction::Leave => {
+                let pool = runtime.timeline_store.runtime_pool_config().await?;
                 let cooldown_seconds = payload
                     .cooldown_seconds
-                    .unwrap_or(runtime.manual_leave_cooldown_seconds);
+                    .unwrap_or(pool.manual_leave_cooldown_seconds);
                 runtime
                     .prepare_leave_room_jobs(
                         Some(target_room_identifier),

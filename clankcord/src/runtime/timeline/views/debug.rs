@@ -190,9 +190,7 @@ impl Runtime {
             .await
             .context("loading recent transcript events for debug overview")?;
         let event_kind_counts = event_kind_counts(&recent_events);
-        let summary = job_summary(&summary_jobs);
         let database = database_diagnostics(self).await;
-        let health = runtime_health(self, &summary_jobs, &database, &status);
         let operations = operational_diagnostics(self, now)
             .await
             .context("loading operational health diagnostics")?;
@@ -209,12 +207,29 @@ impl Runtime {
             .list_automations(None, None, None)
             .await
             .context("loading automations for debug overview")?;
+        let pool = self
+            .timeline_store
+            .runtime_pool_config()
+            .await
+            .context("loading runtime pool config for debug overview")?;
+        let configured_room_count = self
+            .timeline_store
+            .list_room_configs()
+            .await
+            .context("loading room config for debug overview")?
+            .len();
+        let summary = job_summary(&summary_jobs);
+        let health = runtime_health(
+            &summary_jobs,
+            &database,
+            &status,
+            configured_room_count,
+            automations.len(),
+        );
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "process": {
-                "startedAt": isoformat_z(Some(self.started_at)),
-                "uptimeSeconds": (now - self.started_at).num_seconds(),
-                "autoJoin": {"enabled": self.auto_join_enabled},
+                "autoJoin": {"enabled": pool.auto_join_enabled},
                 "load": process_load_payload(),
             },
             "health": health,
@@ -821,7 +836,13 @@ impl BacklogKindSummary {
     }
 }
 
-fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value, status: &Value) -> Value {
+fn runtime_health(
+    jobs: &[Job],
+    database: &Value,
+    status: &Value,
+    configured_room_count: usize,
+    automation_count: usize,
+) -> Value {
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
     let bots = status
         .get("bots")
@@ -847,10 +868,10 @@ fn runtime_health(runtime: &Runtime, jobs: &[Job], database: &Value, status: &Va
         "observedBots": bots.len(),
         "readyBots": bots.iter().filter(|bot| bot.get("ready").and_then(Value::as_bool).unwrap_or(false)).count(),
         "activeSessions": sessions.len(),
-        "configuredRooms": runtime.rooms.len(),
+        "configuredRooms": configured_room_count,
         "activeAgentJobs": active_agent_jobs,
         "failedJobs": failed_jobs,
-        "automationsLoaded": runtime.automations.len(),
+        "automationsLoaded": automation_count,
     })
 }
 

@@ -723,17 +723,6 @@ async fn upsert_automation_record_in_tx(
 }
 
 impl Runtime {
-    pub async fn load_automation_registry(&mut self) -> Result<()> {
-        self.automations = self
-            .timeline_store
-            .list_automations(None, None, Some(AutomationState::Active))
-            .await?
-            .into_iter()
-            .map(|record| (record.automation_id.clone(), record))
-            .collect();
-        Ok(())
-    }
-
     pub fn validate_automation_from_value(&self, value: &Value) -> Result<Value> {
         let spec = AutomationSpec::from_json(value)?;
         Ok(json!({"valid": true, "automation": spec.to_json()}))
@@ -742,10 +731,6 @@ impl Runtime {
     pub async fn create_automation_from_value(&mut self, value: &Value) -> Result<Value> {
         let spec = AutomationSpec::from_json(value)?;
         let record = self.timeline_store.create_automation(spec).await?;
-        if record.state == AutomationState::Active {
-            self.automations
-                .insert(record.automation_id.clone(), record.clone());
-        }
         Ok(json!({"created": true, "automation": record.to_json()}))
     }
 
@@ -774,7 +759,6 @@ impl Runtime {
 
     pub async fn cancel_automation_record(&mut self, automation_id: &str) -> Result<Value> {
         let record = self.timeline_store.cancel_automation(automation_id).await?;
-        self.automations.remove(automation_id);
         Ok(record.to_json())
     }
 }

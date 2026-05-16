@@ -350,18 +350,17 @@ impl TimelineStore {
     }
 
     pub async fn replace_runtime_maintenance_job(&self, job: Job) -> Result<Job> {
-        let active = self
-            .list_jobs_by_kind_with_visibility(
-                crate::runtime::JobKind::RuntimeMaintenance,
-                500,
-                JobVisibility::OnlyEphemeral,
-            )
-            .await?;
-        for mut existing in active.into_iter().filter(|job| !job.state.is_terminal()) {
-            existing.mark_cancelled();
-            existing.metadata.error = "runtime maintenance singleton replaced".to_string();
-            self.update_job(&existing).await?;
-        }
+        sqlx::query(
+            r#"
+            DELETE FROM jobs
+            WHERE kind = $1
+              AND terminal = FALSE
+              AND ephemeral = TRUE
+            "#,
+        )
+        .bind(crate::runtime::JobKind::RuntimeMaintenance.as_str())
+        .execute(&self.pool)
+        .await?;
         self.create_job(job).await
     }
 

@@ -154,9 +154,11 @@ impl Runtime {
                 None
             } else {
                 Some(&channel_id)
-            })?
+            })
+            .await?
         } else {
-            self.resolve_room_scope(&guild_id, Some(&channel_id))?
+            self.resolve_room_scope(&guild_id, Some(&channel_id))
+                .await?
         };
         let now = utc_now();
         let start = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
@@ -240,15 +242,19 @@ impl Runtime {
         let mut guild_id = request.guild_id;
         let mut channel_id = request.channel_id;
         if !guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self.resolve_room_scope(&guild_id, Some(&channel_id))?;
+            let room = self
+                .resolve_room_scope(&guild_id, Some(&channel_id))
+                .await?;
             guild_id = room.guild_id;
             channel_id = room.channel_id;
         } else {
-            let room = self.room_for_identifier(if channel_id.is_empty() {
-                None
-            } else {
-                Some(&channel_id)
-            })?;
+            let room = self
+                .room_for_identifier(if channel_id.is_empty() {
+                    None
+                } else {
+                    Some(&channel_id)
+                })
+                .await?;
             guild_id = room.guild_id;
             channel_id = room.channel_id;
         }
@@ -304,7 +310,9 @@ impl Runtime {
         } else {
             let guild_id = request.guild_id;
             let channel_id = request.channel_id;
-            let room = self.resolve_room_scope(&guild_id, Some(&channel_id))?;
+            let room = self
+                .resolve_room_scope(&guild_id, Some(&channel_id))
+                .await?;
             let now = utc_now();
             let start = resolve_time_reference(
                 &first_non_empty([request.since, request.from, "-1h".to_string()]),
@@ -360,7 +368,7 @@ impl Runtime {
         let mut channel_id = request.channel_id;
         let all_channels = request.all_channels;
         if guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self.resolve_room_scope("", Some(&channel_id))?;
+            let room = self.resolve_room_scope("", Some(&channel_id)).await?;
             guild_id = room.guild_id;
             channel_id = room.channel_id;
         }
@@ -368,7 +376,9 @@ impl Runtime {
             return Err(discord_tool_error("guild is required"));
         }
         if !channel_id.is_empty() && !all_channels {
-            let room = self.resolve_room_scope(&guild_id, Some(&channel_id))?;
+            let room = self
+                .resolve_room_scope(&guild_id, Some(&channel_id))
+                .await?;
             guild_id = room.guild_id;
             channel_id = room.channel_id;
         }
@@ -398,7 +408,7 @@ impl Runtime {
         let mut channel_id = request.channel_id;
         let all_channels = request.all_channels;
         if guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self.room_for_identifier(Some(&channel_id))?;
+            let room = self.room_for_identifier(Some(&channel_id)).await?;
             guild_id = room.guild_id;
             channel_id = room.channel_id;
         }
@@ -454,7 +464,9 @@ impl Runtime {
                 "guild, channel, and reference are required",
             ));
         }
-        let room = self.resolve_room_scope(&guild_id, Some(&channel_id))?;
+        let room = self
+            .resolve_room_scope(&guild_id, Some(&channel_id))
+            .await?;
         let now = utc_now();
         let lowered = reference.to_lowercase();
         if lowered.contains("just said") || lowered.contains("last thing") {

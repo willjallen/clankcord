@@ -103,9 +103,10 @@ impl Runtime {
                 user_id: requested_user_id.clone(),
             }
         } else {
+            let control = self.timeline_store.control_config().await?;
             TextTarget {
                 kind: TextTargetKind::Channel,
-                channel_id: self.control_config.bots_channel_id.clone(),
+                channel_id: control.bots_channel_id,
                 user_id: String::new(),
             }
         };
@@ -184,7 +185,7 @@ impl Runtime {
             DiscordTextSendPayload {
                 intent: TextDeliveryKind::Message,
                 target,
-                content: self.confirmation_card_content(job, &command),
+                content: self.confirmation_card_content(job, &command).await?,
                 source_job_id: job.id.clone(),
                 requested_by_user_id: String::new(),
                 allowed_mentions: BinaryPayload::from_json(&json!({"parse": []}))?,
@@ -209,9 +210,15 @@ impl Runtime {
         )]))
     }
 
-    pub fn confirmation_card_content(&self, job: &Job, command: &CommandRequest) -> String {
+    pub async fn confirmation_card_content(
+        &self,
+        job: &Job,
+        command: &CommandRequest,
+    ) -> Result<String> {
         let (start, end) = command.window_times(None);
-        let room = self.room_for_channel_ids(&command.guild_id, &command.voice_channel_id, None);
+        let room = self
+            .room_for_channel_ids(&command.guild_id, &command.voice_channel_id, None)
+            .await?;
         let requester = first_non_empty([
             command.requested_by_speaker_label.clone(),
             command.requested_by_user_id.clone(),
@@ -243,7 +250,7 @@ impl Runtime {
             lines.push("Source context:".to_string());
             lines.extend(context.source_preview.iter().take(6).cloned());
         }
-        preview(&lines.join("\n"), 1900)
+        Ok(preview(&lines.join("\n"), 1900))
     }
     pub async fn approve_confirmation(
         &mut self,

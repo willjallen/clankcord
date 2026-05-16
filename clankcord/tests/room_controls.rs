@@ -1,11 +1,10 @@
-use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use serde_json::json;
 
-use clankcord::runtime::timeline::{TimelineStore, utc_now};
-use clankcord::runtime::{AgentRuntime, ControlConfig, RoomConfig, Runtime};
+use clankcord::runtime::timeline::TimelineStore;
+use clankcord::runtime::{RoomConfig, Runtime};
 
 mod common;
 use common::test_store;
@@ -86,20 +85,8 @@ impl Drop for TestConfigDir {
     }
 }
 
-fn test_runtime(timeline_store: TimelineStore, room: RoomConfig) -> Runtime {
-    Runtime {
-        started_at: utc_now(),
-        guilds: BTreeMap::new(),
-        rooms: BTreeMap::from([(room.room_id.clone(), room)]),
-        control_config: ControlConfig::default(),
-        agents: AgentRuntime::default(),
-        automations: BTreeMap::new(),
-        timeline_store,
-        auto_join_enabled: true,
-        manual_leave_cooldown_seconds: 20 * 60,
-        manual_join_hold_seconds: 60 * 60,
-        pause_release_seconds: 20 * 60,
-    }
+fn test_runtime(timeline_store: TimelineStore, _room: RoomConfig) -> Runtime {
+    Runtime::from_store(timeline_store).unwrap()
 }
 
 fn test_room() -> RoomConfig {

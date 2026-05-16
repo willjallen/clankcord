@@ -147,6 +147,45 @@ async fn runtime_maintenance_job_is_ephemeral_and_round_trips() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn runtime_maintenance_replacement_deletes_active_singleton_by_projection() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let existing = store
+        .create_job(Job::runtime_maintenance(500))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(vec![0_u8, 1, 2])
+        .bind(&existing.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let replacement = store
+        .replace_runtime_maintenance_job(Job::runtime_maintenance(1000))
+        .await
+        .unwrap();
+
+    assert_ne!(replacement.id, existing.id);
+    assert!(store.get_job(&existing.id).await.is_err());
+    let active = store
+        .list_jobs_by_kind_with_visibility(
+            JobKind::RuntimeMaintenance,
+            10,
+            JobVisibility::OnlyEphemeral,
+        )
+        .await
+        .unwrap();
+    assert_eq!(active.len(), 1);
+    assert_eq!(active[0].id, replacement.id);
+    assert_eq!(
+        active[0].runtime_maintenance_payload().unwrap().interval_ms,
+        1000
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn runtime_maintenance_submits_background_work_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());

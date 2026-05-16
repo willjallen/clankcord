@@ -7,8 +7,8 @@ use crate::runtime::util::{non_empty, slugify};
 use crate::runtime::{RoomConfig, Runtime};
 
 impl Runtime {
-    pub fn known_rooms(&self) -> Vec<RoomConfig> {
-        let mut rooms = self.rooms.values().cloned().collect::<Vec<_>>();
+    pub async fn known_rooms(&self) -> Result<Vec<RoomConfig>> {
+        let mut rooms = self.timeline_store.list_room_configs().await?;
         rooms.sort_by(|a, b| {
             (
                 a.guild_slug.as_str(),
@@ -21,7 +21,7 @@ impl Runtime {
                     b.channel_id.as_str(),
                 ))
         });
-        rooms
+        Ok(rooms)
     }
 
     pub fn build_room_config(
@@ -105,14 +105,15 @@ impl Runtime {
             || (!slugged.is_empty() && keys.contains(&slugged))
     }
 
-    pub fn room_for_identifier(&self, identifier: Option<&str>) -> Result<RoomConfig> {
-        let fallback = self.control_config.default_voice_room_id.clone();
+    pub async fn room_for_identifier(&self, identifier: Option<&str>) -> Result<RoomConfig> {
+        let control = self.timeline_store.control_config().await?;
+        let fallback = control.default_voice_room_id;
         let wanted = Self::normalize_room_identifier(
             identifier
                 .filter(|value| !value.trim().is_empty())
                 .or(Some(&fallback)),
         );
-        let rooms = self.known_rooms();
+        let rooms = self.known_rooms().await?;
         if wanted.is_empty() {
             return match rooms.as_slice() {
                 [room] => Ok(room.clone()),
@@ -148,47 +149,57 @@ impl Runtime {
         }
     }
 
-    pub fn room_for_channel_ids(
+    pub async fn room_for_channel_ids(
         &self,
         guild_id: &str,
         channel_id: &str,
         channel_name: Option<&str>,
-    ) -> RoomConfig {
-        for room in self.known_rooms() {
+    ) -> Result<RoomConfig> {
+        for room in self.known_rooms().await? {
             if room.guild_id == guild_id && room.channel_id == channel_id {
-                return room;
+                return Ok(room);
             }
         }
         let guild_slug = self
-            .guilds
-            .get(guild_id)
+            .timeline_store
+            .list_guild_configs()
+            .await?
+            .into_iter()
+            .find(|guild| guild.guild_id == guild_id)
             .map(|guild| guild.guild_slug.clone())
             .unwrap_or_else(|| slugify(guild_id));
-        self.build_room_config(
+        Ok(self.build_room_config(
             guild_id,
             &guild_slug,
             channel_id,
             channel_name.unwrap_or(channel_id),
             "",
-        )
+        ))
     }
 
-    pub fn resolve_room_scope(&self, guild_id: &str, channel: Option<&str>) -> Result<RoomConfig> {
+    pub async fn resolve_room_scope(
+        &self,
+        guild_id: &str,
+        channel: Option<&str>,
+    ) -> Result<RoomConfig> {
         let raw_channel = Self::normalize_room_identifier(channel);
         if !raw_channel.is_empty() {
-            if let Ok(room) = self.room_for_identifier(Some(&raw_channel)) {
+            if let Ok(room) = self.room_for_identifier(Some(&raw_channel)).await {
                 if guild_id.is_empty() || room.guild_id == guild_id {
                     return Ok(room);
                 }
             }
         }
         if !guild_id.is_empty() && !raw_channel.is_empty() {
-            return Ok(self.room_for_channel_ids(guild_id, &raw_channel, None));
+            return self
+                .room_for_channel_ids(guild_id, &raw_channel, None)
+                .await;
         }
         self.room_for_identifier(if raw_channel.is_empty() {
             None
         } else {
             Some(&raw_channel)
         })
+        .await
     }
 }

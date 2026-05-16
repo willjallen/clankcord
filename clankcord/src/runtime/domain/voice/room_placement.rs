@@ -21,18 +21,19 @@ impl Runtime {
         user_id: Option<&str>,
         reason: Option<&str>,
     ) -> Result<Value> {
+        let pool = self.timeline_store.runtime_pool_config().await?;
         let room =
             if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-                self.room_for_identifier(Some(identifier))?
+                self.room_for_identifier(Some(identifier)).await?
             } else if let Some(guild_id) = guild_id.filter(|value| !value.trim().is_empty()) {
-                self.resolve_room_scope(guild_id, None)?
+                self.resolve_room_scope(guild_id, None).await?
             } else {
-                self.room_for_identifier(None)?
+                self.room_for_identifier(None).await?
             };
         let reason = reason.unwrap_or("explicit_request");
         self.set_room_manual_hold(
             &room,
-            self.manual_join_hold_seconds,
+            pool.manual_join_hold_seconds,
             reason,
             user_id.unwrap_or(""),
         )
@@ -53,10 +54,11 @@ impl Runtime {
         cooldown_seconds: Option<i64>,
         requested_by_user_id: Option<&str>,
     ) -> Result<Value> {
-        let cooldown_seconds = cooldown_seconds.unwrap_or(self.manual_leave_cooldown_seconds);
+        let pool = self.timeline_store.runtime_pool_config().await?;
+        let cooldown_seconds = cooldown_seconds.unwrap_or(pool.manual_leave_cooldown_seconds);
         let mut results = Vec::new();
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-            let room = self.room_for_identifier(Some(identifier))?;
+            let room = self.room_for_identifier(Some(identifier)).await?;
             self.suppress_room_auto_join(
                 &room,
                 cooldown_seconds,
@@ -115,6 +117,7 @@ impl Runtime {
         requested_by_user_id: &str,
         reason: &str,
     ) -> Result<JobDecision> {
+        let pool = self.timeline_store.runtime_pool_config().await?;
         if let Some(assignment) = self
             .active_assignments_for_room(&room)
             .await?
@@ -184,7 +187,7 @@ impl Runtime {
         if should_record_manual_hold_for_join(reason) {
             self.set_room_manual_hold(
                 &room,
-                self.manual_join_hold_seconds,
+                pool.manual_join_hold_seconds,
                 reason,
                 requested_by_user_id,
             )
@@ -291,9 +294,10 @@ impl Runtime {
         request: &DiscordVoiceJoinPayload,
         error: &str,
     ) -> Result<()> {
+        let pool = self.timeline_store.runtime_pool_config().await?;
         self.suppress_room_auto_join(
             &request.room,
-            self.manual_leave_cooldown_seconds,
+            pool.manual_leave_cooldown_seconds,
             "join_failed",
             &request.requested_by_user_id,
             true,
@@ -323,7 +327,7 @@ impl Runtime {
         source_job_id: &str,
     ) -> Result<JobDecision> {
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-            let room = self.room_for_identifier(Some(identifier))?;
+            let room = self.room_for_identifier(Some(identifier)).await?;
             self.suppress_room_auto_join(
                 &room,
                 cooldown_seconds,

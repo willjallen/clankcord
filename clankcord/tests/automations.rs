@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use serde_json::{Value, json};
 
 use clankcord::runtime::automations::{
@@ -7,12 +5,12 @@ use clankcord::runtime::automations::{
 };
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    AgentRuntime, CommandRequest, ControlConfig, Job, JobKind, JobState, Runtime, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind,
+    CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind,
 };
 
 mod common;
-use common::{dt, test_store};
+use common::test_store;
 
 #[tokio::test(flavor = "current_thread")]
 async fn automation_spec_lowers_boundary_json_to_typed_structs() {
@@ -369,10 +367,17 @@ async fn runtime_loads_active_automations_after_restart() {
         .await
         .unwrap();
 
-    let mut restarted = test_runtime(store);
-    restarted.load_automation_registry().await.unwrap();
+    let restarted = test_runtime(store);
 
-    assert!(restarted.automations.contains_key(&record.automation_id));
+    assert_eq!(
+        restarted
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Active
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -393,7 +398,6 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
     )
     .await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
@@ -405,7 +409,6 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
     assert_eq!(payload.target.kind, TextTargetKind::AgentChat);
     assert_eq!(payload.content, "Blake joined.");
     assert_eq!(payload.source_job_id, record.automation_id);
-    assert!(!runtime.automations.contains_key(&record.automation_id));
     assert_eq!(
         runtime
             .timeline_store
@@ -458,7 +461,6 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
         json!("participant_left")
     );
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
@@ -468,7 +470,15 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
     let job = runtime.timeline_store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.content, "Blake left.");
-    assert!(!runtime.automations.contains_key(&record.automation_id));
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -509,7 +519,6 @@ async fn overlap_automation_can_match_current_room_participants() {
         .await
         .unwrap();
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
@@ -521,7 +530,15 @@ async fn overlap_automation_can_match_current_room_participants() {
     assert_eq!(payload.target.kind, TextTargetKind::Dm);
     assert_eq!(payload.target.user_id, "user-a");
     assert_eq!(payload.content, "Reminder: talk to Blake about Woven.");
-    assert!(!runtime.automations.contains_key(&record.automation_id));
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -555,11 +572,18 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
     let record = store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "vince", "Vince joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let first = runtime.run_automations().await.unwrap().to_json();
     assert!(first["createdJobs"].as_array().unwrap().is_empty());
-    assert!(runtime.automations.contains_key(&record.automation_id));
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Active
+    );
 
     append_speech(
         &runtime.timeline_store,
@@ -587,14 +611,21 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
     let record = store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let first = runtime.run_automations().await.unwrap().to_json();
     let second = runtime.run_automations().await.unwrap().to_json();
 
     assert_eq!(first["createdJobs"].as_array().unwrap().len(), 1);
     assert!(second["createdJobs"].as_array().unwrap().is_empty());
-    assert!(runtime.automations.contains_key(&record.automation_id));
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Active
+    );
 
     append_speech(
         &runtime.timeline_store,
@@ -655,7 +686,6 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     completed_delivery.mark_complete();
     store.update_job(&completed_delivery).await.unwrap();
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
@@ -687,7 +717,6 @@ async fn automation_action_failures_are_audited_without_crashing_runner() {
     store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let mut runtime = test_runtime(store);
-    runtime.load_automation_registry().await.unwrap();
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
@@ -773,19 +802,7 @@ fn merge_json(base: &mut Value, overrides: Value) {
 }
 
 fn test_runtime(timeline_store: TimelineStore) -> Runtime {
-    Runtime {
-        started_at: dt(2026, 5, 12, 15, 0, 0),
-        guilds: BTreeMap::new(),
-        rooms: BTreeMap::new(),
-        control_config: ControlConfig::default(),
-        agents: AgentRuntime::default(),
-        automations: BTreeMap::new(),
-        timeline_store,
-        auto_join_enabled: true,
-        manual_leave_cooldown_seconds: 20 * 60,
-        manual_join_hold_seconds: 60 * 60,
-        pause_release_seconds: 20 * 60,
-    }
+    Runtime::from_store(timeline_store).unwrap()
 }
 
 async fn insert_agent_source_job(store: &TimelineStore) {

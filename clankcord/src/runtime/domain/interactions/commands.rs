@@ -87,6 +87,7 @@ impl Runtime {
         command: CommandRequest,
         parent_job: &Job,
     ) -> Result<JobDecision> {
+        let pool = self.timeline_store.runtime_pool_config().await?;
         let command_kind = command.command_kind;
         let job_kind = command_kind.job_kind();
         let (guild_id, channel_id, target_room_identifier) = self.command_scope(&command).await?;
@@ -144,7 +145,9 @@ impl Runtime {
                 )?))
             }
             "pause_listening" => {
-                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let room = self
+                    .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
                 self.pause_room(
                     &room,
                     command.arguments.duration_seconds.unwrap_or(20 * 60),
@@ -156,7 +159,9 @@ impl Runtime {
                 )?))
             }
             "resume_listening" => {
-                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let room = self
+                    .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
                 self.resume_room(&room, &command.requested_by_user_id)
                     .await?;
                 let _ = self
@@ -173,7 +178,9 @@ impl Runtime {
                 )?))
             }
             "deafen_listening" => {
-                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let room = self
+                    .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
                 let _ = self
                     .create_voice_playback_job_for_room(
                         &room,
@@ -185,7 +192,7 @@ impl Runtime {
                     .await?;
                 self.pause_room(
                     &room,
-                    self.manual_leave_cooldown_seconds,
+                    pool.manual_leave_cooldown_seconds,
                     &command.requested_by_user_id,
                 )
                 .await?;
@@ -194,7 +201,9 @@ impl Runtime {
                 )?))
             }
             "set_voice_mute" => {
-                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let room = self
+                    .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
                 let session = self
                     .active_session_for_channel(&room.guild_id, &room.channel_id)
                     .await?
@@ -215,7 +224,9 @@ impl Runtime {
                 )]))
             }
             "play_voice_cue" => {
-                let room = self.room_for_identifier(Some(&target_room_identifier))?;
+                let room = self
+                    .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
                 let session = self
                     .active_session_for_channel(&room.guild_id, &room.channel_id)
                     .await?
@@ -251,7 +262,7 @@ impl Runtime {
                         RoomAgentPlacementAction::Leave.as_str(),
                         parent_job.voice_channel_id
                     ),
-                    Some(self.manual_leave_cooldown_seconds),
+                    Some(pool.manual_leave_cooldown_seconds),
                 );
                 Ok(JobDecision::WaitFor(vec![job]))
             }
@@ -340,7 +351,9 @@ impl Runtime {
             }
         }
         if guild_id.is_empty() || channel_id.is_empty() {
-            let room = self.resolve_room_scope(&guild_id, Some(&target_room_identifier))?;
+            let room = self
+                .resolve_room_scope(&guild_id, Some(&target_room_identifier))
+                .await?;
             if guild_id.is_empty() {
                 guild_id = room.guild_id;
             }
