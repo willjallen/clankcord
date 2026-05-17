@@ -53,7 +53,7 @@ WaitFor(children)
     persists child jobs, records dependency edges, and marks the parent waiting
 ```
 
-Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Agent thread title refresh waits for a Discord forum thread rename child. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, agent session resume, title refresh, and publication jobs resume because child output determines the parent result.
+Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for session-thread creation when needed and then for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Agent thread title refresh waits for a Discord forum thread rename child. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, agent session resume, title refresh, and publication jobs resume because child output determines the parent result.
 
 ## Dependency Resolution
 
@@ -97,6 +97,7 @@ agent_thread_title_refresh agent:session:<agent_session_id>
 agent session sunset      agent:session:<agent_session_id>
 voice wake/agent route    agent:route:voice:<guild>:<channel>
 DM text ingress           agent:route:dm:<user_id>
+session text delivery     text:session_route:<guild>:<channel>
 discord_text_send         discord:text:<target-kind>:<target-id>
 discord_forum_thread_rename discord:thread:<thread_id>
 voice playback/mute/deafen voice:session:<session_id>

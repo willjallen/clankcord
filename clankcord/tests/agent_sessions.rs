@@ -5,10 +5,10 @@ mod common;
 
 use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, AgentSessionStartPayload, CommandRequest,
-    DiscordTextMessagePayload, Job, JobKind, JobOutput, JobPayload, Runtime, TextDeliveryKind,
-    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
-    voice_route_key,
+    AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
+    CommandRequest, DiscordForumThreadCreateOutput, DiscordTextMessagePayload, Job, JobKind,
+    JobOutput, JobPayload, JobState, Runtime, TextDeliveryKind, TextDeliveryOutput,
+    TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key, voice_route_key,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -222,7 +222,7 @@ async fn user_sunset_retires_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn resume_creates_linked_active_dm_session() {
+async fn resume_reactivates_retired_dm_session() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());
     let store = common::test_store(&raw.path().join("voice")).await;
@@ -240,28 +240,39 @@ async fn resume_creates_linked_active_dm_session() {
     source.retirement_reason = "user_sunset".to_string();
     store.create_agent_session_record(source).await.unwrap();
 
-    let mut job = Job::agent_session_resume("ags_source", "dm", "", "", "user-a", "user-a", "");
-    let new_id = match &job.payload {
-        JobPayload::AgentSessionResume(payload) => payload.new_agent_session_id.clone(),
+    let job = Job::agent_session_resume("ags_source", "dm", "", "", "user-a", "user-a", "");
+    match &job.payload {
+        JobPayload::AgentSessionResume(payload) => {
+            assert_eq!(payload.new_agent_session_id, "ags_source");
+        }
         _ => unreachable!(),
-    };
-    job = store.create_job(job).await.unwrap();
-    let mut running = job.clone();
-    running.mark_running();
-    store.update_job(&running).await.unwrap();
+    }
+    let mut job = store.create_job(job).await.unwrap();
+    job.mark_running();
+    store.update_job(&job).await.unwrap();
     let mut runtime = Runtime::from_store(store.clone()).unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    runtime.dispatch_claimed_runtime_job(job).await.unwrap();
 
-    let resumed = store.get_agent_session_record(&new_id).await.unwrap();
+    let resumed = store.get_agent_session_record("ags_source").await.unwrap();
     assert_eq!(resumed.state, AgentSessionRecordState::Active);
-    assert_eq!(resumed.resumed_from_agent_session_id, "ags_source");
+    assert_eq!(resumed.retired_at, "");
+    assert_eq!(resumed.retirement_reason, "");
+    assert_eq!(resumed.resumed_from_agent_session_id, "");
     assert_eq!(resumed.codex_session_id, "codex-session");
     assert_eq!(resumed.route_key, dm_route_key("user-a"));
+    assert_eq!(
+        store
+            .list_agent_session_records("dm", "user-a", "", 500)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn voice_resume_takes_over_active_route() {
+async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());
     let store = common::test_store(&raw.path().join("voice")).await;
@@ -291,20 +302,24 @@ async fn voice_resume_takes_over_active_route() {
         (Utc::now() + chrono::Duration::hours(8)).to_rfc3339_opts(SecondsFormat::Millis, true),
     );
     store.create_agent_session_record(active).await.unwrap();
-
-    let mut job = Job::agent_session_resume(
-        "ags_source",
-        "voice",
+    let starting = AgentSessionRecord::new_voice_starting(
+        "ags_starting",
         "guild",
         "code",
-        "",
-        "user-a",
-        "continue the source session",
+        "agent-threads",
+        Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        (Utc::now() + chrono::Duration::hours(8)).to_rfc3339_opts(SecondsFormat::Millis, true),
     );
-    let new_id = match &job.payload {
-        JobPayload::AgentSessionResume(payload) => payload.new_agent_session_id.clone(),
+    store.create_agent_session_record(starting).await.unwrap();
+
+    let mut job =
+        Job::agent_session_resume("ags_source", "voice", "guild", "code", "", "user-a", "");
+    match &job.payload {
+        JobPayload::AgentSessionResume(payload) => {
+            assert_eq!(payload.new_agent_session_id, "ags_source");
+        }
         _ => unreachable!(),
-    };
+    }
     job = store.create_job(job).await.unwrap();
     let mut running = job.clone();
     running.mark_running();
@@ -320,20 +335,93 @@ async fn voice_resume_takes_over_active_route() {
         "agent_session_resume_route_takeover"
     );
     assert_eq!(retired.retired_by_user_id, "user-a");
-    let resumed = store.get_agent_session_record(&new_id).await.unwrap();
-    assert_eq!(resumed.state, AgentSessionRecordState::Starting);
-    assert_eq!(resumed.resumed_from_agent_session_id, "ags_source");
+    let retired_starting = store
+        .get_agent_session_record("ags_starting")
+        .await
+        .unwrap();
+    assert_eq!(retired_starting.state, AgentSessionRecordState::Retired);
+    assert_eq!(
+        retired_starting.retirement_reason,
+        "agent_session_resume_route_takeover"
+    );
+    assert_eq!(retired_starting.retired_by_user_id, "user-a");
+    let resumed = store.get_agent_session_record("ags_source").await.unwrap();
+    assert_eq!(resumed.state, AgentSessionRecordState::Active);
+    assert_eq!(resumed.discord_thread_id, "source-thread");
+    assert_eq!(resumed.text_target.channel_id, "source-thread");
+    assert_eq!(resumed.retired_at, "");
+    assert_eq!(resumed.retirement_reason, "");
+    assert_eq!(resumed.resumed_from_agent_session_id, "");
     assert_eq!(resumed.codex_session_id, "codex-session");
     assert_eq!(resumed.route_key, voice_route_key("guild", "code"));
-    let starting = store
-        .starting_agent_session_for_route(&voice_route_key("guild", "code"))
+    let active = store
+        .active_agent_session_for_route(&voice_route_key("guild", "code"))
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(starting.agent_session_id, new_id);
-    let children = store.list_child_jobs(&job.id).await.unwrap();
-    assert_eq!(children.len(), 1);
-    assert_eq!(children[0].kind, JobKind::DiscordForumThreadCreate);
+    assert_eq!(active.agent_session_id, "ags_source");
+    assert!(store.list_child_jobs(&job.id).await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retired_start_session_does_not_spawn_agent_task() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let created_at = Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    let mut record = AgentSessionRecord::new_voice_starting(
+        "ags_starting",
+        "guild",
+        "code",
+        "agent-threads",
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    record.state = AgentSessionRecordState::Retired;
+    record.retired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    record.retirement_reason = "agent_session_resume_route_takeover".to_string();
+    store.create_agent_session_record(record).await.unwrap();
+    let start = store
+        .create_job(Job::agent_session_start(
+            "guild",
+            "code",
+            "user-a",
+            AgentSessionStartPayload {
+                agent_session_id: "ags_starting".to_string(),
+                guild_id: "guild".to_string(),
+                voice_channel_id: "code".to_string(),
+                discord_parent_channel_id: "agent-threads".to_string(),
+                requested_by_user_id: "user-a".to_string(),
+                command: CommandRequest::agent_task("guild", "code", "user-a", "resume old"),
+            },
+        ))
+        .await
+        .unwrap();
+    let mut running = store.get_job(&start.id).await.unwrap();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let updated = store
+        .get_agent_session_record("ags_starting")
+        .await
+        .unwrap();
+    assert_eq!(updated.state, AgentSessionRecordState::Retired);
+    assert_eq!(updated.discord_thread_id, "");
+    let completed = store.get_job(&start.id).await.unwrap();
+    assert_eq!(completed.state, JobState::Complete);
+    assert_eq!(
+        completed.metadata.output.unwrap(),
+        JobOutput::AgentSessionStart(AgentSessionStartOutput {
+            agent_session_id: "ags_starting".to_string(),
+            status: "retired".to_string(),
+            agent_task_job_id: String::new(),
+        })
+    );
+    assert!(store.list_child_jobs(&start.id).await.unwrap().is_empty());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -436,6 +524,45 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     runtime.dispatch_claimed_runtime_job(running).await.unwrap();
 
     let children = store.list_child_jobs(&start.id).await.unwrap();
+    assert!(
+        !children
+            .iter()
+            .any(|child| child.kind == JobKind::DiscordForumThreadCreate)
+    );
+    let agent_task = children
+        .iter()
+        .find(|child| child.kind == JobKind::AgentTask)
+        .expect("agent task child");
+    let delivery = store
+        .create_job(Job::text_delivery(
+            "guild",
+            "code",
+            "user-a",
+            TextDeliveryPayload::new(
+                TextDeliveryKind::Message,
+                TextTarget {
+                    kind: TextTargetKind::AgentSession,
+                    channel_id: String::new(),
+                    user_id: String::new(),
+                },
+                "ready",
+                agent_task.id.clone(),
+                "user-a",
+                false,
+            ),
+        ))
+        .await
+        .unwrap();
+    let mut running_delivery = delivery.clone();
+    running_delivery.mark_running();
+    store.update_job(&running_delivery).await.unwrap();
+
+    runtime
+        .dispatch_claimed_runtime_job(running_delivery)
+        .await
+        .unwrap();
+
+    let children = store.list_child_jobs(&delivery.id).await.unwrap();
     let thread_create = children
         .iter()
         .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
@@ -453,6 +580,123 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     assert!(payload.content.contains("- Session: `ags_intro`"));
     assert!(!payload.content.contains("- Guild:"));
     assert!(!payload.content.contains("`code`"));
+
+    let mut completed_thread = thread_create.clone();
+    completed_thread.mark_complete();
+    completed_thread.metadata.output = Some(JobOutput::DiscordForumThreadCreate(
+        DiscordForumThreadCreateOutput {
+            parent_channel_id: "agent-threads".to_string(),
+            thread_id: "thread-intro".to_string(),
+            name: payload.name.clone(),
+            source_job_id: delivery.id.clone(),
+        },
+    ));
+    store.update_job(&completed_thread).await.unwrap();
+    let mut running_delivery = store.get_job(&delivery.id).await.unwrap();
+    running_delivery.mark_running();
+    store.update_job(&running_delivery).await.unwrap();
+
+    runtime
+        .dispatch_claimed_runtime_job(running_delivery)
+        .await
+        .unwrap();
+
+    let updated = store.get_agent_session_record("ags_intro").await.unwrap();
+    assert_eq!(updated.discord_thread_id, "thread-intro");
+    assert_eq!(updated.text_target.channel_id, "thread-intro");
+    let children = store.list_child_jobs(&delivery.id).await.unwrap();
+    let send = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordTextSend)
+        .expect("discord send child");
+    assert_eq!(
+        send.payload.to_json()["target"]["channel_id"],
+        "thread-intro"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn session_response_reroutes_after_resume_takeover() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let created_at = Utc::now() - chrono::Duration::minutes(10);
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    let mut source = AgentSessionRecord::new_voice(
+        "ags_source",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-source",
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    source.state = AgentSessionRecordState::Retired;
+    source.retired_at =
+        (created_at + chrono::Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    source.retirement_reason = "agent_session_resume_route_takeover".to_string();
+    store.create_agent_session_record(source).await.unwrap();
+    let active = AgentSessionRecord::new_voice(
+        "ags_active",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-active",
+        (created_at + chrono::Duration::minutes(6)).to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    store.create_agent_session_record(active).await.unwrap();
+    let task = store
+        .create_job(Job::agent_task_for_session(
+            "ags_source",
+            "guild",
+            "code",
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "resume session"),
+        ))
+        .await
+        .unwrap();
+    let delivery = store
+        .create_job(Job::text_delivery(
+            "guild",
+            "code",
+            "user-a",
+            TextDeliveryPayload::new(
+                TextDeliveryKind::Message,
+                TextTarget {
+                    kind: TextTargetKind::AgentSession,
+                    channel_id: String::new(),
+                    user_id: String::new(),
+                },
+                "resumed",
+                task.id,
+                "user-a",
+                false,
+            ),
+        ))
+        .await
+        .unwrap();
+    let mut running = delivery.clone();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let children = store.list_child_jobs(&delivery.id).await.unwrap();
+    assert!(
+        !children
+            .iter()
+            .any(|child| child.kind == JobKind::DiscordForumThreadCreate)
+    );
+    let send = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordTextSend)
+        .expect("discord send child");
+    assert_eq!(
+        send.payload.to_json()["target"]["channel_id"],
+        "thread-active"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

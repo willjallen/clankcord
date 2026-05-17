@@ -14,8 +14,8 @@ use crate::runtime::util::first_value_string;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionResumePayload, AgentSessionRouteKind,
     AgentSessionStartOutput, AgentSessionStartPayload, AgentSessionSunsetPayload, CommandRequest,
-    DiscordForumThreadCreatePayload, Job, JobKind, JobOutput, JobState, Runtime, TextTarget,
-    TextTargetKind, dm_route_key, voice_route_key,
+    Job, JobKind, JobOutput, JobState, Runtime, TextTarget, TextTargetKind, dm_route_key,
+    voice_route_key,
 };
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
@@ -34,7 +34,6 @@ impl Runtime {
             .timeline_store
             .active_agent_session_for_route(&route_key)
             .await?
-            .filter(|record| !record.discord_thread_id.trim().is_empty())
         {
             return Ok(Job::agent_task_for_session(
                 record.agent_session_id,
@@ -145,7 +144,9 @@ impl Runtime {
         let now = utc_now();
         record.codex_session_id = codex_session_id;
         record.last_activity_at = isoformat_z(Some(now));
-        record.state = AgentSessionRecordState::Active;
+        if record.state == AgentSessionRecordState::Starting {
+            record.state = AgentSessionRecordState::Active;
+        }
         self.timeline_store
             .update_agent_session_record(&record)
             .await?;
@@ -177,68 +178,34 @@ impl Runtime {
             .timeline_store
             .get_agent_session_record(&payload.agent_session_id)
             .await?;
-        if record.discord_thread_id.trim().is_empty() {
-            if let Some(thread_job) = children
-                .iter()
-                .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
-            {
-                let Some(JobOutput::DiscordForumThreadCreate(output)) =
-                    thread_job.metadata.output.clone()
-                else {
-                    self.mark_agent_session_failed(&payload.agent_session_id)
-                        .await?;
-                    return Ok(JobDecision::fail(format!(
-                        "agent session thread job {} completed without thread output",
-                        thread_job.id
-                    )));
-                };
-                record.discord_thread_id = output.thread_id.clone();
-                record.discord_parent_channel_id = output.parent_channel_id;
-                record.text_target = TextTarget {
-                    kind: TextTargetKind::Channel,
-                    channel_id: output.thread_id,
-                    user_id: String::new(),
-                };
-                record.state = AgentSessionRecordState::Active;
-                record.last_activity_at = isoformat_z(None);
-                self.timeline_store
-                    .update_agent_session_record(&record)
-                    .await?;
-                self.timeline_store
-                    .append_event(
-                        &record.guild_id,
-                        &record.voice_channel_id,
-                        json!({
-                            "event_kind": "agent_session_created",
-                            "kind": "agent_session_created",
-                            "agent_session": record.to_json(),
-                            "requested_by_user_id": payload.requested_by_user_id,
-                        }),
-                    )
-                    .await?;
-            } else {
-                return Ok(JobDecision::WaitFor(vec![
-                    Job::discord_forum_thread_create(
-                        payload.guild_id.clone(),
-                        payload.voice_channel_id.clone(),
-                        payload.requested_by_user_id.clone(),
-                        DiscordForumThreadCreatePayload {
-                            parent_channel_id: payload.discord_parent_channel_id.clone(),
-                            name: self.default_agent_thread_name(&record).await?,
-                            content: self
-                                .agent_thread_content(
-                                    &payload.guild_id,
-                                    &payload.voice_channel_id,
-                                    &payload.requested_by_user_id,
-                                    &payload.agent_session_id,
-                                )
-                                .await?,
-                            auto_archive_minutes: agent_thread_auto_archive_minutes(),
-                            source_job_id: job.id.clone(),
-                        },
-                    ),
-                ]));
-            }
+        if record.state == AgentSessionRecordState::Starting {
+            record.state = AgentSessionRecordState::Active;
+            record.last_activity_at = isoformat_z(None);
+            self.timeline_store
+                .update_agent_session_record(&record)
+                .await?;
+            self.timeline_store
+                .append_event(
+                    &record.guild_id,
+                    &record.voice_channel_id,
+                    json!({
+                        "event_kind": "agent_session_created",
+                        "kind": "agent_session_created",
+                        "agent_session": record.to_json(),
+                        "requested_by_user_id": payload.requested_by_user_id,
+                    }),
+                )
+                .await?;
+        }
+
+        if record.state != AgentSessionRecordState::Active {
+            return Ok(JobDecision::Complete(JobOutput::AgentSessionStart(
+                AgentSessionStartOutput {
+                    agent_session_id: payload.agent_session_id.clone(),
+                    status: record.state.as_str().to_string(),
+                    agent_task_job_id: String::new(),
+                },
+            )));
         }
 
         if let Some(agent_task) = children
@@ -296,32 +263,57 @@ impl Runtime {
         job: &Job,
         payload: &AgentSessionResumePayload,
     ) -> Result<JobDecision> {
-        let source = self
+        let mut record = self
             .timeline_store
             .get_agent_session_record(&payload.source_agent_session_id)
             .await?;
-        if source.state != AgentSessionRecordState::Retired {
-            anyhow::bail!(
-                "agent session {} is {}; resume requires retired",
-                source.agent_session_id,
-                source.state.as_str()
-            );
-        }
-
         let route_kind = payload.route_kind.trim();
         let route_key = match route_kind {
             "voice" => voice_route_key(&payload.guild_id, &payload.voice_channel_id),
             "dm" => dm_route_key(&payload.dm_user_id),
             value => anyhow::bail!("unsupported agent session resume route kind: {value}"),
         };
+
+        if record.state == AgentSessionRecordState::Active && record.route_key != route_key {
+            anyhow::bail!(
+                "agent session {} is active on {}; resume requested {}",
+                record.agent_session_id,
+                record.route_key,
+                route_key
+            );
+        }
+        if !matches!(
+            record.state,
+            AgentSessionRecordState::Retired | AgentSessionRecordState::Active
+        ) {
+            anyhow::bail!(
+                "agent session {} is {}; resume requires retired or active on the requested route",
+                record.agent_session_id,
+                record.state.as_str()
+            );
+        }
+
         if let Some(active) = self
             .timeline_store
             .active_agent_session_for_route(&route_key)
             .await?
-            && active.agent_session_id != payload.new_agent_session_id
+            && active.agent_session_id != record.agent_session_id
         {
             self.retire_agent_session(
                 &active.agent_session_id,
+                "agent_session_resume_route_takeover",
+                &payload.requested_by_user_id,
+            )
+            .await?;
+        }
+        if let Some(starting) = self
+            .timeline_store
+            .starting_agent_session_for_route(&route_key)
+            .await?
+            && starting.agent_session_id != record.agent_session_id
+        {
+            self.retire_agent_session(
+                &starting.agent_session_id,
                 "agent_session_resume_route_takeover",
                 &payload.requested_by_user_id,
             )
@@ -342,128 +334,88 @@ impl Runtime {
             )));
         }
 
-        let mut record = if let Some(record) = self
-            .timeline_store
-            .maybe_agent_session_record(&payload.new_agent_session_id)
-            .await?
-        {
-            record
-        } else {
-            let created_at = utc_now();
-            let max_active_until =
-                created_at + chrono::Duration::seconds(agent_session_max_active_seconds());
-            let mut record = match route_kind {
-                "voice" => {
-                    if payload.guild_id.trim().is_empty()
-                        || payload.voice_channel_id.trim().is_empty()
-                    {
-                        anyhow::bail!("voice resume requires guild_id and voice_channel_id");
-                    }
-                    let control = self.timeline_store.control_config().await?;
-                    let parent_channel_id = control.agent_threads_channel_id.trim();
-                    if parent_channel_id.is_empty() {
-                        anyhow::bail!("agentThreadsChannelId is not configured");
-                    }
-                    let mut record = AgentSessionRecord::new_voice_starting(
-                        payload.new_agent_session_id.clone(),
-                        payload.guild_id.clone(),
-                        payload.voice_channel_id.clone(),
-                        parent_channel_id.to_string(),
-                        isoformat_z(Some(created_at)),
-                        isoformat_z(Some(max_active_until)),
+        let now = utc_now();
+        let max_active_until = now + chrono::Duration::seconds(agent_session_max_active_seconds());
+        match route_kind {
+            "voice" => {
+                if payload.guild_id.trim().is_empty() || payload.voice_channel_id.trim().is_empty()
+                {
+                    anyhow::bail!("voice resume requires guild_id and voice_channel_id");
+                }
+                if record.guild_id != payload.guild_id {
+                    anyhow::bail!(
+                        "agent session {} belongs to guild {}; resume requested guild {}",
+                        record.agent_session_id,
+                        record.guild_id,
+                        payload.guild_id
                     );
-                    record.voice_capture_session_id = self
-                        .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
-                        .await?
-                        .map(|session| session.session_id)
-                        .unwrap_or_default();
-                    record
                 }
-                "dm" => {
-                    if payload.dm_user_id.trim().is_empty() {
-                        anyhow::bail!("DM resume requires dm_user_id");
-                    }
-                    AgentSessionRecord::new_dm(
-                        payload.new_agent_session_id.clone(),
-                        payload.dm_user_id.clone(),
-                        isoformat_z(Some(created_at)),
-                        isoformat_z(Some(max_active_until)),
-                    )
+                if record.discord_thread_id.trim().is_empty() {
+                    anyhow::bail!(
+                        "agent session {} has no Discord thread to resume",
+                        record.agent_session_id
+                    );
                 }
-                _ => unreachable!(),
-            };
-            record.codex_session_id = source.codex_session_id.clone();
-            record.resumed_from_agent_session_id = source.agent_session_id.clone();
-            let record = self
-                .timeline_store
-                .create_agent_session_record(record)
-                .await?;
-            self.timeline_store
-                .append_event(
-                    &record.guild_id,
-                    &record.voice_channel_id,
-                    json!({
-                        "event_kind": "agent_session_resumed",
-                        "kind": "agent_session_resumed",
-                        "agent_session": record.to_json(),
-                        "resumed_from_agent_session_id": source.agent_session_id,
-                        "requested_by_user_id": payload.requested_by_user_id,
-                    }),
-                )
-                .await?;
-            record
-        };
-
-        if record.route_kind == AgentSessionRouteKind::Voice && record.discord_thread_id.is_empty()
-        {
-            if let Some(thread_job) = children
-                .iter()
-                .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
-            {
-                let Some(JobOutput::DiscordForumThreadCreate(output)) =
-                    thread_job.metadata.output.clone()
-                else {
-                    return Ok(JobDecision::fail(format!(
-                        "agent session resume thread job {} completed without thread output",
-                        thread_job.id
-                    )));
-                };
-                record.discord_thread_id = output.thread_id.clone();
-                record.discord_parent_channel_id = output.parent_channel_id;
+                record.route_kind = AgentSessionRouteKind::Voice;
+                record.route_key = route_key;
+                record.voice_channel_id = payload.voice_channel_id.clone();
+                record.dm_user_id.clear();
+                record.voice_capture_session_id = self
+                    .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
+                    .await?
+                    .map(|session| session.session_id)
+                    .unwrap_or_default();
                 record.text_target = TextTarget {
                     kind: TextTargetKind::Channel,
-                    channel_id: output.thread_id,
+                    channel_id: record.discord_thread_id.clone(),
                     user_id: String::new(),
                 };
-                record.state = AgentSessionRecordState::Active;
-                record.last_activity_at = isoformat_z(None);
-                self.timeline_store
-                    .update_agent_session_record(&record)
-                    .await?;
-            } else {
-                return Ok(JobDecision::WaitFor(vec![
-                    Job::discord_forum_thread_create(
-                        record.guild_id.clone(),
-                        record.voice_channel_id.clone(),
-                        payload.requested_by_user_id.clone(),
-                        DiscordForumThreadCreatePayload {
-                            parent_channel_id: record.discord_parent_channel_id.clone(),
-                            name: self.default_agent_thread_name(&record).await?,
-                            content: self
-                                .agent_thread_content(
-                                    &record.guild_id,
-                                    &record.voice_channel_id,
-                                    &payload.requested_by_user_id,
-                                    &record.agent_session_id,
-                                )
-                                .await?,
-                            auto_archive_minutes: agent_thread_auto_archive_minutes(),
-                            source_job_id: job.id.clone(),
-                        },
-                    ),
-                ]));
             }
+            "dm" => {
+                if payload.dm_user_id.trim().is_empty() {
+                    anyhow::bail!("DM resume requires dm_user_id");
+                }
+                if record.dm_user_id != payload.dm_user_id {
+                    anyhow::bail!(
+                        "agent session {} belongs to DM user {}; resume requested DM user {}",
+                        record.agent_session_id,
+                        record.dm_user_id,
+                        payload.dm_user_id
+                    );
+                }
+                record.route_kind = AgentSessionRouteKind::Dm;
+                record.route_key = route_key;
+                record.guild_id = "dm".to_string();
+                record.voice_channel_id = payload.dm_user_id.clone();
+                record.text_target = TextTarget {
+                    kind: TextTargetKind::Dm,
+                    channel_id: String::new(),
+                    user_id: payload.dm_user_id.clone(),
+                };
+            }
+            _ => unreachable!(),
         }
+        record.state = AgentSessionRecordState::Active;
+        record.last_activity_at = isoformat_z(Some(now));
+        record.max_active_until = isoformat_z(Some(max_active_until));
+        record.retired_at.clear();
+        record.retirement_reason.clear();
+        record.retired_by_user_id.clear();
+        self.timeline_store
+            .update_agent_session_record(&record)
+            .await?;
+        self.timeline_store
+            .append_event(
+                &record.guild_id,
+                &record.voice_channel_id,
+                json!({
+                    "event_kind": "agent_session_resumed",
+                    "kind": "agent_session_resumed",
+                    "agent_session": record.to_json(),
+                    "requested_by_user_id": payload.requested_by_user_id,
+                }),
+            )
+            .await?;
 
         if !payload.message.trim().is_empty() {
             if let Some(agent_task) = children
@@ -726,7 +678,7 @@ impl Runtime {
             .await
     }
 
-    async fn agent_thread_content(
+    pub(crate) async fn agent_thread_content(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
@@ -781,10 +733,6 @@ impl Runtime {
 
 fn agent_session_max_active_seconds() -> i64 {
     config::agent_session_max_active_seconds()
-}
-
-fn agent_thread_auto_archive_minutes() -> i64 {
-    config::agent_thread_auto_archive_minutes()
 }
 
 fn trim_thread_name(value: &str) -> String {

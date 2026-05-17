@@ -336,7 +336,7 @@ async fn dispatch_after_stt_settles(
         .create_child_job(job, agent_job)
         .await?;
     let created = json!({
-        "kind": "agent_task_created",
+        "kind": format!("{}_created", created_job.kind.as_str()),
         "job_ids": [created_job.id.clone()],
         "job": created_job.to_value(),
     });

@@ -861,14 +861,15 @@ impl Job {
         message: impl Into<String>,
     ) -> Self {
         let requested_by_user_id = requested_by_user_id.into();
+        let source_agent_session_id = source_agent_session_id.into();
         Self::new(
             "agent",
             "session",
             requested_by_user_id.clone(),
             JobState::Queued,
             JobPayload::AgentSessionResume(AgentSessionResumePayload {
-                source_agent_session_id: source_agent_session_id.into(),
-                new_agent_session_id: format!("ags_{}", Uuid::new_v4().simple()),
+                source_agent_session_id: source_agent_session_id.clone(),
+                new_agent_session_id: source_agent_session_id,
                 route_kind: route_kind.into(),
                 guild_id: guild_id.into(),
                 voice_channel_id: voice_channel_id.into(),

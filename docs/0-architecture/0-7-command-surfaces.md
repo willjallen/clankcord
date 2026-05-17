@@ -23,7 +23,7 @@ Voice and control mutations lower into typed command jobs. Automation, feedback,
 
 Agent-facing reads default to compact JSON. Large outputs can be written with `--file <path> --format json`, leaving stdout as a short confirmation plus counts, ids, or window bounds. `--ephemeral` includes transient runtime events such as wake and audio internals. `--verbose` expands fields for the selected records.
 
-Member, room-occupant, and agent-session commands are part of the agent contract. `members search`, `members resolve`, and `members get` read the Discord member cache and resolve names to durable Discord user ids. `rooms occupants` reads current voice-state rows for a room. `agent-sessions current`, `list`, `search`, `get`, `sunset`, and `resume` let agents find session history, retire the current session on request, and create a linked active session from a retired source. Agents use these commands before writing automation conditions, DM targets, participant references, or session-continuation work.
+Member, room-occupant, and agent-session commands are part of the agent contract. `members search`, `members resolve`, and `members get` read the Discord member cache and resolve names to durable Discord user ids. `rooms occupants` reads current voice-state rows for a room. `agent-sessions current`, `list`, `search`, `get`, `sunset`, and `resume` let agents find session history, retire the current session on request, and reactivate a retired session on the requested route. Agents use these commands before writing automation conditions, DM targets, participant references, or session-continuation work.
 
 ## HTTP
 

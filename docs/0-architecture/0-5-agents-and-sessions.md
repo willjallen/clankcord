@@ -70,13 +70,13 @@ retired_by_user_id
 resumed_from_agent_session_id
 ```
 
-Voice sessions start in `starting` while the managed Discord thread is created. Once the thread child completes, the session becomes `active` and stores the channel target. DM sessions are created active with a DM target. Active session lifetime is capped at eight hours from `created_at`; activity updates `last_activity_at` and does not extend `max_active_until`.
+Voice sessions start in `starting` while `agent_session_start` is queued. The start job marks the session `active` and creates the first `agent_task`. A voice session stores its managed Discord thread when the first session-targeted `text_delivery` needs a Discord channel. DM sessions are created active with a DM target. Active session lifetime is capped at eight hours from `created_at`; activity updates `last_activity_at` and does not extend `max_active_until`.
 
 ## Voice Sessions
 
-A wake activation or voice command resolves the voice route. The runtime retires due sessions, reuses an active session that owns a thread, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
+A wake activation or voice command resolves the voice route. The runtime retires due sessions, reuses an active session for the route, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
 
-`agent_session_start` creates a `discord_forum_thread_create` child. The thread starts with a readable name from the voice room name and the session creation timestamp in the configured local timezone, such as `Code Lounge 2026-05-17 03:28`. The opening post names the actual voice room, mentions the requester and the other users currently present in that voice channel, and records the `agent_session_id`. After the thread child completes, the parent marks the session active, stores the thread target, and creates the first `agent_task`. Later messages inside that managed thread route back to the same session through `discord_thread_id`. Voice sessions require `agentThreadsChannelId` because the managed thread is the persistent public surface for the session.
+`agent_session_start` marks the session active and creates the first `agent_task`. It does not create a Discord thread. `text_delivery` with the `session` target resolves the current session target when the message is sent. If the selected voice session has no `discord_thread_id`, `text_delivery` creates a `discord_forum_thread_create` child, stores the resulting channel target on the session, and then creates the concrete Discord send. The thread starts with a readable name from the voice room name and the session creation timestamp in the configured local timezone, such as `Code Lounge 2026-05-17 03:28`. The opening post names the actual voice room, mentions the requester and the other users currently present in that voice channel, and records the `agent_session_id`. Later messages inside that managed thread route back to the same session through `discord_thread_id`.
 
 ```text
 wake activation or command
@@ -91,9 +91,13 @@ resolve voice route
               v
           agent_session_start
               |
-              +--> discord_forum_thread_create
               +--> mark session active
               +--> agent_task
+                      |
+                      +--> text_delivery(session)
+                              |
+                              +--> discord_forum_thread_create when needed
+                              +--> discord_text_send
 ```
 
 ## DM Sessions
@@ -120,15 +124,13 @@ Agent session retirement is runtime maintenance and an explicit user action. `ag
 
 Retired sessions remain queryable by id, list, and search. Route lookup and managed-thread ingress do not select them.
 
-`agent_session_resume` creates a new active session linked to a retired source through `resumed_from_agent_session_id`. Resume takes over the target route by retiring the current active session with `agent_session_resume_route_takeover`. A DM resume creates an active DM session. A voice resume creates a starting voice session, creates a managed Discord thread, and marks the new session active. The new session reuses the source `codex_session_id` when the source has one, and it has its own route binding, timestamps, cap, jobs, thread, and audit events.
+`agent_session_resume` reactivates the selected retired session. Resume takes over the target route by retiring the current active or starting session with `agent_session_resume_route_takeover`, clears the selected session's retirement fields, extends its active cap, and keeps its existing Codex session id. Voice resume uses the selected session's existing Discord thread as the session target. A voice session without an existing Discord thread fails resume. A resume job with message text creates the first `agent_task` in the reactivated session.
 
 ```text
 retired AgentSessionRecord
       |
       +--> agent_session_resume
-              |
-              +--> new linked AgentSessionRecord
-              +--> optional managed Discord thread
+              +--> same AgentSessionRecord becomes active
               +--> optional first agent_task
 ```
 
@@ -152,7 +154,7 @@ NO_RESPONSE_NEEDED
 
 Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success.
 
-Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and domain-executed Discord text jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
+Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and domain-executed Discord text jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. Session-targeted text delivery resolves the destination at send time. When the source task's session has been retired by `agent_session_resume_route_takeover`, delivery uses the current active session for that route. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
 
 ## Recovery
 

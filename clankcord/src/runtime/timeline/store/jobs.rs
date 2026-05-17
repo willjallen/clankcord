@@ -1261,6 +1261,13 @@ fn job_ordering_key(job: &Job) -> String {
             }
         }
         crate::runtime::JobPayload::TextDelivery(payload) => {
+            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
+                return format!(
+                    "text:session_route:{}:{}",
+                    normalize_key_part(&job.guild_id),
+                    normalize_key_part(&job.voice_channel_id)
+                );
+            }
             let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
                 payload.target.user_id.as_str()
             } else {

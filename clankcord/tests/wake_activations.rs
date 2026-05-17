@@ -10,8 +10,8 @@ use clankcord::runtime::domain::voice_capture::wake_activations::{
 };
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
 use clankcord::runtime::{
-    AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobState,
-    Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
+    AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobPayload,
+    JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
 };
 
 use common::{dt, test_store};
@@ -314,6 +314,145 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
             .as_array()
             .unwrap()
             .contains(&last["event_id"])
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_treats_resume_text_as_agent_request() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true, "score": 0.88}),
+        2,
+    )
+    .await;
+    append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(3),
+        start + chrono::Duration::seconds(4),
+        "Will",
+        "user-a",
+        "resume the session about banking",
+        json!({}),
+        3,
+    )
+    .await;
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    let start_job_id = string_field(&result["created"]["job"], "job_id");
+    let start_job = runtime.timeline_store.get_job(&start_job_id).await.unwrap();
+    assert_eq!(start_job.kind, JobKind::AgentSessionStart);
+    let JobPayload::AgentSessionStart(payload) = &start_job.payload else {
+        panic!("expected agent-session start payload");
+    };
+    assert_eq!(
+        payload.command.arguments.request,
+        "resume the session about banking"
+    );
+    let jobs = runtime
+        .timeline_store
+        .list_jobs(Some("guild"), None)
+        .await
+        .unwrap();
+    assert!(
+        !jobs
+            .iter()
+            .any(|job| job.kind == JobKind::DiscordForumThreadCreate)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_reuses_active_session_without_thread() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    let created_at = dt(2026, 5, 12, 15, 0, 0);
+    runtime
+        .timeline_store
+        .create_agent_session_record(AgentSessionRecord::new_voice(
+            "ags_active",
+            "guild",
+            "code",
+            "agent-threads",
+            "",
+            created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            (Utc::now() + chrono::Duration::hours(8)).to_rfc3339_opts(SecondsFormat::Millis, true),
+        ))
+        .await
+        .unwrap();
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true, "score": 0.88}),
+        2,
+    )
+    .await;
+    append_event(
+        &runtime.timeline_store,
+        start + chrono::Duration::seconds(3),
+        start + chrono::Duration::seconds(4),
+        "Will",
+        "user-a",
+        "say hello",
+        json!({}),
+        3,
+    )
+    .await;
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    let task_job_id = string_field(&result["created"]["job"], "job_id");
+    let task_job = runtime.timeline_store.get_job(&task_job_id).await.unwrap();
+    assert_eq!(task_job.kind, JobKind::AgentTask);
+    let JobPayload::AgentTask(payload) = &task_job.payload else {
+        panic!("expected agent task payload");
+    };
+    assert_eq!(payload.agent_session_id, "ags_active");
+    let jobs = runtime
+        .timeline_store
+        .list_jobs(Some("guild"), None)
+        .await
+        .unwrap();
+    assert!(
+        !jobs
+            .iter()
+            .any(|job| job.kind == JobKind::AgentSessionStart)
     );
 }
 

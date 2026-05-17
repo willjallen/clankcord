@@ -259,7 +259,7 @@ enum AgentSessionsCommand {
     Get(AgentSessionGetArgs),
     #[command(about = "Retire one agent session.")]
     Sunset(AgentSessionSunsetArgs),
-    #[command(about = "Create a new active session linked to a retired session.")]
+    #[command(about = "Reactivate a retired session on the requested route.")]
     Resume(AgentSessionResumeArgs),
 }
 
