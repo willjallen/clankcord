@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
+use clankcord::adapters::discord::gateway::slash::{
+    slash_missing_voice_channel_response_content, slash_success_response_content,
+};
 use clankcord::runtime::{
     BinaryPayload, CommandKind, DiscordSlashCommandPayload, Job, JobKind, Runtime,
 };
@@ -33,6 +36,51 @@ fn discord_slash_command_job_round_trips() {
     assert_eq!(decoded.payload.to_json()["command_name"], "join");
     assert_eq!(decoded.payload.to_json()["voice_channel_id"], "code");
     assert_eq!(decoded.payload.to_json()["options"][0]["value"], "code");
+}
+
+#[test]
+fn slash_command_responses_are_human_readable() {
+    let join = slash_success_response_content(&slash_payload(
+        "interaction-join",
+        "join",
+        "slash-text",
+        "code",
+        json!([]),
+    ));
+    assert_eq!(join, "Connecting Clanky to <#code>.");
+
+    let deafen = slash_success_response_content(&slash_payload(
+        "interaction-deafen",
+        "deafen",
+        "slash-text",
+        "code",
+        json!([]),
+    ));
+    assert_eq!(deafen, "Deafening Clanky in <#code>.");
+
+    let feedback = slash_success_response_content(&slash_payload(
+        "interaction-feedback",
+        "feedback",
+        "slash-text",
+        "",
+        json!([{"name": "message", "value": "The join command stalled."}]),
+    ));
+    assert_eq!(feedback, "Feedback sent: The join command stalled.");
+
+    let responses = [
+        join,
+        deafen,
+        feedback,
+        slash_missing_voice_channel_response_content().to_string(),
+    ];
+    for response in responses {
+        assert!(!response.contains("job_"));
+        assert!(!response.contains("queued"));
+    }
+    assert_eq!(
+        slash_missing_voice_channel_response_content(),
+        "You are not in a voice channel."
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -143,6 +191,8 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
     let mut runtime = test_runtime(store.clone());
 
     for (interaction_id, slash_name, expected_kind) in [
+        ("interaction-join", "join", CommandKind::JoinRoom),
+        ("interaction-leave", "leave", CommandKind::LeaveRoom),
         ("interaction-deafen", "deafen", CommandKind::DeafenListening),
         (
             "interaction-undeafen",
@@ -156,7 +206,7 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
                 slash_name,
                 "slash-text",
                 "code",
-                json!([]),
+                json!([{"name": "room", "value": "other"}]),
             )))
             .await
             .unwrap();
@@ -176,6 +226,8 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
         assert_eq!(command.requested_by_user_id, "user-a");
         assert_eq!(command.requested_by_speaker_label, "will");
         assert_eq!(command.target_voice_channel_id, "");
+        assert_eq!(command.arguments.channel, "");
+        assert_eq!(command.arguments.target_channel, "");
     }
 }
 

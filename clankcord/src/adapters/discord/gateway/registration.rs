@@ -64,25 +64,13 @@ fn slash_commands() -> serde_json::Value {
     json!([
         {
             "name": "join",
-            "description": "Ask Clanky to join a voice room.",
-            "type": 1,
-            "options": [{
-                "name": "room",
-                "description": "Voice room id, channel id, or configured room name.",
-                "type": 3,
-                "required": false
-            }]
+            "description": "Ask Clanky to join your current voice room.",
+            "type": 1
         },
         {
             "name": "leave",
-            "description": "Ask Clanky to leave a voice room.",
-            "type": 1,
-            "options": [{
-                "name": "room",
-                "description": "Voice room id, channel id, or configured room name.",
-                "type": 3,
-                "required": false
-            }]
+            "description": "Ask Clanky to leave your current voice room.",
+            "type": 1
         },
         {
             "name": "wake",

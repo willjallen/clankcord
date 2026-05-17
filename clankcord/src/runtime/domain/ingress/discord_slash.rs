@@ -155,7 +155,6 @@ fn command_request(
     payload: &DiscordSlashCommandPayload,
     command_kind: CommandKind,
 ) -> Result<CommandRequest> {
-    let target = slash_option_string(payload, &["room", "channel", "voice_channel", "target"]);
     CommandRequest::from_json(&json!({
         "action": "dispatch_now",
         "command_kind": command_kind.as_str(),
@@ -163,10 +162,10 @@ fn command_request(
         "voice_channel_id": payload.voice_channel_id,
         "requested_by_user_id": payload.user_id,
         "requested_by_speaker_label": payload.username,
-        "target_voice_channel_id": target,
+        "target_voice_channel_id": "",
         "arguments": {
-            "channel": target,
-            "target_channel": target,
+            "channel": "",
+            "target_channel": "",
         },
     }))
 }
