@@ -345,8 +345,9 @@ pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
     let mut payload = payload_json.as_object().cloned().unwrap_or_default();
     let event_id: String = row.try_get("event_id")?;
     let kind: String = row.try_get("event_kind")?;
+    let scope_kind: String = row.try_get("scope_kind")?;
     let guild_id: String = row.try_get("guild_id")?;
-    let channel_id: String = row.try_get("voice_channel_id")?;
+    let scope_id: String = row.try_get("scope_id")?;
     let capture_run_id: String = row.try_get("capture_run_id")?;
     let conversation_id: String = row.try_get("conversation_id")?;
     let speaker_user_id: String = row.try_get("speaker_user_id")?;
@@ -365,10 +366,14 @@ pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
     set_default_string(&mut payload, "eventId", &event_id);
     set_default_string(&mut payload, "event_kind", &kind);
     set_default_string(&mut payload, "kind", &kind);
+    set_default_string(&mut payload, "scope_kind", &scope_kind);
+    set_default_string(&mut payload, "scope_id", &scope_id);
     set_default_string(&mut payload, "guild_id", &guild_id);
     set_default_string(&mut payload, "guildId", &guild_id);
-    set_default_string(&mut payload, "voice_channel_id", &channel_id);
-    set_default_string(&mut payload, "channelId", &channel_id);
+    if scope_kind == "voice_channel" {
+        set_default_string(&mut payload, "voice_channel_id", &scope_id);
+        set_default_string(&mut payload, "channelId", &scope_id);
+    }
     if let Ok(value) = row.try_get::<String, _>("room_guild_slug") {
         if !value.is_empty() {
             set_default_string(&mut payload, "guild_slug", &value);
@@ -466,6 +471,8 @@ pub(crate) fn compact_timeline_payload(payload: &Value, kind: &str) -> Value {
         "kind",
         "guild_id",
         "guildId",
+        "scope_kind",
+        "scope_id",
         "guild_slug",
         "guildSlug",
         "voice_channel_id",

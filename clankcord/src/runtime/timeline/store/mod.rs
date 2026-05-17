@@ -15,7 +15,6 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
-pub(crate) use jobs::upsert_job_rows;
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::fs;
@@ -156,7 +155,7 @@ impl TimelineStore {
         database_url: String,
         database_schema: String,
     ) -> Result<Self> {
-        let root = root.unwrap_or_else(config::voice_memory_root);
+        let root = root.unwrap_or_else(config::timeline_root);
         fs::create_dir_all(&root)?;
         let mut pool_options = PgPoolOptions::new().max_connections(config::database_pool_size());
         if !database_schema.trim().is_empty() && database_schema != "public" {

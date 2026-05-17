@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::adapters::codex::CodexAdapter;
@@ -106,7 +106,7 @@ pub struct AgentSessionRecord {
     pub route_kind: AgentSessionRouteKind,
     pub route_key: String,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub dm_user_id: String,
     pub voice_capture_session_id: String,
     pub discord_thread_id: String,
@@ -144,7 +144,7 @@ impl AgentSessionRecord {
             route_kind: AgentSessionRouteKind::Voice,
             route_key: voice_route_key(&guild_id, &voice_channel_id),
             guild_id,
-            voice_channel_id,
+            scope_id: voice_channel_id,
             dm_user_id: String::new(),
             voice_capture_session_id: String::new(),
             text_target: TextTarget {
@@ -183,7 +183,7 @@ impl AgentSessionRecord {
             route_kind: AgentSessionRouteKind::Voice,
             route_key: voice_route_key(&guild_id, &voice_channel_id),
             guild_id,
-            voice_channel_id,
+            scope_id: voice_channel_id,
             dm_user_id: String::new(),
             voice_capture_session_id: String::new(),
             discord_thread_id: String::new(),
@@ -218,8 +218,8 @@ impl AgentSessionRecord {
             codex_session_id: String::new(),
             route_kind: AgentSessionRouteKind::Dm,
             route_key: dm_route_key(&user_id),
-            guild_id: "dm".to_string(),
-            voice_channel_id: user_id.clone(),
+            guild_id: String::new(),
+            scope_id: user_id.clone(),
             dm_user_id: user_id.clone(),
             voice_capture_session_id: String::new(),
             discord_thread_id: String::new(),
@@ -249,27 +249,83 @@ impl AgentSessionRecord {
     }
 
     pub fn to_json(&self) -> Value {
-        json!({
-            "agent_session_id": self.agent_session_id,
-            "codex_session_id": self.codex_session_id,
-            "route_kind": self.route_kind.as_str(),
-            "route_key": self.route_key,
-            "guild_id": self.guild_id,
-            "voice_channel_id": self.voice_channel_id,
-            "dm_user_id": self.dm_user_id,
-            "voice_capture_session_id": self.voice_capture_session_id,
-            "discord_thread_id": self.discord_thread_id,
-            "discord_parent_channel_id": self.discord_parent_channel_id,
-            "text_target": self.text_target.to_json(),
-            "state": self.state.as_str(),
-            "created_at": self.created_at,
-            "last_activity_at": self.last_activity_at,
-            "max_active_until": self.max_active_until,
-            "retired_at": self.retired_at,
-            "retirement_reason": self.retirement_reason,
-            "retired_by_user_id": self.retired_by_user_id,
-            "resumed_from_agent_session_id": self.resumed_from_agent_session_id,
-        })
+        let mut object = Map::new();
+        object.insert(
+            "agent_session_id".to_string(),
+            Value::String(self.agent_session_id.clone()),
+        );
+        object.insert(
+            "codex_session_id".to_string(),
+            Value::String(self.codex_session_id.clone()),
+        );
+        object.insert(
+            "route_kind".to_string(),
+            Value::String(self.route_kind.as_str().to_string()),
+        );
+        object.insert(
+            "route_key".to_string(),
+            Value::String(self.route_key.clone()),
+        );
+        if !self.guild_id.trim().is_empty() {
+            object.insert("guild_id".to_string(), Value::String(self.guild_id.clone()));
+        }
+        object.insert("scope_id".to_string(), Value::String(self.scope_id.clone()));
+        if self.route_kind == AgentSessionRouteKind::Voice {
+            object.insert(
+                "voice_channel_id".to_string(),
+                Value::String(self.scope_id.clone()),
+            );
+        }
+        object.insert(
+            "dm_user_id".to_string(),
+            Value::String(self.dm_user_id.clone()),
+        );
+        object.insert(
+            "voice_capture_session_id".to_string(),
+            Value::String(self.voice_capture_session_id.clone()),
+        );
+        object.insert(
+            "discord_thread_id".to_string(),
+            Value::String(self.discord_thread_id.clone()),
+        );
+        object.insert(
+            "discord_parent_channel_id".to_string(),
+            Value::String(self.discord_parent_channel_id.clone()),
+        );
+        object.insert("text_target".to_string(), self.text_target.to_json());
+        object.insert(
+            "state".to_string(),
+            Value::String(self.state.as_str().to_string()),
+        );
+        object.insert(
+            "created_at".to_string(),
+            Value::String(self.created_at.clone()),
+        );
+        object.insert(
+            "last_activity_at".to_string(),
+            Value::String(self.last_activity_at.clone()),
+        );
+        object.insert(
+            "max_active_until".to_string(),
+            Value::String(self.max_active_until.clone()),
+        );
+        object.insert(
+            "retired_at".to_string(),
+            Value::String(self.retired_at.clone()),
+        );
+        object.insert(
+            "retirement_reason".to_string(),
+            Value::String(self.retirement_reason.clone()),
+        );
+        object.insert(
+            "retired_by_user_id".to_string(),
+            Value::String(self.retired_by_user_id.clone()),
+        );
+        object.insert(
+            "resumed_from_agent_session_id".to_string(),
+            Value::String(self.resumed_from_agent_session_id.clone()),
+        );
+        Value::Object(object)
     }
 }
 
@@ -298,7 +354,7 @@ pub struct AgentSession {
     pub key: String,
     pub role: String,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub session_id: String,
     pub active_job_id: String,
     pub latest_job_id: String,
@@ -314,7 +370,7 @@ impl AgentSession {
         role: AgentRole,
         key: &str,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         job_id: &str,
         prior_session_id: impl Into<String>,
     ) -> Self {
@@ -323,7 +379,7 @@ impl AgentSession {
             key: key.to_string(),
             role: role.as_str().to_string(),
             guild_id: guild_id.to_string(),
-            voice_channel_id: voice_channel_id.to_string(),
+            scope_id: scope_id.to_string(),
             session_id: prior_session_id.into(),
             active_job_id: job_id.to_string(),
             latest_job_id: job_id.to_string(),
@@ -358,7 +414,7 @@ impl AgentSession {
             "key": self.key,
             "role": self.role,
             "guild_id": self.guild_id,
-            "voice_channel_id": self.voice_channel_id,
+            "scope_id": self.scope_id,
             "session_id": self.session_id,
             "active_job_id": self.active_job_id,
             "latest_job_id": self.latest_job_id,

@@ -39,8 +39,9 @@ An automation spec names its schema, human-readable name, optional idempotency k
     "source_job_id": "job_..."
   },
   "scope": {
+    "scope_kind": "voice_channel",
     "guild_id": "discord-guild-id",
-    "voice_channel_id": "discord-voice-channel-id"
+    "scope_id": "discord-voice-channel-id"
   },
   "trigger": {
     "kind": "event",
@@ -71,7 +72,7 @@ An automation spec names its schema, human-readable name, optional idempotency k
 }
 ```
 
-The JSON boundary accepts snake_case and the documented camelCase aliases for common fields such as `guildId`, `voiceChannelId`, `channelId`, `sourceJobId`, `idempotencyKey`, `maxFires`, `expiresAt`, and `textTarget`. Generated JSON uses snake_case.
+The JSON boundary accepts snake_case and the documented camelCase aliases for common non-scope fields such as `guildId`, `sourceJobId`, `idempotencyKey`, `maxFires`, `expiresAt`, and `textTarget`. The scope identity fields are `scope_kind` and `scope_id`. Generated JSON uses snake_case.
 
 ## Owners
 
@@ -99,12 +100,13 @@ System-owned automations carry system authority.
 
 ## Scope
 
-Scope binds a stored automation to one Discord guild and one Discord voice channel. Specs use Discord ids. Resolve people, rooms, and channels through Clankcord commands before storing long-lived JSON.
+Scope binds a stored automation to one runtime scope. Stored automations currently execute in `voice_channel` scopes, so `scope_id` is the Discord voice channel id. Specs use Discord ids. Resolve people, rooms, and channels through Clankcord commands before storing long-lived JSON.
 
 ```json
 {
+  "scope_kind": "voice_channel",
   "guild_id": "553018603226529802",
-  "voice_channel_id": "1204188344993447956"
+  "scope_id": "1204188344993447956"
 }
 ```
 
@@ -370,8 +372,9 @@ Reminder when a user joins:
     "source_job_id": "job_abc123"
   },
   "scope": {
+    "scope_kind": "voice_channel",
     "guild_id": "553018603226529802",
-    "voice_channel_id": "1204188344993447956"
+    "scope_id": "1204188344993447956"
   },
   "trigger": {
     "kind": "event",
@@ -409,8 +412,9 @@ Reminder when two users overlap:
     "source_job_id": "job_abc123"
   },
   "scope": {
+    "scope_kind": "voice_channel",
     "guild_id": "553018603226529802",
-    "voice_channel_id": "1204188344993447956"
+    "scope_id": "1204188344993447956"
   },
   "trigger": {
     "kind": "event",
@@ -446,8 +450,9 @@ Agent work after a refinement job completes:
     "source_job_id": "job_abc123"
   },
   "scope": {
+    "scope_kind": "voice_channel",
     "guild_id": "553018603226529802",
-    "voice_channel_id": "1204188344993447956"
+    "scope_id": "1204188344993447956"
   },
   "trigger": {
     "kind": "job",

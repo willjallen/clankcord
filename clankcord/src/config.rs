@@ -43,7 +43,7 @@ pub struct AppConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct PathsConfig {
     pub state_dir: PathBuf,
-    pub voice_memory_root: PathBuf,
+    pub timeline_root: PathBuf,
     pub agent_workspaces_root: PathBuf,
 }
 
@@ -353,8 +353,8 @@ pub fn state_dir() -> PathBuf {
     app_config().paths.state_dir.clone()
 }
 
-pub fn voice_memory_root() -> PathBuf {
-    app_config().paths.voice_memory_root.clone()
+pub fn timeline_root() -> PathBuf {
+    app_config().paths.timeline_root.clone()
 }
 
 pub fn agent_workspaces_root() -> PathBuf {

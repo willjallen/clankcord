@@ -27,8 +27,8 @@ pub(crate) fn initialize_test_config(root: &Path) {
             &format!("state_dir = \"{}\"", root.join("state").display()),
         )
         .replace(
-            "voice_memory_root = \"/clankcord/durable/clankcord/voice\"",
-            &format!("voice_memory_root = \"{}\"", root.join("voice").display()),
+            "timeline_root = \"/clankcord/durable/clankcord/timeline\"",
+            &format!("timeline_root = \"{}\"", root.join("timeline").display()),
         )
         .replace(
             "agent_workspaces_root = \"/clankcord/state/agent-workspaces\"",

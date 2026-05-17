@@ -6,49 +6,32 @@ use serde_json::json;
 
 use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::JobVisibility;
+use clankcord::runtime::timeline::views::JobsRequest;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
-    DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordTypingAction,
-    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput,
-    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput,
-    DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload, JobState,
-    RefineTranscriptPayload, RoomConfig, Runtime, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload,
-    WakeProbePayload,
+    DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
+    DiscordTextSendPayload, DiscordTypingAction, DiscordTypingIndicatorOutput,
+    DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime, RuntimeScope,
+    RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
 use common::{initialize_test_config, test_store};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum PreV0_2_0JobState {
-    Queued,
-    Running,
-    Waiting,
-    Complete,
-    Cancelled,
-    CancelRequested,
-    ConfirmationPending,
-    Approved,
-    ApprovalFailed,
-    Failed,
-    FailedTimeout,
-    AgentDispatchFailed,
-    FailedDraftRetained,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PreV0_2_0Job<Payload> {
+struct PreV0_3_0Job {
     id: String,
     kind: JobKind,
     guild_id: String,
     voice_channel_id: String,
-    state: PreV0_2_0JobState,
+    state: JobState,
     requested_by_user_id: String,
-    payload: Payload,
+    payload: JobPayload,
     attempts: i64,
     created_at: String,
     updated_at: String,
@@ -62,41 +45,22 @@ struct PreV0_2_0Job<Payload> {
     metadata: JobMetadata,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-enum PreV0_2_0SlashPayloadNoVoiceChannel {
-    AudioSegment,
-    WakeActivation,
-    AgentTask,
-    DiscordTextMessage,
-    DiscordSlashCommand(PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel {
-    interaction_id: String,
-    interaction_token: String,
-    application_id: String,
-    guild_id: String,
-    channel_id: String,
-    user_id: String,
-    username: String,
-    command_name: String,
-    options: BinaryPayload,
-    created_at: String,
-    response_visibility: String,
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
-        "voice_channel_id": "channel",
+        "scope_id": "channel",
         "requested_by_user_id": "requester",
         "arguments": {"question": "what happened?", "relative_start": "-20m"}
     }))
     .unwrap();
-    let job = Job::agent_task_for_session("ags_test", "guild", "channel", "requester", command);
+    let job = Job::agent_task_for_session(
+        "ags_test",
+        RuntimeScope::voice_channel("guild", "channel"),
+        "requester",
+        command,
+    );
 
     let encoded = job.encode().unwrap();
     let parsed = Job::decode(&encoded).unwrap();
@@ -116,7 +80,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 2);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 3);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -138,34 +102,155 @@ fn job_state_rejects_agent_specific_dispatch_failure_state() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn timeline_initialize_records_v0_2_0_schema_migration() {
+async fn timeline_initialize_records_registered_schema_migrations() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
 
-    let row = sqlx::query(
+    let rows = sqlx::query(
         r#"
         SELECT version, name, clankcord_version
         FROM clankcord_schema_migrations
-        WHERE version = '0.2.0'
+        ORDER BY version
         "#,
     )
-    .fetch_one(&store.pool)
+    .fetch_all(&store.pool)
     .await
     .unwrap();
+    let migrations = rows
+        .iter()
+        .map(|row| {
+            (
+                sqlx::Row::try_get::<String, _>(row, "version").unwrap(),
+                sqlx::Row::try_get::<String, _>(row, "name").unwrap(),
+                sqlx::Row::try_get::<String, _>(row, "clankcord_version").unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
 
     assert_eq!(
-        sqlx::Row::try_get::<String, _>(&row, "version").unwrap(),
-        "0.2.0"
+        migrations,
+        vec![
+            (
+                "0.2.0".to_string(),
+                "job payload blob envelope".to_string(),
+                "0.3.0".to_string()
+            ),
+            (
+                "0.3.0".to_string(),
+                "generic runtime scope projections".to_string(),
+                "0.3.0".to_string()
+            ),
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
+        ))
+        .await
+        .unwrap();
+    let legacy_blob = encode_pre_v0_3_0_job(&created);
+
+    sqlx::raw_sql(
+        r#"
+        ALTER TABLE jobs ADD COLUMN voice_channel_id TEXT NOT NULL DEFAULT '';
+        UPDATE jobs SET voice_channel_id = scope_id;
+        ALTER TABLE jobs DROP COLUMN scope_kind CASCADE;
+        ALTER TABLE jobs DROP COLUMN scope_id CASCADE;
+        "#,
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(legacy_blob)
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.3.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.3.0");
+    assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
+    let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "scope_kind").unwrap(),
+        "voice_channel"
     );
     assert_eq!(
-        sqlx::Row::try_get::<String, _>(&row, "name").unwrap(),
-        "job payload blob envelope"
+        sqlx::Row::try_get::<String, _>(&row, "scope_id").unwrap(),
+        "code"
     );
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&row, "clankcord_version").unwrap(),
-        "0.2.0"
-    );
+    let migrated = store.get_job(&created.id).await.unwrap();
+    assert_eq!(migrated.scope_kind, RuntimeScopeKind::VoiceChannel);
+    assert_eq!(migrated.scope_id, "code");
+    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert!(Job::is_current_payload_blob(&payload_blob));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn jobs_public_view_uses_generic_scope_fields() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
+        ))
+        .await
+        .unwrap();
+    let runtime = Runtime::from_store(store).unwrap();
+
+    let jobs = runtime
+        .jobs(JobsRequest {
+            guild_id: "guild".to_string(),
+            ..JobsRequest::default()
+        })
+        .await
+        .unwrap();
+    let job = jobs["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|job| job["job_id"] == created.id)
+        .expect("created job appears in public jobs view");
+
+    assert_eq!(job["scope_kind"], "voice_channel");
+    assert_eq!(job["scope_id"], "code");
+    assert!(job.get("voice_channel_id").is_none());
+
+    let verbose = runtime.get_job_payload(&created.id, true).await.unwrap();
+    assert_eq!(verbose["scope_kind"], "voice_channel");
+    assert_eq!(verbose["scope_id"], "code");
+    assert!(verbose.get("voice_channel_id").is_none());
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -312,131 +397,6 @@ async fn runtime_maintenance_replacement_deletes_active_singleton_by_projection(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn v0_2_0_schema_migration_rewrites_pre_v0_2_0_job_blobs() {
-    let raw = tempfile::tempdir().unwrap();
-    initialize_test_config(raw.path());
-    let store = test_store(&raw.path().join("voice")).await;
-    let created = store
-        .create_job(Job::runtime_maintenance(500))
-        .await
-        .unwrap();
-    let pre_v0_2_0 = bincode::serialize(&created).unwrap();
-    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
-        .bind(&pre_v0_2_0)
-        .bind(&created.id)
-        .execute(&store.pool)
-        .await
-        .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.2.0'")
-        .execute(&store.pool)
-        .await
-        .unwrap();
-
-    let applied = store.run_pending_schema_migrations().await.unwrap();
-
-    assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].version, "0.2.0");
-    let migrated = store.get_job(&created.id).await.unwrap();
-    assert_eq!(migrated.id, created.id);
-    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
-        .bind(&created.id)
-        .fetch_one(&store.pool)
-        .await
-        .unwrap();
-    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
-    assert!(Job::is_current_payload_blob(&payload_blob));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn v0_2_0_schema_migration_rewrites_pre_v0_2_0_slash_payloads() {
-    let raw = tempfile::tempdir().unwrap();
-    initialize_test_config(raw.path());
-    let store = test_store(&raw.path().join("voice")).await;
-    let created = store
-        .create_job(Job::discord_slash_command(DiscordSlashCommandPayload {
-            interaction_id: "interaction-pre-v0-2-0".to_string(),
-            interaction_token: "token-pre-v0-2-0".to_string(),
-            application_id: "application".to_string(),
-            guild_id: "guild".to_string(),
-            channel_id: "text".to_string(),
-            voice_channel_id: "voice".to_string(),
-            user_id: "requester".to_string(),
-            username: "requester".to_string(),
-            command_name: "leave".to_string(),
-            options: BinaryPayload::empty(),
-            created_at: "2026-05-16T12:00:00.000Z".to_string(),
-            response_visibility: "ephemeral".to_string(),
-        }))
-        .await
-        .unwrap();
-    let JobPayload::DiscordSlashCommand(payload) = &created.payload else {
-        panic!("created test job should be a slash-command job");
-    };
-    let pre_v0_2_0 = PreV0_2_0Job {
-        id: created.id.clone(),
-        kind: created.kind,
-        guild_id: created.guild_id.clone(),
-        voice_channel_id: created.voice_channel_id.clone(),
-        state: PreV0_2_0JobState::Queued,
-        requested_by_user_id: created.requested_by_user_id.clone(),
-        payload: PreV0_2_0SlashPayloadNoVoiceChannel::DiscordSlashCommand(
-            PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel {
-                interaction_id: payload.interaction_id.clone(),
-                interaction_token: payload.interaction_token.clone(),
-                application_id: payload.application_id.clone(),
-                guild_id: payload.guild_id.clone(),
-                channel_id: payload.channel_id.clone(),
-                user_id: payload.user_id.clone(),
-                username: payload.username.clone(),
-                command_name: payload.command_name.clone(),
-                options: payload.options.clone(),
-                created_at: payload.created_at.clone(),
-                response_visibility: payload.response_visibility.clone(),
-            },
-        ),
-        attempts: created.attempts,
-        created_at: created.created_at.clone(),
-        updated_at: created.updated_at.clone(),
-        next_run_at: created.next_run_at.clone(),
-        started_at: created.started_at.clone(),
-        completed_at: created.completed_at.clone(),
-        cancelled_at: created.cancelled_at.clone(),
-        parent_job_id: created.parent_job_id.clone(),
-        root_job_id: created.root_job_id.clone(),
-        lineage_depth: created.lineage_depth,
-        metadata: created.metadata.clone(),
-    };
-    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
-        .bind(bincode::serialize(&pre_v0_2_0).unwrap())
-        .bind(&created.id)
-        .execute(&store.pool)
-        .await
-        .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.2.0'")
-        .execute(&store.pool)
-        .await
-        .unwrap();
-
-    let applied = store.run_pending_schema_migrations().await.unwrap();
-
-    assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].version, "0.2.0");
-    let migrated = store.get_job(&created.id).await.unwrap();
-    let JobPayload::DiscordSlashCommand(payload) = &migrated.payload else {
-        panic!("migrated test job should be a slash-command job");
-    };
-    assert_eq!(payload.interaction_id, "interaction-pre-v0-2-0");
-    assert_eq!(payload.voice_channel_id, "voice");
-    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
-        .bind(&created.id)
-        .fetch_one(&store.pool)
-        .await
-        .unwrap();
-    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
-    assert!(Job::is_current_payload_blob(&payload_blob));
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn runtime_maintenance_submits_background_work_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
@@ -520,8 +480,7 @@ async fn opaque_json_lowers_to_binary_payload() {
 #[tokio::test(flavor = "current_thread")]
 async fn job_lineage_allows_arbitrary_dag_depth_metadata() {
     let root = Job::new(
-        "guild",
-        "channel",
+        RuntimeScope::voice_channel("guild", "channel"),
         "requester",
         JobState::Queued,
         JobPayload::RefineTranscript(RefineTranscriptPayload {
@@ -562,7 +521,11 @@ async fn text_delivery_payload_is_a_first_class_binary_job() {
         "extra_boundary_field": {"kept": true}
     }))
     .unwrap();
-    let job = Job::text_delivery("guild", "code", "user-a", payload);
+    let job = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        payload,
+    );
     let decoded = Job::decode(&job.encode().unwrap()).unwrap();
 
     assert_eq!(decoded.kind, JobKind::TextDelivery);
@@ -579,8 +542,7 @@ async fn text_delivery_payload_is_a_first_class_binary_job() {
 #[test]
 fn discord_text_io_jobs_round_trip() {
     let text = Job::discord_text_send(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         DiscordTextSendPayload {
             intent: TextDeliveryKind::Message,
@@ -601,8 +563,7 @@ fn discord_text_io_jobs_round_trip() {
     assert_eq!(decoded.payload.to_json()["components"][0]["type"], 1);
 
     let thread = Job::discord_forum_thread_create(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         DiscordForumThreadCreatePayload {
             parent_channel_id: "forum-1".to_string(),
@@ -617,8 +578,7 @@ fn discord_text_io_jobs_round_trip() {
     assert_eq!(decoded.payload.to_json()["parent_channel_id"], "forum-1");
 
     let rename = Job::discord_forum_thread_rename(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "runtime",
         DiscordForumThreadRenamePayload {
             thread_id: "thread-1".to_string(),
@@ -635,8 +595,7 @@ fn discord_text_io_jobs_round_trip() {
 #[tokio::test(flavor = "current_thread")]
 async fn discord_typing_indicator_job_round_trips_and_requeues_agent_parent() {
     let typing = Job::discord_typing_indicator(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         DiscordTypingIndicatorPayload {
             action: DiscordTypingAction::Start,
@@ -680,8 +639,7 @@ async fn discord_typing_indicator_job_round_trips_and_requeues_agent_parent() {
     let parent = store
         .create_job(Job::agent_task_for_session(
             "ags_test",
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             CommandRequest::agent_task("guild", "code", "user-a", "summarize this"),
         ))
@@ -779,9 +737,17 @@ async fn wake_activation_payload_is_a_first_class_binary_job() {
 async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
-    let due = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("due"));
+    let due = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        text_delivery_payload("due"),
+    );
     let due_id = due.id.clone();
-    let mut future = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("future"));
+    let mut future = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        text_delivery_payload("future"),
+    );
     let future_id = future.id.clone();
     future.next_run_at =
         Some((Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true));
@@ -822,19 +788,23 @@ async fn timeline_allows_multiple_text_deliveries_for_one_agent_source() {
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
-        "voice_channel_id": "code",
+        "scope_id": "code",
         "requested_by_user_id": "user-a",
         "arguments": {"question": "fact check this"}
     }))
     .unwrap();
-    let mut source = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
+    let mut source = Job::agent_task_for_session(
+        "ags_test",
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        command,
+    );
     source.id = "job_agent_source".to_string();
     source.root_job_id = source.id.clone();
     store.create_job(source).await.unwrap();
 
     let first = Job::text_delivery(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         TextDeliveryPayload::new(
             TextDeliveryKind::Message,
@@ -847,8 +817,7 @@ async fn timeline_allows_multiple_text_deliveries_for_one_agent_source() {
     );
     let first_id = first.id.clone();
     let second = Job::text_delivery(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         TextDeliveryPayload::new(
             TextDeliveryKind::Message,
@@ -885,9 +854,16 @@ async fn timeline_reports_earliest_queued_ready_time() {
     let store = test_store(&raw.path().join("voice")).await;
     let early = Utc::now() + Duration::seconds(30);
     let late = early + Duration::seconds(30);
-    let mut early_job =
-        Job::text_delivery("guild", "code", "user-a", text_delivery_payload("early"));
-    let mut late_job = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("late"));
+    let mut early_job = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        text_delivery_payload("early"),
+    );
+    let mut late_job = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        text_delivery_payload("late"),
+    );
     early_job.next_run_at = Some(early.to_rfc3339_opts(SecondsFormat::Millis, true));
     late_job.next_run_at = Some(late.to_rfc3339_opts(SecondsFormat::Millis, true));
 
@@ -911,12 +887,17 @@ async fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
-        "voice_channel_id": "code",
+        "scope_id": "code",
         "requested_by_user_id": "user-a",
         "arguments": {"question": "summarize this"}
     }))
     .unwrap();
-    let job = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
+    let job = Job::agent_task_for_session(
+        "ags_test",
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        command,
+    );
     let job_id = job.id.clone();
     store.create_job(job).await.unwrap();
 
@@ -952,8 +933,7 @@ async fn waiting_agent_task_holds_session_ordering_key() {
     let first = store
         .create_job(Job::agent_task_for_session(
             "ags_test",
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             command.clone(),
         ))
@@ -963,8 +943,7 @@ async fn waiting_agent_task_holds_session_ordering_key() {
         .create_child_job(
             &first,
             Job::discord_typing_indicator(
-                "guild",
-                "code",
+                RuntimeScope::voice_channel("guild", "code"),
                 "user-a",
                 DiscordTypingIndicatorPayload {
                     action: DiscordTypingAction::Start,
@@ -983,7 +962,10 @@ async fn waiting_agent_task_holds_session_ordering_key() {
         .unwrap();
     let second = store
         .create_job(Job::agent_task_for_session(
-            "ags_test", "guild", "code", "user-a", command,
+            "ags_test",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            command,
         ))
         .await
         .unwrap();
@@ -1010,8 +992,7 @@ async fn timeline_claim_due_agent_ingress_serializes_by_voice_route_across_job_k
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
     let command_job = Job::command_request(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         CommandRequest::agent_task("guild", "code", "user-a", "first request"),
     );
@@ -1062,20 +1043,29 @@ async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
     let command = CommandRequest::from_json(&json!({
         "command_kind": "agent_task",
         "guild_id": "guild",
-        "voice_channel_id": "code",
+        "scope_id": "code",
         "requested_by_user_id": "user-a",
         "arguments": {"question": "summarize this"}
     }))
     .unwrap();
-    let mut first =
-        Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command.clone());
+    let mut first = Job::agent_task_for_session(
+        "ags_test",
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        command.clone(),
+    );
     first.created_at = Utc
         .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
         .unwrap()
         .to_rfc3339_opts(SecondsFormat::Millis, true);
     first.updated_at = first.created_at.clone();
     let first_id = first.id.clone();
-    let mut second = Job::agent_task_for_session("ags_test", "guild", "code", "user-a", command);
+    let mut second = Job::agent_task_for_session(
+        "ags_test",
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        command,
+    );
     second.created_at = Utc
         .with_ymd_and_hms(2026, 5, 12, 16, 0, 1)
         .unwrap()
@@ -1177,14 +1167,17 @@ async fn timeline_child_jobs_are_stored_as_dependency_edges() {
     let store = test_store(&raw.path().join("voice")).await;
     let parent = store
         .create_job(Job::text_delivery(
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             text_delivery_payload("parent"),
         ))
         .await
         .unwrap();
-    let child = Job::text_delivery("guild", "code", "user-a", text_delivery_payload("child"));
+    let child = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        text_delivery_payload("child"),
+    );
     let child_id = child.id.clone();
 
     store.create_child_job(&parent, child).await.unwrap();
@@ -1391,6 +1384,55 @@ fn text_delivery_payload(content: &str) -> TextDeliveryPayload {
         "content": content,
     }))
     .unwrap()
+}
+
+fn encode_pre_v0_3_0_job(job: &Job) -> Vec<u8> {
+    let previous = PreV0_3_0Job {
+        id: job.id.clone(),
+        kind: job.kind,
+        guild_id: job.guild_id.clone(),
+        voice_channel_id: job.scope_id.clone(),
+        state: job.state,
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        payload: job.payload.clone(),
+        attempts: job.attempts,
+        created_at: job.created_at.clone(),
+        updated_at: job.updated_at.clone(),
+        next_run_at: job.next_run_at.clone(),
+        started_at: job.started_at.clone(),
+        completed_at: job.completed_at.clone(),
+        cancelled_at: job.cancelled_at.clone(),
+        parent_job_id: job.parent_job_id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        lineage_depth: job.lineage_depth,
+        metadata: job.metadata.clone(),
+    };
+    let body = bincode::serialize(&previous).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = $1
+            AND column_name = $2
+        ) AS exists
+        "#,
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::Row::try_get(&row, "exists").unwrap()
 }
 
 fn raw_path(path: &str) -> std::path::PathBuf {

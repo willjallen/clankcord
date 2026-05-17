@@ -58,7 +58,7 @@ fn prompt_context() -> AgentTaskPromptContext {
         agent_session_id: "ags_test".to_string(),
         resumed_from_agent_session_id: String::new(),
         guild_id: "guild".to_string(),
-        voice_channel_id: "code".to_string(),
+        scope_id: "code".to_string(),
         requested_by_user_id: "user-1".to_string(),
         requested_by: "will".to_string(),
         request: "summarize this".to_string(),

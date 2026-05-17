@@ -335,11 +335,11 @@ pub struct CommandRequest {
     pub action: CommandAction,
     pub command_kind: CommandKind,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub requested_by_user_id: String,
     pub requested_by_speaker_label: String,
     pub target_room_id: String,
-    pub target_voice_channel_id: String,
+    pub target_channel_id: String,
     pub acknowledgement_text: String,
     pub requires_confirmation: bool,
     pub approved_by_user_id: String,
@@ -352,14 +352,14 @@ pub struct CommandRequest {
 impl CommandRequest {
     pub fn agent_task(
         guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
         request: impl Into<String>,
     ) -> Self {
         Self::new_internal(
             CommandKind::AgentTask,
             guild_id,
-            voice_channel_id,
+            scope_id,
             requested_by_user_id,
             CommandArguments {
                 request: request.into(),
@@ -370,14 +370,14 @@ impl CommandRequest {
 
     pub fn start_live_transcript(
         guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
         title: impl Into<String>,
     ) -> Self {
         Self::new_internal(
             CommandKind::StartLiveTranscript,
             guild_id,
-            voice_channel_id,
+            scope_id,
             requested_by_user_id,
             CommandArguments {
                 request: title.into(),
@@ -390,7 +390,7 @@ impl CommandRequest {
     fn new_internal(
         command_kind: CommandKind,
         guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
         arguments: CommandArguments,
     ) -> Self {
@@ -398,11 +398,11 @@ impl CommandRequest {
             action: CommandAction::DispatchNow,
             command_kind,
             guild_id: guild_id.into(),
-            voice_channel_id: voice_channel_id.into(),
+            scope_id: scope_id.into(),
             requested_by_user_id: requested_by_user_id.into(),
             requested_by_speaker_label: String::new(),
             target_room_id: String::new(),
-            target_voice_channel_id: String::new(),
+            target_channel_id: String::new(),
             acknowledgement_text: String::new(),
             requires_confirmation: false,
             approved_by_user_id: String::new(),
@@ -422,16 +422,16 @@ impl CommandRequest {
             action: CommandAction::from_str(&string_field(value, "action"))?,
             command_kind,
             guild_id: string_field(value, "guild_id"),
-            voice_channel_id: string_field(value, "voice_channel_id"),
+            scope_id: string_field(value, "scope_id"),
             requested_by_user_id: string_field(value, "requested_by_user_id"),
             requested_by_speaker_label: string_field(value, "requested_by_speaker_label"),
             target_room_id: first_non_empty([
                 string_field(value, "target_room_id"),
                 string_field(value, "targetRoomId"),
             ]),
-            target_voice_channel_id: first_non_empty([
-                string_field(value, "target_voice_channel_id"),
-                string_field(value, "targetVoiceChannelId"),
+            target_channel_id: first_non_empty([
+                string_field(value, "target_channel_id"),
+                string_field(value, "targetChannelId"),
             ]),
             acknowledgement_text: string_field(value, "acknowledgement_text"),
             requires_confirmation: truthy(value.get("requires_confirmation"), false),
@@ -454,7 +454,7 @@ impl CommandRequest {
             Value::String(self.command_kind.as_str().to_string()),
         );
         insert_non_empty(&mut map, "guild_id", &self.guild_id);
-        insert_non_empty(&mut map, "voice_channel_id", &self.voice_channel_id);
+        insert_non_empty(&mut map, "scope_id", &self.scope_id);
         insert_non_empty(&mut map, "requested_by_user_id", &self.requested_by_user_id);
         insert_non_empty(
             &mut map,
@@ -462,11 +462,7 @@ impl CommandRequest {
             &self.requested_by_speaker_label,
         );
         insert_non_empty(&mut map, "target_room_id", &self.target_room_id);
-        insert_non_empty(
-            &mut map,
-            "target_voice_channel_id",
-            &self.target_voice_channel_id,
-        );
+        insert_non_empty(&mut map, "target_channel_id", &self.target_channel_id);
         insert_non_empty(&mut map, "acknowledgement_text", &self.acknowledgement_text);
         insert_non_empty(&mut map, "approved_by_user_id", &self.approved_by_user_id);
         insert_non_empty(&mut map, "target_job_id", &self.target_job_id);
@@ -497,7 +493,7 @@ impl CommandRequest {
     pub fn target_room_identifier(&self, default_channel_id: &str) -> String {
         first_non_empty([
             self.target_room_id.clone(),
-            self.target_voice_channel_id.clone(),
+            self.target_channel_id.clone(),
             self.arguments.room.clone(),
             self.arguments.channel.clone(),
             self.arguments.target_room.clone(),
@@ -1483,16 +1479,28 @@ impl JobPayload {
                 "requested_by_user_id": payload.requested_by_user_id,
                 "reason": payload.reason,
             }),
-            Self::AgentSessionResume(payload) => json!({
-                "source_agent_session_id": payload.source_agent_session_id,
-                "new_agent_session_id": payload.new_agent_session_id,
-                "route_kind": payload.route_kind,
-                "guild_id": payload.guild_id,
-                "voice_channel_id": payload.voice_channel_id,
-                "dm_user_id": payload.dm_user_id,
-                "requested_by_user_id": payload.requested_by_user_id,
-                "message": payload.message,
-            }),
+            Self::AgentSessionResume(payload) => {
+                let scope_id = if payload.route_kind == "dm" {
+                    payload.dm_user_id.as_str()
+                } else {
+                    payload.voice_channel_id.as_str()
+                };
+                let scope_kind = if payload.route_kind == "dm" {
+                    "dm"
+                } else {
+                    "voice_channel"
+                };
+                json!({
+                    "source_agent_session_id": payload.source_agent_session_id,
+                    "new_agent_session_id": payload.new_agent_session_id,
+                    "route_kind": payload.route_kind,
+                    "scope_kind": scope_kind,
+                    "guild_id": payload.guild_id,
+                    "scope_id": scope_id,
+                    "requested_by_user_id": payload.requested_by_user_id,
+                    "message": payload.message,
+                })
+            }
             Self::AgentSessionRetirement(payload) => json!({
                 "source_job_id": payload.source_job_id,
             }),

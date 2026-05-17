@@ -29,12 +29,12 @@ text_delivery -> discord_text_send
 
 ## Routing
 
-Every agent input belongs to one persisted session. Voice inputs resolve by `voice:<guild_id>:<voice_channel_id>`. DM inputs resolve by `dm:<user_id>`. Managed Discord thread messages resolve by the `discord_thread_id` stored on the voice session that owns that thread.
+Every agent input belongs to one persisted session. Voice inputs resolve by `voice:<guild_id>:<scope_id>`, where `scope_id` is the Discord voice channel id. DM inputs resolve by `dm:<scope_id>`, where `scope_id` is the Discord user id. Managed Discord thread messages resolve by the `discord_thread_id` stored on the voice session that owns that thread.
 
 Top-level `agent-chat` channel messages complete as ignored text ingress. `agent_chat` is a text-delivery target used for runtime responses; follow-up conversation happens in the managed thread, DM, or active voice route. Retired sessions fall out of route selection, managed thread messages can reactivate the owning voice session, and agent work serializes by `agent:session:<agent_session_id>`.
 
 ```text
-voice:<guild_id>:<voice_channel_id>
+voice:<guild_id>:<scope_id>
       -> active AgentSessionRecord
       -> managed Discord thread
       -> Codex session id
@@ -60,7 +60,7 @@ codex_session_id
 route_kind                  voice | dm
 route_key
 guild_id
-voice_channel_id
+scope_id
 dm_user_id
 voice_capture_session_id
 discord_thread_id

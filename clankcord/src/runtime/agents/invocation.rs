@@ -27,7 +27,7 @@ pub(crate) struct AgentInvocationRequest {
     pub session_key: String,
     pub job_id: String,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub prior_session_id: String,
     pub prompt: String,
     pub cwd: Option<PathBuf>,
@@ -59,7 +59,7 @@ impl AgentRuntime {
             request.role,
             &request.session_key,
             &request.guild_id,
-            &request.voice_channel_id,
+            &request.scope_id,
             &request.job_id,
             request.prior_session_id.clone(),
         );

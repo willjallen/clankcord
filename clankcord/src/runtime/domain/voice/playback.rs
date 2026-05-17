@@ -32,7 +32,7 @@ impl Runtime {
         {
             return Ok(JobDecision::WaitFor(vec![Job::discord_voice_mute(
                 job.guild_id.clone(),
-                job.voice_channel_id.clone(),
+                job.scope_id.clone(),
                 job.requested_by_user_id.clone(),
                 DiscordVoiceMutePayload {
                     session_id: payload.session_id.clone(),
@@ -48,7 +48,7 @@ impl Runtime {
         {
             return Ok(JobDecision::WaitFor(vec![Job::discord_voice_play_audio(
                 job.guild_id.clone(),
-                job.voice_channel_id.clone(),
+                job.scope_id.clone(),
                 job.requested_by_user_id.clone(),
                 DiscordVoicePlayAudioPayload {
                     session_id: payload.session_id.clone(),

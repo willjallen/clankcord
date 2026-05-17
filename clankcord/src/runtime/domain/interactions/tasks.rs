@@ -256,7 +256,7 @@ impl Runtime {
 
         let job_dir = self
             .timeline_store
-            .channel_dir(&latest.guild_id, &latest.voice_channel_id)
+            .channel_dir(&latest.guild_id, &latest.scope_id)
             .join("jobs");
         fs::create_dir_all(&job_dir)?;
 
@@ -300,7 +300,7 @@ impl Runtime {
             session_key,
             job_id: latest.id.clone(),
             guild_id: latest.guild_id.clone(),
-            voice_channel_id: latest.voice_channel_id.clone(),
+            scope_id: latest.scope_id.clone(),
             prior_session_id,
             prompt,
             cwd: Some(workdir.clone()),
@@ -390,7 +390,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &latest.guild_id,
-                    &latest.voice_channel_id,
+                    &latest.scope_id,
                     json!({
                         "event_kind": "agent_task_result_suppressed",
                         "kind": "agent_task_result_suppressed",
@@ -430,7 +430,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &latest.guild_id,
-                    &latest.voice_channel_id,
+                    &latest.scope_id,
                     json!({
                         "event_kind": "agent_task_result_suppressed",
                         "kind": "agent_task_result_suppressed",
@@ -537,8 +537,7 @@ impl Runtime {
         }
         let requested_by_user_id = agent_task_requester_id(job);
         let response = Job::text_delivery(
-            job.guild_id.clone(),
-            job.voice_channel_id.clone(),
+            job.scope(),
             requested_by_user_id.clone(),
             TextDeliveryPayload::new(
                 TextDeliveryKind::Message,
@@ -568,7 +567,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &job.guild_id,
-                    &job.voice_channel_id,
+                    &job.scope_id,
                     json!({
                         "event_kind": event_kind,
                         "kind": event_kind,
@@ -595,8 +594,7 @@ fn agent_task_requester_id(job: &Job) -> String {
 fn agent_task_typing_job(job: &Job, action: DiscordTypingAction, attempts: i64) -> Job {
     let requested_by_user_id = agent_task_requester_id(job);
     Job::discord_typing_indicator(
-        job.guild_id.clone(),
-        job.voice_channel_id.clone(),
+        job.scope(),
         requested_by_user_id.clone(),
         DiscordTypingIndicatorPayload {
             action,
@@ -692,7 +690,7 @@ pub struct AgentTaskPromptContext {
     pub agent_session_id: String,
     pub resumed_from_agent_session_id: String,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub requested_by_user_id: String,
     pub requested_by: String,
     pub request: String,
@@ -732,7 +730,7 @@ impl Runtime {
             .timeline_store
             .load_events(
                 &job.guild_id,
-                &job.voice_channel_id,
+                &job.scope_id,
                 Some(start),
                 Some(end + chrono::Duration::minutes(2)),
                 Some(&speech_kinds),
@@ -774,7 +772,7 @@ impl Runtime {
             agent_session_id,
             resumed_from_agent_session_id,
             guild_id: job.guild_id.clone(),
-            voice_channel_id: job.voice_channel_id.clone(),
+            scope_id: job.scope_id.clone(),
             requested_by_user_id: job.requested_by_user_id.clone(),
             requested_by,
             request,
@@ -831,10 +829,7 @@ fn agent_task_template_vars(context: &AgentTaskPromptContext) -> BTreeMap<String
             context.resumed_from_agent_session_id.clone(),
         ),
         ("guild_id".to_string(), context.guild_id.clone()),
-        (
-            "voice_channel_id".to_string(),
-            context.voice_channel_id.clone(),
-        ),
+        ("scope_id".to_string(), context.scope_id.clone()),
         (
             "requested_by_user_id".to_string(),
             context.requested_by_user_id.clone(),
@@ -851,9 +846,7 @@ fn agent_task_template_vars(context: &AgentTaskPromptContext) -> BTreeMap<String
 }
 
 fn validate_agent_task_job(job: &Job) -> Result<()> {
-    if job.id.trim().is_empty()
-        || job.guild_id.trim().is_empty()
-        || job.voice_channel_id.trim().is_empty()
+    if job.id.trim().is_empty() || job.guild_id.trim().is_empty() || job.scope_id.trim().is_empty()
     {
         anyhow::bail!("agent task job is missing job/guild/channel identity");
     }
@@ -907,10 +900,7 @@ fn agent_task_env(
         vars.insert("CLANKCORD_AGENT_SESSION_ID".to_string(), agent_session_id);
     }
     vars.insert("CLANKCORD_AGENT_GUILD_ID".to_string(), job.guild_id.clone());
-    vars.insert(
-        "CLANKCORD_AGENT_VOICE_CHANNEL_ID".to_string(),
-        job.voice_channel_id.clone(),
-    );
+    vars.insert("CLANKCORD_AGENT_SCOPE_ID".to_string(), job.scope_id.clone());
     vars.insert(
         "CLANKCORD_AGENT_REQUESTED_BY_USER_ID".to_string(),
         job.requested_by_user_id.clone(),

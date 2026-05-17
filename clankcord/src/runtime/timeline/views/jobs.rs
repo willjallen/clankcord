@@ -3,7 +3,7 @@ use std::str::FromStr;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::runtime::{Job, JobState};
+use crate::runtime::{Job, JobState, RuntimeScopeKind};
 
 use crate::runtime::Runtime;
 use crate::runtime::timeline::JobVisibility;
@@ -66,8 +66,9 @@ impl Runtime {
             "job_id": job.id.clone(),
             "kind": job.kind.as_str(),
             "state": state.clone(),
+            "scope_kind": job.scope_kind.as_str(),
             "guild_id": job.guild_id.clone(),
-            "voice_channel_id": job.voice_channel_id.clone(),
+            "scope_id": job.scope_id.clone(),
             "requested_by_user_id": job.requested_by_user_id.clone(),
             "command_kind": job.command_kind(),
             "created_at": job.created_at.clone(),
@@ -96,8 +97,9 @@ impl Runtime {
             "job_id": job.id.clone(),
             "kind": job.kind.as_str(),
             "state": state.clone(),
+            "scope_kind": job.scope_kind.as_str(),
             "guild_id": job.guild_id.clone(),
-            "voice_channel_id": job.voice_channel_id.clone(),
+            "scope_id": job.scope_id.clone(),
             "requested_by_user_id": job.requested_by_user_id.clone(),
             "command_kind": job.command_kind(),
             "request": preview(&request, 1000),
@@ -125,7 +127,11 @@ impl Runtime {
             .list_jobs(Some(guild_id), None)
             .await?
             .into_iter()
-            .filter(|job| job.voice_channel_id == channel_id && job.state.is_cancellable())
+            .filter(|job| {
+                job.scope_kind == RuntimeScopeKind::VoiceChannel
+                    && job.scope_id == channel_id
+                    && job.state.is_cancellable()
+            })
             .collect::<Vec<_>>();
         jobs.sort_by(|left, right| {
             let left_time = first_non_empty([left.updated_at.clone(), left.created_at.clone()]);
@@ -153,7 +159,8 @@ impl Runtime {
             .await?
             .into_iter()
             .filter(|job| {
-                job.voice_channel_id == channel_id
+                job.scope_kind == RuntimeScopeKind::VoiceChannel
+                    && job.scope_id == channel_id
                     && job.kind.is_agent_task()
                     && matches!(
                         job.state,
@@ -210,8 +217,9 @@ impl Runtime {
         Ok(json!({
             "interaction_id": string_field(interaction, "interaction_id"),
             "state": string_field(interaction, "state"),
+            "scope_kind": RuntimeScopeKind::VoiceChannel.as_str(),
             "guild_id": non_empty(string_field(interaction, "guild_id"), guild_id.to_string()),
-            "voice_channel_id": non_empty(string_field(interaction, "voice_channel_id"), channel_id.to_string()),
+            "scope_id": non_empty(string_field(interaction, "scope_id"), channel_id.to_string()),
             "created_at": string_field(interaction, "created_at"),
             "updated_at": string_field(interaction, "updated_at"),
             "expires_at": string_field(interaction, "expires_at"),

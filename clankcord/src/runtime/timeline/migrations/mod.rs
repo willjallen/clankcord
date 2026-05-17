@@ -1,4 +1,5 @@
 mod v0_2_0;
+mod v0_3_0;
 
 use std::cmp::Ordering;
 
@@ -28,11 +29,18 @@ struct RegisteredMigration {
     name: &'static str,
 }
 
-const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[RegisteredMigration {
-    version: SchemaVersion::new(0, 2, 0),
-    version_text: "0.2.0",
-    name: "job payload blob envelope",
-}];
+const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 2, 0),
+        version_text: "0.2.0",
+        name: "job payload blob envelope",
+    },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 3, 0),
+        version_text: "0.3.0",
+        name: "generic runtime scope projections",
+    },
+];
 
 impl TimelineStore {
     pub async fn ensure_schema_migration_table(&self) -> Result<()> {
@@ -95,6 +103,7 @@ impl TimelineStore {
         let mut transaction = self.pool.begin().await?;
         match migration.version_text {
             "0.2.0" => v0_2_0::run(&mut transaction).await?,
+            "0.3.0" => v0_3_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

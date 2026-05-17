@@ -82,7 +82,7 @@
       { title: 'Job Type', field: 'jobKind', width: 165, headerSort: false, formatter: pillFormatter('jobKind', 'jobClass') },
       { title: 'State', field: 'state', width: 105, headerSort: false, formatter: pillFormatter('state') },
       { title: 'Command', field: 'command', width: 105, headerSort: false },
-      { title: 'Room', field: 'room', width: 150, headerSort: false },
+      { title: 'Scope', field: 'room', width: 150, headerSort: false },
       { title: 'Actor', field: 'actor', width: 150, headerSort: false },
       { title: 'Detail', field: 'detail', minWidth: 220, widthGrow: 2, headerSort: false, formatter: 'textarea' },
       { title: 'Id', field: 'id', width: 170, headerSort: false },

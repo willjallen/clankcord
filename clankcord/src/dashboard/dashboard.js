@@ -184,7 +184,7 @@ window.dashboard = function dashboard() {
     ...window.ClankDashboardExplorer.methods,
 
     jsonUrl() {
-      return `${rootPrefix}/v1/voice/debug/overview?${this.queryParams().toString()}`;
+      return `${rootPrefix}/v1/debug/overview?${this.queryParams().toString()}`;
     },
 
     queryParams() {
@@ -326,7 +326,7 @@ window.dashboard = function dashboard() {
       if (cached && !options.force && !this.isActiveState(cached.job?.state)) return;
       this.agentDetailLoadingId = jobId;
       try {
-        const response = await fetch(`${rootPrefix}/v1/voice/debug/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+        const response = await fetch(`${rootPrefix}/v1/debug/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
         if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
         const detail = await response.json();
         const returnedJobId = detail?.job?.job_id || '';
@@ -365,9 +365,9 @@ window.dashboard = function dashboard() {
         action: 'dispatch_now',
         command_kind: commandKind,
         guild_id: room.guildId,
-        voice_channel_id: room.channelId,
+        scope_id: room.channelId,
         requested_by_user_id: this.control.requestedByUserId.trim() || 'dashboard',
-        target_voice_channel_id: room.channelId,
+        target_channel_id: room.channelId,
         arguments: {
           channel: room.channelId,
           target_channel: room.channelId,
@@ -375,7 +375,7 @@ window.dashboard = function dashboard() {
         },
       };
       try {
-        const response = await fetch(`${rootPrefix}/v1/voice/commands`, {
+        const response = await fetch(`${rootPrefix}/v1/commands`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
@@ -518,7 +518,8 @@ window.dashboard = function dashboard() {
         ['Root', job.root_job_id],
         ['Parent', job.parent_job_id],
         ['Guild', job.guild_id],
-        ['Channel', job.voice_channel_id],
+        ['Scope Kind', job.scope_kind],
+        ['Scope ID', job.scope_id],
         ['Requested By', job.requested_by_user_id],
         ['Attempts', job.attempts ?? 0],
         ['Created', job.created_at],
@@ -536,7 +537,8 @@ window.dashboard = function dashboard() {
       const stats = this.codexUsageStats(codex, metadata);
       return [
         ['Job', job.job_id],
-        ['Channel', job.voice_channel_id],
+        ['Scope Kind', job.scope_kind],
+        ['Scope ID', job.scope_id],
         ['Requester', job.requested_by_user_id],
         ['Model', codex.model || metadata.agent?.model || ''],
         ['Session', codex.sessionId || metadata.agent?.session_id || ''],
@@ -545,7 +547,7 @@ window.dashboard = function dashboard() {
         ['Context', this.contextUsageLabel(stats)],
         ['Events', codex.eventCount ?? 0],
         ['Session Jobs', entry?.session?.jobCount ?? ''],
-        ['Channel Jobs', entry?.session?.channelJobCount ?? ''],
+        ['Scope Jobs', entry?.session?.scopeJobCount ?? ''],
       ].map(([label, value]) => ({ label, value: textValue(value) }));
     },
 
@@ -570,8 +572,8 @@ window.dashboard = function dashboard() {
       return this.recentJobs.filter((job) => this.statusClass(job.state) === 'bad' || this.jobMetadata(job).error || this.agentMetadata(job).dispatch_error);
     },
 
-    roomJobLoad() {
-      return this.jobSummary().byRoom || [];
+    scopeJobLoad() {
+      return this.jobSummary().byScope || [];
     },
 
     healthRows() {
@@ -721,8 +723,8 @@ window.dashboard = function dashboard() {
         if (room.channelId) channels.set(room.channelId, { id: room.channelId, label: this.roomName(room) });
       });
       this.allJobs().forEach((job) => {
-        if (job.voice_channel_id && !channels.has(job.voice_channel_id)) {
-          channels.set(job.voice_channel_id, { id: job.voice_channel_id, label: this.roomLabel(job.voice_channel_id) });
+        if (job.scope_id && !channels.has(job.scope_id)) {
+          channels.set(job.scope_id, { id: job.scope_id, label: this.jobScopeLabel(job) });
         }
       });
       this.timelineEvents.concat(this.transcriptEvents).forEach((event) => {
@@ -764,7 +766,7 @@ window.dashboard = function dashboard() {
         { id: 'job_kind', label: 'Job Type' },
         { id: 'state', label: 'State' },
         { id: 'command', label: 'Command' },
-        { id: 'room', label: 'Room' },
+        { id: 'room', label: 'Scope' },
         { id: 'actor', label: 'Actor' },
       ];
     },
@@ -863,7 +865,7 @@ window.dashboard = function dashboard() {
         timelineRecordTypes: 'Record',
         timelineKinds: 'Kind',
         timelineJobStates: 'Job State',
-        timelineChannels: 'Channel',
+        timelineChannels: 'Scope',
       }[field] || '';
     },
 
@@ -999,9 +1001,10 @@ window.dashboard = function dashboard() {
       }
       if (field === 'room') {
         return [
+          this.eventScopeKind(event),
           event?.guild_slug,
           this.eventGuildId(event),
-          this.eventChannelName(event),
+          this.eventScopeLabel(event),
           this.eventChannelId(event),
           event?.voice_channel_slug,
         ].filter(Boolean);
@@ -1055,10 +1058,12 @@ window.dashboard = function dashboard() {
         ].filter(Boolean);
       }
       if (field === 'room') {
+        const scopeId = job?.scope_id || '';
         return [
+          job?.scope_kind,
           job?.guild_id,
-          job?.voice_channel_id,
-          this.roomLabel(job?.voice_channel_id),
+          scopeId,
+          this.jobScopeLabel(job),
         ].filter(Boolean);
       }
       if (field === 'actor') return [job?.requested_by_user_id].filter(Boolean);
@@ -1091,7 +1096,7 @@ window.dashboard = function dashboard() {
         const haystack = [
           this.eventKind(event),
           this.eventGuildId(event),
-          this.eventChannelName(event),
+          this.eventScopeLabel(event),
           this.eventChannelId(event),
           this.eventSpeaker(event),
           this.eventDetail(event),
@@ -1135,7 +1140,7 @@ window.dashboard = function dashboard() {
         if (!this.timelineTimeMatches(Date.parse(this.jobTime(job)) || 0)) return false;
         if (kinds.length && !kinds.includes(job.kind)) return false;
         if (states.length && !states.includes(job.state)) return false;
-        if (channels.length && !channels.includes(job.voice_channel_id)) return false;
+        if (channels.length && !channels.includes(job.scope_id)) return false;
         if (!this.recordMatchesTimelineSearch('job', job)) return false;
         return true;
       });
@@ -1156,7 +1161,7 @@ window.dashboard = function dashboard() {
         state: event?.state || '',
         stateClass: this.statusClass(event?.state || ''),
         command: event?.command_kind || event?.command_name || '',
-        room: this.eventChannelName(event),
+        room: this.eventScopeLabel(event),
         actor: this.eventSpeaker(event),
         detail: this.eventDetail(event),
         id,
@@ -1179,7 +1184,7 @@ window.dashboard = function dashboard() {
         state: job.state,
         stateClass: this.statusClass(job.state),
         command: this.commandKind(job),
-        room: this.roomLabel(job.voice_channel_id),
+        room: this.jobScopeLabel(job),
         actor: job.requested_by_user_id || '',
         detail: this.jobDetail(job),
         id: job.job_id,
@@ -1350,7 +1355,21 @@ window.dashboard = function dashboard() {
     },
 
     eventChannelId(event) {
-      return event?.channelId || event?.voice_channel_id || event?.voiceChannelId || '';
+      return event?.scope_id || event?.scopeId || event?.channelId || event?.voice_channel_id || '';
+    },
+
+    eventScopeKind(event) {
+      if (event?.scope_kind) return event.scope_kind;
+      if (event?.voice_channel_id) return 'voice_channel';
+      return '';
+    },
+
+    eventScopeLabel(event) {
+      const scopeId = this.eventChannelId(event);
+      if (!scopeId) return '';
+      const scopeKind = this.eventScopeKind(event);
+      if (scopeKind === 'voice_channel') return this.eventChannelName(event);
+      return [scopeKind, scopeId].filter(Boolean).join(' / ');
     },
 
     eventChannelName(event) {
@@ -1430,7 +1449,7 @@ window.dashboard = function dashboard() {
 
     automationScope(record) {
       const scope = record?.spec?.scope || {};
-      return [scope.guild_id || scope.guildId, scope.voice_channel_id || scope.voiceChannelId || scope.channelId].filter(Boolean).join(' / ');
+      return [scope.scope_kind, scope.guild_id, scope.scope_id].filter(Boolean).join(' / ');
     },
 
     automationTrigger(record) {
@@ -1482,11 +1501,11 @@ window.dashboard = function dashboard() {
 
     liveRoomOccupants(room) {
       const guildId = room?.guildId || room?.guild_id || '';
-      const channelId = room?.channelId || room?.voice_channel_id || '';
-      const rooms = this.status().liveVoiceOccupancy?.rooms || [];
+      const channelId = room?.channelId || room?.scope_id || '';
+      const rooms = this.status().liveOccupancy?.rooms || [];
       const match = rooms.find((entry) => (
         (entry.guild_id || entry.guildId) === guildId
-        && (entry.voice_channel_id || entry.voiceChannelId || entry.channelId) === channelId
+        && (entry.scope_id || entry.scopeId || entry.channelId) === channelId
       ));
       return match?.occupants || [];
     },

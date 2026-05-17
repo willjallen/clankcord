@@ -534,7 +534,7 @@ async fn amend_activation_job(
         .timeline_store
         .append_event(
             &activation.guild_id,
-            &activation.voice_channel_id,
+            &activation.scope_id,
             json!({
                 "event_kind": "wake_activation_amended",
                 "kind": "wake_activation_amended",

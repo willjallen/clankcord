@@ -171,8 +171,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         &[
             column("sequence", "bigint", false),
             column("event_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("event_kind", "text", false),
             column("started_at_ms", "bigint", true),
             column("ended_at_ms", "bigint", true),
@@ -190,8 +191,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "conversations",
         &[
             column("conversation_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("start_ms", "bigint", true),
             column("end_ms", "bigint", true),
             column("last_speech_at_ms", "bigint", true),
@@ -203,8 +205,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "windows",
         &[
             column("window_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("start_ms", "bigint", true),
             column("end_ms", "bigint", true),
             column("payload_json", "jsonb", false),
@@ -214,8 +217,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "publications",
         &[
             column("publication_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("window_id", "text", false),
             column("state", "text", false),
             column("created_at_ms", "bigint", true),
@@ -227,8 +231,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "authoritative_spans",
         &[
             column("span_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("window_id", "text", false),
             column("publication_id", "text", false),
             column("start_ms", "bigint", true),
@@ -266,8 +271,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "jobs",
         &[
             column("job_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("kind", "text", false),
             column("state", "text", false),
             column("terminal", "boolean", false),
@@ -315,8 +321,9 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         "automations",
         &[
             column("automation_id", "text", false),
+            column("scope_kind", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("state", "text", false),
             column("idempotency_key", "text", false),
             column("created_at_ms", "bigint", true),
@@ -335,7 +342,7 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("route_kind", "text", false),
             column("route_key", "text", false),
             column("guild_id", "text", false),
-            column("voice_channel_id", "text", false),
+            column("scope_id", "text", false),
             column("dm_user_id", "text", false),
             column("voice_capture_session_id", "text", false),
             column("discord_thread_id", "text", false),
@@ -576,8 +583,9 @@ impl TimelineStore {
             CREATE TABLE IF NOT EXISTS timeline_events (
               sequence BIGSERIAL PRIMARY KEY,
               event_id TEXT NOT NULL UNIQUE,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               event_kind TEXT NOT NULL,
               started_at_ms BIGINT,
               ended_at_ms BIGINT,
@@ -593,8 +601,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS conversations (
               conversation_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               start_ms BIGINT,
               end_ms BIGINT,
               last_speech_at_ms BIGINT,
@@ -604,8 +613,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS windows (
               window_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               start_ms BIGINT,
               end_ms BIGINT,
               payload_json JSONB NOT NULL
@@ -613,8 +623,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS publications (
               publication_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               window_id TEXT NOT NULL DEFAULT '',
               state TEXT NOT NULL DEFAULT '',
               created_at_ms BIGINT,
@@ -624,8 +635,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS authoritative_spans (
               span_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               window_id TEXT NOT NULL DEFAULT '',
               publication_id TEXT NOT NULL DEFAULT '',
               start_ms BIGINT,
@@ -648,8 +660,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS jobs (
               job_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT '',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               kind TEXT NOT NULL DEFAULT '',
               state TEXT NOT NULL DEFAULT '',
               terminal BOOLEAN NOT NULL DEFAULT FALSE,
@@ -692,8 +705,9 @@ impl TimelineStore {
 
             CREATE TABLE IF NOT EXISTS automations (
               automation_id TEXT PRIMARY KEY,
+              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
               guild_id TEXT NOT NULL,
-              voice_channel_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
               state TEXT NOT NULL DEFAULT '',
               idempotency_key TEXT NOT NULL DEFAULT '',
               created_at_ms BIGINT,
@@ -710,7 +724,7 @@ impl TimelineStore {
               route_kind TEXT NOT NULL DEFAULT '',
               route_key TEXT NOT NULL DEFAULT '',
               guild_id TEXT NOT NULL DEFAULT '',
-              voice_channel_id TEXT NOT NULL DEFAULT '',
+              scope_id TEXT NOT NULL DEFAULT '',
               dm_user_id TEXT NOT NULL DEFAULT '',
               voice_capture_session_id TEXT NOT NULL DEFAULT '',
               discord_thread_id TEXT NOT NULL DEFAULT '',
@@ -866,9 +880,9 @@ impl TimelineStore {
         sqlx::raw_sql(
             r#"
             CREATE INDEX IF NOT EXISTS idx_timeline_room_time
-              ON timeline_events(guild_id, voice_channel_id, started_at_ms, sequence);
+              ON timeline_events(scope_kind, scope_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_room_kind_time
-              ON timeline_events(guild_id, voice_channel_id, event_kind, started_at_ms, sequence);
+              ON timeline_events(scope_kind, scope_id, event_kind, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_capture_run_time
               ON timeline_events(capture_run_id, started_at_ms, sequence);
             CREATE INDEX IF NOT EXISTS idx_timeline_conversation_time
@@ -886,11 +900,11 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_capture_runs_room_time
               ON capture_runs(guild_id, voice_channel_id, started_at_ms, ended_at_ms);
             CREATE INDEX IF NOT EXISTS idx_conversations_room_time
-              ON conversations(guild_id, voice_channel_id, start_ms, end_ms);
+              ON conversations(scope_kind, scope_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_spans_room_time
-              ON authoritative_spans(guild_id, voice_channel_id, start_ms, end_ms);
+              ON authoritative_spans(scope_kind, scope_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
-              ON publications(guild_id, voice_channel_id, state, created_at_ms);
+              ON publications(scope_kind, scope_id, state, created_at_ms);
             CREATE INDEX IF NOT EXISTS idx_capture_sessions_active_room
               ON capture_sessions(guild_id, voice_channel_id, active, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
@@ -900,7 +914,7 @@ impl TimelineStore {
               ON jobs(ordering_key)
               WHERE terminal = FALSE AND ordering_key <> '';
             CREATE INDEX IF NOT EXISTS idx_jobs_active_visible_scope
-              ON jobs(guild_id, voice_channel_id, updated_at_ms DESC, job_id)
+              ON jobs(scope_kind, scope_id, updated_at_ms DESC, job_id)
               WHERE terminal = FALSE AND ephemeral = FALSE;
             CREATE INDEX IF NOT EXISTS idx_jobs_recent_visible
               ON jobs(updated_at_ms DESC, job_id)
@@ -909,9 +923,9 @@ impl TimelineStore {
               ON jobs(updated_at_ms DESC, job_id)
               WHERE failed = TRUE AND ephemeral = FALSE;
             CREATE INDEX IF NOT EXISTS idx_jobs_scope_state_kind_updated
-              ON jobs(guild_id, voice_channel_id, state, kind, updated_at_ms DESC);
+              ON jobs(scope_kind, scope_id, state, kind, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_scope_kind_updated
-              ON jobs(guild_id, voice_channel_id, kind, updated_at_ms DESC);
+              ON jobs(scope_kind, scope_id, kind, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_kind_updated
               ON jobs(kind, updated_at_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_jobs_state_updated
@@ -926,14 +940,14 @@ impl TimelineStore {
               ON jobs(source_job_id, updated_at_ms DESC, job_id)
               WHERE kind = 'text_delivery';
             CREATE INDEX IF NOT EXISTS idx_jobs_audio_segment_pending_speaker
-              ON jobs(guild_id, voice_channel_id, speaker_user_id, segment_end_ms, job_id)
-              WHERE kind = 'audio_segment' AND terminal = FALSE;
+              ON jobs(guild_id, scope_id, speaker_user_id, segment_end_ms, job_id)
+              WHERE scope_kind = 'voice_channel' AND kind = 'audio_segment' AND terminal = FALSE;
             CREATE INDEX IF NOT EXISTS idx_job_dependencies_child
               ON job_dependencies(child_job_id, parent_job_id);
             CREATE INDEX IF NOT EXISTS idx_automations_scope_state
-              ON automations(guild_id, voice_channel_id, state, expires_at_ms);
+              ON automations(scope_kind, scope_id, state, expires_at_ms);
             CREATE INDEX IF NOT EXISTS idx_automations_idempotency
-              ON automations(guild_id, voice_channel_id, idempotency_key, state);
+              ON automations(scope_kind, scope_id, idempotency_key, state);
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_route
               ON agent_sessions(route_key, state, max_active_until_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_thread

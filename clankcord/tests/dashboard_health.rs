@@ -3,7 +3,9 @@ use serde_json::json;
 
 mod common;
 
-use clankcord::runtime::{DebugOverviewRequest, Runtime};
+use clankcord::runtime::{
+    CommandRequest, DebugOverviewRequest, Job, JobState, Runtime, RuntimeScope,
+};
 
 use common::{initialize_test_config, test_store};
 
@@ -76,6 +78,61 @@ async fn dashboard_health_includes_http_request_snapshot() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn dashboard_job_summary_groups_by_runtime_scope() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(raw.path()).await;
+    store
+        .create_job(Job::new(
+            RuntimeScope::voice_channel("guild", "voice"),
+            "system",
+            JobState::Queued,
+            clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+                command: CommandRequest::agent_task("guild", "voice", "system", "voice"),
+            }),
+        ))
+        .await
+        .unwrap();
+    store
+        .create_job(Job::new(
+            RuntimeScope::dm("user"),
+            "system",
+            JobState::Failed,
+            clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+                command: CommandRequest::agent_task("", "user", "system", "dm"),
+            }),
+        ))
+        .await
+        .unwrap();
+    let runtime = Runtime::from_store(store).unwrap();
+
+    let overview = runtime
+        .debug_overview(DebugOverviewRequest::default())
+        .await
+        .unwrap();
+    let summary = &overview["jobs"]["summary"];
+    let scopes = summary["byScope"].as_array().unwrap();
+    let events = overview["timeline"]["recentEvents"].as_array().unwrap();
+
+    assert!(summary.get("byRoom").is_none());
+    assert!(scopes.iter().any(|scope| {
+        scope["scope_kind"] == "voice_channel"
+            && scope["guild_id"] == "guild"
+            && scope["scope_id"] == "voice"
+            && scope["total"] == 1
+    }));
+    assert!(scopes.iter().any(|scope| {
+        scope["scope_kind"] == "dm" && scope["scope_id"] == "user" && scope["failed"] == 1
+    }));
+    assert!(events.iter().any(|event| {
+        event["kind"] == "job_created"
+            && event["scope_kind"] == "dm"
+            && event["scope_id"] == "user"
+            && event.get("voice_channel_id").is_none()
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
@@ -85,14 +142,14 @@ async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
     sqlx::query(
         r#"
         INSERT INTO jobs(
-          job_id, guild_id, voice_channel_id, kind, state, terminal, failed,
+          job_id, scope_kind, guild_id, scope_id, kind, state, terminal, failed,
           ephemeral, cancellable, lane, ordering_key, ready_at_ms, created_at_ms,
           updated_at_ms, started_at_ms, completed_at_ms
         )
         VALUES
-          ('job_latency_clean', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
+          ('job_latency_clean', 'voice_channel', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
            FALSE, FALSE, 'voice_control', 'latency-test', $1, $2, $5, $3, $4),
-          ('job_latency_phase', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
+          ('job_latency_phase', 'voice_channel', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
            FALSE, FALSE, 'voice_control', 'latency-test', $8, $6, $10, $7, $9)
         "#,
     )

@@ -49,7 +49,7 @@ impl Runtime {
             )
             .await?
             .into_iter()
-            .filter(|job| job.voice_channel_id == room.channel_id && !job.state.is_terminal())
+            .filter(|job| job.scope_id == room.channel_id && !job.state.is_terminal())
             .map(|job| Self::public_job_view(&job))
             .collect::<Vec<_>>();
         Ok(json!({

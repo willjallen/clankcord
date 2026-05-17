@@ -3,7 +3,7 @@ job_id: {{job_id}}
 agent_session_id: {{agent_session_id}}
 resumed_from_agent_session_id: {{resumed_from_agent_session_id}}
 guild_id: {{guild_id}}
-voice_channel_id: {{voice_channel_id}}
+scope_id: {{scope_id}}
 requested_by_user_id: {{requested_by_user_id}}
 requested_by: {{requested_by}}
 request: {{request}}

@@ -7,7 +7,7 @@ use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
     CommandRequest, DiscordForumThreadCreateOutput, DiscordTextMessagePayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, Runtime, TextDeliveryKind, TextDeliveryOutput,
+    JobOutput, JobPayload, JobState, Runtime, RuntimeScope, TextDeliveryKind, TextDeliveryOutput,
     TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key, voice_route_key,
 };
 
@@ -240,7 +240,7 @@ async fn resume_reactivates_retired_dm_session() {
     source.retirement_reason = "user_sunset".to_string();
     store.create_agent_session_record(source).await.unwrap();
 
-    let job = Job::agent_session_resume("ags_source", "dm", "", "", "user-a", "user-a", "");
+    let job = Job::agent_session_resume("ags_source", "dm", "", "user-a", "user-a", "");
     match &job.payload {
         JobPayload::AgentSessionResume(payload) => {
             assert_eq!(payload.new_agent_session_id, "ags_source");
@@ -312,8 +312,7 @@ async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
     );
     store.create_agent_session_record(starting).await.unwrap();
 
-    let mut job =
-        Job::agent_session_resume("ags_source", "voice", "guild", "code", "", "user-a", "");
+    let mut job = Job::agent_session_resume("ags_source", "voice", "guild", "code", "user-a", "");
     match &job.payload {
         JobPayload::AgentSessionResume(payload) => {
             assert_eq!(payload.new_agent_session_id, "ags_source");
@@ -649,8 +648,7 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
         .expect("agent task child");
     let delivery = store
         .create_job(Job::text_delivery(
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             TextDeliveryPayload::new(
                 TextDeliveryKind::Message,
@@ -763,8 +761,7 @@ async fn session_response_reroutes_after_resume_takeover() {
     let task = store
         .create_job(Job::agent_task_for_session(
             "ags_source",
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             CommandRequest::agent_task("guild", "code", "user-a", "resume session"),
         ))
@@ -772,8 +769,7 @@ async fn session_response_reroutes_after_resume_takeover() {
         .unwrap();
     let delivery = store
         .create_job(Job::text_delivery(
-            "guild",
-            "code",
+            RuntimeScope::voice_channel("guild", "code"),
             "user-a",
             TextDeliveryPayload::new(
                 TextDeliveryKind::Message,
@@ -965,8 +961,7 @@ async fn insert_completed_agent_response(
 ) {
     let mut task = Job::agent_task_for_session(
         agent_session_id,
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         requested_by_user_id,
         CommandRequest::agent_task("guild", "code", requested_by_user_id, request),
     );
@@ -978,8 +973,7 @@ async fn insert_completed_agent_response(
         user_id: String::new(),
     };
     let mut delivery = Job::text_delivery(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         requested_by_user_id,
         TextDeliveryPayload::new(
             TextDeliveryKind::Message,

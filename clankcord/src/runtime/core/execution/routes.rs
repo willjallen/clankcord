@@ -231,7 +231,7 @@ mod room_agents {
             return runtime.resume_room_agent_placement_job(job, payload).await;
         }
         let target_room_identifier = if payload.room_id.trim().is_empty() {
-            job.voice_channel_id.as_str()
+            job.scope_id.as_str()
         } else {
             payload.room_id.as_str()
         };

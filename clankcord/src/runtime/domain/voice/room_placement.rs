@@ -515,7 +515,7 @@ impl Runtime {
                         .map(|(child, payload)| {
                             Job::discord_voice_leave(
                                 child.guild_id.clone(),
-                                child.voice_channel_id.clone(),
+                                child.scope_id.clone(),
                                 job.requested_by_user_id.clone(),
                                 DiscordVoiceLeavePayload {
                                     session_id: payload.session_id.clone(),

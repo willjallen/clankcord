@@ -4,6 +4,7 @@ use serde_json::{Map, Number, Value, json};
 use uuid::Uuid;
 
 use crate::runtime::util::first_non_empty;
+use crate::runtime::{RuntimeScope, RuntimeScopeKind};
 
 use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{
@@ -24,7 +25,7 @@ use super::{
 use crate::Result;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
-const JOB_PAYLOAD_BLOB_VERSION: u16 = 2;
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 3;
 const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
     JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
 
@@ -333,8 +334,9 @@ impl JobMetadata {
 pub struct Job {
     pub id: String,
     pub kind: JobKind,
+    pub scope_kind: RuntimeScopeKind,
     pub guild_id: String,
-    pub voice_channel_id: String,
+    pub scope_id: String,
     pub state: JobState,
     pub requested_by_user_id: String,
     pub payload: JobPayload,
@@ -353,8 +355,7 @@ pub struct Job {
 
 impl Job {
     pub fn new(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         state: JobState,
         payload: JobPayload,
@@ -365,8 +366,9 @@ impl Job {
         Self {
             id: id.clone(),
             kind: payload.kind(),
-            guild_id: guild_id.into(),
-            voice_channel_id: voice_channel_id.into(),
+            scope_kind: scope.kind,
+            guild_id: scope.guild_id,
+            scope_id: scope.scope_id,
             state,
             requested_by_user_id: requested_by_user_id.into(),
             payload,
@@ -384,6 +386,14 @@ impl Job {
         }
     }
 
+    pub fn scope(&self) -> RuntimeScope {
+        RuntimeScope {
+            kind: self.scope_kind,
+            guild_id: self.guild_id.clone(),
+            scope_id: self.scope_id.clone(),
+        }
+    }
+
     pub fn attach_to_parent(&mut self, parent: &Job) -> Result<()> {
         self.parent_job_id = Some(parent.id.clone());
         self.root_job_id = if parent.root_job_id.trim().is_empty() {
@@ -397,14 +407,12 @@ impl Job {
 
     pub fn agent_task_for_session(
         agent_session_id: impl Into<String>,
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         command: CommandRequest,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::AgentTask(AgentTaskPayload {
@@ -415,19 +423,13 @@ impl Job {
     }
 
     pub fn discord_text_message(payload: DiscordTextMessagePayload) -> Self {
-        let guild_id = if payload.guild_id.trim().is_empty() {
-            "dm".to_string()
+        let scope = if payload.guild_id.trim().is_empty() {
+            RuntimeScope::dm(payload.author_user_id.clone())
         } else {
-            payload.guild_id.clone()
-        };
-        let scope_channel_id = if payload.guild_id.trim().is_empty() {
-            payload.author_user_id.clone()
-        } else {
-            payload.channel_id.clone()
+            RuntimeScope::text_channel(payload.guild_id.clone(), payload.channel_id.clone())
         };
         Self::new(
-            guild_id,
-            scope_channel_id,
+            scope,
             payload.author_user_id.clone(),
             JobState::Queued,
             JobPayload::DiscordTextMessage(payload),
@@ -435,9 +437,17 @@ impl Job {
     }
 
     pub fn discord_slash_command(payload: DiscordSlashCommandPayload) -> Self {
+        let scope = if payload.guild_id.trim().is_empty() {
+            RuntimeScope::dm(payload.user_id.clone())
+        } else if payload.timeline_channel_id() == payload.voice_channel_id
+            && !payload.voice_channel_id.trim().is_empty()
+        {
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone())
+        } else {
+            RuntimeScope::text_channel(payload.guild_id.clone(), payload.channel_id.clone())
+        };
         Self::new(
-            payload.guild_id.clone(),
-            payload.timeline_channel_id().to_string(),
+            scope,
             payload.user_id.clone(),
             JobState::Queued,
             JobPayload::DiscordSlashCommand(payload),
@@ -446,8 +456,7 @@ impl Job {
 
     pub fn wake_activation(payload: WakeActivationPayload) -> Self {
         Self::new(
-            payload.guild_id.clone(),
-            payload.voice_channel_id.clone(),
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
             payload.speaker_user_id.clone(),
             JobState::Queued,
             JobPayload::WakeActivation(payload),
@@ -455,14 +464,12 @@ impl Job {
     }
 
     pub fn text_delivery(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         payload: TextDeliveryPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::TextDelivery(payload),
@@ -470,14 +477,12 @@ impl Job {
     }
 
     pub fn discord_text_send(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         payload: DiscordTextSendPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordTextSend(payload),
@@ -485,14 +490,12 @@ impl Job {
     }
 
     pub fn discord_forum_thread_create(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         payload: DiscordForumThreadCreatePayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordForumThreadCreate(payload),
@@ -500,14 +503,12 @@ impl Job {
     }
 
     pub fn discord_forum_thread_rename(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         payload: DiscordForumThreadRenamePayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordForumThreadRename(payload),
@@ -515,14 +516,12 @@ impl Job {
     }
 
     pub fn discord_typing_indicator(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         payload: DiscordTypingIndicatorPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordTypingIndicator(payload),
@@ -535,9 +534,10 @@ impl Job {
         requested_by_user_id: impl Into<String>,
         payload: AgentSessionStartPayload,
     ) -> Self {
+        let guild_id = guild_id.into();
+        let voice_channel_id = voice_channel_id.into();
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::AgentSessionStart(payload),
@@ -551,8 +551,7 @@ impl Job {
         payload: TranscriptPublicationPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::TranscriptPublication(payload),
@@ -561,8 +560,7 @@ impl Job {
 
     pub fn audio_segment(payload: AudioSegmentPayload) -> Self {
         Self::new(
-            payload.guild_id.clone(),
-            payload.voice_channel_id.clone(),
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
             "discord_voice_adapter",
             JobState::Queued,
             JobPayload::AudioSegment(payload),
@@ -571,8 +569,7 @@ impl Job {
 
     pub fn wake_probe(payload: WakeProbePayload) -> Self {
         Self::new(
-            payload.guild_id.clone(),
-            payload.voice_channel_id.clone(),
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
             "discord_voice_adapter",
             JobState::Queued,
             JobPayload::WakeProbe(payload),
@@ -580,15 +577,13 @@ impl Job {
     }
 
     pub fn confirmation_required(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         command: CommandRequest,
         confirmation: ConfirmationContext,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::ConfirmationRequired(ConfirmationRequiredPayload {
@@ -599,14 +594,12 @@ impl Job {
     }
 
     pub fn command_request(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         command: CommandRequest,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id,
             JobState::Queued,
             JobPayload::Command(CommandPayload { command }),
@@ -621,8 +614,7 @@ impl Job {
         publication_id: impl Into<String>,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::RefineTranscript(RefineTranscriptPayload {
@@ -642,8 +634,7 @@ impl Job {
         cooldown_seconds: Option<i64>,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             "runtime_automation",
             JobState::Queued,
             JobPayload::RoomAgentPlacement(RoomAgentPlacementPayload {
@@ -658,8 +649,10 @@ impl Job {
 
     pub fn discord_voice_join(payload: DiscordVoiceJoinPayload) -> Self {
         Self::new(
-            payload.room.guild_id.clone(),
-            payload.room.channel_id.clone(),
+            RuntimeScope::voice_channel(
+                payload.room.guild_id.clone(),
+                payload.room.channel_id.clone(),
+            ),
             payload.requested_by_user_id.clone(),
             JobState::Queued,
             JobPayload::DiscordVoiceJoin(payload),
@@ -673,8 +666,7 @@ impl Job {
         payload: DiscordVoiceLeavePayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordVoiceLeave(payload),
@@ -688,8 +680,7 @@ impl Job {
         payload: DiscordVoicePlaybackPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordVoicePlayback(payload),
@@ -703,8 +694,7 @@ impl Job {
         payload: DiscordVoiceMutePayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordVoiceMute(payload),
@@ -718,8 +708,7 @@ impl Job {
         payload: DiscordVoiceDeafenPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordVoiceDeafen(payload),
@@ -733,8 +722,7 @@ impl Job {
         payload: DiscordVoicePlayAudioPayload,
     ) -> Self {
         Self::new(
-            guild_id,
-            voice_channel_id,
+            RuntimeScope::voice_channel(guild_id, voice_channel_id),
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordVoicePlayAudio(payload),
@@ -742,16 +730,14 @@ impl Job {
     }
 
     pub fn runtime_control(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
+        scope: RuntimeScope,
         requested_by_user_id: impl Into<String>,
         action: RuntimeControlAction,
         target_job_id: impl Into<String>,
     ) -> Self {
         let requested_by_user_id = requested_by_user_id.into();
         Self::new(
-            guild_id,
-            voice_channel_id,
+            scope,
             requested_by_user_id.clone(),
             JobState::Queued,
             JobPayload::RuntimeControl(RuntimeControlPayload {
@@ -764,8 +750,7 @@ impl Job {
 
     pub fn runtime_maintenance(interval_ms: i64) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::RuntimeMaintenance(RuntimeMaintenancePayload { interval_ms }),
@@ -774,8 +759,7 @@ impl Job {
 
     pub fn voice_status_sync(source_job_id: impl Into<String>) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::VoiceStatusSync(VoiceStatusSyncPayload {
@@ -786,8 +770,7 @@ impl Job {
 
     pub fn discord_voice_status_snapshot(source_job_id: impl Into<String>) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotPayload {
@@ -798,8 +781,7 @@ impl Job {
 
     pub fn automation_evaluation(source_job_id: impl Into<String>) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::AutomationEvaluation(AutomationEvaluationPayload {
@@ -810,8 +792,7 @@ impl Job {
 
     pub fn stale_wake_probe_sweep(source_job_id: impl Into<String>, max_age_seconds: i64) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::StaleWakeProbeSweep(StaleWakeProbeSweepPayload {
@@ -823,8 +804,7 @@ impl Job {
 
     pub fn stale_running_job_sweep(source_job_id: impl Into<String>, timeout_minutes: i64) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::StaleRunningJobSweep(StaleRunningJobSweepPayload {
@@ -836,8 +816,7 @@ impl Job {
 
     pub fn ephemeral_job_gc(source_job_id: impl Into<String>, batch_limit: usize) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::EphemeralJobGc(EphemeralJobGcPayload {
@@ -854,8 +833,7 @@ impl Job {
     ) -> Self {
         let requested_by_user_id = requested_by_user_id.into();
         Self::new(
-            "agent",
-            "session",
+            RuntimeScope::runtime(),
             requested_by_user_id.clone(),
             JobState::Queued,
             JobPayload::AgentSessionSunset(AgentSessionSunsetPayload {
@@ -870,25 +848,37 @@ impl Job {
         source_agent_session_id: impl Into<String>,
         route_kind: impl Into<String>,
         guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
-        dm_user_id: impl Into<String>,
+        scope_id: impl Into<String>,
         requested_by_user_id: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
         let requested_by_user_id = requested_by_user_id.into();
         let source_agent_session_id = source_agent_session_id.into();
+        let route_kind = route_kind.into();
+        let guild_id = guild_id.into();
+        let scope_id = scope_id.into();
+        let scope = if route_kind == "dm" {
+            RuntimeScope::dm(scope_id.clone())
+        } else {
+            RuntimeScope::voice_channel(guild_id.clone(), scope_id.clone())
+        };
+        let is_voice_scope = scope.kind == RuntimeScopeKind::VoiceChannel;
+        let is_dm_scope = scope.kind == RuntimeScopeKind::Dm;
         Self::new(
-            "agent",
-            "session",
+            scope,
             requested_by_user_id.clone(),
             JobState::Queued,
             JobPayload::AgentSessionResume(AgentSessionResumePayload {
                 source_agent_session_id: source_agent_session_id.clone(),
                 new_agent_session_id: source_agent_session_id,
-                route_kind: route_kind.into(),
-                guild_id: guild_id.into(),
-                voice_channel_id: voice_channel_id.into(),
-                dm_user_id: dm_user_id.into(),
+                route_kind,
+                guild_id,
+                voice_channel_id: if is_voice_scope {
+                    scope_id.clone()
+                } else {
+                    String::new()
+                },
+                dm_user_id: if is_dm_scope { scope_id } else { String::new() },
                 requested_by_user_id,
                 message: message.into(),
             }),
@@ -897,8 +887,7 @@ impl Job {
 
     pub fn agent_session_retirement(source_job_id: impl Into<String>) -> Self {
         Self::new(
-            "runtime",
-            "runtime",
+            RuntimeScope::runtime(),
             "runtime",
             JobState::Queued,
             JobPayload::AgentSessionRetirement(AgentSessionRetirementPayload {
@@ -919,8 +908,7 @@ impl Job {
         let guild_id = guild_id.into();
         let voice_channel_id = voice_channel_id.into();
         Self::new(
-            guild_id.clone(),
-            voice_channel_id.clone(),
+            RuntimeScope::voice_channel(guild_id.clone(), voice_channel_id.clone()),
             "runtime",
             JobState::Queued,
             JobPayload::AgentThreadTitleRefresh(AgentThreadTitleRefreshPayload {
@@ -978,11 +966,14 @@ impl Job {
             "kind".to_string(),
             Value::String(self.kind.as_str().to_string()),
         );
-        object.insert("guild_id".to_string(), Value::String(self.guild_id.clone()));
         object.insert(
-            "voice_channel_id".to_string(),
-            Value::String(self.voice_channel_id.clone()),
+            "scope_kind".to_string(),
+            Value::String(self.scope_kind.as_str().to_string()),
         );
+        if !self.guild_id.trim().is_empty() {
+            object.insert("guild_id".to_string(), Value::String(self.guild_id.clone()));
+        }
+        object.insert("scope_id".to_string(), Value::String(self.scope_id.clone()));
         object.insert(
             "state".to_string(),
             Value::String(self.state.as_str().to_string()),
@@ -1211,8 +1202,9 @@ impl Job {
         match key {
             "job_id" => self.id.clone(),
             "kind" => self.kind.as_str().to_string(),
+            "scope_kind" => self.scope_kind.as_str().to_string(),
             "guild_id" => self.guild_id.clone(),
-            "voice_channel_id" => self.voice_channel_id.clone(),
+            "scope_id" => self.scope_id.clone(),
             "state" => self.state.as_str().to_string(),
             "requested_by_user_id" => self.requested_by_user_id.clone(),
             "created_at" => self.created_at.clone(),

@@ -22,7 +22,7 @@ impl Runtime {
     ) -> Result<ConfirmationContext> {
         let (start, end) = command.window_times(None);
         let guild_id = command.guild_id.clone();
-        let channel_id = command.voice_channel_id.clone();
+        let channel_id = command.scope_id.clone();
         let events = if guild_id.is_empty() || channel_id.is_empty() {
             Vec::new()
         } else {
@@ -179,8 +179,7 @@ impl Runtime {
         }
 
         Ok(JobDecision::WaitFor(vec![Job::discord_text_send(
-            job.guild_id.clone(),
-            job.voice_channel_id.clone(),
+            job.scope(),
             requested_user_id.clone(),
             DiscordTextSendPayload {
                 intent: TextDeliveryKind::Message,
@@ -196,13 +195,13 @@ impl Runtime {
                             "type": 2,
                             "style": 3,
                             "label": "Approve",
-                            "custom_id": format!("clankcord_voice_confirm:{}", job.id),
+                            "custom_id": format!("clankcord_confirm:{}", job.id),
                         },
                         {
                             "type": 2,
                             "style": 4,
                             "label": "Cancel",
-                            "custom_id": format!("clankcord_voice_cancel:{}", job.id),
+                            "custom_id": format!("clankcord_cancel:{}", job.id),
                         },
                     ],
                 }]))?,
@@ -217,7 +216,7 @@ impl Runtime {
     ) -> Result<String> {
         let (start, end) = command.window_times(None);
         let room = self
-            .room_for_channel_ids(&command.guild_id, &command.voice_channel_id, None)
+            .room_for_channel_ids(&command.guild_id, &command.scope_id, None)
             .await?;
         let requester = first_non_empty([
             command.requested_by_speaker_label.clone(),

@@ -26,8 +26,9 @@ A stored spec has required fields for `name`, `owner`, `scope`, `trigger`, `cond
   "idempotency_key": "optional stable dedupe key",
   "owner": {"kind": "system"},
   "scope": {
+    "scope_kind": "voice_channel",
     "guild_id": "discord-guild-id",
-    "voice_channel_id": "discord-voice-channel-id"
+    "scope_id": "discord-voice-channel-id"
   },
   "trigger": {
     "kind": "event",
@@ -49,18 +50,19 @@ A stored spec has required fields for `name`, `owner`, `scope`, `trigger`, `cond
 }
 ```
 
-The JSON boundary accepts snake_case and the documented camelCase aliases for common fields such as `guildId`, `voiceChannelId`, `sourceJobId`, `idempotencyKey`, `maxFires`, and `expiresAt`. Generated JSON uses snake_case.
+The JSON boundary accepts snake_case and the documented camelCase aliases for common non-scope fields such as `guildId`, `sourceJobId`, `idempotencyKey`, `maxFires`, and `expiresAt`. The scope identity fields are `scope_kind` and `scope_id`. Generated JSON uses snake_case.
 
 ## Ownership And Scope
 
 Supported owners are `agent`, `user`, and `system`. Agent-owned automations require `source_job_id`, may include `user_id`, lock the source job while being created, and dedupe active automations for the same source job within the same scope. User-owned automations require `user_id`. System-owned automations carry system authority.
 
-Scope binds the automation to one Discord guild and one voice channel. Specs use durable Discord ids, so an agent that depends on a named person or room resolves that name through `clankcord members resolve` or room inspection before storing the JSON.
+Scope binds the automation to one runtime scope. Stored automations currently execute in `voice_channel` scopes, so `scope_id` is the Discord voice channel id. Specs use durable Discord ids, so an agent that depends on a named person or room resolves that name through `clankcord members resolve` or room inspection before storing the JSON.
 
 ```json
 {
+  "scope_kind": "voice_channel",
   "guild_id": "553018603226529802",
-  "voice_channel_id": "1204188344993447956"
+  "scope_id": "1204188344993447956"
 }
 ```
 

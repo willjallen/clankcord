@@ -118,7 +118,7 @@
     jobMatchesExplore(job) {
       const filters = this.filters;
       if (!filters.globalIncludeTerminal && this.isTerminalState(job.state)) return false;
-      if (filters.globalRoom && job.voice_channel_id !== filters.globalRoom) return false;
+      if (filters.globalRoom && job.scope_id !== filters.globalRoom) return false;
       if (filters.globalGuild && job.guild_id !== filters.globalGuild) return false;
       if (filters.globalJobKind && job.kind !== filters.globalJobKind) return false;
       if (filters.globalJobState && job.state !== filters.globalJobState) return false;
@@ -129,8 +129,9 @@
         job.job_id,
         job.root_job_id,
         job.parent_job_id,
+        job.scope_kind,
         job.guild_id,
-        job.voice_channel_id,
+        job.scope_id,
         job.requested_by_user_id,
         job.kind,
         job.state,
@@ -165,6 +166,14 @@
     roomLabel(channelId) {
       const room = this.rooms.find((entry) => entry.channelId === channelId);
       return room ? this.roomName(room) : channelId;
+    },
+
+    jobScopeLabel(job) {
+      const scopeId = job?.scope_id || '';
+      if (!scopeId) return '';
+      const scopeKind = job?.scope_kind || '';
+      if (scopeKind === 'voice_channel') return this.roomLabel(scopeId);
+      return [scopeKind, scopeId].filter(Boolean).join(' / ');
     },
 
     selectedExplorerJobLifecycle() {
@@ -254,7 +263,9 @@
         return rows.get(id);
       };
       this.allJobs().forEach((job) => {
-        ensure(job.voice_channel_id).jobs += 1;
+        const row = ensure(job.scope_id);
+        row.label = this.jobScopeLabel(job) || row.label;
+        row.jobs += 1;
       });
       this.timelineEvents.forEach((event) => {
         const row = ensure(this.eventChannelId(event));
@@ -276,7 +287,7 @@
         state: job.state,
         stateClass: this.statusClass(job.state),
         command: this.commandKind(job),
-        room: this.roomLabel(job.voice_channel_id),
+        room: this.jobScopeLabel(job),
         requester: job.requested_by_user_id,
         attempts: job.attempts ?? 0,
         updatedAgo: this.ago(this.jobTime(job)),
@@ -290,7 +301,7 @@
         when: this.ago(this.eventWhen(event)),
         kind: this.eventKind(event),
         kindClass: this.statusClass(this.eventKind(event)),
-        room: this.eventChannelName(event),
+        room: this.eventScopeLabel(event),
         speaker: this.eventSpeaker(event),
         detail: this.eventDetail(event),
         id: this.eventId(event),

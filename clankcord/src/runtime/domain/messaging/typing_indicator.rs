@@ -8,7 +8,7 @@ use crate::runtime::util::first_non_empty;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind,
     DiscordForumThreadCreatePayload, DiscordTypingAction, DiscordTypingIndicatorPayload, Job,
-    JobKind, JobOutput, JobState, Runtime, TextTarget, TextTargetKind,
+    JobKind, JobOutput, JobState, Runtime, RuntimeScope, TextTarget, TextTargetKind,
 };
 
 enum TypingTarget {
@@ -56,7 +56,7 @@ impl Runtime {
         self.timeline_store
             .append_event(
                 &job.guild_id,
-                &job.voice_channel_id,
+                &job.scope_id,
                 json!({
                     "event_kind": "discord_typing_indicator",
                     "kind": "discord_typing_indicator",
@@ -194,7 +194,7 @@ impl Runtime {
                     self.timeline_store
                         .append_event(
                             &session.guild_id,
-                            &session.voice_channel_id,
+                            &session.scope_id,
                             json!({
                                 "event_kind": "agent_session_thread_created",
                                 "kind": "agent_session_thread_created",
@@ -213,8 +213,10 @@ impl Runtime {
                         );
                     }
                     Ok(TypingTarget::WaitFor(Job::discord_forum_thread_create(
-                        session.guild_id.clone(),
-                        session.voice_channel_id.clone(),
+                        RuntimeScope::voice_channel(
+                            session.guild_id.clone(),
+                            session.scope_id.clone(),
+                        ),
                         payload.requested_by_user_id.clone(),
                         DiscordForumThreadCreatePayload {
                             parent_channel_id: session.discord_parent_channel_id.clone(),
@@ -222,7 +224,7 @@ impl Runtime {
                             content: self
                                 .agent_thread_content(
                                     &session.guild_id,
-                                    &session.voice_channel_id,
+                                    &session.scope_id,
                                     &first_non_empty([
                                         payload.requested_by_user_id.clone(),
                                         job.requested_by_user_id.clone(),

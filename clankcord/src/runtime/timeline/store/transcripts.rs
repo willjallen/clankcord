@@ -54,9 +54,10 @@ impl TimelineStore {
         self.ensure_room(guild_id, voice_channel_id, "", "", "")
             .await?;
         sqlx::query(
-            "INSERT INTO windows(window_id, guild_id, voice_channel_id, start_ms, end_ms, payload_json) VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO windows(window_id, scope_kind, guild_id, scope_id, start_ms, end_ms, payload_json) VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(&window_id)
+        .bind("voice_channel")
         .bind(guild_id)
         .bind(voice_channel_id)
         .bind(instant_ms_dt(start))
@@ -308,7 +309,9 @@ impl TimelineStore {
         }
         if let Some(channel_id) = voice_channel_id.filter(|value| !value.is_empty()) {
             push_filter_prefix(&mut query, &mut has_where);
-            query.push("voice_channel_id = ").push_bind(channel_id);
+            query
+                .push("scope_kind = 'voice_channel' AND scope_id = ")
+                .push_bind(channel_id);
         }
         if let Some(state) = state.filter(|value| !value.is_empty()) {
             push_filter_prefix(&mut query, &mut has_where);
@@ -334,9 +337,12 @@ impl TimelineStore {
         self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
         sqlx::query(
             r#"
-            INSERT INTO publications(publication_id, guild_id, voice_channel_id, window_id, state, created_at_ms, updated_at_ms, payload_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO publications(publication_id, scope_kind, guild_id, scope_id, window_id, state, created_at_ms, updated_at_ms, payload_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT(publication_id) DO UPDATE SET
+              scope_kind = EXCLUDED.scope_kind,
+              guild_id = EXCLUDED.guild_id,
+              scope_id = EXCLUDED.scope_id,
               window_id = EXCLUDED.window_id,
               state = EXCLUDED.state,
               updated_at_ms = EXCLUDED.updated_at_ms,
@@ -344,6 +350,7 @@ impl TimelineStore {
             "#,
         )
         .bind(&publication_id)
+        .bind("voice_channel")
         .bind(&guild_id)
         .bind(&channel_id)
         .bind(string_field(publication, "window_id"))
@@ -405,11 +412,12 @@ impl TimelineStore {
             .await?;
         sqlx::query(
             r#"
-            INSERT INTO authoritative_spans(span_id, guild_id, voice_channel_id, window_id, publication_id, start_ms, end_ms, created_at_ms, payload_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            INSERT INTO authoritative_spans(span_id, scope_kind, guild_id, scope_id, window_id, publication_id, start_ms, end_ms, created_at_ms, payload_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             "#,
         )
         .bind(&span_id)
+        .bind("voice_channel")
         .bind(guild_id)
         .bind(voice_channel_id)
         .bind(window_id)
@@ -450,7 +458,7 @@ impl TimelineStore {
         );
         query.push_bind(guild_id);
         query
-            .push(" AND voice_channel_id = ")
+            .push(" AND scope_kind = 'voice_channel' AND scope_id = ")
             .push_bind(voice_channel_id);
         if let Some(start) = start {
             query

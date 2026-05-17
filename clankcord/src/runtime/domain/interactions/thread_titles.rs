@@ -19,7 +19,7 @@ use crate::runtime::util::{first_non_empty, first_value_string};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload,
     DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, Runtime,
-    TextTargetKind,
+    RuntimeScope, TextTargetKind,
 };
 
 const THREAD_TITLE_RESPONSE_INTERVAL: usize = 2;
@@ -81,7 +81,7 @@ impl Runtime {
                 source_job.id.clone(),
                 record.agent_session_id,
                 record.guild_id,
-                record.voice_channel_id,
+                record.scope_id,
                 record.discord_thread_id,
                 current_thread_name,
                 response_count,
@@ -121,8 +121,7 @@ impl Runtime {
         let prompt = build_agent_thread_title_prompt(&context)?;
         let invocation = self.invoke_agent_thread_title(job, payload, prompt).await?;
         let rename = Job::discord_forum_thread_rename(
-            payload.guild_id.clone(),
-            payload.voice_channel_id.clone(),
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
             "runtime",
             DiscordForumThreadRenamePayload {
                 thread_id: payload.discord_thread_id.clone(),
@@ -166,11 +165,7 @@ impl Runtime {
     ) -> Result<Vec<String>> {
         let mut agent_tasks = self
             .timeline_store
-            .list_jobs_by_scope_kind(
-                &record.guild_id,
-                &record.voice_channel_id,
-                JobKind::AgentTask,
-            )
+            .list_jobs_by_scope_kind(&record.guild_id, &record.scope_id, JobKind::AgentTask)
             .await?;
         agent_tasks.sort_by(|left, right| {
             left.created_at
@@ -248,7 +243,7 @@ impl Runtime {
             session_key: format!("agent:thread-title:{}", payload.agent_session_id),
             job_id: job.id.clone(),
             guild_id: payload.guild_id.clone(),
-            voice_channel_id: payload.voice_channel_id.clone(),
+            scope_id: payload.voice_channel_id.clone(),
             prior_session_id: String::new(),
             prompt,
             cwd: Some(workdir),
@@ -360,7 +355,7 @@ impl Runtime {
             .timeline_store
             .load_events(
                 &record.guild_id,
-                &record.voice_channel_id,
+                &record.scope_id,
                 None,
                 None,
                 None,
@@ -389,7 +384,7 @@ impl Runtime {
             .timeline_store
             .load_events(
                 &record.guild_id,
-                &record.voice_channel_id,
+                &record.scope_id,
                 None,
                 None,
                 None,
@@ -564,9 +559,6 @@ fn agent_thread_title_env(job: &Job) -> BTreeMap<String, String> {
     );
     vars.insert("CLANKCORD_AGENT_JOB_ID".to_string(), job.id.clone());
     vars.insert("CLANKCORD_AGENT_GUILD_ID".to_string(), job.guild_id.clone());
-    vars.insert(
-        "CLANKCORD_AGENT_VOICE_CHANNEL_ID".to_string(),
-        job.voice_channel_id.clone(),
-    );
+    vars.insert("CLANKCORD_AGENT_SCOPE_ID".to_string(), job.scope_id.clone());
     vars
 }

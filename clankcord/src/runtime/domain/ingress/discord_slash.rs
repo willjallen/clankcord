@@ -159,10 +159,9 @@ fn command_request(
         "action": "dispatch_now",
         "command_kind": command_kind.as_str(),
         "guild_id": payload.guild_id,
-        "voice_channel_id": payload.voice_channel_id,
+        "scope_id": payload.timeline_channel_id(),
         "requested_by_user_id": payload.user_id,
         "requested_by_speaker_label": payload.username,
-        "target_voice_channel_id": "",
         "arguments": {
             "channel": "",
             "target_channel": "",

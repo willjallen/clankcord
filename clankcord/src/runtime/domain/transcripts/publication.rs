@@ -11,8 +11,8 @@ use crate::runtime::util::{
 };
 use crate::runtime::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
-    JobOutput, JobState, RoomConfig, Runtime, TextDeliveryKind, TextTarget, TextTargetKind,
-    TranscriptPublicationOutput, TranscriptPublicationPayload,
+    JobOutput, JobState, RoomConfig, Runtime, RuntimeScope, TextDeliveryKind, TextTarget,
+    TextTargetKind, TranscriptPublicationOutput, TranscriptPublicationPayload,
 };
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
@@ -126,8 +126,7 @@ impl Runtime {
                     .into_iter()
                     .map(|chunk| {
                         Job::discord_text_send(
-                            job.guild_id.clone(),
-                            job.voice_channel_id.clone(),
+                            job.scope(),
                             job.requested_by_user_id.clone(),
                             DiscordTextSendPayload {
                                 intent: TextDeliveryKind::Message,
@@ -195,8 +194,7 @@ impl Runtime {
         }
         Ok(JobDecision::WaitFor(vec![
             Job::discord_forum_thread_create(
-                job.guild_id.clone(),
-                job.voice_channel_id.clone(),
+                RuntimeScope::voice_channel(job.guild_id.clone(), job.scope_id.clone()),
                 job.requested_by_user_id.clone(),
                 DiscordForumThreadCreatePayload {
                     parent_channel_id: forum_id,

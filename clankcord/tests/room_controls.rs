@@ -2,7 +2,8 @@ use serde_json::json;
 
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    CommandKind, CommandRequest, Job, JobKind, RoomConfig, Runtime, VoiceCaptureSessionStatus,
+    CommandKind, CommandRequest, Job, JobKind, RoomConfig, Runtime, RuntimeScope,
+    VoiceCaptureSessionStatus,
 };
 
 mod common;
@@ -154,14 +155,13 @@ fn test_room() -> RoomConfig {
 
 fn command_job(room: &RoomConfig, command_kind: CommandKind) -> Job {
     Job::command_request(
-        &room.guild_id,
-        &room.channel_id,
+        RuntimeScope::voice_channel(&room.guild_id, &room.channel_id),
         "user-a",
         CommandRequest::from_json(&json!({
             "action": "dispatch_now",
             "command_kind": command_kind.as_str(),
             "guild_id": room.guild_id,
-            "voice_channel_id": room.channel_id,
+            "scope_id": room.channel_id,
             "requested_by_user_id": "user-a",
             "arguments": {
                 "channel": "",

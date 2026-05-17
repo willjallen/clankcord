@@ -111,7 +111,7 @@ impl TimelineStore {
     pub async fn list_agent_session_records(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         state: &str,
         limit: usize,
     ) -> Result<Vec<AgentSessionRecord>> {
@@ -125,10 +125,8 @@ impl TimelineStore {
         if !guild_id.trim().is_empty() {
             query.push(" AND guild_id = ").push_bind(guild_id);
         }
-        if !voice_channel_id.trim().is_empty() {
-            query
-                .push(" AND voice_channel_id = ")
-                .push_bind(voice_channel_id);
+        if !scope_id.trim().is_empty() {
+            query.push(" AND scope_id = ").push_bind(scope_id);
         }
         if !state.trim().is_empty() {
             query.push(" AND state = ").push_bind(state);
@@ -195,7 +193,7 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
     sqlx::query(
         r#"
         INSERT INTO agent_sessions(
-          agent_session_id, codex_session_id, route_kind, route_key, guild_id, voice_channel_id,
+          agent_session_id, codex_session_id, route_kind, route_key, guild_id, scope_id,
           dm_user_id, voice_capture_session_id, discord_thread_id, discord_parent_channel_id, text_target_kind,
           text_channel_id, text_user_id, state, created_at_ms, last_activity_at_ms,
           max_active_until_ms, retired_at_ms, retirement_reason, retired_by_user_id,
@@ -207,7 +205,7 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
           route_kind = EXCLUDED.route_kind,
           route_key = EXCLUDED.route_key,
           guild_id = EXCLUDED.guild_id,
-          voice_channel_id = EXCLUDED.voice_channel_id,
+          scope_id = EXCLUDED.scope_id,
           dm_user_id = EXCLUDED.dm_user_id,
           voice_capture_session_id = EXCLUDED.voice_capture_session_id,
           discord_thread_id = EXCLUDED.discord_thread_id,
@@ -231,7 +229,7 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
     .bind(record.route_kind.as_str())
     .bind(&record.route_key)
     .bind(&record.guild_id)
-    .bind(&record.voice_channel_id)
+    .bind(&record.scope_id)
     .bind(&record.dm_user_id)
     .bind(&record.voice_capture_session_id)
     .bind(&record.discord_thread_id)

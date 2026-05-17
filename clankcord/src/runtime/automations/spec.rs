@@ -6,7 +6,7 @@ use anyhow::Context;
 use sqlx::Row;
 
 use crate::runtime::timeline::{TimelineStore, instant_ms_str, isoformat_z, new_id, parse_instant};
-use crate::runtime::{JobKind, JobState, Runtime};
+use crate::runtime::{JobKind, JobState, Runtime, RuntimeScopeKind};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutomationSpec {
@@ -117,21 +117,25 @@ impl AutomationOwner {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AutomationScope {
+    #[serde(default)]
+    pub scope_kind: String,
     #[serde(default, alias = "guildId")]
     pub guild_id: String,
-    #[serde(
-        default,
-        alias = "voiceChannelId",
-        alias = "channel_id",
-        alias = "channelId"
-    )]
-    pub voice_channel_id: String,
+    #[serde(default)]
+    pub scope_id: String,
 }
 
 impl AutomationScope {
     fn validate(&self) -> Result<()> {
-        if self.guild_id.trim().is_empty() || self.voice_channel_id.trim().is_empty() {
-            anyhow::bail!("automation scope requires guild_id and voice_channel_id");
+        let scope_kind = self.scope_kind.parse::<RuntimeScopeKind>()?;
+        if scope_kind != RuntimeScopeKind::VoiceChannel {
+            anyhow::bail!("stored automations currently require scope_kind voice_channel");
+        }
+        if self.scope_id.trim().is_empty() {
+            anyhow::bail!("automation scope requires scope_id");
+        }
+        if scope_kind == RuntimeScopeKind::VoiceChannel && self.guild_id.trim().is_empty() {
+            anyhow::bail!("voice-channel automation scope requires guild_id");
         }
         Ok(())
     }
@@ -554,7 +558,7 @@ impl TimelineStore {
         transaction.commit().await?;
         self.append_event(
             &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
+            &record.spec.scope.scope_id,
             json!({
                 "event_kind": "automation_created",
                 "kind": "automation_created",
@@ -582,7 +586,7 @@ impl TimelineStore {
     pub async fn list_automations(
         &self,
         guild_id: Option<&str>,
-        voice_channel_id: Option<&str>,
+        scope_id: Option<&str>,
         state: Option<AutomationState>,
     ) -> Result<Vec<AutomationRecord>> {
         let records = self
@@ -595,9 +599,9 @@ impl TimelineStore {
                     .is_none_or(|value| record.spec.scope.guild_id == value)
             })
             .filter(|record| {
-                voice_channel_id
+                scope_id
                     .filter(|value| !value.trim().is_empty())
-                    .is_none_or(|value| record.spec.scope.voice_channel_id == value)
+                    .is_none_or(|value| record.spec.scope.scope_id == value)
             })
             .filter(|record| state.is_none_or(|value| record.state == value))
             .collect::<Vec<_>>();
@@ -611,7 +615,7 @@ impl TimelineStore {
         self.upsert_automation_record(&record).await?;
         self.append_event(
             &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
+            &record.spec.scope.scope_id,
             json!({
                 "event_kind": "automation_cancelled",
                 "kind": "automation_cancelled",
@@ -651,10 +655,10 @@ async fn find_active_automation_by_idempotency_key_in_tx(
         return Ok(None);
     }
     let row = sqlx::query(
-        "SELECT payload_blob FROM automations WHERE guild_id = $1 AND voice_channel_id = $2 AND idempotency_key = $3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
+        "SELECT payload_blob FROM automations WHERE scope_kind = $1 AND scope_id = $2 AND idempotency_key = $3 AND state = 'active' ORDER BY created_at_ms DESC LIMIT 1",
     )
-    .bind(&spec.scope.guild_id)
-    .bind(&spec.scope.voice_channel_id)
+    .bind(&spec.scope.scope_kind)
+    .bind(&spec.scope.scope_id)
     .bind(&spec.idempotency_key)
     .fetch_optional(transaction.as_mut())
     .await?;
@@ -696,14 +700,14 @@ async fn find_active_agent_automation_by_source_in_tx(
         r#"
         SELECT payload_blob
         FROM automations
-        WHERE guild_id = $1
-          AND voice_channel_id = $2
+        WHERE scope_kind = $1
+          AND scope_id = $2
           AND state = 'active'
         ORDER BY created_at_ms, automation_id
         "#,
     )
-    .bind(&spec.scope.guild_id)
-    .bind(&spec.scope.voice_channel_id)
+    .bind(&spec.scope.scope_kind)
+    .bind(&spec.scope.scope_id)
     .fetch_all(transaction.as_mut())
     .await?;
     for row in rows {
@@ -738,8 +742,9 @@ async fn upsert_automation_record_in_tx(
         r#"
             INSERT INTO automations(
               automation_id,
+              scope_kind,
               guild_id,
-              voice_channel_id,
+              scope_id,
               state,
               idempotency_key,
               created_at_ms,
@@ -749,10 +754,11 @@ async fn upsert_automation_record_in_tx(
               max_fires,
               payload_blob
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT(automation_id) DO UPDATE SET
+              scope_kind = EXCLUDED.scope_kind,
               guild_id = EXCLUDED.guild_id,
-              voice_channel_id = EXCLUDED.voice_channel_id,
+              scope_id = EXCLUDED.scope_id,
               state = EXCLUDED.state,
               idempotency_key = EXCLUDED.idempotency_key,
               updated_at_ms = EXCLUDED.updated_at_ms,
@@ -763,8 +769,9 @@ async fn upsert_automation_record_in_tx(
             "#,
     )
     .bind(&record.automation_id)
+    .bind(&record.spec.scope.scope_kind)
     .bind(&record.spec.scope.guild_id)
-    .bind(&record.spec.scope.voice_channel_id)
+    .bind(&record.spec.scope.scope_id)
     .bind(record.state.as_str())
     .bind(&record.spec.idempotency_key)
     .bind(created_ms)
@@ -793,12 +800,12 @@ impl Runtime {
     pub async fn list_automation_records(
         &self,
         guild_id: Option<&str>,
-        voice_channel_id: Option<&str>,
+        scope_id: Option<&str>,
         state: Option<AutomationState>,
     ) -> Result<Value> {
         let records = self
             .timeline_store
-            .list_automations(guild_id, voice_channel_id, state)
+            .list_automations(guild_id, scope_id, state)
             .await?;
         Ok(json!({
             "automations": records.iter().map(AutomationRecord::to_json).collect::<Vec<_>>(),
@@ -870,27 +877,20 @@ fn validate_scope_boundary(value: &Value) -> Result<()> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("$.scope must be an object"))?;
+    if !has_any_key(object, &["scope_kind"]) {
+        anyhow::bail!("$.scope requires scope_kind");
+    }
     if !has_any_key(object, &["guild_id", "guildId"]) {
         if object.contains_key("guild") {
             anyhow::bail!("$.scope requires guild_id; use guild_id instead of guild");
         }
         anyhow::bail!("$.scope requires guild_id");
     }
-    if !has_any_key(
-        object,
-        &[
-            "voice_channel_id",
-            "voiceChannelId",
-            "channel_id",
-            "channelId",
-        ],
-    ) {
+    if !has_any_key(object, &["scope_id"]) {
         if object.contains_key("channel") {
-            anyhow::bail!(
-                "$.scope requires voice_channel_id; use voice_channel_id instead of channel"
-            );
+            anyhow::bail!("$.scope requires scope_id; use scope_id instead of channel");
         }
-        anyhow::bail!("$.scope requires voice_channel_id");
+        anyhow::bail!("$.scope requires scope_id");
     }
     Ok(())
 }

@@ -1,6 +1,6 @@
 [paths]
 state_dir = "/clankcord/state"
-voice_memory_root = "/clankcord/durable/clankcord/voice"
+timeline_root = "/clankcord/durable/clankcord/timeline"
 agent_workspaces_root = "/clankcord/state/agent-workspaces"
 
 [secrets]

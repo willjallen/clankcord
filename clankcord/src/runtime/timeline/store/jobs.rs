@@ -38,15 +38,14 @@ struct JobSummary {
 
 impl TimelineStore {
     pub async fn create_job(&self, job: Job) -> Result<Job> {
-        self.ensure_room(&job.guild_id, &job.voice_channel_id, "", "", "")
-            .await?;
+        self.ensure_job_voice_room(&job).await?;
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &job).await?;
         transaction.commit().await?;
         if !job.kind.is_ephemeral() {
-            self.append_event(
-                &job.guild_id,
-                &job.voice_channel_id,
+            let scope = job.scope();
+            self.append_scope_event(
+                &scope,
                 serde_json::json!({
                     "event_kind": "job_created",
                     "kind": "job_created",
@@ -109,8 +108,7 @@ impl TimelineStore {
         child.attach_to_parent(parent)?;
         self.ensure_dependency_is_acyclic(&parent.id, &child.id)
             .await?;
-        self.ensure_room(&child.guild_id, &child.voice_channel_id, "", "", "")
-            .await?;
+        self.ensure_job_voice_room(&child).await?;
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &child).await?;
         sqlx::query(
@@ -132,9 +130,9 @@ impl TimelineStore {
         }
         transaction.commit().await?;
         if !child.kind.is_ephemeral() {
-            self.append_event(
-                &child.guild_id,
-                &child.voice_channel_id,
+            let scope = child.scope();
+            self.append_scope_event(
+                &scope,
                 serde_json::json!({
                     "event_kind": "job_created",
                     "kind": "job_created",
@@ -402,7 +400,7 @@ impl TimelineStore {
     pub async fn list_jobs_by_scope_kind(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         kind: crate::runtime::JobKind,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
@@ -411,13 +409,14 @@ impl TimelineStore {
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
             WHERE j.guild_id = $1
-              AND j.voice_channel_id = $2
+              AND j.scope_kind = 'voice_channel'
+              AND j.scope_id = $2
               AND j.kind = $3
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
             "#,
         )
         .bind(guild_id)
-        .bind(voice_channel_id)
+        .bind(scope_id)
         .bind(kind.as_str())
         .fetch_all(&self.pool)
         .await?;
@@ -427,7 +426,7 @@ impl TimelineStore {
     pub async fn list_active_jobs_by_scope_kind(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         kind: crate::runtime::JobKind,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
@@ -436,14 +435,15 @@ impl TimelineStore {
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
             WHERE j.guild_id = $1
-              AND j.voice_channel_id = $2
+              AND j.scope_kind = 'voice_channel'
+              AND j.scope_id = $2
               AND j.kind = $3
               AND j.terminal = FALSE
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
             "#,
         )
         .bind(guild_id)
-        .bind(voice_channel_id)
+        .bind(scope_id)
         .bind(kind.as_str())
         .fetch_all(&self.pool)
         .await?;
@@ -575,25 +575,23 @@ impl TimelineStore {
     pub async fn list_jobs_for_trigger(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         kinds: &[crate::runtime::JobKind],
         states: &[crate::runtime::JobState],
         updated_after: Option<DateTime<Utc>>,
     ) -> Result<Vec<Job>> {
         if guild_id.trim().is_empty()
-            || voice_channel_id.trim().is_empty()
+            || scope_id.trim().is_empty()
             || kinds.is_empty()
             || states.is_empty()
         {
             return Ok(Vec::new());
         }
         let mut query = QueryBuilder::<Postgres>::new(
-            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id WHERE j.guild_id = ",
+            "SELECT p.payload_blob FROM jobs j JOIN job_payloads p ON p.job_id = j.job_id WHERE j.scope_kind = 'voice_channel' AND j.guild_id = ",
         );
         query.push_bind(guild_id);
-        query
-            .push(" AND j.voice_channel_id = ")
-            .push_bind(voice_channel_id);
+        query.push(" AND j.scope_id = ").push_bind(scope_id);
         query.push(" AND j.kind IN (");
         let mut kind_sep = query.separated(", ");
         for kind in kinds {
@@ -701,7 +699,7 @@ impl TimelineStore {
     pub async fn has_pending_audio_segment_for_speaker(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         speaker_user_id: &str,
         segment_end_at_or_after: DateTime<Utc>,
     ) -> Result<bool> {
@@ -711,7 +709,8 @@ impl TimelineStore {
               SELECT 1
               FROM jobs
               WHERE guild_id = $1
-                AND voice_channel_id = $2
+                AND scope_kind = 'voice_channel'
+                AND scope_id = $2
                 AND speaker_user_id = $3
                 AND segment_end_ms >= $4
                 AND kind = 'audio_segment'
@@ -720,7 +719,7 @@ impl TimelineStore {
             "#,
         )
         .bind(guild_id)
-        .bind(voice_channel_id)
+        .bind(scope_id)
         .bind(speaker_user_id)
         .bind(instant_ms_dt(segment_end_at_or_after))
         .fetch_one(&self.pool)
@@ -731,7 +730,7 @@ impl TimelineStore {
     pub async fn has_pending_audio_segment_for_speaker_until(
         &self,
         guild_id: &str,
-        voice_channel_id: &str,
+        scope_id: &str,
         speaker_user_id: &str,
         segment_end_at_or_after: DateTime<Utc>,
         segment_end_at_or_before: DateTime<Utc>,
@@ -742,7 +741,8 @@ impl TimelineStore {
               SELECT 1
               FROM jobs
               WHERE guild_id = $1
-                AND voice_channel_id = $2
+                AND scope_kind = 'voice_channel'
+                AND scope_id = $2
                 AND speaker_user_id = $3
                 AND segment_end_ms >= $4
                 AND segment_end_ms <= $5
@@ -752,7 +752,7 @@ impl TimelineStore {
             "#,
         )
         .bind(guild_id)
-        .bind(voice_channel_id)
+        .bind(scope_id)
         .bind(speaker_user_id)
         .bind(instant_ms_dt(segment_end_at_or_after))
         .bind(instant_ms_dt(segment_end_at_or_before))
@@ -934,6 +934,14 @@ impl TimelineStore {
             .map(|row| row.try_get::<String, _>("child_job_id"))
             .collect::<std::result::Result<Vec<_>, _>>()?)
     }
+
+    async fn ensure_job_voice_room(&self, job: &Job) -> Result<()> {
+        if job.scope_kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+            self.ensure_room(&job.guild_id, &job.scope_id, "", "", "")
+                .await?;
+        }
+        Ok(())
+    }
 }
 
 fn push_filter_prefix(query: &mut QueryBuilder<'_, Postgres>, has_where: &mut bool) {
@@ -995,8 +1003,9 @@ pub(crate) async fn upsert_job_rows(
         r#"
         INSERT INTO jobs(
           job_id,
+          scope_kind,
           guild_id,
-          voice_channel_id,
+          scope_id,
           kind,
           state,
           terminal,
@@ -1022,10 +1031,11 @@ pub(crate) async fn upsert_job_rows(
           speaker_user_id,
           segment_end_ms
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)
         ON CONFLICT(job_id) DO UPDATE SET
+          scope_kind = EXCLUDED.scope_kind,
           guild_id = EXCLUDED.guild_id,
-          voice_channel_id = EXCLUDED.voice_channel_id,
+          scope_id = EXCLUDED.scope_id,
           kind = EXCLUDED.kind,
           state = EXCLUDED.state,
           terminal = EXCLUDED.terminal,
@@ -1053,8 +1063,9 @@ pub(crate) async fn upsert_job_rows(
         "#,
     )
     .bind(&job.id)
+    .bind(job.scope_kind.as_str())
     .bind(&job.guild_id)
-    .bind(&job.voice_channel_id)
+    .bind(&job.scope_id)
     .bind(job.kind.as_str())
     .bind(job.state.as_str())
     .bind(projection.terminal)
@@ -1240,10 +1251,7 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::Command(payload)
             if payload.command.command_kind == crate::runtime::CommandKind::AgentTask =>
         {
-            voice_agent_route_ordering_key(
-                &payload.command.guild_id,
-                &payload.command.voice_channel_id,
-            )
+            voice_agent_route_ordering_key(&payload.command.guild_id, &payload.command.scope_id)
         }
         crate::runtime::JobPayload::DiscordTextMessage(payload) => {
             if payload.guild_id.trim().is_empty() {
@@ -1271,7 +1279,7 @@ fn job_ordering_key(job: &Job) -> String {
                 return format!(
                     "text:session_route:{}:{}",
                     normalize_key_part(&job.guild_id),
-                    normalize_key_part(&job.voice_channel_id)
+                    normalize_key_part(&job.scope_id)
                 );
             }
             let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
@@ -1337,7 +1345,7 @@ fn job_ordering_key(job: &Job) -> String {
             } else {
                 format!(
                     "discord:confirmation:channel:{}",
-                    normalize_key_part(&job.voice_channel_id)
+                    normalize_key_part(&job.scope_id)
                 )
             }
         }
@@ -1374,7 +1382,7 @@ fn job_ordering_key(job: &Job) -> String {
         }
         crate::runtime::JobPayload::RoomAgentPlacement(payload) => {
             let room_key = if payload.room_id.trim().is_empty() {
-                job.voice_channel_id.as_str()
+                job.scope_id.as_str()
             } else {
                 payload.room_id.as_str()
             };

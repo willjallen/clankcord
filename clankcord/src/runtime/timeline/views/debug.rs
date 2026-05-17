@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
@@ -18,7 +19,9 @@ use crate::runtime::timeline::{
     round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
-use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
+use crate::runtime::{
+    AgentRuntime, Job, JobKind, JobState, Runtime, RuntimeScope, RuntimeScopeKind,
+};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
@@ -102,7 +105,7 @@ impl Runtime {
         let mut status = self.status_payload(None).await?;
         if let Value::Object(object) = &mut status {
             object.insert(
-                "liveVoiceOccupancy".to_string(),
+                "liveOccupancy".to_string(),
                 self.timeline_store
                     .voice_occupancy_snapshot()
                     .await
@@ -259,10 +262,10 @@ impl Runtime {
             "automations": automation_dashboard_payload(&automations),
             "publications": publications,
             "links": {
-                "json": "/v1/voice/debug/overview",
-                "poolStatus": "/v1/voice/pool/status",
-                "timelineTail": "/v1/voice/timeline/tail",
-                "jobs": "/v1/voice/jobs",
+                "json": "/v1/debug/overview",
+                "poolStatus": "/v1/pool/status",
+                "timelineTail": "/v1/timeline/tail",
+                "jobs": "/v1/jobs",
             }
         }))
     }
@@ -299,12 +302,21 @@ impl Runtime {
         query_field: DebugSearchField,
     ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
-        for (guild_id, channel_id) in self.debug_timeline_event_channels(start, end).await? {
-            let mut room_events = self
+        for scope in self.debug_timeline_event_scopes(start, end).await? {
+            let mut scope_events = self
                 .timeline_store
-                .load_events(&guild_id, &channel_id, start, end, kinds, None, false)
+                .load_scope_events(
+                    scope.kind,
+                    &scope.guild_id,
+                    &scope.scope_id,
+                    start,
+                    end,
+                    kinds,
+                    None,
+                    false,
+                )
                 .await?;
-            events.append(&mut room_events);
+            events.append(&mut scope_events);
         }
         events.sort_by_key(|event| event_start(event).unwrap_or_else(utc_now));
         let query = query.trim();
@@ -338,14 +350,14 @@ impl Runtime {
         Ok(events.into_iter().map(compact_debug_event).collect())
     }
 
-    async fn debug_timeline_event_channels(
+    async fn debug_timeline_event_scopes(
         &self,
         start: Option<DateTime<Utc>>,
         end: Option<DateTime<Utc>>,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<Vec<RuntimeScope>> {
         let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
             r#"
-            SELECT DISTINCT guild_id, voice_channel_id
+            SELECT DISTINCT scope_kind, guild_id, scope_id
             FROM timeline_events
             WHERE forgotten = FALSE
             "#,
@@ -360,10 +372,18 @@ impl Runtime {
                 .push(" AND COALESCE(started_at_ms, created_at_ms) < ")
                 .push_bind(instant_ms_dt(end));
         }
-        query.push(" ORDER BY guild_id, voice_channel_id");
+        query.push(" ORDER BY scope_kind, guild_id, scope_id");
         let rows = query.build().fetch_all(&self.timeline_store.pool).await?;
         rows.into_iter()
-            .map(|row| Ok((row.try_get("guild_id")?, row.try_get("voice_channel_id")?)))
+            .map(|row| {
+                Ok(RuntimeScope {
+                    kind: RuntimeScopeKind::from_str(
+                        row.try_get::<String, _>("scope_kind")?.as_str(),
+                    )?,
+                    guild_id: row.try_get("guild_id")?,
+                    scope_id: row.try_get("scope_id")?,
+                })
+            })
             .collect()
     }
 
@@ -587,6 +607,8 @@ fn compact_debug_event(event: Value) -> Value {
             "event_id",
             "event_kind",
             "kind",
+            "scope_kind",
+            "scope_id",
             "guild_id",
             "guild_slug",
             "voice_channel_id",
@@ -715,9 +737,10 @@ fn merge_jobs<'a>(jobs: impl Iterator<Item = &'a Job>) -> Vec<Job> {
 }
 
 #[derive(Debug, Default)]
-struct RoomJobSummary {
+struct ScopeJobSummary {
+    scope_kind: String,
     guild_id: String,
-    voice_channel_id: String,
+    scope_id: String,
     total: usize,
     active: usize,
     failed: usize,
@@ -2282,12 +2305,12 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
     });
     let mut sessions = BTreeMap::<String, AgentSession>::new();
     for job in ordered {
-        let key = AgentRuntime::task_session_key(&job.guild_id, &job.voice_channel_id);
+        let key = AgentRuntime::task_session_key(&job.guild_id, &job.scope_id);
         let entry = sessions.entry(key.clone()).or_insert_with(|| AgentSession {
             key,
             role: "task".to_string(),
             guild_id: job.guild_id.clone(),
-            voice_channel_id: job.voice_channel_id.clone(),
+            scope_id: job.scope_id.clone(),
             created_at: job.created_at.clone(),
             ..AgentSession::default()
         });
@@ -2348,14 +2371,10 @@ async fn agent_session_payload(
     selected: &Job,
     selected_codex: &Value,
 ) -> Result<Value> {
-    let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.voice_channel_id);
+    let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.scope_id);
     let mut jobs = runtime
         .timeline_store
-        .list_jobs_by_scope_kind(
-            &selected.guild_id,
-            &selected.voice_channel_id,
-            JobKind::AgentTask,
-        )
+        .list_jobs_by_scope_kind(&selected.guild_id, &selected.scope_id, JobKind::AgentTask)
         .await?;
     let current = agent_sessions_from_jobs(&jobs)
         .into_iter()
@@ -2367,7 +2386,7 @@ async fn agent_session_payload(
             .cmp(&right.created_at)
             .then_with(|| left.id.cmp(&right.id))
     });
-    let channel_job_count = jobs.len();
+    let scope_job_count = jobs.len();
     let mut rows = jobs
         .iter()
         .filter(|job| agent_job_matches_selected_session(*job, selected, &selected_session_id))
@@ -2412,7 +2431,7 @@ async fn agent_session_payload(
         "current": current,
         "jobCount": rows.len(),
         "totalJobCount": total_job_count,
-        "channelJobCount": channel_job_count,
+        "scopeJobCount": scope_job_count,
         "truncated": truncated,
         "jobs": rows,
         "transcript": {
@@ -2550,7 +2569,7 @@ fn compact_agent_job_payload(job: &Job) -> Value {
         "result": artifact_stub(&metadata.result_path),
         "raw": artifact_stub(&metadata.raw_result_path),
         "codex": codex,
-        "detailUrl": format!("/v1/voice/debug/agents/{}", job.id),
+        "detailUrl": format!("/v1/debug/agents/{}", job.id),
     })
 }
 
@@ -2959,7 +2978,7 @@ fn push_tool_call(tool_calls: &mut Vec<Value>, timeline: &mut Vec<Value>, mut to
 fn job_summary(jobs: &[Job]) -> Value {
     let mut by_state = BTreeMap::new();
     let mut by_kind = BTreeMap::new();
-    let mut by_room = BTreeMap::<String, RoomJobSummary>::new();
+    let mut by_scope = BTreeMap::<String, ScopeJobSummary>::new();
     let mut active = 0;
     let mut queued = 0;
     let mut running = 0;
@@ -2988,26 +3007,34 @@ fn job_summary(jobs: &[Job]) -> Value {
             failed += 1;
         }
 
-        let room_key = format!("{}\n{}", job.guild_id, job.voice_channel_id);
-        let room = by_room.entry(room_key).or_insert_with(|| RoomJobSummary {
-            guild_id: job.guild_id.clone(),
-            voice_channel_id: job.voice_channel_id.clone(),
-            ..RoomJobSummary::default()
-        });
-        room.total += 1;
+        let scope_key = format!(
+            "{}\n{}\n{}",
+            job.scope_kind.as_str(),
+            job.guild_id,
+            job.scope_id
+        );
+        let scope = by_scope
+            .entry(scope_key)
+            .or_insert_with(|| ScopeJobSummary {
+                scope_kind: job.scope_kind.as_str().to_string(),
+                guild_id: job.guild_id.clone(),
+                scope_id: job.scope_id.clone(),
+                ..ScopeJobSummary::default()
+            });
+        scope.total += 1;
         if !job.state.is_terminal() {
-            room.active += 1;
+            scope.active += 1;
         }
         if is_failed_state(&state) {
-            room.failed += 1;
+            scope.failed += 1;
         }
         let latest_at = first_non_empty([
             job.updated_at.clone(),
             job.created_at.clone(),
             job.started_at.clone().unwrap_or_default(),
         ]);
-        if latest_at > room.latest_at {
-            room.latest_at = latest_at;
+        if latest_at > scope.latest_at {
+            scope.latest_at = latest_at;
         }
     }
 
@@ -3022,7 +3049,7 @@ fn job_summary(jobs: &[Job]) -> Value {
         "cancellable": cancellable,
         "byState": count_rows(by_state, "state"),
         "byKind": count_rows(by_kind, "kind"),
-        "byRoom": room_job_rows(by_room),
+        "byScope": scope_job_rows(by_scope),
     })
 }
 
@@ -3050,8 +3077,8 @@ fn count_rows(counts: BTreeMap<String, usize>, label_key: &str) -> Vec<Value> {
     rows
 }
 
-fn room_job_rows(rooms: BTreeMap<String, RoomJobSummary>) -> Vec<Value> {
-    let mut rows = rooms.into_values().collect::<Vec<_>>();
+fn scope_job_rows(scopes: BTreeMap<String, ScopeJobSummary>) -> Vec<Value> {
+    let mut rows = scopes.into_values().collect::<Vec<_>>();
     rows.sort_by(|left, right| {
         right
             .active
@@ -3061,14 +3088,15 @@ fn room_job_rows(rooms: BTreeMap<String, RoomJobSummary>) -> Vec<Value> {
             .then_with(|| right.latest_at.cmp(&left.latest_at))
     });
     rows.into_iter()
-        .map(|room| {
+        .map(|scope| {
             json!({
-                "guild_id": room.guild_id,
-                "voice_channel_id": room.voice_channel_id,
-                "total": room.total,
-                "active": room.active,
-                "failed": room.failed,
-                "latest_at": room.latest_at,
+                "scope_kind": scope.scope_kind,
+                "guild_id": scope.guild_id,
+                "scope_id": scope.scope_id,
+                "total": scope.total,
+                "active": scope.active,
+                "failed": scope.failed,
+                "latest_at": scope.latest_at,
             })
         })
         .collect()

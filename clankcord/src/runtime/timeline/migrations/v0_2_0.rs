@@ -2,9 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::runtime::jobs::JobMetadata;
-use crate::runtime::timeline::store::upsert_job_rows;
 use crate::runtime::{
-    BinaryPayload, DiscordSlashCommandPayload, Job, JobKind, JobPayload, JobState,
+    BinaryPayload, DiscordSlashCommandPayload, Job, JobKind, JobPayload, JobState, RuntimeScopeKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +93,9 @@ struct PreV0_2_0DiscordSlashCommandPayloadNoInteractionId {
 }
 
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
+    if !column_exists(transaction, "jobs", "voice_channel_id").await? {
+        return Ok(());
+    }
     let rows = sqlx::query(
         r#"
         SELECT j.job_id, j.kind, j.state, j.voice_channel_id, p.payload_blob
@@ -112,10 +114,7 @@ pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>)
         let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob")?;
         if Job::is_current_payload_blob(&payload_blob) {
             if state == "agent_dispatch_failed" {
-                let job = Job::decode(&payload_blob).map_err(|error| {
-                    anyhow::anyhow!("rewriting pre-v0.2.0 job projection state {job_id}: {error:#}")
-                })?;
-                upsert_job_rows(transaction, &job).await?;
+                rewrite_legacy_job_projection_state(transaction, &job_id, JobState::Failed).await?;
             }
             continue;
         }
@@ -124,8 +123,105 @@ pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>)
                 .map_err(|error| {
                     anyhow::anyhow!("migrating pre-v0.2.0 job payload blob {job_id}: {error:#}")
                 })?;
-        upsert_job_rows(transaction, &job).await?;
+        update_legacy_job_rows(transaction, &job).await?;
     }
+    Ok(())
+}
+
+async fn column_exists(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &str,
+    column: &str,
+) -> Result<bool> {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = $1
+            AND column_name = $2
+        ) AS exists
+        "#,
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(transaction.as_mut())
+    .await?;
+    Ok(sqlx::Row::try_get(&row, "exists")?)
+}
+
+async fn update_legacy_job_rows(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job: &Job,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE jobs
+        SET guild_id = $2,
+            voice_channel_id = $3,
+            kind = $4,
+            state = $5,
+            terminal = $6,
+            failed = $7,
+            cancellable = $8,
+            root_job_id = $9,
+            parent_job_id = $10,
+            lineage_depth = $11,
+            requested_by_user_id = $12
+        WHERE job_id = $1
+        "#,
+    )
+    .bind(&job.id)
+    .bind(&job.guild_id)
+    .bind(&job.scope_id)
+    .bind(job.kind.as_str())
+    .bind(job.state.as_str())
+    .bind(job.state.is_terminal())
+    .bind(is_failed_job_state(job.state))
+    .bind(job.state.is_cancellable())
+    .bind(&job.root_job_id)
+    .bind(job.parent_job_id.as_deref())
+    .bind(job.lineage_depth as i64)
+    .bind(&job.requested_by_user_id)
+    .execute(transaction.as_mut())
+    .await?;
+    sqlx::query(
+        r#"
+        INSERT INTO job_payloads(job_id, payload_blob)
+        VALUES ($1, $2)
+        ON CONFLICT(job_id) DO UPDATE SET payload_blob = EXCLUDED.payload_blob
+        "#,
+    )
+    .bind(&job.id)
+    .bind(job.encode()?)
+    .execute(transaction.as_mut())
+    .await?;
+    Ok(())
+}
+
+async fn rewrite_legacy_job_projection_state(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    job_id: &str,
+    state: JobState,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE jobs
+        SET state = $2,
+            terminal = $3,
+            failed = $4,
+            cancellable = $5
+        WHERE job_id = $1
+        "#,
+    )
+    .bind(job_id)
+    .bind(state.as_str())
+    .bind(state.is_terminal())
+    .bind(is_failed_job_state(state))
+    .bind(state.is_cancellable())
+    .execute(transaction.as_mut())
+    .await?;
     Ok(())
 }
 
@@ -138,6 +234,9 @@ fn decode_pre_v0_2_0_job_payload_blob(
     let state = pre_v0_2_0_payload_migration_state(projected_state)?;
     if let Ok(previous) = bincode::deserialize::<PreV0_2_0Job<PreV0_2_0JobState, JobPayload>>(bytes)
     {
+        return previous.into_current_with(state, |payload, _job_id| Ok(payload));
+    }
+    if let Ok(previous) = bincode::deserialize::<PreV0_2_0Job<JobState, JobPayload>>(bytes) {
         return previous.into_current_with(state, |payload, _job_id| Ok(payload));
     }
     if projected_kind == JobKind::DiscordSlashCommand {
@@ -190,7 +289,7 @@ fn decode_pre_v0_2_0_job_payload_blob(
             });
         }
     }
-    Ok(bincode::deserialize(bytes)?)
+    anyhow::bail!("pre-v0.2.0 job payload shape is not recognized")
 }
 
 fn pre_v0_2_0_payload_migration_state(raw: &str) -> Result<JobState> {
@@ -210,8 +309,9 @@ impl<State, Payload> PreV0_2_0Job<State, Payload> {
         Ok(Job {
             id: self.id,
             kind: payload.kind(),
+            scope_kind: RuntimeScopeKind::VoiceChannel,
             guild_id: self.guild_id,
-            voice_channel_id: self.voice_channel_id,
+            scope_id: self.voice_channel_id,
             state,
             requested_by_user_id: self.requested_by_user_id,
             payload,
@@ -228,4 +328,14 @@ impl<State, Payload> PreV0_2_0Job<State, Payload> {
             metadata: self.metadata,
         })
     }
+}
+
+fn is_failed_job_state(state: JobState) -> bool {
+    matches!(
+        state,
+        JobState::ApprovalFailed
+            | JobState::Failed
+            | JobState::FailedTimeout
+            | JobState::FailedDraftRetained
+    )
 }

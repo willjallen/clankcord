@@ -62,7 +62,7 @@
           <div id="event-trend-chart" class="chart-host"></div>
         </section>
         <section>
-          <h2><span>Room Activity</span><small>jobs / speech / transcript / wake</small></h2>
+          <h2><span>Scope Activity</span><small>jobs / speech / transcript / wake</small></h2>
           <div id="room-activity-chart" class="chart-host"></div>
         </section>
       </div>
@@ -90,24 +90,25 @@
             </div>
           </section>
           <section>
-            <h2><span>Room Job Load</span><small x-text="roomJobLoad().length"></small></h2>
+            <h2><span>Scope Job Load</span><small x-text="scopeJobLoad().length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Guild</th><th>Channel</th><th>Total</th><th>Active</th><th>Failed</th><th>Latest</th></tr></thead>
+                <thead><tr><th>Scope</th><th>Guild</th><th>ID</th><th>Total</th><th>Active</th><th>Failed</th><th>Latest</th></tr></thead>
                 <tbody>
-                  <template x-for="room in roomJobLoad()" :key="`${room.guild_id}:${room.voice_channel_id}`">
+                  <template x-for="scope in scopeJobLoad()" :key="`${scope.scope_kind}:${scope.guild_id}:${scope.scope_id}`">
                     <tr>
-                      <td class="mono" x-text="short(room.guild_id, 14)"></td>
-                      <td class="mono" x-text="short(room.voice_channel_id, 18)"></td>
-                      <td x-text="room.total"></td>
-                      <td x-text="room.active"></td>
-                      <td x-text="room.failed"></td>
-                      <td x-text="ago(room.latest_at)"></td>
+                      <td x-text="scope.scope_kind"></td>
+                      <td class="mono" x-text="short(scope.guild_id, 14)"></td>
+                      <td class="mono" x-text="short(scope.scope_id, 18)"></td>
+                      <td x-text="scope.total"></td>
+                      <td x-text="scope.active"></td>
+                      <td x-text="scope.failed"></td>
+                      <td x-text="ago(scope.latest_at)"></td>
                     </tr>
                   </template>
                 </tbody>
               </table>
-              <div class="empty" x-show="!roomJobLoad().length">No job history.</div>
+              <div class="empty" x-show="!scopeJobLoad().length">No job history.</div>
             </div>
           </section>
         </div>
@@ -644,7 +645,7 @@
                 <tbody>
                   <template x-for="session in sessions" :key="session.sessionId || session.captureRunId || session.assignmentId">
                     <tr>
-                      <td x-text="session.room?.channelName || session.roomId || session.voiceChannelId || ''"></td>
+                      <td x-text="session.room?.channelName || session.roomId || session.scopeId || ''"></td>
                       <td class="mono" x-text="short(session.captureRunId || session.sessionId || session.assignmentId, 18)"></td>
                       <td><span class="pill" :class="statusClass(session.mode || 'active')" x-text="session.mode || 'active'"></span></td>
                       <td x-text="session.botId || ''"></td>
@@ -796,7 +797,7 @@
               <span>Job State</span><strong x-text="timelineFilterSummary('timelineJobStates')"></strong>
             </button>
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineChannels')}" @click="toggleTimelineFilterEditor('timelineChannels')">
-              <span>Channel</span><strong x-text="timelineFilterSummary('timelineChannels')"></strong>
+              <span>Scope</span><strong x-text="timelineFilterSummary('timelineChannels')"></strong>
             </button>
           </div>
           <button type="button" class="filter-clear" @click="clearTimelineFilters()">Clear</button>

@@ -689,10 +689,7 @@ struct ResponseSubmitArgs {
     sink: String,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(
-        long,
-        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
-    )]
+    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,
@@ -718,10 +715,7 @@ struct ResponseDmArgs {
     job: Option<String>,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(
-        long,
-        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
-    )]
+    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,
@@ -775,10 +769,7 @@ struct FeedbackSubmitArgs {
     job: Option<String>,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(
-        long,
-        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
-    )]
+    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,
@@ -919,11 +910,11 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 JobsCommand::Get(args) => jobs_get(args),
                 JobsCommand::Retry(args) => api_emit(
                     "POST",
-                    &format!("/v1/voice/jobs/{}/retry", args.job_id),
+                    &format!("/v1/jobs/{}/retry", args.job_id),
                     None,
                     None,
                 ),
-                JobsCommand::RunDue => api_emit("POST", "/v1/voice/jobs/run-due", None, None),
+                JobsCommand::RunDue => api_emit("POST", "/v1/jobs/run-due", None, None),
             }
         }
         Command::Responses { command } => match command {
@@ -937,23 +928,19 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 print!("{}", crate::runtime::automations::AUTOMATION_SPEC_MANUAL);
                 Ok(0)
             }
-            AutomationsCommand::Create(args) => automation_spec(args, "/v1/voice/automations"),
-            AutomationsCommand::Validate(args) => {
-                automation_spec(args, "/v1/voice/automations/validate")
-            }
-            AutomationsCommand::DryRun(args) => {
-                automation_spec(args, "/v1/voice/automations/dry-run")
-            }
+            AutomationsCommand::Create(args) => automation_spec(args, "/v1/automations"),
+            AutomationsCommand::Validate(args) => automation_spec(args, "/v1/automations/validate"),
+            AutomationsCommand::DryRun(args) => automation_spec(args, "/v1/automations/dry-run"),
             AutomationsCommand::List(args) => automations_list(args),
             AutomationsCommand::Get(args) => api_emit(
                 "GET",
-                &format!("/v1/voice/automations/{}", args.automation_id),
+                &format!("/v1/automations/{}", args.automation_id),
                 None,
                 None,
             ),
             AutomationsCommand::Cancel(args) => api_emit(
                 "POST",
-                &format!("/v1/voice/automations/{}/cancel", args.automation_id),
+                &format!("/v1/automations/{}/cancel", args.automation_id),
                 None,
                 None,
             ),
@@ -974,7 +961,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
 fn status(args: StatusArgs) -> Result<i32> {
     api_emit(
         "GET",
-        "/v1/voice/status",
+        "/v1/status",
         None,
         Some(json!({"guild": args.guild, "channel": args.channel})),
     )
@@ -983,7 +970,7 @@ fn status(args: StatusArgs) -> Result<i32> {
 fn room_occupants(args: RoomOccupantsArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/rooms/occupants",
+        "/v1/rooms/occupants",
         None,
         Some(json!({"guild": agent_context_guild(args.guild), "room": args.room})),
         &args.output,
@@ -1047,7 +1034,7 @@ fn room_play_cue(args: PlayCueArgs) -> Result<i32> {
 fn timeline_tail(args: TimelineTailArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/timeline/tail",
+        "/v1/timeline/tail",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1064,7 +1051,7 @@ fn timeline_tail(args: TimelineTailArgs) -> Result<i32> {
 fn timeline_range(args: TimelineRangeArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/timeline/range",
+        "/v1/timeline/range",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1083,7 +1070,7 @@ fn timeline_range(args: TimelineRangeArgs) -> Result<i32> {
 fn conversations_list(args: ConversationsListArgs) -> Result<i32> {
     api_emit(
         "GET",
-        "/v1/voice/conversations/list",
+        "/v1/conversations/list",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1097,7 +1084,7 @@ fn conversations_list(args: ConversationsListArgs) -> Result<i32> {
 fn context_resolve(args: ContextResolveArgs) -> Result<i32> {
     api_emit(
         "GET",
-        "/v1/voice/context/resolve",
+        "/v1/context/resolve",
         None,
         Some(json!({"guild": args.guild, "channel": args.channel, "reference": args.reference})),
     )
@@ -1106,7 +1093,7 @@ fn context_resolve(args: ContextResolveArgs) -> Result<i32> {
 fn participant_trace(args: ParticipantTraceArgs) -> Result<i32> {
     api_emit(
         "GET",
-        "/v1/voice/participant/trace",
+        "/v1/participant/trace",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1143,7 +1130,7 @@ fn transcript_materialize(args: TranscriptMaterializeArgs) -> Result<i32> {
 fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
     let result = api_request(
         "GET",
-        "/v1/voice/transcript/render",
+        "/v1/transcript/render",
         None,
         Some(json!({
             "window": args.window,
@@ -1163,7 +1150,7 @@ fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
 fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/transcript/search",
+        "/v1/transcript/search",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1181,7 +1168,7 @@ fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
 fn jobs_list(args: JobsListArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/jobs",
+        "/v1/jobs",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1196,7 +1183,7 @@ fn jobs_list(args: JobsListArgs) -> Result<i32> {
 fn jobs_get(args: JobGetArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        &format!("/v1/voice/jobs/{}", args.job_id),
+        &format!("/v1/jobs/{}", args.job_id),
         None,
         Some(json!({"ephemeral": args.ephemeral, "verbose": args.verbose})),
         &args.output,
@@ -1206,7 +1193,7 @@ fn jobs_get(args: JobGetArgs) -> Result<i32> {
 fn members_search(args: MemberSearchArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/members/search",
+        "/v1/members/search",
         None,
         Some(json!({
             "guild": agent_context_guild(args.guild),
@@ -1220,7 +1207,7 @@ fn members_search(args: MemberSearchArgs) -> Result<i32> {
 fn members_resolve(args: MemberResolveArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/members/resolve",
+        "/v1/members/resolve",
         None,
         Some(json!({
             "guild": agent_context_guild(args.guild),
@@ -1233,7 +1220,7 @@ fn members_resolve(args: MemberResolveArgs) -> Result<i32> {
 fn members_get(args: MemberGetArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        &format!("/v1/voice/members/{}", args.user_id),
+        &format!("/v1/members/{}", args.user_id),
         None,
         Some(json!({"guild": agent_context_guild(args.guild)})),
         &args.output,
@@ -1243,7 +1230,7 @@ fn members_get(args: MemberGetArgs) -> Result<i32> {
 fn agent_sessions_current(args: AgentSessionsCurrentArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/agent-sessions/current",
+        "/v1/agent-sessions/current",
         None,
         Some(json!({"guild": args.guild, "channel": args.channel})),
         &args.output,
@@ -1253,7 +1240,7 @@ fn agent_sessions_current(args: AgentSessionsCurrentArgs) -> Result<i32> {
 fn agent_sessions_list(args: AgentSessionsListArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/agent-sessions",
+        "/v1/agent-sessions",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1268,7 +1255,7 @@ fn agent_sessions_list(args: AgentSessionsListArgs) -> Result<i32> {
 fn agent_sessions_search(args: AgentSessionsSearchArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        "/v1/voice/agent-sessions/search",
+        "/v1/agent-sessions/search",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1285,7 +1272,7 @@ fn agent_sessions_search(args: AgentSessionsSearchArgs) -> Result<i32> {
 fn agent_sessions_get(args: AgentSessionGetArgs) -> Result<i32> {
     api_emit_output(
         "GET",
-        &format!("/v1/voice/agent-sessions/{}", args.agent_session_id),
+        &format!("/v1/agent-sessions/{}", args.agent_session_id),
         None,
         None,
         &args.output,
@@ -1295,7 +1282,7 @@ fn agent_sessions_get(args: AgentSessionGetArgs) -> Result<i32> {
 fn agent_sessions_sunset(args: AgentSessionSunsetArgs) -> Result<i32> {
     api_emit(
         "POST",
-        &format!("/v1/voice/agent-sessions/{}/sunset", args.agent_session_id),
+        &format!("/v1/agent-sessions/{}/sunset", args.agent_session_id),
         Some(json!({
             "requestedByUserId": agent_context_requested_by(args.requested_by_user_id),
             "reason": args.reason,
@@ -1313,12 +1300,11 @@ fn agent_sessions_resume(args: AgentSessionResumeArgs) -> Result<i32> {
     };
     api_emit(
         "POST",
-        &format!("/v1/voice/agent-sessions/{}/resume", args.agent_session_id),
+        &format!("/v1/agent-sessions/{}/resume", args.agent_session_id),
         Some(json!({
             "routeKind": route_kind,
             "guildId": args.guild.unwrap_or_default(),
-            "voiceChannelId": args.channel.unwrap_or_default(),
-            "dmUserId": args.dm_user.unwrap_or_default(),
+            "scopeId": args.dm_user.or(args.channel).unwrap_or_default(),
             "requestedByUserId": agent_context_requested_by(args.requested_by_user_id),
             "message": message,
         })),
@@ -1330,13 +1316,14 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
     let content = read_required_payload(args.file, "response body")?;
     api_emit(
         "POST",
-        "/v1/voice/responses",
+        "/v1/responses",
         Some(json!({
             "intent": response_kind,
             "source_job_id": agent_context_job(args.job),
             "target": args.sink,
+            "scope_kind": "voice_channel",
             "guild_id": agent_context_guild(args.guild),
-            "voice_channel_id": agent_context_channel(args.channel),
+            "scope_id": agent_context_scope_id(args.channel),
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": response_kind == "question",
@@ -1350,7 +1337,7 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
     let guild_id = agent_context_guild(args.guild.clone());
     let resolved = api_request(
         "GET",
-        "/v1/voice/members/resolve",
+        "/v1/members/resolve",
         None,
         Some(json!({"guild": guild_id, "query": args.to})),
     )?;
@@ -1371,13 +1358,14 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
     }
     api_emit(
         "POST",
-        "/v1/voice/responses",
+        "/v1/responses",
         Some(json!({
             "intent": "message",
             "source_job_id": agent_context_job(args.job),
             "target": format!("dm:{user_id}"),
+            "scope_kind": "voice_channel",
             "guild_id": guild_id,
-            "voice_channel_id": agent_context_channel(args.channel),
+            "scope_id": agent_context_scope_id(args.channel),
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": false,
@@ -1390,11 +1378,12 @@ fn feedback_submit(args: FeedbackSubmitArgs) -> Result<i32> {
     let content = read_required_payload(args.file, "feedback body")?;
     api_emit(
         "POST",
-        "/v1/voice/feedback",
+        "/v1/feedback",
         Some(json!({
             "source_job_id": agent_context_job(args.job),
+            "scope_kind": "voice_channel",
             "guild_id": agent_context_guild(args.guild),
-            "voice_channel_id": agent_context_channel(args.channel),
+            "scope_id": agent_context_scope_id(args.channel),
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
         })),
@@ -1411,7 +1400,7 @@ fn automation_spec(args: AutomationSpecArgs, path: &str) -> Result<i32> {
 fn automations_list(args: AutomationListArgs) -> Result<i32> {
     api_emit(
         "GET",
-        "/v1/voice/automations",
+        "/v1/automations",
         None,
         Some(json!({
             "guild": args.guild,
@@ -1472,7 +1461,7 @@ fn duration_to_seconds(raw: &str) -> i64 {
 fn confirmation_approve(args: ConfirmationApproveArgs) -> Result<i32> {
     api_emit(
         "POST",
-        &format!("/v1/voice/confirmations/{}/approve", args.job_id),
+        &format!("/v1/confirmations/{}/approve", args.job_id),
         Some(json!({"approvedByUserId": args.approved_by_user_id.unwrap_or_default()})),
         None,
     )
@@ -1481,7 +1470,7 @@ fn confirmation_approve(args: ConfirmationApproveArgs) -> Result<i32> {
 fn confirmation_cancel(args: ConfirmationCancelArgs) -> Result<i32> {
     api_emit(
         "POST",
-        &format!("/v1/voice/confirmations/{}/cancel", args.job_id),
+        &format!("/v1/confirmations/{}/cancel", args.job_id),
         Some(json!({"cancelledByUserId": args.cancelled_by_user_id.unwrap_or_default()})),
         None,
     )
@@ -1513,12 +1502,12 @@ fn forget(args: ForgetArgs) -> Result<i32> {
     let channel = args.channel.clone();
     api_emit(
         "POST",
-        "/v1/voice/commands",
+        "/v1/commands",
         Some(json!({
             "action": "dispatch_now",
             "command_kind": "forget_window",
             "guild_id": args.guild.unwrap_or_default(),
-            "voice_channel_id": channel.unwrap_or_default(),
+            "scope_id": channel.unwrap_or_default(),
             "requested_by_user_id": args.requested_by_user_id.unwrap_or_default(),
             "arguments": {
                 "window_id": args.window.unwrap_or_default(),
@@ -1541,12 +1530,12 @@ fn submit_command(
 ) -> Result<i32> {
     api_emit(
         "POST",
-        "/v1/voice/commands",
+        "/v1/commands",
         Some(json!({
             "action": "dispatch_now",
             "command_kind": command_kind,
             "guild_id": guild_id.unwrap_or_default(),
-            "voice_channel_id": channel_id.unwrap_or_default(),
+            "scope_id": channel_id.unwrap_or_default(),
             "requested_by_user_id": requested_by_user_id.unwrap_or_default(),
             "arguments": arguments,
         })),
@@ -1736,11 +1725,11 @@ fn agent_context_guild(value: Option<String>) -> String {
         .unwrap_or_default()
 }
 
-fn agent_context_channel(value: Option<String>) -> String {
+fn agent_context_scope_id(value: Option<String>) -> String {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .or_else(|| env_value("CLANKCORD_AGENT_VOICE_CHANNEL_ID"))
+        .or_else(|| env_value("CLANKCORD_AGENT_SCOPE_ID"))
         .unwrap_or_default()
 }
 

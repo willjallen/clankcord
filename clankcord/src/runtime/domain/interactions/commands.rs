@@ -8,7 +8,7 @@ use crate::runtime::util::string_field;
 use crate::runtime::{
     CommandKind, CommandRequest, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, ForgetRequest, Job, JobKind, JobOutput, MaterializeTranscriptRequest,
-    RoomAgentPlacementAction,
+    RoomAgentPlacementAction, RuntimeScope,
 };
 
 use crate::runtime::Runtime;
@@ -22,7 +22,7 @@ impl Runtime {
         let mut command = command;
         let (guild_id, channel_id, _) = self.command_scope(&command).await?;
         command.guild_id = guild_id.clone();
-        command.voice_channel_id = channel_id.clone();
+        command.scope_id = channel_id.clone();
         if requires_confirmation(command.command_kind.as_str())
             && command.approved_by_user_id.trim().is_empty()
         {
@@ -31,8 +31,7 @@ impl Runtime {
         if command.requires_confirmation {
             let confirmation_context = self.confirmation_context_for_command(&command).await?;
             let job = Job::confirmation_required(
-                &guild_id,
-                &channel_id,
+                RuntimeScope::voice_channel(guild_id.clone(), channel_id.clone()),
                 command.requested_by_user_id.clone(),
                 command,
                 confirmation_context,
@@ -52,8 +51,7 @@ impl Runtime {
         }
 
         let job = Job::command_request(
-            &guild_id,
-            &channel_id,
+            RuntimeScope::voice_channel(guild_id.clone(), channel_id.clone()),
             command.requested_by_user_id.clone(),
             command,
         );
@@ -278,7 +276,7 @@ impl Runtime {
                         "command:{}:{}:{}",
                         parent_job.id,
                         RoomAgentPlacementAction::Leave.as_str(),
-                        parent_job.voice_channel_id
+                        parent_job.scope_id
                     ),
                     Some(pool.manual_leave_cooldown_seconds),
                 );
@@ -300,7 +298,7 @@ impl Runtime {
                         "command:{}:{}:{}",
                         parent_job.id,
                         RoomAgentPlacementAction::Join.as_str(),
-                        parent_job.voice_channel_id
+                        parent_job.scope_id
                     ),
                     None,
                 );
@@ -353,7 +351,7 @@ impl Runtime {
 
     async fn command_scope(&self, command: &CommandRequest) -> Result<(String, String, String)> {
         let mut guild_id = command.guild_id.trim().to_string();
-        let mut channel_id = command.voice_channel_id.trim().to_string();
+        let mut channel_id = command.scope_id.trim().to_string();
         let target_room_identifier = command.target_room_identifier(&channel_id);
         if (guild_id.is_empty() || channel_id.is_empty()) && !command.arguments.window_id.is_empty()
         {

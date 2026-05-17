@@ -358,14 +358,27 @@ impl TimelineStore {
         voice_channel_id: &str,
         event: Value,
     ) -> Result<Value> {
+        let scope = crate::runtime::RuntimeScope::voice_channel(guild_id, voice_channel_id);
+        self.append_scope_event(&scope, event).await
+    }
+
+    pub async fn append_scope_event(
+        &self,
+        scope: &crate::runtime::RuntimeScope,
+        event: Value,
+    ) -> Result<Value> {
         let mut payload = event.as_object().cloned().unwrap_or_default();
         set_default_string(&mut payload, "event_id", &new_id("evt"));
         let event_id = string_field_map(&payload, "event_id");
         set_default_string(&mut payload, "eventId", &event_id);
-        set_default_string(&mut payload, "guild_id", guild_id);
-        set_default_string(&mut payload, "guildId", guild_id);
-        set_default_string(&mut payload, "voice_channel_id", voice_channel_id);
-        set_default_string(&mut payload, "channelId", voice_channel_id);
+        set_default_string(&mut payload, "scope_kind", scope.kind.as_str());
+        set_default_string(&mut payload, "scope_id", &scope.scope_id);
+        set_default_string(&mut payload, "guild_id", &scope.guild_id);
+        set_default_string(&mut payload, "guildId", &scope.guild_id);
+        if scope.kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+            set_default_string(&mut payload, "voice_channel_id", &scope.scope_id);
+            set_default_string(&mut payload, "channelId", &scope.scope_id);
+        }
         set_default_string(&mut payload, "created_at", &isoformat_z(None));
         let created_at = string_field_map(&payload, "created_at");
         set_default_string(&mut payload, "timestamp", &created_at);
@@ -398,26 +411,29 @@ impl TimelineStore {
             ],
         );
         let capture_run_id = first_string(&payload, &["capture_run_id", "captureRunId"]);
-        self.ensure_room(
-            guild_id,
-            voice_channel_id,
-            &first_string(&payload, &["guild_slug", "guildSlug"]),
-            &first_string(&payload, &["voice_channel_name", "channelName"]),
-            &first_string(&payload, &["voice_channel_slug", "channelSlug"]),
-        )
-        .await?;
+        if scope.kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+            self.ensure_room(
+                &scope.guild_id,
+                &scope.scope_id,
+                &first_string(&payload, &["guild_slug", "guildSlug"]),
+                &first_string(&payload, &["voice_channel_name", "channelName"]),
+                &first_string(&payload, &["voice_channel_slug", "channelSlug"]),
+            )
+            .await?;
+        }
         sqlx::query(
             r#"
             INSERT INTO timeline_events(
-              event_id, guild_id, voice_channel_id, event_kind, started_at_ms, ended_at_ms,
+              event_id, scope_kind, guild_id, scope_id, event_kind, started_at_ms, ended_at_ms,
               created_at_ms, capture_run_id, conversation_id, speaker_user_id, speaker_label, text, payload_json
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             "#,
         )
         .bind(event_id)
-        .bind(guild_id)
-        .bind(voice_channel_id)
+        .bind(scope.kind.as_str())
+        .bind(&scope.guild_id)
+        .bind(&scope.scope_id)
         .bind(kind.clone())
         .bind(started_ms)
         .bind(ended_ms)
@@ -620,6 +636,30 @@ impl TimelineStore {
         capture_run_id: Option<&str>,
         include_forgotten: bool,
     ) -> Result<Vec<Value>> {
+        self.load_scope_events(
+            crate::runtime::RuntimeScopeKind::VoiceChannel,
+            guild_id,
+            voice_channel_id,
+            start,
+            end,
+            kinds,
+            capture_run_id,
+            include_forgotten,
+        )
+        .await
+    }
+
+    pub async fn load_scope_events(
+        &self,
+        scope_kind: crate::runtime::RuntimeScopeKind,
+        guild_id: &str,
+        scope_id: &str,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+        kinds: Option<&BTreeSet<String>>,
+        capture_run_id: Option<&str>,
+        include_forgotten: bool,
+    ) -> Result<Vec<Value>> {
         if kinds.is_some_and(BTreeSet::is_empty) {
             return Ok(Vec::new());
         }
@@ -631,14 +671,18 @@ impl TimelineStore {
                    r.voice_channel_slug AS room_voice_channel_slug
             FROM timeline_events e
             LEFT JOIN voice_rooms r
-              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
+              ON e.scope_kind = 'voice_channel'
+             AND r.guild_id = e.guild_id
+             AND r.voice_channel_id = e.scope_id
             WHERE e.guild_id =
             "#,
         );
         query.push_bind(guild_id);
         query
-            .push(" AND e.voice_channel_id = ")
-            .push_bind(voice_channel_id);
+            .push(" AND e.scope_kind = ")
+            .push_bind(scope_kind.as_str())
+            .push(" AND e.scope_id = ")
+            .push_bind(scope_id);
         if let Some(kinds) = kinds {
             query.push(" AND e.event_kind IN (");
             let mut separated = query.separated(", ");
@@ -679,7 +723,9 @@ impl TimelineStore {
                    r.voice_channel_slug AS room_voice_channel_slug
             FROM timeline_events e
             LEFT JOIN voice_rooms r
-              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
+              ON e.scope_kind = 'voice_channel'
+             AND r.guild_id = e.guild_id
+             AND r.voice_channel_id = e.scope_id
             WHERE e.event_id = $1
             "#,
         )
@@ -1122,7 +1168,10 @@ impl TimelineStore {
         let row = sqlx::query(
             r#"
             SELECT payload_json FROM conversations
-            WHERE guild_id = $1 AND voice_channel_id = $2 AND state = 'ephemeral'
+            WHERE guild_id = $1
+              AND scope_kind = 'voice_channel'
+              AND scope_id = $2
+              AND state = 'ephemeral'
             ORDER BY COALESCE(last_speech_at_ms, end_ms, start_ms) DESC
             LIMIT 1
             "#,
@@ -1246,9 +1295,12 @@ impl TimelineStore {
         self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
         sqlx::query(
             r#"
-            INSERT INTO conversations(conversation_id, guild_id, voice_channel_id, start_ms, end_ms, last_speech_at_ms, state, payload_json)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            INSERT INTO conversations(conversation_id, scope_kind, guild_id, scope_id, start_ms, end_ms, last_speech_at_ms, state, payload_json)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT(conversation_id) DO UPDATE SET
+              scope_kind = EXCLUDED.scope_kind,
+              guild_id = EXCLUDED.guild_id,
+              scope_id = EXCLUDED.scope_id,
               start_ms = EXCLUDED.start_ms,
               end_ms = EXCLUDED.end_ms,
               last_speech_at_ms = EXCLUDED.last_speech_at_ms,
@@ -1257,6 +1309,7 @@ impl TimelineStore {
             "#,
         )
         .bind(conversation_id)
+        .bind("voice_channel")
         .bind(guild_id)
         .bind(channel_id)
         .bind(start_ms)
@@ -1280,7 +1333,9 @@ impl TimelineStore {
         );
         query.push_bind(guild_id);
         if let Some(channel_id) = voice_channel_id.filter(|value| !value.is_empty()) {
-            query.push(" AND voice_channel_id = ").push_bind(channel_id);
+            query
+                .push(" AND scope_kind = 'voice_channel' AND scope_id = ")
+                .push_bind(channel_id);
         }
         if let Some(since) = since {
             query

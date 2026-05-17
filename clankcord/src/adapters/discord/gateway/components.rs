@@ -10,9 +10,9 @@ pub async fn handle_component_interaction(
     component: ComponentInteraction,
 ) {
     let custom_id = component.data.custom_id.trim().to_string();
-    let action = if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_confirm:") {
+    let action = if let Some(job_id) = custom_id.strip_prefix("clankcord_confirm:") {
         ("approve", job_id.trim().to_string())
-    } else if let Some(job_id) = custom_id.strip_prefix("clankcord_voice_cancel:") {
+    } else if let Some(job_id) = custom_id.strip_prefix("clankcord_cancel:") {
         ("cancel", job_id.trim().to_string())
     } else {
         return;
@@ -31,14 +31,11 @@ pub async fn handle_component_interaction(
         .await;
     let content = match result {
         Ok(_) if action.0 == "approve" => {
-            format!("Clanky voice confirmation `{}` approval queued.", action.1)
+            format!("Clanky confirmation `{}` approval queued.", action.1)
         }
-        Ok(_) => format!(
-            "Clanky voice confirmation `{}` cancellation queued.",
-            action.1
-        ),
+        Ok(_) => format!("Clanky confirmation `{}` cancellation queued.", action.1),
         Err(error) => format!(
-            "Could not complete Clanky voice confirmation `{}`: {}",
+            "Could not complete Clanky confirmation `{}`: {}",
             action.1, error
         ),
     };

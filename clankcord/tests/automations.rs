@@ -1,17 +1,52 @@
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use clankcord::runtime::automations::{
-    AutomationAction, AutomationCondition, AutomationSpec, AutomationState,
+    AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
+    AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState,
     AutomationTextTargetKind, AutomationTrigger,
 };
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
-    CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind, VoiceBotStatus,
+    CommandRequest, Job, JobKind, JobState, Runtime, RuntimeScope, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind, VoiceBotStatus,
 };
 
 mod common;
 use common::test_store;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_3_0AutomationScope {
+    guild_id: String,
+    voice_channel_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PreV0_3_0AutomationSpec {
+    schema: String,
+    name: String,
+    idempotency_key: String,
+    owner: AutomationOwner,
+    scope: PreV0_3_0AutomationScope,
+    trigger: AutomationTrigger,
+    condition: AutomationCondition,
+    delay: Option<AutomationDelay>,
+    expiry: AutomationExpiry,
+    actions: Vec<AutomationAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct PreV0_3_0AutomationRecord {
+    automation_id: String,
+    state: AutomationState,
+    created_at: String,
+    updated_at: String,
+    last_evaluated_at: String,
+    last_fired_at: String,
+    fire_count: u64,
+    pending_recheck: Option<AutomationPendingRecheck>,
+    spec: PreV0_3_0AutomationSpec,
+}
 
 #[tokio::test(flavor = "current_thread")]
 async fn automation_spec_lowers_boundary_json_to_typed_structs() {
@@ -20,7 +55,7 @@ async fn automation_spec_lowers_boundary_json_to_typed_structs() {
         "name": "alarm",
         "idempotency_key": "job_1:alarm",
         "owner": {"kind": "agent", "user_id": "user-a", "source_job_id": "job_1"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "event_kinds": ["timer.elapsed"]},
         "condition": {"kind": "true"},
         "actions": [{
@@ -32,7 +67,9 @@ async fn automation_spec_lowers_boundary_json_to_typed_structs() {
     .unwrap();
 
     assert_eq!(spec.expiry.max_fires, Some(1));
+    assert_eq!(spec.scope.scope_kind, "voice_channel");
     assert_eq!(spec.scope.guild_id, "guild");
+    assert_eq!(spec.scope.scope_id, "code");
     let AutomationAction::TextSend { sink, content } = &spec.actions[0] else {
         panic!("expected response action");
     };
@@ -46,7 +83,7 @@ async fn automation_job_trigger_accepts_runtime_job_names() {
         "schema": "clankcord.automation.v0",
         "name": "job watcher",
         "owner": {"kind": "system"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {
             "kind": "job",
             "job_kinds": ["agent_task"],
@@ -72,7 +109,7 @@ async fn automation_spec_accepts_delayed_recheck_condition() {
         "schema": "clankcord.automation.v0",
         "name": "delayed away watcher",
         "owner": {"kind": "system"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "event_kinds": ["participant_left"]},
         "condition": {
             "kind": "predicate",
@@ -111,7 +148,7 @@ async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
         "name": "camel case reminder",
         "idempotencyKey": "job_1:camel",
         "owner": {"kind": "agent", "userId": "user-a", "sourceJobId": "job_1"},
-        "scope": {"guildId": "guild", "voiceChannelId": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "eventKinds": ["room.member_joined"]},
         "condition": {
             "kind": "predicate",
@@ -156,10 +193,13 @@ async fn invalid_automation_specs_return_actionable_errors() {
         ),
         (
             "scope channel shorthand",
-            spec_value_replacing("scope", json!({"guild_id": "guild", "channel": "code"})),
+            spec_value_replacing(
+                "scope",
+                json!({"scope_kind": "voice_channel", "guild_id": "guild", "channel": "code"}),
+            ),
             vec![
-                "$.scope requires voice_channel_id",
-                "use voice_channel_id instead of channel",
+                "$.scope requires scope_id",
+                "use scope_id instead of channel",
             ],
         ),
         (
@@ -368,7 +408,7 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
         "name": "remind blake",
         "idempotency_key": "job_1:remind-blake",
         "owner": {"kind": "agent", "user_id": "user-a", "source_job_id": "job_1"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "event_kinds": ["room.member_joined"]},
         "condition": {
             "kind": "predicate",
@@ -408,6 +448,64 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and_blob() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(reminder_spec("job_1:migrate-automation"))
+        .await
+        .unwrap();
+    let legacy_blob = bincode::serialize(&PreV0_3_0AutomationRecord::from_current(&record))
+        .expect("legacy automation record serializes");
+
+    sqlx::raw_sql(
+        r#"
+        ALTER TABLE automations ADD COLUMN voice_channel_id TEXT NOT NULL DEFAULT '';
+        UPDATE automations SET voice_channel_id = scope_id;
+        ALTER TABLE automations DROP COLUMN scope_kind CASCADE;
+        ALTER TABLE automations DROP COLUMN scope_id CASCADE;
+        "#,
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE automations SET payload_blob = $1 WHERE automation_id = $2")
+        .bind(legacy_blob)
+        .bind(&record.automation_id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.3.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.3.0");
+    assert!(!column_exists(&store.pool, "automations", "voice_channel_id").await);
+    let row = sqlx::query("SELECT scope_kind, scope_id FROM automations WHERE automation_id = $1")
+        .bind(&record.automation_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "scope_kind").unwrap(),
+        "voice_channel"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&row, "scope_id").unwrap(),
+        "code"
+    );
+    let migrated = store.get_automation(&record.automation_id).await.unwrap();
+    assert_eq!(migrated.spec.scope.scope_kind, "voice_channel");
+    assert_eq!(migrated.spec.scope.guild_id, "guild");
+    assert_eq!(migrated.spec.scope.scope_id, "code");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1091,8 +1189,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     .unwrap();
     store.create_automation(spec).await.unwrap();
     let mut completed_delivery = Job::text_delivery(
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         TextDeliveryPayload::new(
             TextDeliveryKind::Message,
@@ -1165,7 +1262,7 @@ fn reminder_spec(idempotency_key: &str) -> AutomationSpec {
         "name": "remind blake",
         "idempotency_key": idempotency_key,
         "owner": {"kind": "agent", "user_id": "user-a", "source_job_id": "job_1"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "event_kinds": ["room.member_joined"]},
         "condition": {
             "kind": "predicate",
@@ -1216,7 +1313,7 @@ fn spec_value(overrides: Value) -> Value {
         "name": "test automation",
         "idempotency_key": "test:auto",
         "owner": {"kind": "agent", "user_id": "user-a", "source_job_id": "job_1"},
-        "scope": {"guild_id": "guild", "voice_channel_id": "code"},
+        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
         "trigger": {"kind": "event", "event_kinds": ["room.member_joined"]},
         "condition": {"kind": "true"},
         "actions": [{
@@ -1250,6 +1347,56 @@ fn merge_json(base: &mut Value, overrides: Value) {
     }
 }
 
+impl PreV0_3_0AutomationRecord {
+    fn from_current(record: &AutomationRecord) -> Self {
+        Self {
+            automation_id: record.automation_id.clone(),
+            state: record.state,
+            created_at: record.created_at.clone(),
+            updated_at: record.updated_at.clone(),
+            last_evaluated_at: record.last_evaluated_at.clone(),
+            last_fired_at: record.last_fired_at.clone(),
+            fire_count: record.fire_count,
+            pending_recheck: record.pending_recheck.clone(),
+            spec: PreV0_3_0AutomationSpec {
+                schema: record.spec.schema.clone(),
+                name: record.spec.name.clone(),
+                idempotency_key: record.spec.idempotency_key.clone(),
+                owner: record.spec.owner.clone(),
+                scope: PreV0_3_0AutomationScope {
+                    guild_id: record.spec.scope.guild_id.clone(),
+                    voice_channel_id: record.spec.scope.scope_id.clone(),
+                },
+                trigger: record.spec.trigger.clone(),
+                condition: record.spec.condition.clone(),
+                delay: record.spec.delay.clone(),
+                expiry: record.spec.expiry.clone(),
+                actions: record.spec.actions.clone(),
+            },
+        }
+    }
+}
+
+async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
+    let row = sqlx::query(
+        r#"
+        SELECT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = $1
+            AND column_name = $2
+        ) AS exists
+        "#,
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::Row::try_get(&row, "exists").unwrap()
+}
+
 fn test_runtime(timeline_store: TimelineStore) -> Runtime {
     Runtime::from_store(timeline_store).unwrap()
 }
@@ -1257,8 +1404,7 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
 async fn insert_agent_source_job(store: &TimelineStore) {
     let mut job = Job::agent_task_for_session(
         "ags_source",
-        "guild",
-        "code",
+        RuntimeScope::voice_channel("guild", "code"),
         "user-a",
         CommandRequest::agent_task("guild", "code", "user-a", "source request"),
     );

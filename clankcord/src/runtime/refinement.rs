@@ -266,7 +266,7 @@ pub async fn run_refinement_job(store: &TimelineStore, job_id: &str) -> Result<V
         anyhow::bail!("unknown refinement job: {job_id}");
     }
     let guild_id = job.guild_id.clone();
-    let channel_id = job.voice_channel_id.clone();
+    let channel_id = job.scope_id.clone();
     let payload = job
         .refinement_payload()
         .cloned()

@@ -31,20 +31,20 @@ CLANKCORD_REPO_DIR
 CLANKCORD_AGENT_JOB_ID
 CLANKCORD_AGENT_SESSION_ID
 CLANKCORD_AGENT_GUILD_ID
-CLANKCORD_AGENT_VOICE_CHANNEL_ID
+CLANKCORD_AGENT_SCOPE_ID
 CLANKCORD_AGENT_REQUESTED_BY_USER_ID
 CLANKCORD_API_BASE_URL
 ```
 
-The CLI uses these variables for agent-friendly defaults. `responses send`, `responses ask`, and `responses dm` can infer the current job, guild, channel, and requester from the environment while still accepting explicit flags for manual operation.
+The CLI uses these variables for agent-friendly defaults. `responses send`, `responses ask`, and `responses dm` can infer the current job, guild, scope, and requester from the environment while still accepting explicit flags for manual operation.
 
 ## Prompt
 
-The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{resumed_from_agent_session_id}}`, `{{guild_id}}`, `{{voice_channel_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
+The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{resumed_from_agent_session_id}}`, `{{guild_id}}`, `{{scope_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
 
 The master instructions describe Clankcord authority boundaries, transcript handling for speech-to-text context, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
 
-The per-job prompt template is compact and stable. It contains job identity, session identity, guild, voice channel, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
+The per-job prompt template is compact and stable. It contains job identity, session identity, guild, runtime scope, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
 
 ```text
 JOB:
@@ -52,7 +52,7 @@ job_id: ...
 agent_session_id: ...
 resumed_from_agent_session_id: ...
 guild_id: ...
-voice_channel_id: ...
+scope_id: ...
 requested_by_user_id: ...
 requested_by: ...
 request: ...

@@ -3,11 +3,12 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::util::{first_non_empty, single_child_of_kind, string_field};
+use crate::runtime::util::{single_child_of_kind, string_field};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, BinaryPayload,
     DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState,
-    Runtime, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
+    Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget,
+    TextTargetKind,
 };
 
 enum TextDeliveryTarget {
@@ -23,23 +24,7 @@ impl Runtime {
         } else {
             Some(self.timeline_store.get_job(&payload.source_job_id).await?)
         };
-        let guild_id = first_non_empty([
-            string_field(value, "guild_id"),
-            source
-                .as_ref()
-                .map(|job| job.guild_id.clone())
-                .unwrap_or_default(),
-        ]);
-        let voice_channel_id = first_non_empty([
-            string_field(value, "voice_channel_id"),
-            source
-                .as_ref()
-                .map(|job| job.voice_channel_id.clone())
-                .unwrap_or_default(),
-        ]);
-        if guild_id.trim().is_empty() || voice_channel_id.trim().is_empty() {
-            anyhow::bail!("text delivery is missing guild/channel scope");
-        }
+        let scope = text_delivery_scope_from_value(value, source.as_ref())?;
         if payload.requested_by_user_id.trim().is_empty() {
             payload.requested_by_user_id = source
                 .as_ref()
@@ -47,8 +32,7 @@ impl Runtime {
                 .unwrap_or_default();
         }
         Ok(Job::text_delivery(
-            guild_id,
-            voice_channel_id,
+            scope,
             payload.requested_by_user_id.clone(),
             payload,
         ))
@@ -95,8 +79,7 @@ impl Runtime {
             TextDeliveryTarget::WaitFor(child) => return Ok(JobDecision::WaitFor(vec![child])),
         };
         let child = Job::discord_text_send(
-            job.guild_id.clone(),
-            job.voice_channel_id.clone(),
+            job.scope(),
             job.requested_by_user_id.clone(),
             DiscordTextSendPayload {
                 intent: payload.intent,
@@ -127,7 +110,7 @@ impl Runtime {
         self.timeline_store
             .append_event(
                 &job.guild_id,
-                &job.voice_channel_id,
+                &job.scope_id,
                 json!({
                     "event_kind": "text_delivered",
                     "kind": "text_delivered",
@@ -268,7 +251,7 @@ impl Runtime {
                     self.timeline_store
                         .append_event(
                             &session.guild_id,
-                            &session.voice_channel_id,
+                            &session.scope_id,
                             json!({
                                 "event_kind": "agent_session_thread_created",
                                 "kind": "agent_session_thread_created",
@@ -288,8 +271,10 @@ impl Runtime {
                     }
                     Ok(TextDeliveryTarget::WaitFor(
                         Job::discord_forum_thread_create(
-                            session.guild_id.clone(),
-                            session.voice_channel_id.clone(),
+                            RuntimeScope::voice_channel(
+                                session.guild_id.clone(),
+                                session.scope_id.clone(),
+                            ),
                             payload.requested_by_user_id.clone(),
                             DiscordForumThreadCreatePayload {
                                 parent_channel_id: session.discord_parent_channel_id.clone(),
@@ -297,7 +282,7 @@ impl Runtime {
                                 content: self
                                     .agent_thread_content(
                                         &session.guild_id,
-                                        &session.voice_channel_id,
+                                        &session.scope_id,
                                         &payload.requested_by_user_id,
                                         &session.agent_session_id,
                                     )
@@ -323,4 +308,54 @@ fn require_target_id(value: &str, label: &str, job: &Job) -> Result<()> {
         anyhow::bail!("text delivery job {} has no {label} target id", job.id);
     }
     Ok(())
+}
+
+fn text_delivery_scope_from_value(value: &Value, source: Option<&Job>) -> Result<RuntimeScope> {
+    let source_scope = source.map(Job::scope);
+    let raw_kind = string_field(value, "scope_kind");
+    let kind = if raw_kind.trim().is_empty() {
+        source_scope
+            .as_ref()
+            .map(|scope| scope.kind)
+            .ok_or_else(|| anyhow::anyhow!("text delivery is missing scope_kind"))?
+    } else {
+        raw_kind.parse::<RuntimeScopeKind>()?
+    };
+    let scope_id = {
+        let explicit = string_field(value, "scope_id");
+        if explicit.trim().is_empty() {
+            source_scope
+                .as_ref()
+                .map(|scope| scope.scope_id.clone())
+                .unwrap_or_default()
+        } else {
+            explicit
+        }
+    };
+    if scope_id.trim().is_empty() {
+        anyhow::bail!("text delivery is missing scope_id");
+    }
+    let guild_id = {
+        let explicit = string_field(value, "guild_id");
+        if explicit.trim().is_empty() {
+            source_scope
+                .as_ref()
+                .map(|scope| scope.guild_id.clone())
+                .unwrap_or_default()
+        } else {
+            explicit
+        }
+    };
+    if matches!(
+        kind,
+        RuntimeScopeKind::VoiceChannel | RuntimeScopeKind::TextChannel | RuntimeScopeKind::Thread
+    ) && guild_id.trim().is_empty()
+    {
+        anyhow::bail!("text delivery scope {kind:?} requires guild_id");
+    }
+    Ok(RuntimeScope {
+        kind,
+        guild_id,
+        scope_id,
+    })
 }

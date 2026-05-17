@@ -192,12 +192,12 @@ fn has_active_placement_job(
         job.room_agent_placement_payload()
             .is_some_and(|payload| payload.action == action && placement_targets_room(job, room))
     }) || context.has_active_job_in_guild(JobKind::DiscordVoiceJoin, &room.guild_id, |job| {
-        job.voice_channel_id == room.channel_id
+        job.scope_id == room.channel_id
     })
 }
 
 fn placement_targets_room(job: &Job, room: &RoomConfig) -> bool {
-    room_identifier_matches(&job.voice_channel_id, room)
+    room_identifier_matches(&job.scope_id, room)
         || job
             .room_agent_placement_payload()
             .is_some_and(|payload| room_identifier_matches(&payload.room_id, room))

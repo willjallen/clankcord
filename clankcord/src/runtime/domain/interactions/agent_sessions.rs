@@ -14,8 +14,8 @@ use crate::runtime::util::first_value_string;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionResumePayload, AgentSessionRouteKind,
     AgentSessionStartOutput, AgentSessionStartPayload, AgentSessionSunsetPayload, CommandRequest,
-    Job, JobKind, JobOutput, JobState, Runtime, TextTarget, TextTargetKind, dm_route_key,
-    voice_route_key,
+    Job, JobKind, JobOutput, JobState, Runtime, RuntimeScope, TextTarget, TextTargetKind,
+    dm_route_key, voice_route_key,
 };
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
@@ -36,9 +36,8 @@ impl Runtime {
             .await?
         {
             return Ok(Job::agent_task_for_session(
-                record.agent_session_id,
-                record.guild_id,
-                record.voice_channel_id,
+                record.agent_session_id.clone(),
+                agent_session_scope(&record),
                 requested_by_user_id.to_string(),
                 command,
             ));
@@ -187,7 +186,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &record.guild_id,
-                    &record.voice_channel_id,
+                    &record.scope_id,
                     json!({
                         "event_kind": "agent_session_created",
                         "kind": "agent_session_created",
@@ -229,8 +228,7 @@ impl Runtime {
 
         Ok(JobDecision::WaitFor(vec![Job::agent_task_for_session(
             payload.agent_session_id.clone(),
-            payload.guild_id.clone(),
-            payload.voice_channel_id.clone(),
+            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
             payload.requested_by_user_id.clone(),
             payload.command.clone(),
         )]))
@@ -358,7 +356,7 @@ impl Runtime {
                 }
                 record.route_kind = AgentSessionRouteKind::Voice;
                 record.route_key = route_key;
-                record.voice_channel_id = payload.voice_channel_id.clone();
+                record.scope_id = payload.voice_channel_id.clone();
                 record.dm_user_id.clear();
                 record.voice_capture_session_id = self
                     .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
@@ -386,7 +384,7 @@ impl Runtime {
                 record.route_kind = AgentSessionRouteKind::Dm;
                 record.route_key = route_key;
                 record.guild_id = "dm".to_string();
-                record.voice_channel_id = payload.dm_user_id.clone();
+                record.scope_id = payload.dm_user_id.clone();
                 record.text_target = TextTarget {
                     kind: TextTargetKind::Dm,
                     channel_id: String::new(),
@@ -407,7 +405,7 @@ impl Runtime {
         self.timeline_store
             .append_event(
                 &record.guild_id,
-                &record.voice_channel_id,
+                &record.scope_id,
                 json!({
                     "event_kind": "agent_session_resumed",
                     "kind": "agent_session_resumed",
@@ -438,12 +436,11 @@ impl Runtime {
             }
             return Ok(JobDecision::WaitFor(vec![Job::agent_task_for_session(
                 record.agent_session_id.clone(),
-                record.guild_id.clone(),
-                record.voice_channel_id.clone(),
+                agent_session_scope(&record),
                 payload.requested_by_user_id.clone(),
                 CommandRequest::agent_task(
                     record.guild_id.clone(),
-                    record.voice_channel_id.clone(),
+                    record.scope_id.clone(),
                     payload.requested_by_user_id.clone(),
                     payload.message.clone(),
                 ),
@@ -474,7 +471,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &record.guild_id,
-                    &record.voice_channel_id,
+                    &record.scope_id,
                     json!({
                         "event_kind": "agent_session_retired",
                         "kind": "agent_session_retired",
@@ -509,7 +506,7 @@ impl Runtime {
             self.timeline_store
                 .append_event(
                     &record.guild_id,
-                    &record.voice_channel_id,
+                    &record.scope_id,
                     json!({
                         "event_kind": "agent_session_retired",
                         "kind": "agent_session_retired",
@@ -635,7 +632,7 @@ impl Runtime {
             .timeline_store
             .load_events(
                 &record.guild_id,
-                &record.voice_channel_id,
+                &record.scope_id,
                 start,
                 end,
                 None,
@@ -651,11 +648,7 @@ impl Runtime {
         }
         for job in self
             .timeline_store
-            .list_jobs_by_scope_kind(
-                &record.guild_id,
-                &record.voice_channel_id,
-                JobKind::AgentTask,
-            )
+            .list_jobs_by_scope_kind(&record.guild_id, &record.scope_id, JobKind::AgentTask)
             .await?
         {
             if let crate::runtime::JobPayload::AgentTask(payload) = &job.payload
@@ -719,7 +712,7 @@ impl Runtime {
         record: &AgentSessionRecord,
     ) -> Result<String> {
         let room = self
-            .room_for_channel_ids(&record.guild_id, &record.voice_channel_id, None)
+            .room_for_channel_ids(&record.guild_id, &record.scope_id, None)
             .await?;
         let created_at = parse_instant(&record.created_at).with_context(|| {
             format!(
@@ -767,8 +760,16 @@ fn agent_session_resume_command(record: &AgentSessionRecord) -> String {
     } else {
         format!(
             "clankcord agent-sessions resume {} --guild {} --channel {}",
-            record.agent_session_id, record.guild_id, record.voice_channel_id
+            record.agent_session_id, record.guild_id, record.scope_id
         )
+    }
+}
+
+fn agent_session_scope(record: &AgentSessionRecord) -> RuntimeScope {
+    if record.route_kind == AgentSessionRouteKind::Dm {
+        RuntimeScope::dm(record.dm_user_id.clone())
+    } else {
+        RuntimeScope::voice_channel(record.guild_id.clone(), record.scope_id.clone())
     }
 }
 

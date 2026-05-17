@@ -5,6 +5,7 @@ pub mod domain;
 pub mod jobs;
 pub mod refinement;
 pub mod rooms;
+pub mod scope;
 pub mod service;
 pub mod timeline;
 pub(crate) mod util;
@@ -42,6 +43,7 @@ pub use jobs::{
     WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
+pub use scope::{RuntimeScope, RuntimeScopeKind};
 pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };

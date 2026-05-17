@@ -7,7 +7,7 @@ use clankcord::adapters::discord::gateway::slash::{
 };
 use clankcord::runtime::{
     BinaryPayload, CommandKind, DebugOverviewRequest, DiscordSlashCommandPayload, Job, JobKind,
-    Runtime,
+    Runtime, RuntimeScopeKind,
 };
 
 mod common;
@@ -33,7 +33,8 @@ fn discord_slash_command_job_round_trips() {
     let decoded = Job::decode(&job.encode().unwrap()).unwrap();
     assert_eq!(decoded.kind, JobKind::DiscordSlashCommand);
     assert_eq!(decoded.requested_by_user_id, "user-a");
-    assert_eq!(decoded.voice_channel_id, "code");
+    assert_eq!(decoded.scope_kind, RuntimeScopeKind::VoiceChannel);
+    assert_eq!(decoded.scope_id, "code");
     assert_eq!(decoded.payload.to_json()["command_name"], "join");
     assert_eq!(decoded.payload.to_json()["voice_channel_id"], "code");
     assert_eq!(decoded.payload.to_json()["options"][0]["value"], "code");
@@ -258,14 +259,15 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].kind, JobKind::Command);
         assert_eq!(children[0].guild_id, "guild");
-        assert_eq!(children[0].voice_channel_id, "code");
+        assert_eq!(children[0].scope_kind, RuntimeScopeKind::VoiceChannel);
+        assert_eq!(children[0].scope_id, "code");
         let command = children[0].command().unwrap();
         assert_eq!(command.command_kind, expected_kind);
         assert_eq!(command.guild_id, "guild");
-        assert_eq!(command.voice_channel_id, "code");
+        assert_eq!(command.scope_id, "code");
         assert_eq!(command.requested_by_user_id, "user-a");
         assert_eq!(command.requested_by_speaker_label, "will");
-        assert_eq!(command.target_voice_channel_id, "");
+        assert_eq!(command.target_channel_id, "");
         assert_eq!(command.arguments.channel, "");
         assert_eq!(command.arguments.target_channel, "");
     }

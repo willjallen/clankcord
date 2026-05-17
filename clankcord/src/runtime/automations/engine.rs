@@ -15,9 +15,9 @@ use crate::runtime::automations::{
 use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
-    CommandRequest, Job, JobKind, JobState, RoomConfig, RoomControl, Runtime, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind, VoiceAssignment, VoiceBotStatus,
-    VoiceCaptureSessionStatus,
+    CommandRequest, Job, JobKind, JobState, RoomConfig, RoomControl, Runtime, RuntimeScope,
+    RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 
 pub(crate) trait Automation: Send + Sync {
@@ -281,7 +281,7 @@ async fn run_stored_automations(
                 .timeline_store
                 .append_event(
                     &job.guild_id,
-                    &job.voice_channel_id,
+                    &job.scope_id,
                     json!({
                         "event_kind": "automation_fired",
                         "kind": "automation_fired",
@@ -399,7 +399,7 @@ async fn jobs_for_actions(runtime: &Runtime, record: &AutomationRecord) -> Resul
                     .timeline_store
                     .append_event(
                         &record.spec.scope.guild_id,
-                        &record.spec.scope.voice_channel_id,
+                        &record.spec.scope.scope_id,
                         json!({
                             "event_kind": "automation_action_failed",
                             "kind": "automation_action_failed",
@@ -480,7 +480,7 @@ async fn event_contexts(
         .timeline_store
         .load_events(
             &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
+            &record.spec.scope.scope_id,
             start,
             None,
             Some(&kinds),
@@ -514,7 +514,7 @@ async fn job_contexts(
         .timeline_store
         .list_jobs_for_trigger(
             &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
+            &record.spec.scope.scope_id,
             job_kinds,
             states,
             cursor,
@@ -522,7 +522,7 @@ async fn job_contexts(
         .await?
         .into_iter()
         .filter(|job| job.guild_id == record.spec.scope.guild_id)
-        .filter(|job| job.voice_channel_id == record.spec.scope.voice_channel_id)
+        .filter(|job| job.scope_id == record.spec.scope.scope_id)
         .filter(|job| job_kinds.contains(&job.kind) && states.contains(&job.state))
         .filter(|job| {
             let updated = parse_instant(&job.updated_at);
@@ -548,16 +548,13 @@ async fn base_context(
     let room = runtime
         .room_for_channel_ids(
             &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
+            &record.spec.scope.scope_id,
             None,
         )
         .await?;
     let occupants = runtime
         .timeline_store
-        .room_occupants(
-            &record.spec.scope.guild_id,
-            &record.spec.scope.voice_channel_id,
-        )
+        .room_occupants(&record.spec.scope.guild_id, &record.spec.scope.scope_id)
         .await?;
     let participants = room_participants(&occupants);
     let mut room_status = runtime.status_for_room(&room).await?;
@@ -604,12 +601,11 @@ fn room_participants(occupants: &[Value]) -> BTreeMap<String, Value> {
 
 fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Result<Job> {
     let guild_id = record.spec.scope.guild_id.clone();
-    let voice_channel_id = record.spec.scope.voice_channel_id.clone();
+    let scope_id = record.spec.scope.scope_id.clone();
     let requested_by_user_id = automation_requested_by(record);
     match action {
         AutomationAction::TextSend { sink, content } => Ok(Job::text_delivery(
-            guild_id,
-            voice_channel_id,
+            automation_voice_scope(record)?,
             requested_by_user_id.clone(),
             TextDeliveryPayload::new(
                 TextDeliveryKind::Message,
@@ -621,26 +617,30 @@ fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Resul
             ),
         )),
         AutomationAction::AgentTaskStart { prompt, .. } => Ok(Job::command_request(
-            guild_id.clone(),
-            voice_channel_id.clone(),
+            automation_voice_scope(record)?,
             requested_by_user_id.clone(),
-            CommandRequest::agent_task(guild_id, voice_channel_id, requested_by_user_id, prompt),
+            CommandRequest::agent_task(guild_id, scope_id, requested_by_user_id, prompt),
         )),
         AutomationAction::TranscriptStartLive { title } => Ok(Job::command_request(
-            guild_id.clone(),
-            voice_channel_id.clone(),
+            automation_voice_scope(record)?,
             requested_by_user_id.clone(),
-            CommandRequest::start_live_transcript(
-                guild_id,
-                voice_channel_id,
-                requested_by_user_id,
-                title,
-            ),
+            CommandRequest::start_live_transcript(guild_id, scope_id, requested_by_user_id, title),
         )),
         AutomationAction::SoundPlay { name } => anyhow::bail!(
             "automation action sound.play is not executable until a sound playback job exists: {name}"
         ),
     }
+}
+
+fn automation_voice_scope(record: &AutomationRecord) -> Result<RuntimeScope> {
+    let scope_kind = record.spec.scope.scope_kind.parse::<RuntimeScopeKind>()?;
+    if scope_kind != RuntimeScopeKind::VoiceChannel {
+        anyhow::bail!("automation action requires voice_channel scope");
+    }
+    Ok(RuntimeScope::voice_channel(
+        record.spec.scope.guild_id.clone(),
+        record.spec.scope.scope_id.clone(),
+    ))
 }
 
 fn text_target(sink: &AutomationTextTarget) -> Result<TextTarget> {

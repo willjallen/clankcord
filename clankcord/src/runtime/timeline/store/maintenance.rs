@@ -281,12 +281,15 @@ impl TimelineStore {
                    r.voice_channel_slug AS room_voice_channel_slug
             FROM timeline_events e
             LEFT JOIN voice_rooms r
-              ON r.guild_id = e.guild_id AND r.voice_channel_id = e.voice_channel_id
-            WHERE e.event_kind IN ('speech_segment', 'transcript')
+              ON e.scope_kind = 'voice_channel'
+             AND r.guild_id = e.guild_id
+             AND r.voice_channel_id = e.scope_id
+            WHERE e.scope_kind = 'voice_channel'
+              AND e.event_kind IN ('speech_segment', 'transcript')
               AND e.forgotten = FALSE
               AND e.started_at_ms IS NOT NULL
               AND e.started_at_ms < $1
-            ORDER BY e.guild_id, e.voice_channel_id, e.started_at_ms
+            ORDER BY e.guild_id, e.scope_id, e.started_at_ms
             "#,
         )
         .bind(cutoff_ms)
@@ -298,7 +301,7 @@ impl TimelineStore {
         for row in rows {
             let event_id: String = row.try_get("event_id")?;
             let guild_id: String = row.try_get("guild_id")?;
-            let channel_id: String = row.try_get("voice_channel_id")?;
+            let channel_id: String = row.try_get("scope_id")?;
             let event = timeline_event_payload(&row)?;
             event_ids.push(event_id);
             *retired_by_channel

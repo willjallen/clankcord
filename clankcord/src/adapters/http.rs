@@ -256,9 +256,7 @@ struct AgentSessionResumeBody {
     #[serde(default)]
     guild_id: String,
     #[serde(default)]
-    voice_channel_id: String,
-    #[serde(default)]
-    dm_user_id: String,
+    scope_id: String,
     #[serde(default)]
     requested_by_user_id: String,
     #[serde(default)]
@@ -285,68 +283,61 @@ pub fn router(handle: RuntimeHandle) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/v1/status", get(status))
-        .route("/v1/voice/pool/status", get(pool_status))
-        .route("/v1/voice/status", get(voice_status))
-        .route("/v1/voice/rooms/occupants", get(room_occupants))
-        .route("/v1/voice/commands", post(command_submit))
-        .route("/v1/voice/responses", post(response_submit))
-        .route("/v1/voice/feedback", post(feedback_submit))
+        .route("/v1/pool/status", get(pool_status))
+        .route("/v1/rooms/occupants", get(room_occupants))
+        .route("/v1/commands", post(command_submit))
+        .route("/v1/responses", post(response_submit))
+        .route("/v1/feedback", post(feedback_submit))
         .route(
-            "/v1/voice/automations",
+            "/v1/automations",
             get(automations_list).post(automation_create),
         )
-        .route("/v1/voice/automations/validate", post(automation_validate))
-        .route("/v1/voice/automations/dry-run", post(automation_validate))
-        .route("/v1/voice/automations/{automation_id}", get(automation_get))
+        .route("/v1/automations/validate", post(automation_validate))
+        .route("/v1/automations/dry-run", post(automation_validate))
+        .route("/v1/automations/{automation_id}", get(automation_get))
         .route(
-            "/v1/voice/automations/{automation_id}/cancel",
+            "/v1/automations/{automation_id}/cancel",
             post(automation_cancel),
         )
-        .route("/v1/voice/timeline/tail", get(timeline_tail))
-        .route("/v1/voice/timeline/range", get(timeline_range))
-        .route("/v1/voice/transcript/render", get(transcript_render))
-        .route("/v1/voice/transcript/search", get(transcript_search))
-        .route("/v1/voice/conversations/list", get(conversations_list))
-        .route("/v1/voice/context/resolve", get(context_resolve))
-        .route("/v1/voice/participant/trace", get(participant_trace))
-        .route("/v1/voice/members/search", get(members_search))
-        .route("/v1/voice/members/resolve", get(members_resolve))
-        .route("/v1/voice/members/{user_id}", get(members_get))
+        .route("/v1/timeline/tail", get(timeline_tail))
+        .route("/v1/timeline/range", get(timeline_range))
+        .route("/v1/transcript/render", get(transcript_render))
+        .route("/v1/transcript/search", get(transcript_search))
+        .route("/v1/conversations/list", get(conversations_list))
+        .route("/v1/context/resolve", get(context_resolve))
+        .route("/v1/participant/trace", get(participant_trace))
+        .route("/v1/members/search", get(members_search))
+        .route("/v1/members/resolve", get(members_resolve))
+        .route("/v1/members/{user_id}", get(members_get))
+        .route("/v1/agent-sessions/current", get(agent_sessions_current))
+        .route("/v1/agent-sessions", get(agent_sessions_list))
+        .route("/v1/agent-sessions/search", get(agent_sessions_search))
         .route(
-            "/v1/voice/agent-sessions/current",
-            get(agent_sessions_current),
-        )
-        .route("/v1/voice/agent-sessions", get(agent_sessions_list))
-        .route(
-            "/v1/voice/agent-sessions/search",
-            get(agent_sessions_search),
-        )
-        .route(
-            "/v1/voice/agent-sessions/{agent_session_id}",
+            "/v1/agent-sessions/{agent_session_id}",
             get(agent_sessions_get),
         )
         .route(
-            "/v1/voice/agent-sessions/{agent_session_id}/sunset",
+            "/v1/agent-sessions/{agent_session_id}/sunset",
             post(agent_sessions_sunset),
         )
         .route(
-            "/v1/voice/agent-sessions/{agent_session_id}/resume",
+            "/v1/agent-sessions/{agent_session_id}/resume",
             post(agent_sessions_resume),
         )
-        .route("/v1/voice/jobs", get(jobs_list))
-        .route("/v1/voice/jobs/run-due", post(jobs_run_due))
-        .route("/v1/voice/jobs/{job_id}", get(jobs_get))
-        .route("/v1/voice/jobs/{job_id}/retry", post(jobs_retry))
+        .route("/v1/jobs", get(jobs_list))
+        .route("/v1/jobs/run-due", post(jobs_run_due))
+        .route("/v1/jobs/{job_id}", get(jobs_get))
+        .route("/v1/jobs/{job_id}/retry", post(jobs_retry))
         .route(
-            "/v1/voice/confirmations/{job_id}/approve",
+            "/v1/confirmations/{job_id}/approve",
             post(confirmation_approve),
         )
         .route(
-            "/v1/voice/confirmations/{job_id}/cancel",
+            "/v1/confirmations/{job_id}/cancel",
             post(confirmation_cancel),
         )
-        .route("/v1/voice/debug/overview", get(debug_overview))
-        .route("/v1/voice/debug/agents/{job_id}", get(debug_agent_job))
+        .route("/v1/debug/overview", get(debug_overview))
+        .route("/v1/debug/agents/{job_id}", get(debug_agent_job))
         .route("/debug", get(debug_dashboard))
         .route("/debug/dashboard.css", get(debug_dashboard_css))
         .route(
@@ -411,36 +402,6 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
         Ok(runtime) => runtime,
         Err(error) => return err(error),
     };
-    match runtime
-        .status_payload(
-            query
-                .get("room")
-                .or_else(|| query.get("channel"))
-                .map(String::as_str),
-        )
-        .await
-    {
-        Ok(payload) => ok(payload),
-        Err(error) => err(error),
-    }
-}
-
-async fn pool_status(State(state): State<AppState>) -> Response {
-    let runtime = match state.runtime_context() {
-        Ok(runtime) => runtime,
-        Err(error) => return err(error),
-    };
-    match runtime.status_payload(None).await {
-        Ok(payload) => ok(payload),
-        Err(error) => err(error),
-    }
-}
-
-async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
-    let runtime = match state.runtime_context() {
-        Ok(runtime) => runtime,
-        Err(error) => return err(error),
-    };
     let guild = query_str(&query, &["guild"]);
     let channel = query_str(&query, &["channel"]);
     if !guild.is_empty() && !channel.is_empty() {
@@ -478,9 +439,20 @@ async fn voice_status(State(state): State<AppState>, Query(query): Query<BTreeQu
                 Ok(occupancy) => occupancy,
                 Err(error) => return err(error),
             };
-            object.insert("liveVoiceOccupancy".to_string(), occupancy);
+            object.insert("liveOccupancy".to_string(), occupancy);
         }
         ok(payload)
+    }
+}
+
+async fn pool_status(State(state): State<AppState>) -> Response {
+    let runtime = match state.runtime_context() {
+        Ok(runtime) => runtime,
+        Err(error) => return err(error),
+    };
+    match runtime.status_payload(None).await {
+        Ok(payload) => ok(payload),
+        Err(error) => err(error),
     }
 }
 
@@ -549,17 +521,9 @@ async fn submit_feedback_event(
     if guild_id.is_empty() {
         anyhow::bail!("feedback requires guild_id");
     }
-    let voice_channel_id = first_value_string(
-        payload,
-        &[
-            "voice_channel_id",
-            "voiceChannelId",
-            "channel_id",
-            "channelId",
-        ],
-    );
-    if voice_channel_id.is_empty() {
-        anyhow::bail!("feedback requires voice_channel_id");
+    let channel_id = first_value_string(payload, &["scope_id", "channel_id", "channelId"]);
+    if channel_id.is_empty() {
+        anyhow::bail!("feedback requires scope_id");
     }
     let message = first_value_string(payload, &["content", "message", "feedback_message"]);
     if message.trim().is_empty() {
@@ -571,7 +535,7 @@ async fn submit_feedback_event(
         .timeline_store
         .append_event(
             &guild_id,
-            &voice_channel_id,
+            &channel_id,
             json!({
                 "event_kind": "feedback",
                 "kind": "feedback",
@@ -623,11 +587,7 @@ async fn automations_list(
         runtime
             .list_automation_records(
                 non_empty_string(query_str(&query, &["guild", "guildId"])).as_deref(),
-                non_empty_string(query_str(
-                    &query,
-                    &["channel", "channelId", "voice_channel_id"],
-                ))
-                .as_deref(),
+                non_empty_string(query_str(&query, &["channel", "channelId"])).as_deref(),
                 state_filter,
             )
             .await,
@@ -657,7 +617,7 @@ async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQ
         runtime
             .timeline_tail(TimelineTailRequest {
                 guild_id: query_str(&query, &["guild", "guildId", "guild_id"]),
-                channel_id: query_str(&query, &["channel", "channelId", "voice_channel_id"]),
+                channel_id: query_str(&query, &["channel", "channelId"]),
                 since: query_str(&query, &["since"]),
                 limit: query_usize(&query, &["limit"], 200),
                 include_ephemeral: query_bool(&query, &["ephemeral"], false),
@@ -925,8 +885,7 @@ async fn agent_sessions_resume(
                 agent_session_id,
                 payload.route_kind,
                 payload.guild_id,
-                payload.voice_channel_id,
-                payload.dm_user_id,
+                payload.scope_id,
                 payload.requested_by_user_id,
                 payload.message,
             ))

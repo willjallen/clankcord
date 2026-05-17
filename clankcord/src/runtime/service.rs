@@ -89,13 +89,7 @@ impl RuntimeHandle {
         actor_user_id: String,
     ) -> Result<Value> {
         let target = self.timeline_store.get_job(&target_job_id).await?;
-        let job = Job::runtime_control(
-            target.guild_id,
-            target.voice_channel_id,
-            actor_user_id,
-            action,
-            target_job_id,
-        );
+        let job = Job::runtime_control(target.scope(), actor_user_id, action, target_job_id);
         self.submit_job(job).await
     }
 
@@ -403,13 +397,9 @@ async fn handle_runtime_submission(handle: &RuntimeHandle, submission: RuntimeSu
             reply,
         } => {
             let result = match handle.timeline_store.get_job(&target_job_id).await {
-                Ok(target) => Job::runtime_control(
-                    target.guild_id,
-                    target.voice_channel_id,
-                    actor_user_id,
-                    action,
-                    target_job_id,
-                ),
+                Ok(target) => {
+                    Job::runtime_control(target.scope(), actor_user_id, action, target_job_id)
+                }
                 Err(error) => {
                     let _ = reply.send(Err(error));
                     return;

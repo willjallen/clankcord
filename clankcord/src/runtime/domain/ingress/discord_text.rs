@@ -4,7 +4,8 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::{
-    AgentSessionRecord, CommandRequest, DiscordTextMessagePayload, Job, JobOutput, Runtime,
+    AgentSessionRecord, AgentSessionRouteKind, CommandRequest, DiscordTextMessagePayload, Job,
+    JobOutput, Runtime, RuntimeScope,
 };
 
 pub(crate) async fn prepare(
@@ -79,8 +80,7 @@ async fn resume_agent_session_from_thread_message(
         session.agent_session_id,
         "voice",
         session.guild_id,
-        session.voice_channel_id,
-        "",
+        session.scope_id,
         payload.author_user_id.clone(),
         payload.content.clone(),
     )]))
@@ -95,7 +95,7 @@ async fn append_thread_message_event(
         .timeline_store
         .append_event(
             &session.guild_id,
-            &session.voice_channel_id,
+            &session.scope_id,
             json!({
                 "event_kind": "discord_text_message",
                 "kind": "discord_text_message",
@@ -128,7 +128,7 @@ fn agent_task_for_thread_message(
 ) -> Result<Job> {
     let mut command = CommandRequest::agent_task(
         session.guild_id.clone(),
-        session.voice_channel_id.clone(),
+        session.scope_id.clone(),
         payload.author_user_id.clone(),
         payload.content.clone(),
     );
@@ -143,9 +143,8 @@ fn agent_task_for_thread_message(
     command.arguments = crate::runtime::CommandArguments::from_json(Some(&arguments))?;
 
     Ok(Job::agent_task_for_session(
-        session.agent_session_id,
-        session.guild_id,
-        session.voice_channel_id,
+        session.agent_session_id.clone(),
+        agent_session_scope(&session),
         payload.author_user_id.clone(),
         command,
     ))
@@ -156,6 +155,14 @@ fn agent_session_is_current(session: &AgentSessionRecord) -> bool {
         && parse_instant(&session.max_active_until)
             .map(|max_active_until| max_active_until > utc_now())
             .unwrap_or(false)
+}
+
+fn agent_session_scope(session: &AgentSessionRecord) -> RuntimeScope {
+    if session.route_kind == AgentSessionRouteKind::Dm {
+        RuntimeScope::dm(session.dm_user_id.clone())
+    } else {
+        RuntimeScope::voice_channel(session.guild_id.clone(), session.scope_id.clone())
+    }
 }
 
 fn text_author_label(payload: &DiscordTextMessagePayload) -> String {
