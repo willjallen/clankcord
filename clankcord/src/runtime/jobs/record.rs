@@ -7,7 +7,8 @@ use crate::runtime::util::first_non_empty;
 
 use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{
-    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
+    AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
+    AgentSessionSunsetPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
     BinaryPayload, CommandPayload, CommandRequest, ConfirmationContext,
     ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
     DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenPayload,
@@ -22,7 +23,7 @@ use super::{
 use crate::Result;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
-const JOB_PAYLOAD_BLOB_VERSION: u16 = 1;
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 2;
 const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
     JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
 
@@ -811,6 +812,65 @@ impl Job {
             JobPayload::EphemeralJobGc(EphemeralJobGcPayload {
                 source_job_id: source_job_id.into(),
                 batch_limit,
+            }),
+        )
+    }
+
+    pub fn agent_session_sunset(
+        agent_session_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        let requested_by_user_id = requested_by_user_id.into();
+        Self::new(
+            "agent",
+            "session",
+            requested_by_user_id.clone(),
+            JobState::Queued,
+            JobPayload::AgentSessionSunset(AgentSessionSunsetPayload {
+                agent_session_id: agent_session_id.into(),
+                requested_by_user_id,
+                reason: reason.into(),
+            }),
+        )
+    }
+
+    pub fn agent_session_resume(
+        source_agent_session_id: impl Into<String>,
+        route_kind: impl Into<String>,
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        dm_user_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        let requested_by_user_id = requested_by_user_id.into();
+        Self::new(
+            "agent",
+            "session",
+            requested_by_user_id.clone(),
+            JobState::Queued,
+            JobPayload::AgentSessionResume(AgentSessionResumePayload {
+                source_agent_session_id: source_agent_session_id.into(),
+                new_agent_session_id: format!("ags_{}", Uuid::new_v4().simple()),
+                route_kind: route_kind.into(),
+                guild_id: guild_id.into(),
+                voice_channel_id: voice_channel_id.into(),
+                dm_user_id: dm_user_id.into(),
+                requested_by_user_id,
+                message: message.into(),
+            }),
+        )
+    }
+
+    pub fn agent_session_retirement(source_job_id: impl Into<String>) -> Self {
+        Self::new(
+            "runtime",
+            "runtime",
+            "runtime",
+            JobState::Queued,
+            JobPayload::AgentSessionRetirement(AgentSessionRetirementPayload {
+                source_job_id: source_job_id.into(),
             }),
         )
     }

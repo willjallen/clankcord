@@ -17,13 +17,13 @@ durable jobs and timeline events
 
 ## CLI
 
-The root `clankcord` command is both the operator surface and the primary tool surface for agents. It is organized by capability: service startup, status, rooms, messages, timeline, transcripts, conversations, context, participants, members, jobs, responses, automations, feedback, confirmations, pause, resume, and forget.
+The root `clankcord` command is both the operator surface and the primary tool surface for agents. It is organized by capability: service startup, status, rooms, messages, timeline, transcripts, conversations, context, participants, members, agent sessions, jobs, responses, automations, feedback, confirmations, pause, resume, and forget.
 
 Voice and control mutations lower into typed command jobs. Automation, feedback, confirmation, response, and job-control commands call HTTP or runtime surfaces that create automation records, append feedback events, create `text_delivery` jobs, or create `runtime_control` jobs. Read commands query rendered timeline and runtime views.
 
 Agent-facing reads default to compact JSON. Large outputs can be written with `--file <path> --format json`, leaving stdout as a short confirmation plus counts, ids, or window bounds. `--ephemeral` includes transient runtime events such as wake and audio internals. `--verbose` expands fields for the selected records.
 
-Member and room-occupant commands are part of the agent contract. `members search`, `members resolve`, and `members get` read the Discord member cache and resolve names to durable Discord user ids. `rooms occupants` reads current voice-state rows for a room. Agents use these commands before writing automation conditions, DM targets, or participant references.
+Member, room-occupant, and agent-session commands are part of the agent contract. `members search`, `members resolve`, and `members get` read the Discord member cache and resolve names to durable Discord user ids. `rooms occupants` reads current voice-state rows for a room. `agent-sessions current`, `list`, `search`, `get`, `sunset`, and `resume` let agents find session history, retire the current session on request, and create a linked active session from a retired source. Agents use these commands before writing automation conditions, DM targets, participant references, or session-continuation work.
 
 ## HTTP
 
@@ -44,6 +44,7 @@ HTTP routes are mounted over the runtime handle. They cover health, status, voic
 /v1/voice/context/resolve
 /v1/voice/participant/trace
 /v1/voice/members/*
+/v1/voice/agent-sessions/*
 /v1/voice/jobs/*
 /v1/voice/confirmations/*
 /v1/voice/debug/*
@@ -74,7 +75,7 @@ set_voice_mute
 play_voice_cue
 ```
 
-Command jobs either handle the control directly or emit child jobs. Transcript commands materialize windows and can create publication and refinement work. Pause, resume, and deafen update room controls and can create cue playback. Deafen and resume create concrete Discord deafen IO jobs for active voice sessions. Join and leave create `room_agent_placement`. Voice mute and cue commands create concrete Discord voice IO jobs. Agent task commands resolve or create an agent session and emit `agent_session_start` or `agent_task`. `forget_window` enters confirmation before executing.
+Command jobs either handle the control directly or emit child jobs. Transcript commands materialize windows and can create publication and refinement work. Pause, resume, and deafen update room controls and can create cue playback. Deafen and resume create concrete Discord deafen IO jobs for active voice sessions. Join and leave create `room_agent_placement`. Voice mute and cue commands create concrete Discord voice IO jobs. Agent task commands resolve or create an agent session and emit `agent_session_start` or `agent_task`. Agent-session lifecycle mutations create `agent_session_sunset` and `agent_session_resume` jobs. `forget_window` enters confirmation before executing.
 
 ## Confirmations
 

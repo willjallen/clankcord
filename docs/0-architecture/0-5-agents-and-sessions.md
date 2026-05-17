@@ -1,6 +1,6 @@
 # Agents And Sessions
 
-An agent session is the durable route authority for Codex-backed work. Voice routes, managed Discord thread follow-ups, and DMs all resolve to a persisted `AgentSessionRecord` before Codex is invoked. The session connects Discord routing, the Codex session id, the response target, expiry, and the serialized ordering key used by `agent_task`.
+An agent session is the durable route authority for Codex-backed work. Voice routes, managed Discord thread follow-ups, and DMs all resolve to a persisted `AgentSessionRecord` before Codex is invoked. The session connects Discord routing, the Codex session id, the response target, lifecycle cap, resume lineage, and the serialized ordering key used by `agent_task`.
 
 ```text
 voice wake, voice command, DM, or managed thread message
@@ -25,7 +25,7 @@ text_delivery -> discord_text_send
 
 Every agent input belongs to one persisted session. Voice inputs resolve by `voice:<guild_id>:<voice_channel_id>`. DM inputs resolve by `dm:<user_id>`. Managed Discord thread messages resolve by the `discord_thread_id` stored on the voice session that owns that thread.
 
-Top-level `agent-chat` channel messages complete as ignored text ingress. `agent_chat` is a text-delivery target used for runtime responses; follow-up conversation happens in the managed thread, DM, or active voice route. Expired sessions fall out of selection, and agent work serializes by `agent:session:<agent_session_id>`.
+Top-level `agent-chat` channel messages complete as ignored text ingress. `agent_chat` is a text-delivery target used for runtime responses; follow-up conversation happens in the managed thread, DM, or active voice route. Retired sessions fall out of selection, and agent work serializes by `agent:session:<agent_session_id>`.
 
 ```text
 voice:<guild_id>:<voice_channel_id>
@@ -46,7 +46,7 @@ dm:<user_id>
 
 ## Session Record
 
-`AgentSessionRecord` stores the route, Discord target, Codex identity, lifecycle, and expiry.
+`AgentSessionRecord` stores the route, Discord target, Codex identity, lifecycle, cap deadline, retirement fields, and resume lineage.
 
 ```text
 agent_session_id
@@ -56,20 +56,25 @@ route_key
 guild_id
 voice_channel_id
 dm_user_id
+voice_capture_session_id
 discord_thread_id
 discord_parent_channel_id
 text_target
-state                       starting | active | expired | failed
+state                       starting | active | retired | failed
 created_at
 last_activity_at
-expires_at
+max_active_until
+retired_at
+retirement_reason
+retired_by_user_id
+resumed_from_agent_session_id
 ```
 
-Voice sessions start in `starting` while the managed Discord thread is created. Once the thread child completes, the session becomes `active` and stores the channel target. DM sessions are created active with a DM target. Session expiry comes from `agents.session_expiry_seconds` in `config.toml`, clamped between 60 seconds and seven days.
+Voice sessions start in `starting` while the managed Discord thread is created. Once the thread child completes, the session becomes `active` and stores the channel target. DM sessions are created active with a DM target. Active session lifetime is capped at eight hours from `created_at`; activity updates `last_activity_at` and does not extend `max_active_until`.
 
 ## Voice Sessions
 
-A wake activation or voice command resolves the voice route. The runtime reuses an active unexpired session that already owns a thread, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
+A wake activation or voice command resolves the voice route. The runtime retires due sessions, reuses an active session that owns a thread, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
 
 `agent_session_start` creates a `discord_forum_thread_create` child. After the thread child completes, the parent marks the session active, stores the thread target, and creates the first `agent_task`. Later messages inside that managed thread route back to the same session through `discord_thread_id`. Voice sessions require `agentThreadsChannelId` because the managed thread is the persistent public surface for the session.
 
@@ -93,13 +98,31 @@ resolve voice route
 
 ## DM Sessions
 
-A DM resolves to `dm:<user_id>`. The runtime reuses an active unexpired DM session for that user or creates a new active record. The text target remains `dm:<user_id>`, and responses stay in DM unless an explicit response command selects another target.
+A DM resolves to `dm:<user_id>`. The runtime retires due sessions, reuses an active DM session for that user, or creates a new active record. The text target remains `dm:<user_id>`, and responses stay in DM unless an explicit response command selects another target.
 
 ## Text Ingress
 
 Discord text messages enter as `discord_text_message` jobs. The ingress handler routes DMs to DM agent sessions and managed thread messages to the owning voice session. Routed messages append a `discord_text_message` timeline event and create an `agent_task` child for the selected session.
 
-Empty messages, expired managed threads, top-level `agent-chat` messages, and unmanaged guild channels complete as ignored ingress cases. They still pass through the runtime job path, which keeps text ingress visible in job inspection and timeline diagnostics.
+Empty messages, retired managed threads, top-level `agent-chat` messages, and unmanaged guild channels complete as ignored ingress cases. They still pass through the runtime job path, which keeps text ingress visible in job inspection and timeline diagnostics.
+
+## Retirement And Resume
+
+Agent session retirement is runtime maintenance and an explicit user action. `agent_session_retirement` runs from `runtime_maintenance` and retires sessions whose `max_active_until` has passed or whose bound `voice_capture_session_id` is no longer active. `agent_session_sunset` retires a selected session when a user or operator asks to end it. Retirement sets `state = retired`, records `retired_at`, `retirement_reason`, and `retired_by_user_id` when present, and appends `agent_session_retired`.
+
+Retired sessions remain queryable by id, list, and search. Route lookup and managed-thread ingress do not select them.
+
+`agent_session_resume` creates a new active session linked to a retired source through `resumed_from_agent_session_id`. A DM resume creates an active DM session. A voice resume creates a starting voice session, creates a managed Discord thread, then marks the new session active. The new session reuses the source `codex_session_id` when the source has one, and it has its own route binding, timestamps, cap, jobs, thread, and audit events.
+
+```text
+retired AgentSessionRecord
+      |
+      +--> agent_session_resume
+              |
+              +--> new linked AgentSessionRecord
+              +--> optional managed Discord thread
+              +--> optional first agent_task
+```
 
 ## Agent Task
 

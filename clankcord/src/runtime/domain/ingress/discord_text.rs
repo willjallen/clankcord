@@ -31,7 +31,7 @@ pub(crate) async fn prepare(
             return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                 &json!({
                     "kind": "discord_text_message",
-                    "status": "ignored_expired_agent_thread",
+                    "status": "ignored_retired_agent_thread",
                     "agent_session_id": session.agent_session_id,
                 }),
             )?));
@@ -117,8 +117,8 @@ pub(crate) async fn prepare(
 
 fn agent_session_is_current(session: &AgentSessionRecord) -> bool {
     session.state.is_selectable()
-        && parse_instant(&session.expires_at)
-            .map(|expires_at| expires_at > utc_now())
+        && parse_instant(&session.max_active_until)
+            .map(|max_active_until| max_active_until > utc_now())
             .unwrap_or(false)
 }
 

@@ -66,7 +66,7 @@ impl FromStr for AgentSessionRouteKind {
 pub enum AgentSessionRecordState {
     Starting,
     Active,
-    Expired,
+    Retired,
     Failed,
 }
 
@@ -75,13 +75,13 @@ impl AgentSessionRecordState {
         match self {
             Self::Starting => "starting",
             Self::Active => "active",
-            Self::Expired => "expired",
+            Self::Retired => "retired",
             Self::Failed => "failed",
         }
     }
 
     pub fn is_selectable(self) -> bool {
-        matches!(self, Self::Starting | Self::Active)
+        matches!(self, Self::Active)
     }
 }
 
@@ -92,7 +92,7 @@ impl FromStr for AgentSessionRecordState {
         match raw.trim() {
             "starting" => Ok(Self::Starting),
             "active" => Ok(Self::Active),
-            "expired" => Ok(Self::Expired),
+            "retired" => Ok(Self::Retired),
             "failed" => Ok(Self::Failed),
             value => anyhow::bail!("unknown agent session state: {value}"),
         }
@@ -108,13 +108,18 @@ pub struct AgentSessionRecord {
     pub guild_id: String,
     pub voice_channel_id: String,
     pub dm_user_id: String,
+    pub voice_capture_session_id: String,
     pub discord_thread_id: String,
     pub discord_parent_channel_id: String,
     pub text_target: TextTarget,
     pub state: AgentSessionRecordState,
     pub created_at: String,
     pub last_activity_at: String,
-    pub expires_at: String,
+    pub max_active_until: String,
+    pub retired_at: String,
+    pub retirement_reason: String,
+    pub retired_by_user_id: String,
+    pub resumed_from_agent_session_id: String,
 }
 
 impl AgentSessionRecord {
@@ -125,7 +130,7 @@ impl AgentSessionRecord {
         discord_parent_channel_id: impl Into<String>,
         discord_thread_id: impl Into<String>,
         created_at: impl Into<String>,
-        expires_at: impl Into<String>,
+        max_active_until: impl Into<String>,
     ) -> Self {
         let agent_session_id = agent_session_id.into();
         let guild_id = guild_id.into();
@@ -141,6 +146,7 @@ impl AgentSessionRecord {
             guild_id,
             voice_channel_id,
             dm_user_id: String::new(),
+            voice_capture_session_id: String::new(),
             text_target: TextTarget {
                 kind: TextTargetKind::Channel,
                 channel_id: discord_thread_id.clone(),
@@ -151,7 +157,11 @@ impl AgentSessionRecord {
             state: AgentSessionRecordState::Active,
             last_activity_at: created_at.clone(),
             created_at,
-            expires_at: expires_at.into(),
+            max_active_until: max_active_until.into(),
+            retired_at: String::new(),
+            retirement_reason: String::new(),
+            retired_by_user_id: String::new(),
+            resumed_from_agent_session_id: String::new(),
         }
     }
 
@@ -161,7 +171,7 @@ impl AgentSessionRecord {
         voice_channel_id: impl Into<String>,
         discord_parent_channel_id: impl Into<String>,
         created_at: impl Into<String>,
-        expires_at: impl Into<String>,
+        max_active_until: impl Into<String>,
     ) -> Self {
         let agent_session_id = agent_session_id.into();
         let guild_id = guild_id.into();
@@ -175,6 +185,7 @@ impl AgentSessionRecord {
             guild_id,
             voice_channel_id,
             dm_user_id: String::new(),
+            voice_capture_session_id: String::new(),
             discord_thread_id: String::new(),
             discord_parent_channel_id: discord_parent_channel_id.into(),
             text_target: TextTarget {
@@ -185,7 +196,11 @@ impl AgentSessionRecord {
             state: AgentSessionRecordState::Starting,
             last_activity_at: created_at.clone(),
             created_at,
-            expires_at: expires_at.into(),
+            max_active_until: max_active_until.into(),
+            retired_at: String::new(),
+            retirement_reason: String::new(),
+            retired_by_user_id: String::new(),
+            resumed_from_agent_session_id: String::new(),
         }
     }
 
@@ -193,7 +208,7 @@ impl AgentSessionRecord {
         agent_session_id: impl Into<String>,
         user_id: impl Into<String>,
         created_at: impl Into<String>,
-        expires_at: impl Into<String>,
+        max_active_until: impl Into<String>,
     ) -> Self {
         let agent_session_id = agent_session_id.into();
         let user_id = user_id.into();
@@ -206,6 +221,7 @@ impl AgentSessionRecord {
             guild_id: "dm".to_string(),
             voice_channel_id: user_id.clone(),
             dm_user_id: user_id.clone(),
+            voice_capture_session_id: String::new(),
             discord_thread_id: String::new(),
             discord_parent_channel_id: String::new(),
             text_target: TextTarget {
@@ -216,7 +232,11 @@ impl AgentSessionRecord {
             state: AgentSessionRecordState::Active,
             last_activity_at: created_at.clone(),
             created_at,
-            expires_at: expires_at.into(),
+            max_active_until: max_active_until.into(),
+            retired_at: String::new(),
+            retirement_reason: String::new(),
+            retired_by_user_id: String::new(),
+            resumed_from_agent_session_id: String::new(),
         }
     }
 
@@ -237,13 +257,18 @@ impl AgentSessionRecord {
             "guild_id": self.guild_id,
             "voice_channel_id": self.voice_channel_id,
             "dm_user_id": self.dm_user_id,
+            "voice_capture_session_id": self.voice_capture_session_id,
             "discord_thread_id": self.discord_thread_id,
             "discord_parent_channel_id": self.discord_parent_channel_id,
             "text_target": self.text_target.to_json(),
             "state": self.state.as_str(),
             "created_at": self.created_at,
             "last_activity_at": self.last_activity_at,
-            "expires_at": self.expires_at,
+            "max_active_until": self.max_active_until,
+            "retired_at": self.retired_at,
+            "retirement_reason": self.retirement_reason,
+            "retired_by_user_id": self.retired_by_user_id,
+            "resumed_from_agent_session_id": self.resumed_from_agent_session_id,
         })
     }
 }

@@ -66,7 +66,7 @@ The Discord text loop starts the gateway client for messages, slash commands, an
 
 The live voice loop ticks every 500 ms by default. It starts missing configured voice clients, asks active capture sessions to flush ready buffers, and commits current capture-session stats into Postgres. A flush can produce `audio_segment` jobs for STT and `wake_probe` jobs for wake detection. Those jobs enter through the same sink and scheduler as commands and Discord text work.
 
-Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, and adapter synchronization run as child background jobs.
+Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, agent session retirement, and adapter synchronization run as child background jobs.
 
 ```text
 runtime_maintenance
@@ -74,6 +74,7 @@ runtime_maintenance
       +--> schedule next maintenance run
       +--> voice_status_sync
       +--> automation_evaluation
+      +--> agent_session_retirement
       +--> stale_wake_probe_sweep
       +--> stale_running_job_sweep
       +--> ephemeral_job_gc

@@ -33,7 +33,7 @@ The row uses stable projections for scheduling and filtering. The payload blob h
 
 Job states describe lifecycle, not domain-specific causes. Runtime code uses generic terminal states such as `complete`, `failed`, `failed_timeout`, and `cancelled`; job kind, typed output, `metadata.error`, and detail metadata record why that lifecycle transition happened. An agent dispatch failure is an `agent_task` in `failed` state with the dispatch cause recorded in `metadata.error` and `metadata.agent_task.dispatch_error`.
 
-Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, agent session startup, agent tasks, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute and deafen control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
+Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, agent session startup, agent session sunset, agent session resume, agent tasks, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute and deafen control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, `agent_session_retirement`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
 
 ## Decisions
 
@@ -53,7 +53,7 @@ WaitFor(children)
     persists child jobs, records dependency edges, and marks the parent waiting
 ```
 
-Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, and publication jobs resume because child output determines the parent result.
+Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, agent session resume, and publication jobs resume because child output determines the parent result.
 
 ## Dependency Resolution
 
@@ -93,6 +93,7 @@ Lanes bound concurrency by class of work. Wake probes have separate capacity fro
 ```text
 wake_probe                wake:stream:<stream_id>
 agent_task                agent:session:<agent_session_id>
+agent session sunset      agent:session:<agent_session_id>
 voice wake/agent route    agent:route:voice:<guild>:<channel>
 DM text ingress           agent:route:dm:<user_id>
 discord_text_send         discord:text:<target-kind>:<target-id>

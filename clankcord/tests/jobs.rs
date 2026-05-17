@@ -114,7 +114,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 1);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 2);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -459,7 +459,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
             .as_array()
             .map(|values| values.len())
             .unwrap(),
-        5
+        6
     );
 
     let jobs = store
@@ -470,6 +470,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     assert!(kinds.contains(&JobKind::RuntimeMaintenance));
     assert!(kinds.contains(&JobKind::VoiceStatusSync));
     assert!(kinds.contains(&JobKind::AutomationEvaluation));
+    assert!(kinds.contains(&JobKind::AgentSessionRetirement));
     assert!(kinds.contains(&JobKind::StaleWakeProbeSweep));
     assert!(kinds.contains(&JobKind::StaleRunningJobSweep));
     assert!(kinds.contains(&JobKind::EphemeralJobGc));
@@ -481,6 +482,7 @@ async fn maintenance_work_jobs_are_typed_ephemeral_jobs() {
         Job::voice_status_sync("job_source"),
         Job::discord_voice_status_snapshot("job_source"),
         Job::automation_evaluation("job_source"),
+        Job::agent_session_retirement("job_source"),
         Job::stale_wake_probe_sweep("job_source", 15),
         Job::stale_running_job_sweep("job_source", 30),
         Job::ephemeral_job_gc("job_source", 500),

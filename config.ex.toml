@@ -41,7 +41,6 @@ bypass_sandbox = false
 approval_policy = "never"
 
 [agents]
-session_expiry_seconds = 86400
 thread_auto_archive_minutes = 1440
 
 [prompts]

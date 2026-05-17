@@ -239,6 +239,32 @@ struct ConfirmationBody {
     cancelled_by_user_id: String,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AgentSessionSunsetBody {
+    #[serde(default)]
+    requested_by_user_id: String,
+    #[serde(default)]
+    reason: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct AgentSessionResumeBody {
+    #[serde(default)]
+    route_kind: String,
+    #[serde(default)]
+    guild_id: String,
+    #[serde(default)]
+    voice_channel_id: String,
+    #[serde(default)]
+    dm_user_id: String,
+    #[serde(default)]
+    requested_by_user_id: String,
+    #[serde(default)]
+    message: String,
+}
+
 impl AppState {
     fn runtime_context(&self) -> Result<crate::runtime::Runtime> {
         self.handle.runtime_context()
@@ -286,6 +312,27 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/voice/members/search", get(members_search))
         .route("/v1/voice/members/resolve", get(members_resolve))
         .route("/v1/voice/members/{user_id}", get(members_get))
+        .route(
+            "/v1/voice/agent-sessions/current",
+            get(agent_sessions_current),
+        )
+        .route("/v1/voice/agent-sessions", get(agent_sessions_list))
+        .route(
+            "/v1/voice/agent-sessions/search",
+            get(agent_sessions_search),
+        )
+        .route(
+            "/v1/voice/agent-sessions/{agent_session_id}",
+            get(agent_sessions_get),
+        )
+        .route(
+            "/v1/voice/agent-sessions/{agent_session_id}/sunset",
+            post(agent_sessions_sunset),
+        )
+        .route(
+            "/v1/voice/agent-sessions/{agent_session_id}/resume",
+            post(agent_sessions_resume),
+        )
         .route("/v1/voice/jobs", get(jobs_list))
         .route("/v1/voice/jobs/run-due", post(jobs_run_due))
         .route("/v1/voice/jobs/{job_id}", get(jobs_get))
@@ -781,6 +828,108 @@ async fn members_get(
                 guild_id: query_str(&query, &["guild", "guildId"]),
                 user_id,
             })
+            .await,
+    )
+}
+
+async fn agent_sessions_current(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .agent_session_current(
+                &query_str(&query, &["guild", "guildId"]),
+                &query_str(&query, &["channel", "channelId"]),
+            )
+            .await,
+    )
+}
+
+async fn agent_sessions_list(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .agent_session_list(
+                &query_str(&query, &["guild", "guildId"]),
+                &query_str(&query, &["channel", "channelId"]),
+                &query_str(&query, &["state"]),
+                query_usize(&query, &["limit"], 50),
+            )
+            .await,
+    )
+}
+
+async fn agent_sessions_search(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .agent_session_search(
+                &query_str(&query, &["guild", "guildId"]),
+                &query_str(&query, &["channel", "channelId"]),
+                &query_str(&query, &["state"]),
+                &query_str(&query, &["query"]),
+                &query_str(&query, &["since"]),
+                query_usize(&query, &["limit"], 25),
+            )
+            .await,
+    )
+}
+
+async fn agent_sessions_get(
+    State(state): State<AppState>,
+    Path(agent_session_id): Path<String>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(runtime.agent_session_get(&agent_session_id).await)
+}
+
+async fn agent_sessions_sunset(
+    State(state): State<AppState>,
+    Path(agent_session_id): Path<String>,
+    Json(payload): Json<AgentSessionSunsetBody>,
+) -> Response {
+    if payload.reason.trim().is_empty() {
+        return err(crate::errors::discord_tool_error(
+            "agent session sunset requires reason",
+        ));
+    }
+    result(
+        state
+            .handle
+            .submit_job(crate::runtime::Job::agent_session_sunset(
+                agent_session_id,
+                payload.requested_by_user_id,
+                payload.reason,
+            ))
+            .await,
+    )
+}
+
+async fn agent_sessions_resume(
+    State(state): State<AppState>,
+    Path(agent_session_id): Path<String>,
+    Json(payload): Json<AgentSessionResumeBody>,
+) -> Response {
+    result(
+        state
+            .handle
+            .submit_job(crate::runtime::Job::agent_session_resume(
+                agent_session_id,
+                payload.route_kind,
+                payload.guild_id,
+                payload.voice_channel_id,
+                payload.dm_user_id,
+                payload.requested_by_user_id,
+                payload.message,
+            ))
             .await,
     )
 }

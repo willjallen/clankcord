@@ -784,6 +784,7 @@ impl TimelineStore {
                     | crate::runtime::JobKind::TextDelivery
                     | crate::runtime::JobKind::ConfirmationRequired
                     | crate::runtime::JobKind::AgentSessionStart
+                    | crate::runtime::JobKind::AgentSessionResume
                     | crate::runtime::JobKind::TranscriptPublication
                     | crate::runtime::JobKind::VoiceStatusSync
             ) {
@@ -1191,6 +1192,8 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         crate::runtime::JobKind::TextDelivery
         | crate::runtime::JobKind::ConfirmationRequired
         | crate::runtime::JobKind::AgentSessionStart
+        | crate::runtime::JobKind::AgentSessionSunset
+        | crate::runtime::JobKind::AgentSessionResume
         | crate::runtime::JobKind::TranscriptPublication => "general_async",
         crate::runtime::JobKind::DiscordTextSend
         | crate::runtime::JobKind::DiscordForumThreadCreate => "discord_text",
@@ -1202,6 +1205,7 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::VoiceStatusSync
         | crate::runtime::JobKind::DiscordVoiceStatusSnapshot
         | crate::runtime::JobKind::AutomationEvaluation
+        | crate::runtime::JobKind::AgentSessionRetirement
         | crate::runtime::JobKind::StaleWakeProbeSweep
         | crate::runtime::JobKind::StaleRunningJobSweep
         | crate::runtime::JobKind::EphemeralJobGc => "maintenance",
@@ -1302,6 +1306,22 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::AgentSessionStart(payload) => {
             voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
         }
+        crate::runtime::JobPayload::AgentSessionSunset(payload) => {
+            format!(
+                "agent:session:{}",
+                normalize_key_part(&payload.agent_session_id)
+            )
+        }
+        crate::runtime::JobPayload::AgentSessionResume(payload) => {
+            if payload.route_kind == "dm" {
+                format!(
+                    "agent:route:{}",
+                    crate::runtime::dm_route_key(&payload.dm_user_id)
+                )
+            } else {
+                voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
+            }
+        }
         crate::runtime::JobPayload::TranscriptPublication(payload) => {
             format!(
                 "publication:{}",
@@ -1344,6 +1364,7 @@ fn job_ordering_key(job: &Job) -> String {
             "runtime:maintenance".to_string()
         }
         crate::runtime::JobPayload::AutomationEvaluation(_) => "runtime:maintenance".to_string(),
+        crate::runtime::JobPayload::AgentSessionRetirement(_) => "runtime:maintenance".to_string(),
         crate::runtime::JobPayload::StaleWakeProbeSweep(_) => "runtime:maintenance".to_string(),
         crate::runtime::JobPayload::StaleRunningJobSweep(_) => "runtime:maintenance".to_string(),
         crate::runtime::JobPayload::EphemeralJobGc(_) => "runtime:maintenance".to_string(),
@@ -1374,6 +1395,9 @@ fn source_job_id(job: &Job) -> String {
             payload.source_job_id.clone()
         }
         crate::runtime::JobPayload::AutomationEvaluation(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::AgentSessionRetirement(payload) => {
+            payload.source_job_id.clone()
+        }
         crate::runtime::JobPayload::StaleWakeProbeSweep(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::StaleRunningJobSweep(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),

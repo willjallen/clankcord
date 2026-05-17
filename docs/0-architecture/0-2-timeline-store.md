@@ -55,7 +55,7 @@ At startup the runtime reads the highest applied version from `clankcord_schema_
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
-Automations and agent sessions follow the same pattern. Each has queryable projections for routing, expiry, scope, and state, plus typed payload data that Rust code validates and executes.
+Automations and agent sessions follow the same pattern. Automations have queryable projections for expiry, scope, and state. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state. Both store typed payload data that Rust code validates and executes.
 
 ## Code Layout
 

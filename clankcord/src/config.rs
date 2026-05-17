@@ -97,7 +97,6 @@ pub struct CodexConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AgentsConfig {
-    pub session_expiry_seconds: i64,
     pub thread_auto_archive_minutes: i64,
 }
 
@@ -557,11 +556,8 @@ pub fn codex_approval_policy() -> String {
     app_config().codex.approval_policy.clone()
 }
 
-pub fn agent_session_expiry_seconds() -> i64 {
-    app_config()
-        .agents
-        .session_expiry_seconds
-        .clamp(60, 7 * 24 * 60 * 60)
+pub fn agent_session_max_active_seconds() -> i64 {
+    8 * 60 * 60
 }
 
 pub fn agent_thread_auto_archive_minutes() -> i64 {

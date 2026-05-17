@@ -14,7 +14,8 @@ pub use output::{
     TranscriptPublicationOutput,
 };
 pub use payload::{
-    AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
+    AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
+    AgentSessionSunsetPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
     BinaryPayload, CommandAction, CommandArguments, CommandKind, CommandPayload, CommandRequest,
     ConfirmationContext, ConfirmationRequiredPayload, DiscordForumThreadCreatePayload,
     DiscordSlashCommandPayload, DiscordTextMessagePayload, DiscordTextSendPayload,

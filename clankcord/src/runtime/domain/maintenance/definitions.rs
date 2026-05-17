@@ -10,6 +10,7 @@ pub(super) trait MaintenanceJobDefinition {
 
 struct VoiceStatusDefinition;
 struct AutomationEvaluationDefinition;
+struct AgentSessionRetirementDefinition;
 struct StaleWakeProbeSweepDefinition;
 struct StaleRunningJobSweepDefinition;
 struct EphemeralJobGcDefinition;
@@ -31,6 +32,16 @@ impl MaintenanceJobDefinition for AutomationEvaluationDefinition {
 
     fn evaluate(&self, source_job: &Job) -> Vec<Job> {
         vec![Job::automation_evaluation(source_job.id.clone())]
+    }
+}
+
+impl MaintenanceJobDefinition for AgentSessionRetirementDefinition {
+    fn name(&self) -> &'static str {
+        "agent_session_retirement"
+    }
+
+    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
+        vec![Job::agent_session_retirement(source_job.id.clone())]
     }
 }
 
@@ -90,6 +101,7 @@ fn maintenance_job_definitions() -> Vec<Box<dyn MaintenanceJobDefinition>> {
     vec![
         Box::new(VoiceStatusDefinition),
         Box::new(AutomationEvaluationDefinition),
+        Box::new(AgentSessionRetirementDefinition),
         Box::new(StaleWakeProbeSweepDefinition),
         Box::new(StaleRunningJobSweepDefinition),
         Box::new(EphemeralJobGcDefinition),

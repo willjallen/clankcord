@@ -11,6 +11,7 @@ fn agent_task_prompt_is_compact_and_packet_free() {
         &AgentTaskPromptContext {
             job_id: "job_1".to_string(),
             agent_session_id: "ags_1".to_string(),
+            resumed_from_agent_session_id: String::new(),
             guild_id: "guild".to_string(),
             voice_channel_id: "voice".to_string(),
             requested_by_user_id: "user".to_string(),
@@ -68,6 +69,7 @@ fn agent_task_prompt_can_render_from_custom_template_dir() {
         &AgentTaskPromptContext {
             job_id: "job_1".to_string(),
             agent_session_id: "ags_1".to_string(),
+            resumed_from_agent_session_id: String::new(),
             guild_id: "guild".to_string(),
             voice_channel_id: "voice".to_string(),
             requested_by_user_id: "user".to_string(),

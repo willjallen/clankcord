@@ -12,6 +12,7 @@ use crate::errors::discord_tool_error;
 const CLI_AFTER_HELP: &str = r#"Common agent workflows:
   Inspect recent memory:      clankcord timeline tail --since -10m --file timeline.json
   Render transcript context:  clankcord transcripts render --since -30m --file transcript.md --format markdown
+  Search agent sessions:      clankcord agent-sessions search --query "floating point" --file sessions.json
   Resolve a person:           clankcord members resolve "display name"
   Publish a visible reply:    clankcord responses send <<'EOF'
                               message body
@@ -134,6 +135,11 @@ enum Command {
         #[command(subcommand)]
         command: MembersCommand,
     },
+    #[command(about = "Find, inspect, sunset, and resume agent sessions.")]
+    AgentSessions {
+        #[command(subcommand)]
+        command: AgentSessionsCommand,
+    },
     #[command(about = "List, inspect, retry, and run Clankcord runtime jobs.")]
     Jobs {
         #[command(subcommand)]
@@ -239,6 +245,22 @@ enum MembersCommand {
     Resolve(MemberResolveArgs),
     #[command(about = "Get one member by Discord user id.")]
     Get(MemberGetArgs),
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentSessionsCommand {
+    #[command(about = "Show the current active agent session for a voice route.")]
+    Current(AgentSessionsCurrentArgs),
+    #[command(about = "List agent sessions.")]
+    List(AgentSessionsListArgs),
+    #[command(about = "Search agent session history.")]
+    Search(AgentSessionsSearchArgs),
+    #[command(about = "Inspect one agent session.")]
+    Get(AgentSessionGetArgs),
+    #[command(about = "Retire one agent session.")]
+    Sunset(AgentSessionSunsetArgs),
+    #[command(about = "Create a new active session linked to a retired session.")]
+    Resume(AgentSessionResumeArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -581,6 +603,81 @@ struct MemberGetArgs {
 }
 
 #[derive(Debug, ClapArgs, Default)]
+struct AgentSessionsCurrentArgs {
+    #[arg(long)]
+    guild: String,
+    #[arg(long)]
+    channel: String,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct AgentSessionsListArgs {
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    state: Option<String>,
+    #[arg(long, default_value_t = 50)]
+    limit: usize,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs, Default)]
+struct AgentSessionsSearchArgs {
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    state: Option<String>,
+    #[arg(long)]
+    query: String,
+    #[arg(long, default_value = "-30d")]
+    since: String,
+    #[arg(long, default_value_t = 25)]
+    limit: usize,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AgentSessionGetArgs {
+    agent_session_id: String,
+    #[command(flatten)]
+    output: OutputArgs,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AgentSessionSunsetArgs {
+    agent_session_id: String,
+    #[arg(long)]
+    requested_by_user_id: Option<String>,
+    #[arg(long)]
+    reason: String,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AgentSessionResumeArgs {
+    agent_session_id: String,
+    #[arg(long)]
+    guild: Option<String>,
+    #[arg(long)]
+    channel: Option<String>,
+    #[arg(long)]
+    dm_user: Option<String>,
+    #[arg(long)]
+    requested_by_user_id: Option<String>,
+    #[arg(long)]
+    message: Option<String>,
+    #[arg(long, value_name = "PATH")]
+    file: Option<String>,
+}
+
+#[derive(Debug, ClapArgs, Default)]
 struct ResponseSubmitArgs {
     #[arg(long, help = "Source job id. Defaults to CLANKCORD_AGENT_JOB_ID.")]
     job: Option<String>,
@@ -807,6 +904,14 @@ fn run_cli(cli: Cli) -> Result<i32> {
             MembersCommand::Search(args) => members_search(args),
             MembersCommand::Resolve(args) => members_resolve(args),
             MembersCommand::Get(args) => members_get(args),
+        },
+        Command::AgentSessions { command } => match command {
+            AgentSessionsCommand::Current(args) => agent_sessions_current(args),
+            AgentSessionsCommand::List(args) => agent_sessions_list(args),
+            AgentSessionsCommand::Search(args) => agent_sessions_search(args),
+            AgentSessionsCommand::Get(args) => agent_sessions_get(args),
+            AgentSessionsCommand::Sunset(args) => agent_sessions_sunset(args),
+            AgentSessionsCommand::Resume(args) => agent_sessions_resume(args),
         },
         Command::Jobs { command } => {
             match command.unwrap_or(JobsCommand::List(JobsListArgs::default())) {
@@ -1135,6 +1240,92 @@ fn members_get(args: MemberGetArgs) -> Result<i32> {
     )
 }
 
+fn agent_sessions_current(args: AgentSessionsCurrentArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/agent-sessions/current",
+        None,
+        Some(json!({"guild": args.guild, "channel": args.channel})),
+        &args.output,
+    )
+}
+
+fn agent_sessions_list(args: AgentSessionsListArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/agent-sessions",
+        None,
+        Some(json!({
+            "guild": args.guild,
+            "channel": args.channel,
+            "state": args.state,
+            "limit": args.limit,
+        })),
+        &args.output,
+    )
+}
+
+fn agent_sessions_search(args: AgentSessionsSearchArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        "/v1/voice/agent-sessions/search",
+        None,
+        Some(json!({
+            "guild": args.guild,
+            "channel": args.channel,
+            "state": args.state,
+            "query": args.query,
+            "since": args.since,
+            "limit": args.limit,
+        })),
+        &args.output,
+    )
+}
+
+fn agent_sessions_get(args: AgentSessionGetArgs) -> Result<i32> {
+    api_emit_output(
+        "GET",
+        &format!("/v1/voice/agent-sessions/{}", args.agent_session_id),
+        None,
+        None,
+        &args.output,
+    )
+}
+
+fn agent_sessions_sunset(args: AgentSessionSunsetArgs) -> Result<i32> {
+    api_emit(
+        "POST",
+        &format!("/v1/voice/agent-sessions/{}/sunset", args.agent_session_id),
+        Some(json!({
+            "requestedByUserId": agent_context_requested_by(args.requested_by_user_id),
+            "reason": args.reason,
+        })),
+        None,
+    )
+}
+
+fn agent_sessions_resume(args: AgentSessionResumeArgs) -> Result<i32> {
+    let message = read_optional_payload(args.file, args.message)?;
+    let route_kind = if args.dm_user.is_some() {
+        "dm"
+    } else {
+        "voice"
+    };
+    api_emit(
+        "POST",
+        &format!("/v1/voice/agent-sessions/{}/resume", args.agent_session_id),
+        Some(json!({
+            "routeKind": route_kind,
+            "guildId": args.guild.unwrap_or_default(),
+            "voiceChannelId": args.channel.unwrap_or_default(),
+            "dmUserId": args.dm_user.unwrap_or_default(),
+            "requestedByUserId": agent_context_requested_by(args.requested_by_user_id),
+            "message": message,
+        })),
+        None,
+    )
+}
+
 fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32> {
     let content = read_required_payload(args.file, "response body")?;
     api_emit(
@@ -1243,6 +1434,14 @@ fn read_required_payload(file: Option<String>, label: &str) -> Result<String> {
         anyhow::bail!("{label} is empty; provide text on stdin or with --file");
     }
     Ok(content)
+}
+
+fn read_optional_payload(file: Option<String>, inline: Option<String>) -> Result<String> {
+    if let Some(path) = file {
+        return fs::read_to_string(&path)
+            .map_err(|error| anyhow::anyhow!("failed to read message file {path:?}: {error}"));
+    }
+    Ok(inline.unwrap_or_default())
 }
 
 fn duration_to_seconds(raw: &str) -> i64 {
@@ -1467,6 +1666,7 @@ fn payload_record_count(payload: &Value) -> Option<usize> {
         "members",
         "candidates",
         "occupants",
+        "agent_sessions",
     ] {
         if let Some(count) = payload.get(key).and_then(Value::as_array).map(Vec::len) {
             return Some(count);

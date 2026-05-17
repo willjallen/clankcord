@@ -26,7 +26,19 @@ fn top_level_help_describes_command_groups_and_agent_workflows() {
     assert!(help.contains("Common agent workflows"));
     assert!(help.contains("clankcord responses send <<'EOF'"));
     assert!(help.contains("clankcord automations validate < automation.json"));
+    assert!(help.contains("clankcord agent-sessions search"));
     assert!(help.contains("clankcord feedback submit <<'EOF'"));
+}
+
+#[test]
+fn agent_sessions_help_exposes_lifecycle_commands() {
+    let output = clankcord(&["agent-sessions", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    assert!(help.contains("current"));
+    assert!(help.contains("search"));
+    assert!(help.contains("sunset"));
+    assert!(help.contains("resume"));
 }
 
 #[test]

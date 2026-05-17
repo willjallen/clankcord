@@ -11,7 +11,7 @@ use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 29] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 32] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -34,6 +34,11 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 29] = [
     ),
     JobExecutionPolicy::runtime_snapshot(
         JobKind::AutomationEvaluation,
+        JobLane::Maintenance,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::AgentSessionRetirement,
         JobLane::Maintenance,
         JobOrdering::RuntimeMaintenance,
     ),
@@ -125,6 +130,16 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 29] = [
     ),
     JobExecutionPolicy::runtime_exclusive(
         JobKind::AgentSessionStart,
+        JobLane::GeneralAsync,
+        JobOrdering::AgentSession,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::AgentSessionSunset,
+        JobLane::GeneralAsync,
+        JobOrdering::AgentSession,
+    ),
+    JobExecutionPolicy::runtime_exclusive(
+        JobKind::AgentSessionResume,
         JobLane::GeneralAsync,
         JobOrdering::AgentSession,
     ),

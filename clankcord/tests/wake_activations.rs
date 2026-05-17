@@ -847,14 +847,16 @@ fn test_runtime(timeline_store: TimelineStore) -> Runtime {
 }
 
 async fn insert_agent_session(store: &TimelineStore) {
+    let created_at = chrono::Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
         "ags_wake_test",
         "guild",
         "code",
         "agent-threads",
         "thread-wake-test",
-        dt(2026, 5, 12, 15, 0, 0).to_rfc3339_opts(SecondsFormat::Millis, true),
-        dt(2099, 5, 12, 15, 0, 0).to_rfc3339_opts(SecondsFormat::Millis, true),
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
     );
     store.create_agent_session_record(record).await.unwrap();
 }

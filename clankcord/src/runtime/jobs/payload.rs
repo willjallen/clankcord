@@ -860,6 +860,30 @@ pub struct AgentSessionStartPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionSunsetPayload {
+    pub agent_session_id: String,
+    pub requested_by_user_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionResumePayload {
+    pub source_agent_session_id: String,
+    pub new_agent_session_id: String,
+    pub route_kind: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub dm_user_id: String,
+    pub requested_by_user_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSessionRetirementPayload {
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscordTextMessagePayload {
     pub guild_id: String,
     pub channel_id: String,
@@ -1130,6 +1154,9 @@ pub enum JobPayload {
     DiscordTextSend(DiscordTextSendPayload),
     DiscordForumThreadCreate(DiscordForumThreadCreatePayload),
     AgentSessionStart(AgentSessionStartPayload),
+    AgentSessionSunset(AgentSessionSunsetPayload),
+    AgentSessionResume(AgentSessionResumePayload),
+    AgentSessionRetirement(AgentSessionRetirementPayload),
     TranscriptPublication(TranscriptPublicationPayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
@@ -1164,6 +1191,9 @@ impl JobPayload {
             Self::DiscordTextSend(_) => JobKind::DiscordTextSend,
             Self::DiscordForumThreadCreate(_) => JobKind::DiscordForumThreadCreate,
             Self::AgentSessionStart(_) => JobKind::AgentSessionStart,
+            Self::AgentSessionSunset(_) => JobKind::AgentSessionSunset,
+            Self::AgentSessionResume(_) => JobKind::AgentSessionResume,
+            Self::AgentSessionRetirement(_) => JobKind::AgentSessionRetirement,
             Self::TranscriptPublication(_) => JobKind::TranscriptPublication,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
@@ -1195,6 +1225,7 @@ impl JobPayload {
             Self::VoiceStatusSync(_) => None,
             Self::DiscordVoiceStatusSnapshot(_) => None,
             Self::AutomationEvaluation(_) => None,
+            Self::AgentSessionRetirement(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
@@ -1207,6 +1238,8 @@ impl JobPayload {
             Self::DiscordTextSend(_) => None,
             Self::DiscordForumThreadCreate(_) => None,
             Self::AgentSessionStart(payload) => Some(&payload.command),
+            Self::AgentSessionSunset(_) => None,
+            Self::AgentSessionResume(_) => None,
             Self::TranscriptPublication(_) => None,
             Self::ConfirmationRequired(payload) => Some(&payload.command),
             Self::Command(payload) => Some(&payload.command),
@@ -1229,6 +1262,7 @@ impl JobPayload {
             Self::VoiceStatusSync(_) => None,
             Self::DiscordVoiceStatusSnapshot(_) => None,
             Self::AutomationEvaluation(_) => None,
+            Self::AgentSessionRetirement(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
@@ -1241,6 +1275,8 @@ impl JobPayload {
             Self::DiscordTextSend(_) => None,
             Self::DiscordForumThreadCreate(_) => None,
             Self::AgentSessionStart(payload) => Some(&mut payload.command),
+            Self::AgentSessionSunset(_) => None,
+            Self::AgentSessionResume(_) => None,
             Self::TranscriptPublication(_) => None,
             Self::ConfirmationRequired(payload) => Some(&mut payload.command),
             Self::Command(payload) => Some(&mut payload.command),
@@ -1363,6 +1399,24 @@ impl JobPayload {
                 "discord_parent_channel_id": payload.discord_parent_channel_id,
                 "requested_by_user_id": payload.requested_by_user_id,
                 "command": payload.command.to_json(),
+            }),
+            Self::AgentSessionSunset(payload) => json!({
+                "agent_session_id": payload.agent_session_id,
+                "requested_by_user_id": payload.requested_by_user_id,
+                "reason": payload.reason,
+            }),
+            Self::AgentSessionResume(payload) => json!({
+                "source_agent_session_id": payload.source_agent_session_id,
+                "new_agent_session_id": payload.new_agent_session_id,
+                "route_kind": payload.route_kind,
+                "guild_id": payload.guild_id,
+                "voice_channel_id": payload.voice_channel_id,
+                "dm_user_id": payload.dm_user_id,
+                "requested_by_user_id": payload.requested_by_user_id,
+                "message": payload.message,
+            }),
+            Self::AgentSessionRetirement(payload) => json!({
+                "source_job_id": payload.source_job_id,
             }),
             Self::TranscriptPublication(payload) => json!({
                 "publication_id": payload.publication_id,

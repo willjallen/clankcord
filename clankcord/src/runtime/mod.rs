@@ -20,7 +20,8 @@ pub use domain::voice::{
     VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
 pub use jobs::{
-    AgentSessionStartOutput, AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload,
+    AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartOutput,
+    AgentSessionStartPayload, AgentSessionSunsetPayload, AgentTaskPayload, AudioSegmentPayload,
     BinaryPayload, CommandAction, CommandArguments, CommandKind, CommandPayload, CommandRequest,
     ConfirmationContext, ConfirmationRequiredPayload, DiscordForumThreadCreateOutput,
     DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,

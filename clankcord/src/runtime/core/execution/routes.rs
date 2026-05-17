@@ -20,6 +20,9 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
         }
         JobPayload::VoiceStatusSync(_) => runtime.prepare_voice_status_sync_job(job).await,
         JobPayload::AutomationEvaluation(_) => runtime.prepare_automation_evaluation_job(job).await,
+        JobPayload::AgentSessionRetirement(_) => {
+            runtime.prepare_agent_session_retirement_job().await
+        }
         JobPayload::StaleWakeProbeSweep(payload) => {
             runtime
                 .prepare_stale_wake_probe_sweep_job(payload.max_age_seconds)
@@ -51,6 +54,12 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
         JobPayload::ConfirmationRequired(_) => runtime.prepare_confirmation_required_job(job).await,
         JobPayload::AgentSessionStart(payload) => {
             runtime.prepare_agent_session_start_job(job, payload).await
+        }
+        JobPayload::AgentSessionSunset(payload) => {
+            runtime.prepare_agent_session_sunset_job(payload).await
+        }
+        JobPayload::AgentSessionResume(payload) => {
+            runtime.prepare_agent_session_resume_job(job, payload).await
         }
         JobPayload::TranscriptPublication(payload) => {
             runtime

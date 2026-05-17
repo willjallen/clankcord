@@ -337,6 +337,7 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("guild_id", "text", false),
             column("voice_channel_id", "text", false),
             column("dm_user_id", "text", false),
+            column("voice_capture_session_id", "text", false),
             column("discord_thread_id", "text", false),
             column("discord_parent_channel_id", "text", false),
             column("text_target_kind", "text", false),
@@ -345,7 +346,11 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("state", "text", false),
             column("created_at_ms", "bigint", false),
             column("last_activity_at_ms", "bigint", false),
-            column("expires_at_ms", "bigint", false),
+            column("max_active_until_ms", "bigint", false),
+            column("retired_at_ms", "bigint", true),
+            column("retirement_reason", "text", false),
+            column("retired_by_user_id", "text", false),
+            column("resumed_from_agent_session_id", "text", false),
             column("payload_blob", "bytea", false),
         ],
     ),
@@ -707,6 +712,7 @@ impl TimelineStore {
               guild_id TEXT NOT NULL DEFAULT '',
               voice_channel_id TEXT NOT NULL DEFAULT '',
               dm_user_id TEXT NOT NULL DEFAULT '',
+              voice_capture_session_id TEXT NOT NULL DEFAULT '',
               discord_thread_id TEXT NOT NULL DEFAULT '',
               discord_parent_channel_id TEXT NOT NULL DEFAULT '',
               text_target_kind TEXT NOT NULL DEFAULT '',
@@ -715,7 +721,11 @@ impl TimelineStore {
               state TEXT NOT NULL DEFAULT '',
               created_at_ms BIGINT NOT NULL,
               last_activity_at_ms BIGINT NOT NULL,
-              expires_at_ms BIGINT NOT NULL,
+              max_active_until_ms BIGINT NOT NULL,
+              retired_at_ms BIGINT,
+              retirement_reason TEXT NOT NULL DEFAULT '',
+              retired_by_user_id TEXT NOT NULL DEFAULT '',
+              resumed_from_agent_session_id TEXT NOT NULL DEFAULT '',
               payload_blob BYTEA NOT NULL
             );
             "#,
@@ -925,9 +935,9 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_automations_idempotency
               ON automations(guild_id, voice_channel_id, idempotency_key, state);
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_route
-              ON agent_sessions(route_key, state, expires_at_ms DESC);
+              ON agent_sessions(route_key, state, max_active_until_ms DESC);
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_thread
-              ON agent_sessions(discord_thread_id, state, expires_at_ms DESC)
+              ON agent_sessions(discord_thread_id, state, max_active_until_ms DESC)
               WHERE discord_thread_id <> '';
             CREATE INDEX IF NOT EXISTS idx_agent_sessions_codex
               ON agent_sessions(codex_session_id)

@@ -16,6 +16,9 @@ pub enum JobKind {
     DiscordTextSend,
     DiscordForumThreadCreate,
     AgentSessionStart,
+    AgentSessionSunset,
+    AgentSessionResume,
+    AgentSessionRetirement,
     TranscriptPublication,
     RefineTranscript,
     ConfirmationRequired,
@@ -50,6 +53,9 @@ impl JobKind {
             Self::DiscordTextSend => "discord_text_send",
             Self::DiscordForumThreadCreate => "discord_forum_thread_create",
             Self::AgentSessionStart => "agent_session_start",
+            Self::AgentSessionSunset => "agent_session_sunset",
+            Self::AgentSessionResume => "agent_session_resume",
+            Self::AgentSessionRetirement => "agent_session_retirement",
             Self::TranscriptPublication => "transcript_publication",
             Self::RefineTranscript => "refine_transcript",
             Self::ConfirmationRequired => "confirmation_required",
@@ -86,6 +92,7 @@ impl JobKind {
                 | Self::VoiceStatusSync
                 | Self::DiscordVoiceStatusSnapshot
                 | Self::AutomationEvaluation
+                | Self::AgentSessionRetirement
                 | Self::StaleWakeProbeSweep
                 | Self::StaleRunningJobSweep
                 | Self::EphemeralJobGc
@@ -113,6 +120,9 @@ impl FromStr for JobKind {
             "discord_text_send" => Ok(Self::DiscordTextSend),
             "discord_forum_thread_create" => Ok(Self::DiscordForumThreadCreate),
             "agent_session_start" => Ok(Self::AgentSessionStart),
+            "agent_session_sunset" => Ok(Self::AgentSessionSunset),
+            "agent_session_resume" => Ok(Self::AgentSessionResume),
+            "agent_session_retirement" => Ok(Self::AgentSessionRetirement),
             "transcript_publication" => Ok(Self::TranscriptPublication),
             "refine_transcript" => Ok(Self::RefineTranscript),
             "confirmation_required" => Ok(Self::ConfirmationRequired),

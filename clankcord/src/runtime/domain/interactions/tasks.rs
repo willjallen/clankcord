@@ -504,6 +504,7 @@ fn agent_invocation_warning_message(event_kind: &str) -> &'static str {
 pub struct AgentTaskPromptContext {
     pub job_id: String,
     pub agent_session_id: String,
+    pub resumed_from_agent_session_id: String,
     pub guild_id: String,
     pub voice_channel_id: String,
     pub requested_by_user_id: String,
@@ -576,9 +577,16 @@ impl Runtime {
                 request
             ));
         }
+        let agent_session_id = agent_task_session_id(job)?;
+        let resumed_from_agent_session_id = self
+            .timeline_store
+            .get_agent_session_record(&agent_session_id)
+            .await?
+            .resumed_from_agent_session_id;
         Ok(AgentTaskPromptContext {
             job_id: job.id.clone(),
-            agent_session_id: agent_task_session_id(job)?,
+            agent_session_id,
+            resumed_from_agent_session_id,
             guild_id: job.guild_id.clone(),
             voice_channel_id: job.voice_channel_id.clone(),
             requested_by_user_id: job.requested_by_user_id.clone(),
@@ -631,6 +639,10 @@ fn agent_task_template_vars(context: &AgentTaskPromptContext) -> BTreeMap<String
         (
             "agent_session_id".to_string(),
             context.agent_session_id.clone(),
+        ),
+        (
+            "resumed_from_agent_session_id".to_string(),
+            context.resumed_from_agent_session_id.clone(),
         ),
         ("guild_id".to_string(), context.guild_id.clone()),
         (
@@ -781,6 +793,24 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
             "clankcord".to_string(),
             "jobs".to_string(),
             "get".to_string(),
+            "--help".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "agent-sessions".to_string(),
+            "search".to_string(),
+            "--help".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "agent-sessions".to_string(),
+            "sunset".to_string(),
+            "--help".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "agent-sessions".to_string(),
+            "resume".to_string(),
             "--help".to_string(),
         ],
         vec![
