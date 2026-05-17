@@ -321,10 +321,16 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .with_state(state)
 }
 
-pub async fn serve(handle: RuntimeHandle, addr: std::net::SocketAddr) -> Result<()> {
+pub async fn serve_until_shutdown(
+    handle: RuntimeHandle,
+    addr: std::net::SocketAddr,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<()> {
     let app = router(handle);
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
     Ok(())
 }
 

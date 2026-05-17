@@ -94,3 +94,11 @@ voice_status_sync
 The HTTP adapter attaches after the service loops are spawned. It serves health, status, voice, command, response, automation, timeline, transcript, conversation, context, participant, member, job, confirmation, debug, and dashboard routes over `RuntimeHandle`.
 
 Read routes render views from the timeline store. Mutation routes parse boundary JSON and submit jobs or runtime-control requests through runtime intake. The default bind is `0.0.0.0:8091`, configurable through the environment or runtime config.
+
+## Shutdown
+
+The service handles SIGTERM and SIGINT as runtime shutdown requests. The HTTP adapter uses Axum graceful shutdown, so the listener stops accepting new requests and lets in-flight request handlers complete. The shared service shutdown signal stops the intake loop, Discord text gateway, live voice loop, and dispatcher loop.
+
+Shutdown waits briefly for active voice-control jobs to finish before touching live voice state. The live voice adapter then finishes every live capture session in memory, forces wake-probe and audio-segment artifact creation from buffered PCM, persists the ended capture-session metadata, closes the capture run with `runtime_shutdown`, clears bot voice state, leaves Discord voice channels through Songbird, and shuts down the voice gateway shards. Final audio and wake jobs are written directly to Postgres during this path so the durable scheduler can resume them on the next launch.
+
+After live voice state is closed, the service waits for active scheduler workers to release their lane permits and joins the service loop tasks with bounded timeouts. Remaining blocking workers are bounded by the Tokio runtime shutdown timeout after `start_persistent_process` returns.

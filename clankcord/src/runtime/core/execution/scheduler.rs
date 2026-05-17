@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
@@ -324,6 +325,97 @@ where
         }))
     }
 
+    pub(crate) async fn wait_for_voice_idle(&self, timeout: Duration) -> Value {
+        self.wait_for_lanes(timeout, &[JobLane::VoiceControl]).await
+    }
+
+    pub(crate) async fn wait_for_idle(&self, timeout: Duration) -> Value {
+        self.wait_for_lanes(
+            timeout,
+            &[
+                JobLane::VoiceControl,
+                JobLane::GeneralAsync,
+                JobLane::DiscordText,
+                JobLane::Maintenance,
+                JobLane::Wake,
+                JobLane::Audio,
+                JobLane::Refinement,
+                JobLane::Agent,
+            ],
+        )
+        .await
+    }
+
+    async fn wait_for_lanes(&self, timeout: Duration, lanes: &[JobLane]) -> Value {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut reports = Vec::new();
+        let mut idle = true;
+        for lane in lanes {
+            let Some((name, semaphore, capacity)) = self.lanes.lane_entry(*lane) else {
+                continue;
+            };
+            let active_before = capacity.saturating_sub(semaphore.available_permits());
+            if active_before == 0 {
+                reports.push(json!({
+                    "lane": name,
+                    "status": "idle",
+                    "activeBefore": active_before,
+                }));
+                continue;
+            }
+            let now = tokio::time::Instant::now();
+            let remaining = deadline.saturating_duration_since(now);
+            if remaining.is_zero() {
+                idle = false;
+                reports.push(json!({
+                    "lane": name,
+                    "status": "timeout",
+                    "activeBefore": active_before,
+                    "activeAfter": capacity.saturating_sub(semaphore.available_permits()),
+                }));
+                continue;
+            }
+            match tokio::time::timeout(
+                remaining,
+                semaphore.clone().acquire_many_owned(capacity as u32),
+            )
+            .await
+            {
+                Ok(Ok(permit)) => {
+                    drop(permit);
+                    reports.push(json!({
+                        "lane": name,
+                        "status": "idle",
+                        "activeBefore": active_before,
+                    }));
+                }
+                Ok(Err(error)) => {
+                    idle = false;
+                    reports.push(json!({
+                        "lane": name,
+                        "status": "closed",
+                        "activeBefore": active_before,
+                        "error": error.to_string(),
+                    }));
+                }
+                Err(_) => {
+                    idle = false;
+                    reports.push(json!({
+                        "lane": name,
+                        "status": "timeout",
+                        "activeBefore": active_before,
+                        "activeAfter": capacity.saturating_sub(semaphore.available_permits()),
+                    }));
+                }
+            }
+        }
+        json!({
+            "idle": idle,
+            "timeoutMs": timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+            "lanes": reports,
+        })
+    }
+
     async fn schedule_policy(&self, policy: JobExecutionPolicy) -> Result<Value> {
         let lane = self.lanes.semaphore(policy.lane);
         let permits = take_permits(&lane, dispatch_batch_limit(policy));
@@ -457,6 +549,40 @@ impl JobLanes {
             JobLane::Agent => self.agent.clone(),
             JobLane::Maintenance => self.maintenance.clone(),
         }
+    }
+
+    fn lane_entry(&self, lane: JobLane) -> Option<(&'static str, Arc<Semaphore>, usize)> {
+        let concurrency = config::job_concurrency();
+        Some(match lane {
+            JobLane::GeneralAsync => (
+                "general_async",
+                self.async_jobs.clone(),
+                concurrency.general_async.clamp(1, 128),
+            ),
+            JobLane::VoiceControl => (
+                "voice_control",
+                self.voice_control.clone(),
+                concurrency.voice_control.clamp(1, 128),
+            ),
+            JobLane::DiscordText => (
+                "discord_text",
+                self.discord_text.clone(),
+                concurrency.discord_text.clamp(1, 64),
+            ),
+            JobLane::Wake => ("wake", self.wake.clone(), concurrency.wake.clamp(1, 32)),
+            JobLane::Audio => ("audio", self.audio.clone(), concurrency.audio.clamp(1, 128)),
+            JobLane::Refinement => (
+                "refinement",
+                self.refinement.clone(),
+                concurrency.refinement.clamp(1, 32),
+            ),
+            JobLane::Agent => ("agent", self.agent.clone(), concurrency.agent.clamp(1, 32)),
+            JobLane::Maintenance => (
+                "maintenance",
+                self.maintenance.clone(),
+                concurrency.maintenance.clamp(1, 1),
+            ),
+        })
     }
 }
 

@@ -3,6 +3,8 @@ use serenity::client::{Client, Context, EventHandler};
 use serenity::model::application::Interaction;
 use serenity::model::channel::Message;
 use serenity::model::gateway::GatewayIntents;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
 use crate::Result;
 use crate::adapters::discord::gateway::{components, registration, slash};
@@ -19,15 +21,15 @@ impl DiscordTextAdapter {
         Self { job_sink }
     }
 
-    pub fn spawn(self) {
+    pub fn spawn(self, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
         tokio::spawn(async move {
-            if let Err(error) = self.run().await {
+            if let Err(error) = self.run(shutdown).await {
                 log(&format!("discord text adapter stopped: {error}"));
             }
-        });
+        })
     }
 
-    async fn run(self) -> Result<()> {
+    async fn run(self, mut shutdown: watch::Receiver<bool>) -> Result<()> {
         let token = match load_discord_bot_token() {
             Ok(token) => token,
             Err(error) => {
@@ -61,8 +63,27 @@ impl DiscordTextAdapter {
         let mut client = Client::builder(&token, intents)
             .event_handler(handler)
             .await?;
-        client.start_autosharded().await?;
+        let shard_manager = client.shard_manager.clone();
+        tokio::select! {
+            result = client.start_autosharded() => {
+                result?;
+            }
+            _ = wait_for_shutdown(&mut shutdown) => {
+                shard_manager.shutdown_all().await;
+            }
+        }
         Ok(())
+    }
+}
+
+async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::path::PathBuf;
@@ -130,11 +130,131 @@ impl LiveVoiceAdapter {
         Ok(())
     }
 
-    pub async fn shutdown(&self) {
-        let clients = self.voice_clients_lock.lock().await;
-        for client in clients.values() {
-            client.shutdown().await;
+    pub async fn shutdown_gracefully(self: &Arc<Self>) -> Result<Value> {
+        log("live voice adapter shutdown started");
+        let sessions = {
+            let mut sessions = self.capture_sessions_lock.lock().await;
+            std::mem::take(&mut *sessions)
+        };
+        let mut finished_sessions = Vec::new();
+        let mut created_audio_jobs = Vec::new();
+        for (_, live_session) in sessions {
+            let finished = {
+                let mut live_session = live_session.lock().await;
+                live_session.finish("runtime_shutdown".to_string(), local_tz())
+            };
+            for job in &finished.audio_jobs {
+                let created = self.timeline_store.create_job(job.clone()).await?;
+                created_audio_jobs.push(created.id);
+            }
+            self.persist_capture_session_status(&finished.metadata)
+                .await;
+            if !finished.capture_run_id.trim().is_empty() {
+                self.timeline_store
+                    .close_capture_run(
+                        &finished.guild_id,
+                        &finished.voice_channel_id,
+                        &finished.capture_run_id,
+                        None,
+                        "runtime_shutdown",
+                        "ended",
+                    )
+                    .await?;
+            }
+            finished_sessions.push(finished);
         }
+
+        let mut leave_requests = Vec::new();
+        let mut bot_statuses = Vec::new();
+        let mut shard_managers = Vec::new();
+        let mut client_tasks = Vec::new();
+        let mut seen_leave_requests = BTreeSet::new();
+        {
+            let mut clients = self.voice_clients_lock.lock().await;
+            for finished in &finished_sessions {
+                let Some(client) = clients.get_mut(&finished.bot_id) else {
+                    continue;
+                };
+                if seen_leave_requests.insert((finished.bot_id.clone(), finished.guild_id.clone()))
+                {
+                    leave_requests.push((
+                        finished.bot_id.clone(),
+                        finished.guild_id.clone(),
+                        client.voice(),
+                    ));
+                }
+            }
+            for client in clients.values_mut() {
+                if !client.current_guild_id.trim().is_empty()
+                    && seen_leave_requests
+                        .insert((client.bot_id.clone(), client.current_guild_id.clone()))
+                {
+                    leave_requests.push((
+                        client.bot_id.clone(),
+                        client.current_guild_id.clone(),
+                        client.voice(),
+                    ));
+                }
+                client.joining_live_session_id = None;
+                client.active_live_session_id = None;
+                client.current_guild_id.clear();
+                client.current_channel_id.clear();
+                client.ready = false;
+                client.last_error = "runtime shutdown".to_string();
+                bot_statuses.push(client.status());
+                shard_managers.push(client.shard_manager());
+                if let Some(task) = client.take_client_task() {
+                    client_tasks.push((client.bot_id.clone(), task));
+                }
+            }
+        }
+
+        let mut leave_results = Vec::new();
+        for (bot_id, guild_id, voice) in leave_requests {
+            let result = match parse_discord_id("guild_id", &guild_id) {
+                Ok(guild_id) => {
+                    leave_voice_channel(voice, guild_id).await;
+                    json!({"botId": bot_id, "guildId": guild_id.to_string(), "status": "left"})
+                }
+                Err(error) => {
+                    json!({"botId": bot_id, "guildId": guild_id, "status": "invalid_guild", "error": error.to_string()})
+                }
+            };
+            leave_results.push(result);
+        }
+        for status in &bot_statuses {
+            self.persist_bot_status(status).await;
+        }
+        for shard_manager in shard_managers {
+            shard_manager.shutdown_all().await;
+        }
+
+        let mut gateway_results = Vec::new();
+        for (bot_id, mut task) in client_tasks {
+            match tokio::time::timeout(Duration::from_secs(5), &mut task).await {
+                Ok(Ok(())) => {
+                    gateway_results.push(json!({"botId": bot_id, "status": "stopped"}));
+                }
+                Ok(Err(error)) => {
+                    gateway_results.push(json!({"botId": bot_id, "status": "join_error", "error": error.to_string()}));
+                }
+                Err(_) => {
+                    task.abort();
+                    let _ = task.await;
+                    gateway_results.push(json!({"botId": bot_id, "status": "aborted"}));
+                }
+            }
+        }
+
+        let report = json!({
+            "finishedSessions": finished_sessions.len(),
+            "audioJobs": created_audio_jobs,
+            "voiceLeaves": leave_results,
+            "gatewayTasks": gateway_results,
+            "botStatuses": bot_statuses.len(),
+        });
+        log(&format!("live voice adapter shutdown complete: {report}"));
+        Ok(report)
     }
 
     pub(crate) async fn join_assigned_room(

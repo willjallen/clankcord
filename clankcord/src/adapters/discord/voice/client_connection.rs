@@ -102,8 +102,12 @@ impl DiscordVoiceClient {
         self.http.clone()
     }
 
-    pub(super) async fn shutdown(&self) {
-        self.shard_manager.shutdown_all().await;
+    pub(super) fn shard_manager(&self) -> Arc<ShardManager> {
+        self.shard_manager.clone()
+    }
+
+    pub(super) fn take_client_task(&mut self) -> Option<JoinHandle<()>> {
+        self.client_task.take()
     }
 
     pub(super) fn status(&self) -> VoiceBotStatus {
