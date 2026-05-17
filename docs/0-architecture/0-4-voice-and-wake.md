@@ -91,17 +91,19 @@ per-speaker PCM buffer
 The default capture settings come from config.
 
 ```text
-transcription.silenceMs          1000 ms
-transcription.maxSegmentMs       8000 ms
-transcription.minimumUtteranceMs 350 ms
-wake.probeMinimumMs              500 ms
-wake.probeWindowMs               2500 ms
-wake.probeIntervalMs             500 ms
+voice.capture.flush_interval_seconds 0.2 seconds
+transcription.silence_ms             1000 ms
+transcription.max_segment_ms         8000 ms
+transcription.minimum_utterance_ms    350 ms
+wake.probe_minimum_ms                 250 ms
+wake.probe_window_ms                 2000 ms
+wake.probe_interval_ms                500 ms
+wake.activation.active_capture_poll_ms 200 ms
 ```
 
 ## Speech And Wake Jobs
 
-An `audio_segment` job validates the WAV artifact and checksum, calls the STT adapter, handles empty or low-confidence provider results, appends `speech_segment` events for accepted speech, and updates room occupancy with the latest speech time. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
+An `audio_segment` job validates the WAV artifact and checksum, calls the STT adapter, handles empty or low-confidence provider results, appends `speech_segment` events for accepted speech, and updates room occupancy with the latest speech time. Speech segment `endedAt` uses the speaker's last PCM timestamp. Wake activation idle timing follows that timestamp, while the later silence-triggered flush controls WAV and STT job creation. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
 
 A `wake_probe` job validates its wake artifact and checksum, calls the wake adapter, and completes with `no_wake`, `duplicate_wake`, or `wake_detected` data. A positive detection appends a `wake_detected` timeline event and schedules wake activation. Overlapping speaker and probe time suppress duplicate wake events.
 

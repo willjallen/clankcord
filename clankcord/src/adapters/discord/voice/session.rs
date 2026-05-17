@@ -232,7 +232,11 @@ impl SessionAudioPipeline {
         speaker.flush_in_flight = true;
         let pcm = std::mem::take(&mut speaker.pcm);
         let started_at = speaker.started_at.unwrap_or_else(Utc::now);
-        let ended_at = Utc::now();
+        let ended_at = speaker
+            .last_pcm_at
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("speaker buffer {user_id} missing last_pcm_at"))?;
         let label = speaker.label.clone();
         let username = speaker.username.clone();
         speaker.started_at = None;

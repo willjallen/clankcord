@@ -120,6 +120,33 @@ async fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn voice_segmenter_ends_segment_at_last_pcm_timestamp() {
+    let raw = tempfile::tempdir().unwrap();
+    let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
+    let mut session = test_voice_session(raw.path());
+    let pcm = vec![0_u8; PCM_20MS_SILENCE.len()];
+
+    let outcome = pipeline.handle_pcm_packet(Some(&mut session), "user-a", "Will", "will", &pcm);
+    assert_eq!(outcome, AudioPipelineOutcome::Buffered);
+    let last_pcm_at = session.buffers["user-a"].last_pcm_at.unwrap();
+
+    let outcome =
+        pipeline.handle_silence_packet(Some(&mut session), "user-a", "Will", "will", &pcm);
+    assert_eq!(outcome, AudioPipelineOutcome::Buffered);
+    assert_eq!(session.buffers["user-a"].last_pcm_at, Some(last_pcm_at));
+
+    let outcome = pipeline
+        .close_speaker_segment(&mut session, "user-a")
+        .unwrap();
+    let AudioPipelineOutcome::SegmentReady { payload, segment } = outcome else {
+        panic!("expected ready audio segment");
+    };
+
+    assert_eq!(payload.segment_end_time, last_pcm_at);
+    assert_eq!(segment.ended_at, last_pcm_at);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn voice_segmenter_emits_ordered_streaming_wake_probe_chunks_without_closing_segment() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);

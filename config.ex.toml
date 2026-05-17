@@ -86,7 +86,7 @@ max_window_seconds = 60
 additive_preempt_seconds = 10
 independent_after_seconds = 45
 stt_settle_seconds = 120
-active_capture_poll_ms = 500
+active_capture_poll_ms = 200
 
 [elevenlabs]
 api_key_secret = "clankcord_elevenlabs_api_key"
@@ -100,7 +100,7 @@ dir = "/workspace/clankcord/res/audio"
 timeout_ms = 3000
 
 [voice.capture]
-flush_interval_seconds = 0.5
+flush_interval_seconds = 0.2
 
 [voice.diagnostics]
 enabled = false
