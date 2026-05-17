@@ -9,6 +9,7 @@ use crate::config;
 
 const MASTER_TEMPLATE_FILE: &str = "master.md";
 const AGENT_TASK_TEMPLATE_FILE: &str = "agent-task.md";
+const AGENT_THREAD_TITLE_TEMPLATE_FILE: &str = "agent-thread-title.md";
 
 pub fn render_configured_master_prompt() -> Result<String> {
     render_master_prompt_from_dir(&config::prompt_templates_dir())
@@ -16,6 +17,12 @@ pub fn render_configured_master_prompt() -> Result<String> {
 
 pub fn render_configured_agent_task_prompt(vars: &BTreeMap<String, String>) -> Result<String> {
     render_agent_task_prompt_from_dir(&config::prompt_templates_dir(), vars)
+}
+
+pub fn render_configured_agent_thread_title_prompt(
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    render_agent_thread_title_prompt_from_dir(&config::prompt_templates_dir(), vars)
 }
 
 pub fn render_master_prompt_from_dir(prompt_dir: &Path) -> Result<String> {
@@ -27,6 +34,13 @@ pub fn render_agent_task_prompt_from_dir(
     vars: &BTreeMap<String, String>,
 ) -> Result<String> {
     render_prompt_file(prompt_dir, AGENT_TASK_TEMPLATE_FILE, vars)
+}
+
+pub fn render_agent_thread_title_prompt_from_dir(
+    prompt_dir: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Result<String> {
+    render_prompt_file(prompt_dir, AGENT_THREAD_TITLE_TEMPLATE_FILE, vars)
 }
 
 fn render_prompt_file(

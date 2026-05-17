@@ -9,12 +9,14 @@ use crate::runtime::agents::{AgentInfrastructureError, AgentRuntime, AgentSessio
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentRole {
     Task,
+    ThreadTitle,
 }
 
 impl AgentRole {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Task => "task",
+            Self::ThreadTitle => "thread_title",
         }
     }
 }

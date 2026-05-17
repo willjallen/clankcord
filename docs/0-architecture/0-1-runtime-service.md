@@ -66,7 +66,7 @@ The Discord text loop starts the gateway client for messages, slash commands, an
 
 The live voice loop ticks every 500 ms by default. It starts missing configured voice clients, asks active capture sessions to flush ready buffers, and commits current capture-session stats into Postgres. A flush can produce `audio_segment` jobs for STT and `wake_probe` jobs for wake detection. Those jobs enter through the same sink and scheduler as commands and Discord text work.
 
-Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, agent session retirement, and adapter synchronization run as child background jobs.
+Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, agent session retirement, agent thread title refresh, and adapter synchronization run as background jobs.
 
 ```text
 runtime_maintenance
@@ -75,10 +75,13 @@ runtime_maintenance
       +--> voice_status_sync
       +--> automation_evaluation
       +--> agent_session_retirement
+      +--> agent_thread_title_refresh
       +--> stale_wake_probe_sweep
       +--> stale_running_job_sweep
       +--> ephemeral_job_gc
 ```
+
+Agent thread title refresh is selected directly by the maintenance handler. Each pass creates at most one queued `agent_thread_title_refresh` job for an active voice session with a managed thread, at least two newly delivered agent responses since the last title-refresh attempt, and an available title-refresh slot for that session.
 
 Voice status sync is the maintenance path that reconciles adapter state with durable runtime state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state. The live capture loop also commits per-session capture stats while audio is flowing so wake activation can read current speaker activity, buffered audio bytes, and last PCM timestamps.
 

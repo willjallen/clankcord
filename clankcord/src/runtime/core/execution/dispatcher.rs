@@ -49,6 +49,23 @@ impl Runtime {
                 }
             }
             JobKind::AgentTask => self.dispatch_claimed_agent_task_job(running).await,
+            JobKind::AgentThreadTitleRefresh => {
+                let decision = match &running.payload {
+                    crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
+                        self.prepare_agent_thread_title_refresh_job(&running, payload)
+                            .await
+                    }
+                    payload => anyhow::bail!(
+                        "job kind {} has unexpected payload {}",
+                        running.kind,
+                        payload.kind()
+                    ),
+                };
+                match decision {
+                    Ok(decision) => self.apply_job_decision(&job_id, running, decision).await,
+                    Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
+                }
+            }
             kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
         }
     }

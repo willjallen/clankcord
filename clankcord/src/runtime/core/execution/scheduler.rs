@@ -11,7 +11,7 @@ use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 32] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 34] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -158,6 +158,11 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 32] = [
         JobLane::DiscordText,
         JobOrdering::TextTarget,
     ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::DiscordForumThreadRename,
+        JobLane::DiscordText,
+        JobOrdering::TextTarget,
+    ),
     JobExecutionPolicy::blocking_snapshot(
         JobKind::RefineTranscript,
         JobLane::Refinement,
@@ -165,6 +170,11 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 32] = [
     ),
     JobExecutionPolicy::blocking_snapshot(
         JobKind::AgentTask,
+        JobLane::Agent,
+        JobOrdering::AgentSession,
+    ),
+    JobExecutionPolicy::blocking_snapshot(
+        JobKind::AgentThreadTitleRefresh,
         JobLane::Agent,
         JobOrdering::AgentSession,
     ),

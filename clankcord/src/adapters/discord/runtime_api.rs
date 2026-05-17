@@ -4,7 +4,8 @@ use crate::adapters::discord::gateway::{forum_thread, text_send};
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::runtime::domain::external::{ExternalApiFuture, RuntimeExternalApi};
 use crate::runtime::{
-    DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload, DiscordTextSendOutput,
+    DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
+    DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
     DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
@@ -35,6 +36,13 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
         payload: DiscordForumThreadCreatePayload,
     ) -> ExternalApiFuture<'a, DiscordForumThreadCreateOutput> {
         Box::pin(async move { forum_thread::create(payload).await })
+    }
+
+    fn discord_forum_thread_rename<'a>(
+        &'a self,
+        payload: DiscordForumThreadRenamePayload,
+    ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput> {
+        Box::pin(async move { forum_thread::rename(payload).await })
     }
 
     fn discord_voice_join<'a>(

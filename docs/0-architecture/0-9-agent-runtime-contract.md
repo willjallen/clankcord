@@ -36,7 +36,7 @@ The CLI uses these variables for agent-friendly defaults. `responses send`, `res
 
 ## Prompt
 
-The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{guild_id}}`, `{{voice_channel_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
+The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{resumed_from_agent_session_id}}`, `{{guild_id}}`, `{{voice_channel_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
 
 The master instructions describe Clankcord authority boundaries, transcript handling for speech-to-text context, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
 
@@ -69,6 +69,8 @@ CONTEXT NOTE:
 The captured context is a compact five-minute local window of user-visible speech from the same guild and voice channel. It includes all speakers in that window, split into lead-in context and the wake or question segment. The prompt excludes raw job packets, wake internals, audio paths, checksums, provider metadata, token details, and duplicated field aliases.
 
 The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broad room context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
+
+Agent thread title refresh uses its own prompt template, `agent-thread-title.md`. The template asks Codex for a single Discord forum thread title from `{{agent_session_id}}`, `{{current_thread_title}}`, `{{voice_channel_name}}`, `{{response_count}}`, and `{{responses}}`. The title invocation uses a `thread_title` agent role and a workspace under `paths.agent_workspaces_root/thread-title/<agent_session_id>`.
 
 ## Preflight
 

@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use clankcord::runtime::domain::interactions::{
-    AgentTaskPromptContext, agent_invocation_infrastructure_failure,
+    AgentTaskPromptContext, AgentThreadTitlePromptContext, agent_invocation_infrastructure_failure,
     agent_invocation_warning_event_kind, build_agent_task_message_from_template_dir,
+    build_agent_thread_title_prompt_from_template_dir, sanitize_agent_thread_title,
 };
 
 #[test]
@@ -91,6 +92,50 @@ fn agent_task_prompt_can_render_from_custom_template_dir() {
     assert!(prompt.contains("job=job_1"));
     assert!(prompt.contains("request=summarize the floating point discussion"));
     assert!(prompt.contains("hey clanky summarize this"));
+}
+
+#[test]
+fn agent_thread_title_prompt_uses_its_own_template() {
+    let prompt = build_agent_thread_title_prompt_from_template_dir(
+        &AgentThreadTitlePromptContext {
+            agent_session_id: "ags_1".to_string(),
+            current_thread_title: "agent code ags_1".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            response_count: 2,
+            responses: vec![
+                "response 1:\nrequest: explain grpc\nresponse: grpc is a request protocol"
+                    .to_string(),
+                "response 2:\nrequest: compare wasm\nresponse: wasm runs portable modules"
+                    .to_string(),
+            ],
+        },
+        &prompt_dir(),
+    )
+    .expect("render agent thread title prompt");
+
+    assert!(prompt.contains("THREAD_TITLE_TASK"));
+    assert!(prompt.contains("current_thread_title: agent code ags_1"));
+    assert!(prompt.contains("voice_channel_name: Code Lounge"));
+    assert!(prompt.contains("response_count: 2"));
+    assert!(prompt.contains("compare wasm"));
+    assert!(!prompt.contains("===== PREVIOUS CONTEXT ====="));
+    assert!(!prompt.contains("NO_RESPONSE_NEEDED"));
+}
+
+#[test]
+fn agent_thread_title_sanitizer_keeps_one_compact_title() {
+    let title = sanitize_agent_thread_title("  `gRPC and WASM comparison`  \nextra")
+        .expect("sanitize thread title");
+
+    assert_eq!(title, "gRPC and WASM comparison");
+    assert!(sanitize_agent_thread_title("").is_err());
+    assert_eq!(
+        sanitize_agent_thread_title(&"a".repeat(120))
+            .expect("truncate long title")
+            .chars()
+            .count(),
+        80
+    );
 }
 
 #[test]

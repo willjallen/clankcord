@@ -15,10 +15,12 @@ pub enum JobKind {
     TextDelivery,
     DiscordTextSend,
     DiscordForumThreadCreate,
+    DiscordForumThreadRename,
     AgentSessionStart,
     AgentSessionSunset,
     AgentSessionResume,
     AgentSessionRetirement,
+    AgentThreadTitleRefresh,
     TranscriptPublication,
     RefineTranscript,
     ConfirmationRequired,
@@ -52,10 +54,12 @@ impl JobKind {
             Self::TextDelivery => "text_delivery",
             Self::DiscordTextSend => "discord_text_send",
             Self::DiscordForumThreadCreate => "discord_forum_thread_create",
+            Self::DiscordForumThreadRename => "discord_forum_thread_rename",
             Self::AgentSessionStart => "agent_session_start",
             Self::AgentSessionSunset => "agent_session_sunset",
             Self::AgentSessionResume => "agent_session_resume",
             Self::AgentSessionRetirement => "agent_session_retirement",
+            Self::AgentThreadTitleRefresh => "agent_thread_title_refresh",
             Self::TranscriptPublication => "transcript_publication",
             Self::RefineTranscript => "refine_transcript",
             Self::ConfirmationRequired => "confirmation_required",
@@ -93,6 +97,7 @@ impl JobKind {
                 | Self::DiscordVoiceStatusSnapshot
                 | Self::AutomationEvaluation
                 | Self::AgentSessionRetirement
+                | Self::AgentThreadTitleRefresh
                 | Self::StaleWakeProbeSweep
                 | Self::StaleRunningJobSweep
                 | Self::EphemeralJobGc
@@ -119,10 +124,12 @@ impl FromStr for JobKind {
             "text_delivery" => Ok(Self::TextDelivery),
             "discord_text_send" => Ok(Self::DiscordTextSend),
             "discord_forum_thread_create" => Ok(Self::DiscordForumThreadCreate),
+            "discord_forum_thread_rename" => Ok(Self::DiscordForumThreadRename),
             "agent_session_start" => Ok(Self::AgentSessionStart),
             "agent_session_sunset" => Ok(Self::AgentSessionSunset),
             "agent_session_resume" => Ok(Self::AgentSessionResume),
             "agent_session_retirement" => Ok(Self::AgentSessionRetirement),
+            "agent_thread_title_refresh" => Ok(Self::AgentThreadTitleRefresh),
             "transcript_publication" => Ok(Self::TranscriptPublication),
             "refine_transcript" => Ok(Self::RefineTranscript),
             "confirmation_required" => Ok(Self::ConfirmationRequired),

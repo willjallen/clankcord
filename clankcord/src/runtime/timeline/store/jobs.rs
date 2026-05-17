@@ -785,6 +785,7 @@ impl TimelineStore {
                     | crate::runtime::JobKind::ConfirmationRequired
                     | crate::runtime::JobKind::AgentSessionStart
                     | crate::runtime::JobKind::AgentSessionResume
+                    | crate::runtime::JobKind::AgentThreadTitleRefresh
                     | crate::runtime::JobKind::TranscriptPublication
                     | crate::runtime::JobKind::VoiceStatusSync
             ) {
@@ -1196,9 +1197,12 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::AgentSessionResume
         | crate::runtime::JobKind::TranscriptPublication => "general_async",
         crate::runtime::JobKind::DiscordTextSend
-        | crate::runtime::JobKind::DiscordForumThreadCreate => "discord_text",
+        | crate::runtime::JobKind::DiscordForumThreadCreate
+        | crate::runtime::JobKind::DiscordForumThreadRename => "discord_text",
         crate::runtime::JobKind::RefineTranscript => "refinement",
-        crate::runtime::JobKind::AgentTask => "agent",
+        crate::runtime::JobKind::AgentTask | crate::runtime::JobKind::AgentThreadTitleRefresh => {
+            "agent"
+        }
         crate::runtime::JobKind::DiscordTextMessage => "general_async",
         crate::runtime::JobKind::DiscordSlashCommand => "general_async",
         crate::runtime::JobKind::RuntimeMaintenance
@@ -1290,6 +1294,9 @@ fn job_ordering_key(job: &Job) -> String {
                 normalize_key_part(&payload.parent_channel_id)
             )
         }
+        crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
+            format!("discord:thread:{}", normalize_key_part(&payload.thread_id))
+        }
         crate::runtime::JobPayload::ConfirmationRequired(payload) => {
             if payload.confirmation.delivery == "dm" {
                 format!(
@@ -1321,6 +1328,12 @@ fn job_ordering_key(job: &Job) -> String {
             } else {
                 voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
             }
+        }
+        crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
+            format!(
+                "agent:session:{}",
+                normalize_key_part(&payload.agent_session_id)
+            )
         }
         crate::runtime::JobPayload::TranscriptPublication(payload) => {
             format!(
@@ -1386,6 +1399,9 @@ fn source_job_id(job: &Job) -> String {
         crate::runtime::JobPayload::DiscordForumThreadCreate(payload) => {
             payload.source_job_id.clone()
         }
+        crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
+            payload.source_job_id.clone()
+        }
         crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceDeafen(payload) => payload.source_job_id.clone(),
@@ -1396,6 +1412,9 @@ fn source_job_id(job: &Job) -> String {
         }
         crate::runtime::JobPayload::AutomationEvaluation(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::AgentSessionRetirement(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
             payload.source_job_id.clone()
         }
         crate::runtime::JobPayload::StaleWakeProbeSweep(payload) => payload.source_job_id.clone(),

@@ -8,9 +8,10 @@ use crate::runtime::util::first_non_empty;
 use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{
     AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
-    AgentSessionSunsetPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
-    BinaryPayload, CommandPayload, CommandRequest, ConfirmationContext,
-    ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
+    AgentSessionSunsetPayload, AgentTaskPayload, AgentThreadTitleRefreshPayload,
+    AudioSegmentPayload, AutomationEvaluationPayload, BinaryPayload, CommandPayload,
+    CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
+    DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
     DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenPayload,
     DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
     DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload,
@@ -498,6 +499,21 @@ impl Job {
         )
     }
 
+    pub fn discord_forum_thread_rename(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordForumThreadRenamePayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordForumThreadRename(payload),
+        )
+    }
+
     pub fn agent_session_start(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
@@ -871,6 +887,34 @@ impl Job {
             JobState::Queued,
             JobPayload::AgentSessionRetirement(AgentSessionRetirementPayload {
                 source_job_id: source_job_id.into(),
+            }),
+        )
+    }
+
+    pub fn agent_thread_title_refresh(
+        source_job_id: impl Into<String>,
+        agent_session_id: impl Into<String>,
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        discord_thread_id: impl Into<String>,
+        current_thread_name: impl Into<String>,
+        response_count: usize,
+    ) -> Self {
+        let guild_id = guild_id.into();
+        let voice_channel_id = voice_channel_id.into();
+        Self::new(
+            guild_id.clone(),
+            voice_channel_id.clone(),
+            "runtime",
+            JobState::Queued,
+            JobPayload::AgentThreadTitleRefresh(AgentThreadTitleRefreshPayload {
+                source_job_id: source_job_id.into(),
+                agent_session_id: agent_session_id.into(),
+                guild_id,
+                voice_channel_id,
+                discord_thread_id: discord_thread_id.into(),
+                current_thread_name: current_thread_name.into(),
+                response_count,
             }),
         )
     }

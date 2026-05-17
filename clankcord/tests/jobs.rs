@@ -8,14 +8,15 @@ use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
-    DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,
-    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime,
-    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
+    DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenOutput,
+    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput,
+    DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload, JobState,
+    RefineTranscriptPayload, RoomConfig, Runtime, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload,
+    WakeProbePayload,
 };
 
 mod common;
@@ -483,6 +484,15 @@ async fn maintenance_work_jobs_are_typed_ephemeral_jobs() {
         Job::discord_voice_status_snapshot("job_source"),
         Job::automation_evaluation("job_source"),
         Job::agent_session_retirement("job_source"),
+        Job::agent_thread_title_refresh(
+            "job_source",
+            "ags_1",
+            "guild",
+            "code",
+            "thread-1",
+            "agent code ags_1",
+            2,
+        ),
         Job::stale_wake_probe_sweep("job_source", 15),
         Job::stale_running_job_sweep("job_source", 30),
         Job::ephemeral_job_gc("job_source", 500),
@@ -604,6 +614,21 @@ fn discord_text_io_jobs_round_trip() {
     let decoded = Job::decode(&thread.encode().unwrap()).unwrap();
     assert_eq!(decoded.kind, JobKind::DiscordForumThreadCreate);
     assert_eq!(decoded.payload.to_json()["parent_channel_id"], "forum-1");
+
+    let rename = Job::discord_forum_thread_rename(
+        "guild",
+        "code",
+        "runtime",
+        DiscordForumThreadRenamePayload {
+            thread_id: "thread-1".to_string(),
+            name: "gRPC and REST".to_string(),
+            source_job_id: "job_source".to_string(),
+        },
+    );
+    let decoded = Job::decode(&rename.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordForumThreadRename);
+    assert_eq!(decoded.payload.to_json()["thread_id"], "thread-1");
+    assert_eq!(decoded.payload.to_json()["name"], "gRPC and REST");
 }
 
 #[test]

@@ -61,6 +61,13 @@ pub struct DiscordForumThreadCreateOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordForumThreadRenameOutput {
+    pub thread_id: String,
+    pub name: String,
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionStartOutput {
     pub agent_session_id: String,
     pub status: String,
@@ -168,6 +175,7 @@ pub enum JobOutput {
     TextDelivery(TextDeliveryOutput),
     DiscordTextSend(DiscordTextSendOutput),
     DiscordForumThreadCreate(DiscordForumThreadCreateOutput),
+    DiscordForumThreadRename(DiscordForumThreadRenameOutput),
     AgentSessionStart(AgentSessionStartOutput),
     TranscriptPublication(TranscriptPublicationOutput),
     RoomAgentPlacement(RoomAgentPlacementOutput),
@@ -223,6 +231,14 @@ impl JobOutput {
                 json!({
                     "kind": "discord_forum_thread_create",
                     "parent_channel_id": output.parent_channel_id,
+                    "thread_id": output.thread_id,
+                    "name": output.name,
+                    "source_job_id": output.source_job_id,
+                })
+            }
+            Self::DiscordForumThreadRename(output) => {
+                json!({
+                    "kind": "discord_forum_thread_rename",
                     "thread_id": output.thread_id,
                     "name": output.name,
                     "source_job_id": output.source_job_id,

@@ -142,6 +142,23 @@ pub fn create_forum_thread(
     })
 }
 
+pub fn rename_thread(thread_id: &str, name: &str) -> Result<Value> {
+    let body = serde_json::json!({"name": name});
+    let payload = discord_request(
+        "PATCH",
+        &format!("/channels/{thread_id}"),
+        Some(&body),
+        None,
+        None,
+        30,
+    )?;
+    Ok(if payload.is_object() {
+        payload
+    } else {
+        Value::Object(Default::default())
+    })
+}
+
 pub fn create_dm_channel(user_id: &str) -> Result<Value> {
     let body = serde_json::json!({"recipient_id": user_id});
     let payload = discord_request("POST", "/users/@me/channels", Some(&body), None, None, 30)?;

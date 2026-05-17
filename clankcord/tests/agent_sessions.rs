@@ -3,9 +3,12 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, DiscordTextMessagePayload, Job, JobKind,
-    JobPayload, Runtime, TextTargetKind, dm_route_key, voice_route_key,
+    AgentSessionRecord, AgentSessionRecordState, AgentSessionStartPayload, CommandRequest,
+    DiscordTextMessagePayload, Job, JobKind, JobOutput, JobPayload, Runtime, TextDeliveryKind,
+    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
+    voice_route_key,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -307,6 +310,170 @@ async fn search_returns_retired_sessions_with_resume_command() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn agent_session_thread_intro_uses_room_name_and_voice_occupants() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "Will"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "Nia"))
+        .await
+        .unwrap();
+    let created_at = Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    store
+        .create_agent_session_record(AgentSessionRecord::new_voice_starting(
+            "ags_intro",
+            "guild",
+            "code",
+            "agent-threads",
+            created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+        ))
+        .await
+        .unwrap();
+    let start = store
+        .create_job(Job::agent_session_start(
+            "guild",
+            "code",
+            "user-a",
+            AgentSessionStartPayload {
+                agent_session_id: "ags_intro".to_string(),
+                guild_id: "guild".to_string(),
+                voice_channel_id: "code".to_string(),
+                discord_parent_channel_id: "agent-threads".to_string(),
+                requested_by_user_id: "user-a".to_string(),
+                command: CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
+            },
+        ))
+        .await
+        .unwrap();
+    let mut running = start.clone();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let children = store.list_child_jobs(&start.id).await.unwrap();
+    let thread_create = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
+        .expect("thread creation child");
+    let JobPayload::DiscordForumThreadCreate(payload) = &thread_create.payload else {
+        panic!("expected forum thread create payload");
+    };
+    assert!(payload.content.contains("- Voice channel: `Code Lounge`"));
+    assert!(
+        payload
+            .content
+            .contains("- Requested by: <@user-a> <@user-b>")
+    );
+    assert!(payload.content.contains("- Session: `ags_intro`"));
+    assert!(!payload.content.contains("- Guild:"));
+    assert!(!payload.content.contains("`code`"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maintenance_queues_one_thread_title_refresh_after_two_visible_agent_responses() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    insert_active_thread_session(&store, "ags_title").await;
+    insert_completed_agent_response(
+        &store,
+        "ags_title",
+        "explain gRPC",
+        "gRPC uses HTTP/2 streams for service calls.",
+        "user-a",
+    )
+    .await;
+    insert_completed_agent_response(
+        &store,
+        "ags_title",
+        "compare with REST",
+        "REST exposes resources with request methods.",
+        "user-b",
+    )
+    .await;
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let maintenance = store
+        .create_job(Job::runtime_maintenance(500))
+        .await
+        .unwrap();
+    let mut running = maintenance.clone();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let title_jobs = agent_thread_title_refresh_jobs(&store).await;
+    assert_eq!(title_jobs.len(), 1);
+    let JobPayload::AgentThreadTitleRefresh(payload) = &title_jobs[0].payload else {
+        panic!("expected thread-title payload");
+    };
+    assert_eq!(payload.agent_session_id, "ags_title");
+    assert_eq!(payload.discord_thread_id, "thread-1");
+    assert_eq!(payload.response_count, 2);
+    assert_eq!(payload.current_thread_name, "agent code ags_title");
+
+    let completed = store.get_job(&maintenance.id).await.unwrap();
+    let output = completed.metadata.output.unwrap().to_json();
+    assert!(
+        output["submitted_jobs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|job| {
+                job["definition"] == json!("agent_thread_title_refresh")
+                    && job["job_kind"] == json!("agent_thread_title_refresh")
+            })
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_count() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    insert_active_thread_session(&store, "ags_title").await;
+    insert_completed_agent_response(&store, "ags_title", "question one", "answer one", "user-a")
+        .await;
+    insert_completed_agent_response(&store, "ags_title", "question two", "answer two", "user-b")
+        .await;
+    store
+        .append_event(
+            "guild",
+            "code",
+            json!({
+                "event_kind": "agent_thread_title_refresh_attempted",
+                "kind": "agent_thread_title_refresh_attempted",
+                "agent_session_id": "ags_title",
+                "discord_thread_id": "thread-1",
+                "response_count": 2,
+                "refresh_job_id": "job_previous",
+            }),
+        )
+        .await
+        .unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let maintenance = store
+        .create_job(Job::runtime_maintenance(500))
+        .await
+        .unwrap();
+    let mut running = maintenance;
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    assert!(agent_thread_title_refresh_jobs(&store).await.is_empty());
+}
+
 #[test]
 fn discord_text_message_job_round_trips() {
     let job = Job::discord_text_message(DiscordTextMessagePayload {
@@ -325,4 +492,85 @@ fn discord_text_message_job_round_trips() {
     assert_eq!(decoded.kind, JobKind::DiscordTextMessage);
     assert_eq!(decoded.requested_by_user_id, "user-a");
     assert_eq!(decoded.payload.to_json()["content"], "follow up");
+}
+
+fn voice_state(channel_id: &str, user_id: &str, display_name: &str) -> serde_json::Value {
+    json!({
+        "guild_id": "guild",
+        "user_id": user_id,
+        "voice_channel_id": channel_id,
+        "display_name": display_name,
+        "username": display_name,
+    })
+}
+
+async fn insert_active_thread_session(store: &TimelineStore, id: &str) {
+    let created_at = Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    store
+        .create_agent_session_record(AgentSessionRecord::new_voice(
+            id,
+            "guild",
+            "code",
+            "agent-threads",
+            "thread-1",
+            created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn insert_completed_agent_response(
+    store: &TimelineStore,
+    agent_session_id: &str,
+    request: &str,
+    response: &str,
+    requested_by_user_id: &str,
+) {
+    let mut task = Job::agent_task_for_session(
+        agent_session_id,
+        "guild",
+        "code",
+        requested_by_user_id,
+        CommandRequest::agent_task("guild", "code", requested_by_user_id, request),
+    );
+    task.mark_complete();
+    let task = store.create_job(task).await.unwrap();
+    let target = TextTarget {
+        kind: TextTargetKind::Channel,
+        channel_id: "thread-1".to_string(),
+        user_id: String::new(),
+    };
+    let mut delivery = Job::text_delivery(
+        "guild",
+        "code",
+        requested_by_user_id,
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            target.clone(),
+            response,
+            task.id.clone(),
+            requested_by_user_id,
+            false,
+        ),
+    );
+    delivery.mark_complete();
+    delivery.metadata.output = Some(JobOutput::TextDelivery(TextDeliveryOutput {
+        intent: TextDeliveryKind::Message.as_str().to_string(),
+        target,
+        source_job_id: task.id,
+        discord_post: None,
+    }));
+    store.create_job(delivery).await.unwrap();
+}
+
+async fn agent_thread_title_refresh_jobs(store: &TimelineStore) -> Vec<Job> {
+    store
+        .list_jobs_with_visibility(None, None, JobVisibility::IncludeEphemeral)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|job| job.kind == JobKind::AgentThreadTitleRefresh)
+        .collect()
 }

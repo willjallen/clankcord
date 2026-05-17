@@ -1,12 +1,21 @@
 use crate::Result;
-use crate::adapters::discord::api::create_forum_thread;
+use crate::adapters::discord::api::{create_forum_thread, rename_thread};
 use crate::runtime::util::string_field;
-use crate::runtime::{DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload};
+use crate::runtime::{
+    DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
+    DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload,
+};
 
 pub async fn create(
     payload: DiscordForumThreadCreatePayload,
 ) -> Result<DiscordForumThreadCreateOutput> {
     tokio::task::spawn_blocking(move || create_blocking(payload)).await?
+}
+
+pub async fn rename(
+    payload: DiscordForumThreadRenamePayload,
+) -> Result<DiscordForumThreadRenameOutput> {
+    tokio::task::spawn_blocking(move || rename_blocking(payload)).await?
 }
 
 fn create_blocking(
@@ -24,6 +33,21 @@ fn create_blocking(
     }
     Ok(DiscordForumThreadCreateOutput {
         parent_channel_id: payload.parent_channel_id,
+        thread_id,
+        name: payload.name,
+        source_job_id: payload.source_job_id,
+    })
+}
+
+fn rename_blocking(
+    payload: DiscordForumThreadRenamePayload,
+) -> Result<DiscordForumThreadRenameOutput> {
+    let updated = rename_thread(&payload.thread_id, &payload.name)?;
+    let thread_id = string_field(&updated, "id");
+    if thread_id.trim().is_empty() {
+        anyhow::bail!("Discord did not return a renamed thread id");
+    }
+    Ok(DiscordForumThreadRenameOutput {
         thread_id,
         name: payload.name,
         source_job_id: payload.source_job_id,

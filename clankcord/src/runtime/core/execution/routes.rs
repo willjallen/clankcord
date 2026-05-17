@@ -98,6 +98,11 @@ where
                 .execute_discord_forum_thread_create_job(payload, external_api)
                 .await
         }
+        JobPayload::DiscordForumThreadRename(payload) => {
+            runtime
+                .execute_discord_forum_thread_rename_job(payload, external_api)
+                .await
+        }
         JobPayload::DiscordVoiceJoin(payload) => {
             runtime
                 .execute_discord_voice_join_job(payload, external_api)

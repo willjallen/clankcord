@@ -76,7 +76,7 @@ Voice sessions start in `starting` while the managed Discord thread is created. 
 
 A wake activation or voice command resolves the voice route. The runtime retires due sessions, reuses an active session that owns a thread, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
 
-`agent_session_start` creates a `discord_forum_thread_create` child. After the thread child completes, the parent marks the session active, stores the thread target, and creates the first `agent_task`. Later messages inside that managed thread route back to the same session through `discord_thread_id`. Voice sessions require `agentThreadsChannelId` because the managed thread is the persistent public surface for the session.
+`agent_session_start` creates a `discord_forum_thread_create` child. The opening post names the actual voice room, mentions the requester and the other users currently present in that voice channel, and records the `agent_session_id`. After the thread child completes, the parent marks the session active, stores the thread target, and creates the first `agent_task`. Later messages inside that managed thread route back to the same session through `discord_thread_id`. Voice sessions require `agentThreadsChannelId` because the managed thread is the persistent public surface for the session.
 
 ```text
 wake activation or command
@@ -105,6 +105,14 @@ A DM resolves to `dm:<user_id>`. The runtime retires due sessions, reuses an act
 Discord text messages enter as `discord_text_message` jobs. The ingress handler routes DMs to DM agent sessions and managed thread messages to the owning voice session. Routed messages append a `discord_text_message` timeline event and create an `agent_task` child for the selected session.
 
 Empty messages, retired managed threads, top-level `agent-chat` messages, and unmanaged guild channels complete as ignored ingress cases. They still pass through the runtime job path, which keeps text ingress visible in job inspection and timeline diagnostics.
+
+## Thread Titles
+
+Runtime maintenance keeps managed thread names readable. The maintenance handler scans active voice sessions with managed Discord threads and counts completed agent tasks that delivered a visible response into the session thread. When a session has at least two delivered responses beyond the last title-refresh attempt, maintenance creates one `agent_thread_title_refresh` job for that pass.
+
+`agent_thread_title_refresh` runs on the agent lane with the same `agent:session:<agent_session_id>` ordering key as agent work. It writes an `agent_thread_title_refresh_attempted` event before launching Codex, builds a compact title prompt from the session id, current thread name, voice room name, response count, and visible request/response summaries, then creates a `discord_forum_thread_rename` child with the generated title. When the rename child completes, the parent appends `agent_thread_titled` with the title, response count, refresh job id, and rename job id.
+
+The title-refresh selector is bounded by three durable facts: one candidate per maintenance pass, a single active title-refresh job per session, and a response-count gate recorded by the attempted event. A failed Codex or Discord rename attempt advances the attempted response count, so the next maintenance pass waits for two more delivered agent responses before creating another title-refresh job.
 
 ## Retirement And Resume
 

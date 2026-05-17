@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{Value, json};
 
 use crate::Result;
@@ -6,6 +8,7 @@ use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{
     event_text, isoformat_z, new_id, parse_instant, resolve_time_reference, utc_now,
 };
+use crate::runtime::util::first_value_string;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionResumePayload, AgentSessionRouteKind,
     AgentSessionStartOutput, AgentSessionStartPayload, AgentSessionSunsetPayload, CommandRequest,
@@ -223,12 +226,14 @@ impl Runtime {
                                 &payload.voice_channel_id,
                                 &payload.agent_session_id,
                             ),
-                            content: agent_thread_content(
-                                &payload.guild_id,
-                                &payload.voice_channel_id,
-                                &payload.requested_by_user_id,
-                                &payload.agent_session_id,
-                            ),
+                            content: self
+                                .agent_thread_content(
+                                    &payload.guild_id,
+                                    &payload.voice_channel_id,
+                                    &payload.requested_by_user_id,
+                                    &payload.agent_session_id,
+                                )
+                                .await?,
                             auto_archive_minutes: agent_thread_auto_archive_minutes(),
                             source_job_id: job.id.clone(),
                         },
@@ -447,12 +452,14 @@ impl Runtime {
                                 &record.voice_channel_id,
                                 &record.agent_session_id,
                             ),
-                            content: agent_thread_content(
-                                &record.guild_id,
-                                &record.voice_channel_id,
-                                &payload.requested_by_user_id,
-                                &record.agent_session_id,
-                            ),
+                            content: self
+                                .agent_thread_content(
+                                    &record.guild_id,
+                                    &record.voice_channel_id,
+                                    &payload.requested_by_user_id,
+                                    &record.agent_session_id,
+                                )
+                                .await?,
                             auto_archive_minutes: agent_thread_auto_archive_minutes(),
                             source_job_id: job.id.clone(),
                         },
@@ -721,6 +728,42 @@ impl Runtime {
             .update_agent_session_record(&record)
             .await
     }
+
+    async fn agent_thread_content(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+        requested_by_user_id: &str,
+        agent_session_id: &str,
+    ) -> Result<String> {
+        let room = self
+            .room_for_channel_ids(guild_id, voice_channel_id, None)
+            .await?;
+        let occupants = self
+            .timeline_store
+            .room_occupants(guild_id, voice_channel_id)
+            .await?;
+        let mut seen = BTreeSet::new();
+        let mut mentioned_user_ids = Vec::new();
+        for user_id in std::iter::once(requested_by_user_id.to_string()).chain(
+            occupants
+                .iter()
+                .map(|occupant| first_value_string(occupant, &["user_id", "userId"])),
+        ) {
+            if !user_id.trim().is_empty() && seen.insert(user_id.clone()) {
+                mentioned_user_ids.push(user_id);
+            }
+        }
+        let requested_by = mentioned_user_ids
+            .iter()
+            .map(|user_id| format!("<@{user_id}>"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Ok(format!(
+            "# Agent Session\n\n- Voice channel: `{}`\n- Requested by: {}\n- Session: `{}`",
+            room.channel_name, requested_by, agent_session_id
+        ))
+    }
 }
 
 fn agent_session_max_active_seconds() -> i64 {
@@ -739,19 +782,8 @@ fn trim_thread_name(value: &str) -> String {
     trimmed.chars().take(DISCORD_THREAD_NAME_LIMIT).collect()
 }
 
-fn agent_thread_name(voice_channel_id: &str, agent_session_id: &str) -> String {
+pub(crate) fn agent_thread_name(voice_channel_id: &str, agent_session_id: &str) -> String {
     trim_thread_name(&format!("agent {voice_channel_id} {agent_session_id}"))
-}
-
-fn agent_thread_content(
-    guild_id: &str,
-    voice_channel_id: &str,
-    requested_by_user_id: &str,
-    agent_session_id: &str,
-) -> String {
-    format!(
-        "# Agent Session\n\n- Voice channel: `{voice_channel_id}`\n- Guild: `{guild_id}`\n- Requested by: <@{requested_by_user_id}>\n- Session: `{agent_session_id}`"
-    )
 }
 
 fn agent_session_resume_command(record: &AgentSessionRecord) -> String {

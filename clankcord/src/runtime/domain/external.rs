@@ -3,7 +3,8 @@ use std::pin::Pin;
 
 use crate::Result;
 use crate::runtime::{
-    DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload, DiscordTextSendOutput,
+    DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
+    DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
     DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
@@ -22,6 +23,11 @@ pub(crate) trait RuntimeExternalApi: Send + Sync {
         &'a self,
         payload: DiscordForumThreadCreatePayload,
     ) -> ExternalApiFuture<'a, DiscordForumThreadCreateOutput>;
+
+    fn discord_forum_thread_rename<'a>(
+        &'a self,
+        payload: DiscordForumThreadRenamePayload,
+    ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput>;
 
     fn discord_voice_join<'a>(
         &'a self,

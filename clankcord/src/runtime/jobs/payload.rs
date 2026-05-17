@@ -844,6 +844,13 @@ pub struct DiscordForumThreadCreatePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordForumThreadRenamePayload {
+    pub thread_id: String,
+    pub name: String,
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
     pub agent_session_id: String,
     pub command: CommandRequest,
@@ -881,6 +888,17 @@ pub struct AgentSessionResumePayload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentSessionRetirementPayload {
     pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentThreadTitleRefreshPayload {
+    pub source_job_id: String,
+    pub agent_session_id: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub discord_thread_id: String,
+    pub current_thread_name: String,
+    pub response_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1153,10 +1171,12 @@ pub enum JobPayload {
     TextDelivery(TextDeliveryPayload),
     DiscordTextSend(DiscordTextSendPayload),
     DiscordForumThreadCreate(DiscordForumThreadCreatePayload),
+    DiscordForumThreadRename(DiscordForumThreadRenamePayload),
     AgentSessionStart(AgentSessionStartPayload),
     AgentSessionSunset(AgentSessionSunsetPayload),
     AgentSessionResume(AgentSessionResumePayload),
     AgentSessionRetirement(AgentSessionRetirementPayload),
+    AgentThreadTitleRefresh(AgentThreadTitleRefreshPayload),
     TranscriptPublication(TranscriptPublicationPayload),
     RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
@@ -1190,10 +1210,12 @@ impl JobPayload {
             Self::TextDelivery(_) => JobKind::TextDelivery,
             Self::DiscordTextSend(_) => JobKind::DiscordTextSend,
             Self::DiscordForumThreadCreate(_) => JobKind::DiscordForumThreadCreate,
+            Self::DiscordForumThreadRename(_) => JobKind::DiscordForumThreadRename,
             Self::AgentSessionStart(_) => JobKind::AgentSessionStart,
             Self::AgentSessionSunset(_) => JobKind::AgentSessionSunset,
             Self::AgentSessionResume(_) => JobKind::AgentSessionResume,
             Self::AgentSessionRetirement(_) => JobKind::AgentSessionRetirement,
+            Self::AgentThreadTitleRefresh(_) => JobKind::AgentThreadTitleRefresh,
             Self::TranscriptPublication(_) => JobKind::TranscriptPublication,
             Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
@@ -1226,6 +1248,7 @@ impl JobPayload {
             Self::DiscordVoiceStatusSnapshot(_) => None,
             Self::AutomationEvaluation(_) => None,
             Self::AgentSessionRetirement(_) => None,
+            Self::AgentThreadTitleRefresh(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
@@ -1237,6 +1260,7 @@ impl JobPayload {
             Self::TextDelivery(_) => None,
             Self::DiscordTextSend(_) => None,
             Self::DiscordForumThreadCreate(_) => None,
+            Self::DiscordForumThreadRename(_) => None,
             Self::AgentSessionStart(payload) => Some(&payload.command),
             Self::AgentSessionSunset(_) => None,
             Self::AgentSessionResume(_) => None,
@@ -1263,6 +1287,7 @@ impl JobPayload {
             Self::DiscordVoiceStatusSnapshot(_) => None,
             Self::AutomationEvaluation(_) => None,
             Self::AgentSessionRetirement(_) => None,
+            Self::AgentThreadTitleRefresh(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
@@ -1274,6 +1299,7 @@ impl JobPayload {
             Self::TextDelivery(_) => None,
             Self::DiscordTextSend(_) => None,
             Self::DiscordForumThreadCreate(_) => None,
+            Self::DiscordForumThreadRename(_) => None,
             Self::AgentSessionStart(payload) => Some(&mut payload.command),
             Self::AgentSessionSunset(_) => None,
             Self::AgentSessionResume(_) => None,
@@ -1392,6 +1418,11 @@ impl JobPayload {
                 "auto_archive_minutes": payload.auto_archive_minutes,
                 "source_job_id": payload.source_job_id,
             }),
+            Self::DiscordForumThreadRename(payload) => json!({
+                "thread_id": payload.thread_id,
+                "name": payload.name,
+                "source_job_id": payload.source_job_id,
+            }),
             Self::AgentSessionStart(payload) => json!({
                 "agent_session_id": payload.agent_session_id,
                 "guild_id": payload.guild_id,
@@ -1417,6 +1448,15 @@ impl JobPayload {
             }),
             Self::AgentSessionRetirement(payload) => json!({
                 "source_job_id": payload.source_job_id,
+            }),
+            Self::AgentThreadTitleRefresh(payload) => json!({
+                "source_job_id": payload.source_job_id,
+                "agent_session_id": payload.agent_session_id,
+                "guild_id": payload.guild_id,
+                "voice_channel_id": payload.voice_channel_id,
+                "discord_thread_id": payload.discord_thread_id,
+                "current_thread_name": payload.current_thread_name,
+                "response_count": payload.response_count,
             }),
             Self::TranscriptPublication(payload) => json!({
                 "publication_id": payload.publication_id,

@@ -6,18 +6,19 @@ mod util;
 
 pub use kind::{JobKind, JobState};
 pub use output::{
-    AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordTextSendOutput,
-    DiscordVoiceDeafenOutput, DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput,
-    DiscordVoiceMuteOutput, DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput,
-    DiscordVoiceStatusSnapshotOutput, JobCreatedOutput, JobFailure, JobOutput,
-    RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
+    AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordForumThreadRenameOutput,
+    DiscordTextSendOutput, DiscordVoiceDeafenOutput, DiscordVoiceJoinOutput,
+    DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlaybackOutput, DiscordVoiceStatusSnapshotOutput, JobCreatedOutput, JobFailure,
+    JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
     TranscriptPublicationOutput,
 };
 pub use payload::{
     AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
-    AgentSessionSunsetPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
-    BinaryPayload, CommandAction, CommandArguments, CommandKind, CommandPayload, CommandRequest,
-    ConfirmationContext, ConfirmationRequiredPayload, DiscordForumThreadCreatePayload,
+    AgentSessionSunsetPayload, AgentTaskPayload, AgentThreadTitleRefreshPayload,
+    AudioSegmentPayload, AutomationEvaluationPayload, BinaryPayload, CommandAction,
+    CommandArguments, CommandKind, CommandPayload, CommandRequest, ConfirmationContext,
+    ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload,
     DiscordSlashCommandPayload, DiscordTextMessagePayload, DiscordTextSendPayload,
     DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,

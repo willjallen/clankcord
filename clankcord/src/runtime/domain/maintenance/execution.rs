@@ -22,6 +22,14 @@ impl Runtime {
                 "job_kind": created.kind.as_str(),
             }));
         }
+        for definition_job in self.agent_thread_title_refresh_jobs(job).await? {
+            let created = self.timeline_store.create_job(definition_job).await?;
+            submitted.push(json!({
+                "definition": "agent_thread_title_refresh",
+                "job_id": created.id,
+                "job_kind": created.kind.as_str(),
+            }));
+        }
         Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "runtime_maintenance",
