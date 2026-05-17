@@ -896,7 +896,7 @@ impl DiscordSlashCommandPayload {
     pub fn timeline_channel_id(&self) -> &str {
         if matches!(
             self.command_name.as_str(),
-            "join" | "leave" | "wake" | "deafen" | "undeafen"
+            "join" | "leave" | "wake" | "deafen" | "undeafen" | "feedback"
         ) && !self.voice_channel_id.trim().is_empty()
         {
             &self.voice_channel_id

@@ -990,7 +990,13 @@ window.dashboard = function dashboard() {
       if (field === 'kind') return [this.eventKind(event)];
       if (field === 'job_kind') return [event?.job_kind].filter(Boolean);
       if (field === 'state') return [event?.state].filter(Boolean);
-      if (field === 'command') return [event?.command_kind].filter(Boolean);
+      if (field === 'command') {
+        return [
+          event?.command_kind,
+          event?.command_name,
+          this.slashCommandDetail(event),
+        ].filter(Boolean);
+      }
       if (field === 'room') {
         return [
           event?.guild_slug,
@@ -1149,7 +1155,7 @@ window.dashboard = function dashboard() {
         jobClass: this.statusClass(event?.job_kind || ''),
         state: event?.state || '',
         stateClass: this.statusClass(event?.state || ''),
-        command: event?.command_kind || '',
+        command: event?.command_kind || event?.command_name || '',
         room: this.eventChannelName(event),
         actor: this.eventSpeaker(event),
         detail: this.eventDetail(event),
@@ -1368,12 +1374,58 @@ window.dashboard = function dashboard() {
       return firstText([
         event?.text,
         event?.feedback_message,
+        this.slashCommandDetail(event),
         event?.reason,
         event?.job_kind,
         result.reason,
         result.action,
         event?.state,
       ]);
+    },
+
+    slashCommandDetail(event) {
+      const name = textValue(event?.command_name).trim();
+      if (!name) return '';
+      const options = this.slashOptionEntries(event?.options).join(', ');
+      return [`/${name}`, options].filter(Boolean).join(' ');
+    },
+
+    slashOptionEntries(options) {
+      if (Array.isArray(options)) {
+        return options
+          .map((option) => {
+            const name = textValue(option?.name).trim();
+            const value = this.slashOptionValue(option?.value);
+            if (!name) return value;
+            return value ? `${name}: ${value}` : name;
+          })
+          .filter(Boolean);
+      }
+      if (options && typeof options === 'object') {
+        return Object.entries(options)
+          .map(([name, value]) => {
+            const text = this.slashOptionValue(value);
+            return text ? `${name}: ${text}` : name;
+          })
+          .filter(Boolean);
+      }
+      const value = this.slashOptionValue(options);
+      return value ? [value] : [];
+    },
+
+    slashOptionValue(value) {
+      if (value === undefined || value === null) return '';
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+      if (Array.isArray(value)) return value.map((item) => this.slashOptionValue(item)).filter(Boolean).join(', ');
+      if (typeof value === 'object') {
+        for (const key of ['String', 'string', 'Integer', 'integer', 'Number', 'number', 'Boolean', 'boolean']) {
+          const scalar = value[key];
+          if (scalar !== undefined && scalar !== null && textValue(scalar).trim() !== '') return String(scalar);
+        }
+        if (value.value !== undefined) return this.slashOptionValue(value.value);
+        return this.json(value);
+      }
+      return String(value);
     },
 
     automationScope(record) {

@@ -438,7 +438,9 @@ fn debug_event_search_values(event: &Value, field: DebugSearchField) -> Vec<Stri
         DebugSearchField::Kind => debug_non_empty_fields(event, &["kind", "event_kind"]),
         DebugSearchField::JobKind => debug_non_empty_fields(event, &["job_kind"]),
         DebugSearchField::State => debug_non_empty_fields(event, &["state"]),
-        DebugSearchField::Command => debug_non_empty_fields(event, &["command_kind"]),
+        DebugSearchField::Command => {
+            debug_non_empty_fields(event, &["command_kind", "command_name"])
+        }
         DebugSearchField::Room => debug_non_empty_fields(
             event,
             &["guild_slug", "voice_channel_name", "voice_channel_slug"],
@@ -604,6 +606,8 @@ fn compact_debug_event(event: Value) -> Value {
             "job_id",
             "job_kind",
             "command_kind",
+            "command_name",
+            "options",
             "conversation_id",
             "capture_run_id",
             "segment_index",

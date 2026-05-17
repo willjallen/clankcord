@@ -96,7 +96,7 @@ Job payloads and timeline events store the paths and checksums needed to interpr
 
 ## Events And Views
 
-Timeline events are JSONB records with stable projections for room, time, event kind, capture run, speaker, and text. Speech, wake detections, Discord text ingress, slash commands, agent-session creation, automation firing, job creation, occupancy changes, participant transitions, forget, retention, publication, and refinement all enter through this event stream.
+Timeline events are JSONB records with stable projections for room, time, event kind, capture run, speaker, and text. Speech, wake detections, Discord text ingress, slash commands, feedback submissions, agent-session creation, automation firing, job creation, occupancy changes, participant transitions, forget, retention, publication, and refinement all enter through this event stream.
 
 The store loads ranges by guild, channel, time window, event kinds, capture run, and forgotten-state filtering. Timeline tails, transcript rendering, conversation lists, participant traces, context resolution, and dashboard diagnostics are all derived from these stored events and the records around them.
 

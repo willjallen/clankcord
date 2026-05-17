@@ -6,7 +6,8 @@ use clankcord::adapters::discord::gateway::slash::{
     slash_missing_voice_channel_response_content, slash_success_response_content,
 };
 use clankcord::runtime::{
-    BinaryPayload, CommandKind, DiscordSlashCommandPayload, Job, JobKind, Runtime,
+    BinaryPayload, CommandKind, DebugOverviewRequest, DiscordSlashCommandPayload, Job, JobKind,
+    Runtime,
 };
 
 mod common;
@@ -90,23 +91,13 @@ async fn feedback_slash_records_durable_timeline_event() {
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
     let job = store
-        .create_job(Job::discord_slash_command(DiscordSlashCommandPayload {
-            interaction_id: "interaction-feedback".to_string(),
-            interaction_token: "token-feedback".to_string(),
-            application_id: "app-1".to_string(),
-            guild_id: "guild".to_string(),
-            channel_id: "code".to_string(),
-            voice_channel_id: "code".to_string(),
-            user_id: "user-a".to_string(),
-            username: "will".to_string(),
-            command_name: "feedback".to_string(),
-            options: BinaryPayload::from_json(
-                &json!([{"name": "message", "value": "The join command stalled."}]),
-            )
-            .unwrap(),
-            created_at: "2026-05-15T10:00:00.000Z".to_string(),
-            response_visibility: "ephemeral".to_string(),
-        }))
+        .create_job(Job::discord_slash_command(slash_payload(
+            "interaction-feedback",
+            "feedback",
+            "slash-text",
+            "code",
+            json!([{"name": "message", "value": "The join command stalled."}]),
+        )))
         .await
         .unwrap();
 
@@ -114,23 +105,72 @@ async fn feedback_slash_records_durable_timeline_event() {
     runtime.dispatch_claimed_runtime_job(job).await.unwrap();
 
     let mut kinds = BTreeSet::new();
+    kinds.insert("discord_slash_command".to_string());
     kinds.insert("feedback".to_string());
     let events = store
         .load_events("guild", "code", None, None, Some(&kinds), None, false)
         .await
         .unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["kind"], json!("feedback"));
-    assert_eq!(events[0]["job_id"], json!(job_id));
-    assert_eq!(events[0]["interaction_id"], json!("interaction-feedback"));
-    assert_eq!(events[0]["speaker_user_id"], json!("user-a"));
-    assert_eq!(events[0]["speaker_label"], json!("will"));
-    assert_eq!(events[0]["text"], json!("The join command stalled."));
+    assert_eq!(events.len(), 2);
+    let slash_event = events
+        .iter()
+        .find(|event| event["kind"] == json!("discord_slash_command"))
+        .unwrap();
+    let feedback_event = events
+        .iter()
+        .find(|event| event["kind"] == json!("feedback"))
+        .unwrap();
+
+    assert_eq!(slash_event["job_id"], json!(job_id));
+    assert_eq!(slash_event["command_name"], json!("feedback"));
     assert_eq!(
-        events[0]["feedback_message"],
+        slash_event["options"],
+        json!([{"name": "message", "value": "The join command stalled."}])
+    );
+    assert_eq!(feedback_event["job_id"], json!(job_id));
+    assert_eq!(
+        feedback_event["interaction_id"],
+        json!("interaction-feedback")
+    );
+    assert_eq!(feedback_event["discord_channel_id"], json!("slash-text"));
+    assert_eq!(feedback_event["voice_channel_id"], json!("code"));
+    assert_eq!(feedback_event["speaker_user_id"], json!("user-a"));
+    assert_eq!(feedback_event["speaker_label"], json!("will"));
+    assert_eq!(feedback_event["text"], json!("The join command stalled."));
+    assert_eq!(
+        feedback_event["feedback_message"],
         json!("The join command stalled.")
     );
-    assert_eq!(events[0]["timestamp"], json!("2026-05-15T10:00:00.000Z"));
+    assert_eq!(
+        feedback_event["timestamp"],
+        json!("2026-05-15T10:00:00.000Z")
+    );
+
+    let overview = Runtime::from_store(store)
+        .unwrap()
+        .debug_overview(DebugOverviewRequest {
+            timeline_window: "all".to_string(),
+            timeline_query: "/feedback".to_string(),
+            timeline_query_field: "all".to_string(),
+            ..DebugOverviewRequest::default()
+        })
+        .await
+        .unwrap();
+    let dashboard_events = overview["timeline"]["recentEvents"].as_array().unwrap();
+    let dashboard_slash_event = dashboard_events
+        .iter()
+        .find(|event| event["kind"] == json!("discord_slash_command"))
+        .unwrap();
+    assert_eq!(dashboard_slash_event["command_name"], json!("feedback"));
+    assert_eq!(
+        dashboard_slash_event["options"],
+        json!([{"name": "message", "value": "The join command stalled."}])
+    );
+    assert!(
+        dashboard_events
+            .iter()
+            .any(|event| event["kind"] == json!("feedback"))
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
