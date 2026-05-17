@@ -27,6 +27,7 @@ pub struct AppConfig {
     pub discord: DiscordConfig,
     pub codex: CodexConfig,
     pub agents: AgentsConfig,
+    pub prompts: PromptsConfig,
     pub pool: PoolConfig,
     pub transcription: TranscriptionConfig,
     pub stt: SttConfig,
@@ -98,6 +99,11 @@ pub struct CodexConfig {
 pub struct AgentsConfig {
     pub session_expiry_seconds: i64,
     pub thread_auto_archive_minutes: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PromptsConfig {
+    pub dir: PathBuf,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,6 +339,9 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     if config.postgres.password_secret.trim().is_empty() {
         anyhow::bail!("config.toml postgres.password_secret is required");
     }
+    if config.prompts.dir.as_os_str().is_empty() {
+        anyhow::bail!("config.toml prompts.dir is required");
+    }
     config
         .time
         .timezone
@@ -560,6 +569,10 @@ pub fn agent_thread_auto_archive_minutes() -> i64 {
         .agents
         .thread_auto_archive_minutes
         .clamp(60, 10080)
+}
+
+pub fn prompt_templates_dir() -> PathBuf {
+    app_config().prompts.dir.clone()
 }
 
 pub fn runtime_pool_config() -> PoolConfig {

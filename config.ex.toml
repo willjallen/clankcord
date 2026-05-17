@@ -44,6 +44,9 @@ approval_policy = "never"
 session_expiry_seconds = 86400
 thread_auto_archive_minutes = 1440
 
+[prompts]
+dir = "/workspace/clankcord/res/prompts"
+
 [pool]
 idle_channel_name = "idle"
 auto_join_enabled = false

@@ -1,11 +1,14 @@
+use std::path::PathBuf;
+
 use clankcord::runtime::domain::interactions::{
-    AgentTaskPromptContext, build_agent_task_message, build_agent_task_message_for_session,
+    AgentTaskPromptContext, build_agent_task_message_from_template_dir,
 };
 
 #[test]
 fn agent_task_message_uses_compact_transcript_context() {
     let context = prompt_context();
-    let message = build_agent_task_message(&context);
+    let message = build_agent_task_message_from_template_dir(&context, true, &prompt_dir())
+        .expect("build agent task message");
 
     assert!(message.contains("You are Clanky, a helpful and rigorous Discord server assistant"));
     assert!(message.contains("clankcord --help"));
@@ -40,7 +43,8 @@ fn agent_task_message_uses_compact_transcript_context() {
 #[test]
 fn resumed_agent_task_message_omits_large_session_instructions() {
     let context = prompt_context();
-    let message = build_agent_task_message_for_session(&context, false);
+    let message = build_agent_task_message_from_template_dir(&context, false, &prompt_dir())
+        .expect("build resumed agent task message");
 
     assert!(message.contains("JOB:"));
     assert!(!message.contains("SESSION_INSTRUCTIONS:"));
@@ -61,4 +65,8 @@ fn prompt_context() -> AgentTaskPromptContext {
         previous_context: vec!["[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string()],
         question: vec!["[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string()],
     }
+}
+
+fn prompt_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res/prompts")
 }

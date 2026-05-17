@@ -1,24 +1,33 @@
+use std::path::PathBuf;
+
 use clankcord::runtime::domain::interactions::{
     AgentTaskPromptContext, agent_invocation_infrastructure_failure,
-    agent_invocation_warning_event_kind, build_agent_task_message,
+    agent_invocation_warning_event_kind, build_agent_task_message_from_template_dir,
 };
 
 #[test]
 fn agent_task_prompt_is_compact_and_packet_free() {
-    let prompt = build_agent_task_message(&AgentTaskPromptContext {
-        job_id: "job_1".to_string(),
-        agent_session_id: "ags_1".to_string(),
-        guild_id: "guild".to_string(),
-        voice_channel_id: "voice".to_string(),
-        requested_by_user_id: "user".to_string(),
-        requested_by: "Will".to_string(),
-        request: "summarize the floating point discussion".to_string(),
-        workdir: "/clankcord/state/agent-workspaces/task/guild/voice".to_string(),
-        previous_context: vec![
-            "[2026-05-15T00:00:00Z] Will (user): we were talking about floats".to_string(),
-        ],
-        question: vec!["[2026-05-15T00:01:00Z] Will (user): hey clanky summarize this".to_string()],
-    });
+    let prompt = build_agent_task_message_from_template_dir(
+        &AgentTaskPromptContext {
+            job_id: "job_1".to_string(),
+            agent_session_id: "ags_1".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "voice".to_string(),
+            requested_by_user_id: "user".to_string(),
+            requested_by: "Will".to_string(),
+            request: "summarize the floating point discussion".to_string(),
+            workdir: "/clankcord/state/agent-workspaces/task/guild/voice".to_string(),
+            previous_context: vec![
+                "[2026-05-15T00:00:00Z] Will (user): we were talking about floats".to_string(),
+            ],
+            question: vec![
+                "[2026-05-15T00:01:00Z] Will (user): hey clanky summarize this".to_string(),
+            ],
+        },
+        true,
+        &prompt_dir(),
+    )
+    .expect("build agent task prompt");
 
     assert!(prompt.contains("===== PREVIOUS CONTEXT ====="));
     assert!(prompt.contains("===== QUESTION / ACTIVATION ====="));
@@ -45,6 +54,44 @@ fn agent_task_prompt_is_compact_and_packet_free() {
 }
 
 #[test]
+fn agent_task_prompt_can_render_from_custom_template_dir() {
+    let tempdir = tempfile::tempdir().expect("create prompt template dir");
+    std::fs::write(tempdir.path().join("master.md"), "CUSTOM MASTER")
+        .expect("write master prompt template");
+    std::fs::write(
+        tempdir.path().join("agent-task.md"),
+        "CUSTOM TASK\njob={{job_id}}\nrequest={{request}}\n{{question}}",
+    )
+    .expect("write agent task prompt template");
+
+    let prompt = build_agent_task_message_from_template_dir(
+        &AgentTaskPromptContext {
+            job_id: "job_1".to_string(),
+            agent_session_id: "ags_1".to_string(),
+            guild_id: "guild".to_string(),
+            voice_channel_id: "voice".to_string(),
+            requested_by_user_id: "user".to_string(),
+            requested_by: "Will".to_string(),
+            request: "summarize the floating point discussion".to_string(),
+            workdir: "/clankcord/state/agent-workspaces/task/guild/voice".to_string(),
+            previous_context: vec![],
+            question: vec![
+                "[2026-05-15T00:01:00Z] Will (user): hey clanky summarize this".to_string(),
+            ],
+        },
+        true,
+        tempdir.path(),
+    )
+    .expect("render custom prompt templates");
+
+    assert!(prompt.contains("CUSTOM MASTER"));
+    assert!(prompt.contains("CUSTOM TASK"));
+    assert!(prompt.contains("job=job_1"));
+    assert!(prompt.contains("request=summarize the floating point discussion"));
+    assert!(prompt.contains("hey clanky summarize this"));
+}
+
+#[test]
 fn codex_auth_failure_is_infrastructure_failure_but_mcp_token_warning_is_not() {
     assert!(agent_invocation_infrastructure_failure(
         "Auth(TokenRefreshFailed(\"invalid_grant\"))"
@@ -61,4 +108,8 @@ fn codex_auth_failure_is_infrastructure_failure_but_mcp_token_warning_is_not() {
     assert!(!agent_invocation_infrastructure_failure(
         "codex command timed out after 240 seconds"
     ));
+}
+
+fn prompt_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("res/prompts")
 }

@@ -36,6 +36,15 @@ pub(crate) fn initialize_test_config(root: &Path) {
                 "agent_workspaces_root = \"{}\"",
                 root.join("agent-workspaces").display()
             ),
+        )
+        .replace(
+            "dir = \"/workspace/clankcord/res/prompts\"",
+            &format!(
+                "dir = \"{}\"",
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("res/prompts")
+                    .display()
+            ),
         );
     std::fs::write(path.join("config.toml"), config).unwrap();
     let original_dir = std::env::current_dir().unwrap();

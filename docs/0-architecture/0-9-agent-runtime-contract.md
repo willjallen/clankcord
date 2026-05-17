@@ -36,9 +36,11 @@ The CLI uses these variables for agent-friendly defaults. `responses send`, `res
 
 ## Prompt
 
-The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The master instructions describe Clankcord authority boundaries, transcript handling for speech-to-text context, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
+The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{guild_id}}`, `{{voice_channel_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
 
-The per-job prompt is compact and stable. It contains job identity, session identity, guild, voice channel, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
+The master instructions describe Clankcord authority boundaries, transcript handling for speech-to-text context, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
+
+The per-job prompt template is compact and stable. It contains job identity, session identity, guild, voice channel, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
 
 ```text
 JOB:
