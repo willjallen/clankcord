@@ -31,7 +31,7 @@ text_delivery -> discord_text_send
 
 Every agent input belongs to one persisted session. Voice inputs resolve by `voice:<guild_id>:<voice_channel_id>`. DM inputs resolve by `dm:<user_id>`. Managed Discord thread messages resolve by the `discord_thread_id` stored on the voice session that owns that thread.
 
-Top-level `agent-chat` channel messages complete as ignored text ingress. `agent_chat` is a text-delivery target used for runtime responses; follow-up conversation happens in the managed thread, DM, or active voice route. Retired sessions fall out of selection, and agent work serializes by `agent:session:<agent_session_id>`.
+Top-level `agent-chat` channel messages complete as ignored text ingress. `agent_chat` is a text-delivery target used for runtime responses; follow-up conversation happens in the managed thread, DM, or active voice route. Retired sessions fall out of route selection, managed thread messages can reactivate the owning voice session, and agent work serializes by `agent:session:<agent_session_id>`.
 
 ```text
 voice:<guild_id>:<voice_channel_id>
@@ -119,9 +119,9 @@ A DM resolves to `dm:<user_id>`. The runtime retires due sessions, reuses an act
 
 ## Text Ingress
 
-Discord text messages enter as `discord_text_message` jobs. The ingress handler routes DMs to DM agent sessions and managed thread messages to the owning voice session. Routed messages append a `discord_text_message` timeline event and create an `agent_task` child for the selected session.
+Discord text messages enter as `discord_text_message` jobs. The ingress handler routes DMs to DM agent sessions and managed thread messages to the owning voice session. Routed messages append a `discord_text_message` timeline event. An active managed thread creates an `agent_task` child for the selected session. A managed thread attached to a retired or capped voice session creates an `agent_session_resume` child with the message text; resume reactivates the stored session, keeps its Codex session id, and creates the first `agent_task` in that reactivated session.
 
-Empty messages, retired managed threads, top-level `agent-chat` messages, and unmanaged guild channels complete as ignored ingress cases. They still pass through the runtime job path, which keeps text ingress visible in job inspection and timeline diagnostics.
+Empty messages, top-level `agent-chat` messages, and unmanaged guild channels complete as ignored ingress cases. They still pass through the runtime job path, which keeps text ingress visible in job inspection and timeline diagnostics.
 
 ## Thread Titles
 
@@ -135,7 +135,7 @@ The title-refresh selector is bounded by three durable facts: one candidate per 
 
 Agent session retirement is runtime maintenance and an explicit user action. `agent_session_retirement` runs from `runtime_maintenance` and retires sessions whose `max_active_until` has passed or whose bound `voice_capture_session_id` is no longer active. `agent_session_sunset` retires a selected session when a user or operator asks to end it. Retirement sets `state = retired`, records `retired_at`, `retirement_reason`, and `retired_by_user_id` when present, and appends `agent_session_retired`.
 
-Retired sessions remain queryable by id, list, and search. Route lookup and managed-thread ingress do not select them.
+Retired sessions remain queryable by id, list, search, and managed-thread continuation. Route lookup selects active sessions for normal voice and DM routing. Managed-thread continuation creates `agent_session_resume` for the stored voice session before agent work starts.
 
 `agent_session_resume` reactivates the selected retired session. Resume takes over the target route by retiring the current active or starting session with `agent_session_resume_route_takeover`, clears the selected session's retirement fields, extends its active cap, and keeps its existing Codex session id. Voice resume uses the selected session's existing Discord thread as the session target. A voice session without an existing Discord thread fails resume. A resume job with message text creates the first `agent_task` in the reactivated session.
 

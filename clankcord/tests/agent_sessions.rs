@@ -364,6 +364,120 @@ async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn discord_thread_message_resumes_retired_voice_session() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let created_at = Utc::now() - chrono::Duration::hours(1);
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    let mut source = AgentSessionRecord::new_voice(
+        "ags_source",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-source",
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    source.state = AgentSessionRecordState::Retired;
+    source.codex_session_id = "codex-session".to_string();
+    source.retired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    source.retirement_reason = "voice_session_ended".to_string();
+    store.create_agent_session_record(source).await.unwrap();
+    let active = AgentSessionRecord::new_voice(
+        "ags_active",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-active",
+        Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        (Utc::now() + chrono::Duration::hours(8)).to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+    store.create_agent_session_record(active).await.unwrap();
+    let text = store
+        .create_job(Job::discord_text_message(DiscordTextMessagePayload {
+            guild_id: "guild".to_string(),
+            channel_id: "thread-source".to_string(),
+            message_id: "message-1".to_string(),
+            author_user_id: "user-a".to_string(),
+            author_username: "will".to_string(),
+            author_display_name: "Will".to_string(),
+            content: "follow up in the old thread".to_string(),
+            created_at: "2026-05-17T17:44:57.000Z".to_string(),
+            referenced_message_id: String::new(),
+        }))
+        .await
+        .unwrap();
+    let mut running_text = text.clone();
+    running_text.mark_running();
+    store.update_job(&running_text).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime
+        .dispatch_claimed_runtime_job(running_text)
+        .await
+        .unwrap();
+
+    let updated_text = store.get_job(&text.id).await.unwrap();
+    assert_eq!(updated_text.state, JobState::Waiting);
+    let children = store.list_child_jobs(&text.id).await.unwrap();
+    assert_eq!(children.len(), 1);
+    let resume = &children[0];
+    assert_eq!(resume.kind, JobKind::AgentSessionResume);
+    let JobPayload::AgentSessionResume(payload) = &resume.payload else {
+        panic!("expected agent session resume payload");
+    };
+    assert_eq!(payload.source_agent_session_id, "ags_source");
+    assert_eq!(payload.route_kind, "voice");
+    assert_eq!(payload.guild_id, "guild");
+    assert_eq!(payload.voice_channel_id, "code");
+    assert_eq!(payload.message, "follow up in the old thread");
+
+    let events = store
+        .load_events("guild", "code", None, None, None, None, false)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.get("event_kind") == Some(&json!("discord_text_message"))
+            && event.get("agent_session_id") == Some(&json!("ags_source"))
+            && event.get("discord_channel_id") == Some(&json!("thread-source"))
+            && event.get("text") == Some(&json!("follow up in the old thread"))
+    }));
+
+    let mut running_resume = resume.clone();
+    running_resume.mark_running();
+    store.update_job(&running_resume).await.unwrap();
+    runtime
+        .dispatch_claimed_runtime_job(running_resume)
+        .await
+        .unwrap();
+
+    let resumed = store.get_agent_session_record("ags_source").await.unwrap();
+    assert_eq!(resumed.state, AgentSessionRecordState::Active);
+    assert_eq!(resumed.codex_session_id, "codex-session");
+    assert_eq!(resumed.discord_thread_id, "thread-source");
+    assert_eq!(resumed.text_target.channel_id, "thread-source");
+    let retired = store.get_agent_session_record("ags_active").await.unwrap();
+    assert_eq!(retired.state, AgentSessionRecordState::Retired);
+    assert_eq!(
+        retired.retirement_reason,
+        "agent_session_resume_route_takeover"
+    );
+    let resume_children = store.list_child_jobs(&resume.id).await.unwrap();
+    assert_eq!(resume_children.len(), 1);
+    let task = &resume_children[0];
+    assert_eq!(task.kind, JobKind::AgentTask);
+    let JobPayload::AgentTask(payload) = &task.payload else {
+        panic!("expected agent task payload");
+    };
+    assert_eq!(payload.agent_session_id, "ags_source");
+    assert_eq!(
+        payload.command.arguments.request_text(),
+        "follow up in the old thread"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retired_start_session_does_not_spawn_agent_task() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());

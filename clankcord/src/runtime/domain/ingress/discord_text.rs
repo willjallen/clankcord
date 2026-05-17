@@ -28,13 +28,7 @@ pub(crate) async fn prepare(
         .await?
     {
         if !agent_session_is_current(&session) {
-            return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-                &json!({
-                    "kind": "discord_text_message",
-                    "status": "ignored_retired_agent_thread",
-                    "agent_session_id": session.agent_session_id,
-                }),
-            )?));
+            return resume_agent_session_from_thread_message(runtime, payload, session).await;
         }
         session
     } else if payload.channel_id
@@ -57,6 +51,46 @@ pub(crate) async fn prepare(
         )?));
     };
 
+    let event_id = append_thread_message_event(runtime, &session, payload).await?;
+    runtime
+        .touch_agent_session(&session.agent_session_id)
+        .await?;
+
+    let agent_job = agent_task_for_thread_message(session, payload, event_id)?;
+    Ok(JobDecision::WaitFor(vec![agent_job]))
+}
+
+async fn resume_agent_session_from_thread_message(
+    runtime: &mut Runtime,
+    payload: &DiscordTextMessagePayload,
+    session: AgentSessionRecord,
+) -> Result<JobDecision> {
+    if session.route_kind.as_str() != "voice" {
+        anyhow::bail!(
+            "Discord thread {} is attached to unsupported {} agent session {}",
+            payload.channel_id,
+            session.route_kind.as_str(),
+            session.agent_session_id
+        );
+    }
+
+    append_thread_message_event(runtime, &session, payload).await?;
+    Ok(JobDecision::WaitFor(vec![Job::agent_session_resume(
+        session.agent_session_id,
+        "voice",
+        session.guild_id,
+        session.voice_channel_id,
+        "",
+        payload.author_user_id.clone(),
+        payload.content.clone(),
+    )]))
+}
+
+async fn append_thread_message_event(
+    runtime: &mut Runtime,
+    session: &AgentSessionRecord,
+    payload: &DiscordTextMessagePayload,
+) -> Result<String> {
     let event = runtime
         .timeline_store
         .append_event(
@@ -80,10 +114,18 @@ pub(crate) async fn prepare(
             }),
         )
         .await?;
-    runtime
-        .touch_agent_session(&session.agent_session_id)
-        .await?;
+    Ok(event
+        .get("event_id")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string())
+}
 
+fn agent_task_for_thread_message(
+    session: AgentSessionRecord,
+    payload: &DiscordTextMessagePayload,
+    event_id: String,
+) -> Result<Job> {
     let mut command = CommandRequest::agent_task(
         session.guild_id.clone(),
         session.voice_channel_id.clone(),
@@ -91,11 +133,6 @@ pub(crate) async fn prepare(
         payload.content.clone(),
     );
     command.requested_by_speaker_label = text_author_label(payload);
-    let event_id = event
-        .get("event_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("")
-        .to_string();
     let mut arguments = command.arguments.to_json();
     if let Some(object) = arguments.as_object_mut() {
         object.insert(
@@ -105,14 +142,13 @@ pub(crate) async fn prepare(
     }
     command.arguments = crate::runtime::CommandArguments::from_json(Some(&arguments))?;
 
-    let agent_job = Job::agent_task_for_session(
+    Ok(Job::agent_task_for_session(
         session.agent_session_id,
         session.guild_id,
         session.voice_channel_id,
         payload.author_user_id.clone(),
         command,
-    );
-    Ok(JobDecision::WaitFor(vec![agent_job]))
+    ))
 }
 
 fn agent_session_is_current(session: &AgentSessionRecord) -> bool {
