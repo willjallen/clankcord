@@ -7,7 +7,8 @@ pub(crate) use engine::{Automation, AutomationContext, AutomationOutput, Automat
 pub use engine::{AutomationJob, AutomationRun};
 pub use manual::AUTOMATION_SPEC_MANUAL;
 pub use spec::{
-    AutomationAction, AutomationCondition, AutomationConditionOp, AutomationExpiry,
-    AutomationOwner, AutomationRecord, AutomationScalar, AutomationScope, AutomationSpec,
-    AutomationState, AutomationTextTarget, AutomationTextTargetKind, AutomationTrigger,
+    AutomationAction, AutomationCondition, AutomationConditionOp, AutomationDelay,
+    AutomationExpiry, AutomationOwner, AutomationPendingRecheck, AutomationRecord,
+    AutomationScalar, AutomationScope, AutomationSpec, AutomationState, AutomationTextTarget,
+    AutomationTextTargetKind, AutomationTrigger,
 };

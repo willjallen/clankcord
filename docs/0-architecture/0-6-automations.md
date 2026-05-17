@@ -1,6 +1,6 @@
 # Automations
 
-Automations are durable runtime rules. A stored automation names who owns it, where it applies, when it evaluates, which condition gates firing, when it expires, and which runtime actions to emit. When an automation fires, it creates ordinary jobs. Those jobs then move through the same scheduler, dependency resolver, adapter paths, and timeline views as any other work.
+Automations are durable runtime rules. A stored automation names who owns it, where it applies, when it evaluates, which condition gates firing, whether a delayed recheck is required, when it expires, and which runtime actions to emit. When an automation fires, it creates ordinary jobs. Those jobs then move through the same scheduler, dependency resolver, adapter paths, and timeline views as any other work.
 
 ```text
 stored automation
@@ -34,6 +34,10 @@ A stored spec has required fields for `name`, `owner`, `scope`, `trigger`, `cond
     "event_kinds": ["participant_joined"]
   },
   "condition": {"kind": "true"},
+  "delay": {
+    "seconds": 300,
+    "condition": {"kind": "true"}
+  },
   "expiry": {"max_fires": 1},
   "actions": [
     {
@@ -64,7 +68,7 @@ Scope binds the automation to one Discord guild and one voice channel. Specs use
 
 Triggers select the runtime contexts an automation evaluates. A `tick` trigger evaluates when its interval is due. An `event` trigger evaluates matching timeline events after the automation cursor. A `job` trigger evaluates scoped jobs of selected kinds and states. `room_state_changed` is a shortcut over room state, occupancy, participant join, and participant leave activity.
 
-Each condition evaluates an object containing the automation record, runtime clock, room status, live occupants, participant map, selected event, and selected job. The participant map is keyed by Discord user id, which makes overlap and presence checks direct.
+Each condition evaluates an object containing the automation record, runtime clock, current room status, current live occupants, current participant map, event-time room snapshots, selected event, and selected job. The participant map is keyed by Discord user id, which makes overlap and presence checks direct. Voice transition events include `event_room.before` and `event_room.after` snapshots for the scoped room so conditions can describe who was present when the transition was recorded.
 
 ```json
 {
@@ -74,6 +78,10 @@ Each condition evaluates an object containing the automation record, runtime clo
     "status": {"...": "room status snapshot"},
     "liveOccupants": [],
     "participants": {}
+  },
+  "event_room": {
+    "before": {"liveOccupants": [], "participants": {}},
+    "after": {"liveOccupants": [], "participants": {}}
   },
   "event": {"...": "timeline event or null"},
   "job": {"...": "job record or null"}
@@ -99,7 +107,7 @@ Action results return through ordinary job state and timeline events. A fired au
 
 ## Execution
 
-`automation_evaluation` is the background job that runs automation passes. It calls `Runtime::run_automations`, which prunes expired room-control markers in Postgres, loads runtime config, rooms, room controls, active jobs, voice projections, and active automation records from the timeline store, and then runs built-in runtime automations followed by stored durable automations. Stored execution is cursor-based. Expired records are marked `expired`. Trigger contexts are loaded after the automation cursor. The first matching context fires actions. Firing marks the automation evaluated and fired, increments `fire_count`, persists emitted jobs through the timeline store, and records events tying those jobs back to the automation.
+`automation_evaluation` is the background job that runs automation passes. It calls `Runtime::run_automations`, which prunes expired room-control markers in Postgres, loads runtime config, rooms, room controls, active jobs, voice projections, and active automation records from the timeline store, and then runs built-in runtime automations followed by stored durable automations. Stored execution is cursor-based. Expired records are marked `expired`. Trigger contexts are loaded after the automation cursor. The first matching context fires actions or records a pending delayed recheck. A delayed recheck stores the selected event or job and due time on the automation record, then a later pass rebuilds context with the original trigger payload and current room state before firing. Firing marks the automation evaluated and fired, increments `fire_count`, persists emitted jobs through the timeline store, and records events tying those jobs back to the automation.
 
 The authoring workflow is deliberately explicit: resolve durable ids, inspect the context shape, write JSON, validate it, create it, and publish a visible response describing the registered behavior. Validation errors identify the path that violates the spec, including owner/source fields, scope ids, trigger field shapes, expiry timestamps, job kind and state names, action content, sink ids, and condition paths.
 

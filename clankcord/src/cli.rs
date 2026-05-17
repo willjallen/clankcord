@@ -25,6 +25,9 @@ const CLI_AFTER_HELP: &str = r#"Common agent workflows:
   Create automation:          clankcord automations spec
                               clankcord automations validate < automation.json
                               clankcord automations create < automation.json
+  Submit product feedback:    clankcord feedback submit <<'EOF'
+                              feedback body
+                              EOF
 
 Most agent commands infer job, guild, channel, and requester from CLANKCORD_AGENT_* environment variables. Use --file for large outputs so command results do not flood the agent context."#;
 
@@ -145,6 +148,11 @@ enum Command {
     Automations {
         #[command(subcommand)]
         command: AutomationsCommand,
+    },
+    #[command(about = "Submit durable feedback about missing or unsupported Clankcord behavior.")]
+    Feedback {
+        #[command(subcommand)]
+        command: FeedbackCommand,
     },
     #[command(about = "Approve or cancel confirmation-required jobs.")]
     Confirmations {
@@ -294,6 +302,12 @@ enum AutomationsCommand {
     Get(AutomationIdArg),
     #[command(about = "Cancel one automation by id.")]
     Cancel(AutomationIdArg),
+}
+
+#[derive(Debug, Subcommand)]
+enum FeedbackCommand {
+    #[command(about = "Record feedback text in the current room timeline.")]
+    Submit(FeedbackSubmitArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -658,6 +672,30 @@ struct AutomationIdArg {
     automation_id: String,
 }
 
+#[derive(Debug, ClapArgs, Default)]
+struct FeedbackSubmitArgs {
+    #[arg(long, help = "Source job id. Defaults to CLANKCORD_AGENT_JOB_ID.")]
+    job: Option<String>,
+    #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
+    guild: Option<String>,
+    #[arg(
+        long,
+        help = "Discord voice channel id. Defaults to CLANKCORD_AGENT_VOICE_CHANNEL_ID."
+    )]
+    channel: Option<String>,
+    #[arg(
+        long,
+        help = "Requesting Discord user id. Defaults to CLANKCORD_AGENT_REQUESTED_BY_USER_ID."
+    )]
+    requested_by_user_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Read feedback body from a UTF-8 file instead of stdin."
+    )]
+    file: Option<String>,
+}
+
 #[derive(Debug, ClapArgs)]
 struct ConfirmationApproveArgs {
     job_id: String,
@@ -814,6 +852,9 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 None,
                 None,
             ),
+        },
+        Command::Feedback { command } => match command {
+            FeedbackCommand::Submit(args) => feedback_submit(args),
         },
         Command::Confirmations { command } => match command {
             ConfirmationsCommand::Approve(args) => confirmation_approve(args),
@@ -1149,6 +1190,22 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": false,
+        })),
+        None,
+    )
+}
+
+fn feedback_submit(args: FeedbackSubmitArgs) -> Result<i32> {
+    let content = read_required_payload(args.file, "feedback body")?;
+    api_emit(
+        "POST",
+        "/v1/voice/feedback",
+        Some(json!({
+            "source_job_id": agent_context_job(args.job),
+            "guild_id": agent_context_guild(args.guild),
+            "voice_channel_id": agent_context_channel(args.channel),
+            "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
+            "content": content,
         })),
         None,
     )

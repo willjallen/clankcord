@@ -25,6 +25,8 @@ pub struct AutomationSpec {
     #[serde(default)]
     pub condition: AutomationCondition,
     #[serde(default)]
+    pub delay: Option<AutomationDelay>,
+    #[serde(default)]
     pub expiry: AutomationExpiry,
     #[serde(default)]
     pub actions: Vec<AutomationAction>,
@@ -64,6 +66,9 @@ impl AutomationSpec {
         self.scope.validate()?;
         self.trigger.validate()?;
         self.condition.validate()?;
+        if let Some(delay) = &self.delay {
+            delay.validate()?;
+        }
         self.expiry.validate()?;
         if self.actions.is_empty() {
             anyhow::bail!("automation must define at least one action");
@@ -291,6 +296,29 @@ impl AutomationExpiry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutomationDelay {
+    #[serde(default)]
+    pub seconds: u64,
+    #[serde(default)]
+    pub condition: Option<AutomationCondition>,
+}
+
+impl AutomationDelay {
+    fn validate(&self) -> Result<()> {
+        if self.seconds == 0 {
+            anyhow::bail!("automation delay seconds must be greater than 0");
+        }
+        if i64::try_from(self.seconds).is_err() {
+            anyhow::bail!("automation delay seconds is too large");
+        }
+        if let Some(condition) = &self.condition {
+            condition.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum AutomationAction {
     TextSend {
         sink: AutomationTextTarget,
@@ -384,7 +412,17 @@ pub struct AutomationRecord {
     pub last_evaluated_at: String,
     pub last_fired_at: String,
     pub fire_count: u64,
+    pub pending_recheck: Option<AutomationPendingRecheck>,
     pub spec: AutomationSpec,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AutomationPendingRecheck {
+    pub due_at: String,
+    #[serde(default)]
+    pub event_json: Option<String>,
+    #[serde(default)]
+    pub job_json: Option<String>,
 }
 
 impl AutomationRecord {
@@ -398,6 +436,7 @@ impl AutomationRecord {
             last_evaluated_at: String::new(),
             last_fired_at: String::new(),
             fire_count: 0,
+            pending_recheck: None,
             spec,
         }
     }
@@ -417,6 +456,7 @@ impl AutomationRecord {
     pub(crate) fn mark_evaluated(&mut self) {
         self.updated_at = isoformat_z(None);
         self.last_evaluated_at = self.updated_at.clone();
+        self.pending_recheck = None;
     }
 
     pub(crate) fn mark_fired(&mut self) {
@@ -424,6 +464,7 @@ impl AutomationRecord {
         self.last_evaluated_at = self.updated_at.clone();
         self.last_fired_at = self.updated_at.clone();
         self.fire_count += 1;
+        self.pending_recheck = None;
         if self
             .spec
             .expiry
@@ -440,6 +481,21 @@ impl AutomationRecord {
         } else {
             self.last_evaluated_at.clone()
         }
+    }
+
+    pub(crate) fn mark_pending_recheck(
+        &mut self,
+        due_at: String,
+        event_json: Option<String>,
+        job_json: Option<String>,
+    ) {
+        self.updated_at = isoformat_z(None);
+        self.last_evaluated_at = self.updated_at.clone();
+        self.pending_recheck = Some(AutomationPendingRecheck {
+            due_at,
+            event_json,
+            job_json,
+        });
     }
 }
 
@@ -793,6 +849,9 @@ fn validate_boundary_automation_value(value: &Value) -> Result<()> {
     if let Some(condition) = object.get("condition") {
         validate_condition_boundary("$.condition", condition)?;
     }
+    if let Some(delay) = object.get("delay") {
+        validate_delay_boundary(delay)?;
+    }
     if let Some(expiry) = object.get("expiry") {
         validate_expiry_boundary(expiry)?;
     }
@@ -1015,6 +1074,19 @@ fn validate_expiry_boundary(value: &Value) -> Result<()> {
     Ok(())
 }
 
+fn validate_delay_boundary(value: &Value) -> Result<()> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("$.delay must be an object"))?;
+    if object.get("seconds").and_then(Value::as_u64).unwrap_or(0) == 0 {
+        anyhow::bail!("$.delay.seconds must be a positive integer");
+    }
+    if let Some(condition) = object.get("condition") {
+        validate_condition_boundary("$.delay.condition", condition)?;
+    }
+    Ok(())
+}
+
 fn validate_action_boundary(index: usize, value: &Value) -> Result<()> {
     let path = format!("$.actions[{index}]");
     let kind = validate_kind(
@@ -1158,6 +1230,9 @@ fn normalize_boundary_automation_value(value: &Value) -> Value {
         if let Some(condition) = object.get("condition") {
             object.insert("condition".to_string(), normalize_condition(condition));
         }
+        if let Some(delay) = object.get("delay") {
+            object.insert("delay".to_string(), normalize_delay(delay));
+        }
         if let Some(actions) = object.get("actions").and_then(Value::as_array) {
             object.insert(
                 "actions".to_string(),
@@ -1231,6 +1306,14 @@ fn normalize_condition(value: &Value) -> Value {
         }
         _ => value.clone(),
     }
+}
+
+fn normalize_delay(value: &Value) -> Value {
+    let mut payload = value.as_object().cloned().unwrap_or_default();
+    if let Some(condition) = payload.remove("condition") {
+        payload.insert("condition".to_string(), normalize_condition(&condition));
+    }
+    Value::Object(payload)
 }
 
 fn normalize_action(value: &Value) -> Value {

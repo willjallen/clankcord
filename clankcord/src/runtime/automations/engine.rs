@@ -263,7 +263,9 @@ async fn run_stored_automations(
         let outcome = evaluate_stored_automation(runtime, &record).await?;
         let mut updated = record.clone();
         if outcome.evaluated {
-            if outcome.jobs.is_empty() {
+            if let Some(pending) = outcome.pending_recheck {
+                updated.mark_pending_recheck(pending.due_at, pending.event_json, pending.job_json);
+            } else if outcome.jobs.is_empty() {
                 updated.mark_evaluated();
             } else {
                 updated.mark_fired();
@@ -303,6 +305,14 @@ async fn run_stored_automations(
 struct StoredAutomationOutcome {
     evaluated: bool,
     jobs: Vec<Job>,
+    pending_recheck: Option<PendingRecheck>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingRecheck {
+    due_at: String,
+    event_json: Option<String>,
+    job_json: Option<String>,
 }
 
 async fn evaluate_stored_automation(
@@ -311,6 +321,38 @@ async fn evaluate_stored_automation(
 ) -> Result<StoredAutomationOutcome> {
     if record.state != AutomationState::Active {
         return Ok(StoredAutomationOutcome::default());
+    }
+
+    if let Some(pending) = &record.pending_recheck {
+        if !pending_recheck_due(&pending.due_at)? {
+            return Ok(StoredAutomationOutcome::default());
+        }
+        let context = base_context(
+            runtime,
+            record,
+            pending_json_value(pending.event_json.as_deref(), "event")?,
+            pending_json_value(pending.job_json.as_deref(), "job")?,
+        )
+        .await?;
+        let delay_matches = match record
+            .spec
+            .delay
+            .as_ref()
+            .and_then(|delay| delay.condition.as_ref())
+        {
+            Some(condition) => condition_matches(condition, &context)?,
+            None => true,
+        };
+        let jobs = if delay_matches {
+            jobs_for_actions(runtime, record).await?
+        } else {
+            Vec::new()
+        };
+        return Ok(StoredAutomationOutcome {
+            evaluated: true,
+            jobs,
+            pending_recheck: None,
+        });
     }
 
     let contexts = trigger_contexts(runtime, record).await?;
@@ -323,33 +365,78 @@ async fn evaluate_stored_automation(
         if !condition_matches(&record.spec.condition, &context)? {
             continue;
         }
-        for action in &record.spec.actions {
-            match job_for_action(record, action) {
-                Ok(job) => jobs.push(job),
-                Err(error) => {
-                    runtime
-                        .timeline_store
-                        .append_event(
-                            &record.spec.scope.guild_id,
-                            &record.spec.scope.voice_channel_id,
-                            json!({
-                                "event_kind": "automation_action_failed",
-                                "kind": "automation_action_failed",
-                                "automation_id": record.automation_id,
-                                "action": format!("{action:?}"),
-                                "error": error.to_string(),
-                            }),
-                        )
-                        .await?;
-                }
-            }
+        if let Some(delay) = &record.spec.delay {
+            let delay_seconds =
+                i64::try_from(delay.seconds).context("automation delay seconds exceeds i64")?;
+            let due_at = isoformat_z(Some(utc_now() + chrono::Duration::seconds(delay_seconds)));
+            return Ok(StoredAutomationOutcome {
+                evaluated: true,
+                jobs,
+                pending_recheck: Some(PendingRecheck {
+                    due_at,
+                    event_json: context_value_json(&context, "event")?,
+                    job_json: context_value_json(&context, "job")?,
+                }),
+            });
         }
+        jobs = jobs_for_actions(runtime, record).await?;
         break;
     }
     Ok(StoredAutomationOutcome {
         evaluated: true,
         jobs,
+        pending_recheck: None,
     })
+}
+
+async fn jobs_for_actions(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Job>> {
+    let mut jobs = Vec::new();
+    for action in &record.spec.actions {
+        match job_for_action(record, action) {
+            Ok(job) => jobs.push(job),
+            Err(error) => {
+                runtime
+                    .timeline_store
+                    .append_event(
+                        &record.spec.scope.guild_id,
+                        &record.spec.scope.voice_channel_id,
+                        json!({
+                            "event_kind": "automation_action_failed",
+                            "kind": "automation_action_failed",
+                            "automation_id": record.automation_id,
+                            "action": format!("{action:?}"),
+                            "error": error.to_string(),
+                        }),
+                    )
+                    .await?;
+            }
+        }
+    }
+    Ok(jobs)
+}
+
+fn pending_recheck_due(due_at: &str) -> Result<bool> {
+    let due_at = parse_instant(due_at)
+        .with_context(|| format!("automation pending recheck has invalid due_at: {due_at}"))?;
+    Ok(utc_now() >= due_at)
+}
+
+fn pending_json_value(value: Option<&str>, field: &str) -> Result<Option<Value>> {
+    value
+        .map(|value| {
+            serde_json::from_str(value)
+                .with_context(|| format!("automation pending recheck has invalid {field}_json"))
+        })
+        .transpose()
+}
+
+fn context_value_json(context: &Value, key: &str) -> Result<Option<String>> {
+    context
+        .get(key)
+        .filter(|value| !value.is_null())
+        .map(serde_json::to_string)
+        .transpose()
+        .with_context(|| format!("serializing automation pending {key} context"))
 }
 
 async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Value>> {
@@ -478,12 +565,18 @@ async fn base_context(
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));
     }
+    let event_room = event
+        .as_ref()
+        .and_then(|event| event.get("event_room"))
+        .cloned()
+        .unwrap_or_else(|| json!({"before": Value::Null, "after": Value::Null}));
     Ok(json!({
         "automation": record.to_json(),
         "runtime": {
             "now": isoformat_z(None),
         },
         "room": room_status,
+        "event_room": event_room,
         "event": event.unwrap_or(Value::Null),
         "job": job.unwrap_or(Value::Null),
     }))

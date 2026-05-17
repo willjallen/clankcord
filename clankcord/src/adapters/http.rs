@@ -20,6 +20,7 @@ use crate::dashboard::{
     TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
 };
 use crate::runtime::automations::AutomationState;
+use crate::runtime::util::first_value_string;
 use crate::runtime::{
     CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
     ListConversationsRequest, MemberGetRequest, MemberResolveRequest, MemberSearchRequest,
@@ -263,6 +264,7 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/voice/rooms/occupants", get(room_occupants))
         .route("/v1/voice/commands", post(command_submit))
         .route("/v1/voice/responses", post(response_submit))
+        .route("/v1/voice/feedback", post(feedback_submit))
         .route(
             "/v1/voice/automations",
             get(automations_list).post(automation_create),
@@ -479,6 +481,59 @@ async fn response_submit(State(state): State<AppState>, Json(payload): Json<Valu
         }
     };
     result(state.handle.submit_job(job).await)
+}
+
+async fn feedback_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
+    let runtime = runtime_context!(state);
+    result(submit_feedback_event(&runtime, &payload).await)
+}
+
+async fn submit_feedback_event(
+    runtime: &crate::runtime::Runtime,
+    payload: &Value,
+) -> Result<Value> {
+    let guild_id = first_value_string(payload, &["guild_id", "guildId"]);
+    if guild_id.is_empty() {
+        anyhow::bail!("feedback requires guild_id");
+    }
+    let voice_channel_id = first_value_string(
+        payload,
+        &[
+            "voice_channel_id",
+            "voiceChannelId",
+            "channel_id",
+            "channelId",
+        ],
+    );
+    if voice_channel_id.is_empty() {
+        anyhow::bail!("feedback requires voice_channel_id");
+    }
+    let message = first_value_string(payload, &["content", "message", "feedback_message"]);
+    if message.trim().is_empty() {
+        anyhow::bail!("feedback requires content");
+    }
+    let requested_by_user_id = first_value_string(payload, &["requested_by_user_id", "user_id"]);
+    let source_job_id = first_value_string(payload, &["source_job_id", "job_id"]);
+    let event = runtime
+        .timeline_store
+        .append_event(
+            &guild_id,
+            &voice_channel_id,
+            json!({
+                "event_kind": "feedback",
+                "kind": "feedback",
+                "source": "agent_cli",
+                "job_id": source_job_id,
+                "speaker_user_id": requested_by_user_id,
+                "text": &message,
+                "feedback_message": &message,
+            }),
+        )
+        .await?;
+    Ok(json!({
+        "recorded": true,
+        "feedback": event,
+    }))
 }
 
 async fn automation_validate(

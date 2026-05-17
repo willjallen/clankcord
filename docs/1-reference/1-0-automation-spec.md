@@ -26,7 +26,7 @@ clankcord automations cancel <automation-id>
 
 ## Top-Level Shape
 
-An automation spec names its schema, human-readable name, optional idempotency key, owner, scope, trigger, condition, expiry, and actions. The required fields are `name`, `owner`, `scope`, `trigger`, `condition`, and at least one action. `schema` defaults to `clankcord.automation.v0`. `expiry.max_fires` defaults to `1`, which makes a spec one-shot unless recurring behavior is requested.
+An automation spec names its schema, human-readable name, optional idempotency key, owner, scope, trigger, condition, optional delayed recheck, expiry, and actions. The required fields are `name`, `owner`, `scope`, `trigger`, `condition`, and at least one action. `schema` defaults to `clankcord.automation.v0`. `expiry.max_fires` defaults to `1`, which makes a spec one-shot unless recurring behavior is requested.
 
 ```json
 {
@@ -48,6 +48,14 @@ An automation spec names its schema, human-readable name, optional idempotency k
   },
   "condition": {
     "kind": "true"
+  },
+  "delay": {
+    "seconds": 300,
+    "condition": {
+      "kind": "predicate",
+      "path": "room.participants.discord-user-id.present",
+      "op": "empty"
+    }
   },
   "expiry": {
     "max_fires": 1,
@@ -140,7 +148,9 @@ Job kinds parse through `JobKind`; job states parse through `JobState`. Trigger 
 
 ## Evaluation Context
 
-Conditions evaluate against a context object built for the trigger. The object always contains the automation record, runtime clock, room payload, and nullable event and job fields. `room.liveOccupants` comes from current voice state. `room.participants` is keyed by Discord user id and adds `present: true` for present users.
+Conditions evaluate against a context object built for the trigger. The object always contains the automation record, runtime clock, room payload, event-room payload, and nullable event and job fields. `room.liveOccupants` comes from current voice state. `room.participants` is keyed by Discord user id and adds `present: true` for present users.
+
+Voice transition events carry durable room snapshots captured when the transition was recorded. `event_room.before` and `event_room.after` expose `liveOccupants` and `participants` for the scoped room at transition time. These snapshots are the right surface for conditions such as "when Blake joins while I am already present" because they do not depend on who is still present when automation evaluation runs.
 
 ```json
 {
@@ -150,6 +160,16 @@ Conditions evaluate against a context object built for the trigger. The object a
     "status": {"...": "room status snapshot"},
     "liveOccupants": [],
     "participants": {}
+  },
+  "event_room": {
+    "before": {
+      "liveOccupants": [],
+      "participants": {}
+    },
+    "after": {
+      "liveOccupants": [],
+      "participants": {}
+    }
   },
   "event": {"...": "timeline event or null"},
   "job": {"...": "job record or null"}
@@ -234,6 +254,23 @@ Untagged JSON scalars are the normal form.
   "value": "218519280235446272"
 }
 ```
+
+## Delayed Rechecks
+
+`delay` stores a pending recheck after the trigger and top-level condition match. The runner records the selected event or job, advances the automation cursor, waits until `delay.seconds` is due, rebuilds context with the original trigger payload and current room state, evaluates `delay.condition` when present, then fires the actions. A missing delay condition fires after the wait.
+
+```json
+{
+  "seconds": 300,
+  "condition": {
+    "kind": "predicate",
+    "path": "room.participants.218519280235446272.present",
+    "op": "empty"
+  }
+}
+```
+
+Delayed rechecks cover settled-state semantics such as "if Blake is still gone after five minutes" and "if the room is still empty after the join/leave transition settles." Delay seconds must be a positive integer.
 
 ## Expiry
 

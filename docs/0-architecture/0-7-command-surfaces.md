@@ -17,9 +17,9 @@ durable jobs and timeline events
 
 ## CLI
 
-The root `clankcord` command is both the operator surface and the primary tool surface for agents. It is organized by capability: service startup, status, rooms, messages, timeline, transcripts, conversations, context, participants, members, jobs, responses, automations, confirmations, pause, resume, and forget.
+The root `clankcord` command is both the operator surface and the primary tool surface for agents. It is organized by capability: service startup, status, rooms, messages, timeline, transcripts, conversations, context, participants, members, jobs, responses, automations, feedback, confirmations, pause, resume, and forget.
 
-Voice and control mutations lower into typed command jobs. Automation, confirmation, response, and job-control commands call HTTP or runtime surfaces that create automation records, `text_delivery` jobs, or `runtime_control` jobs. Read commands query rendered timeline and runtime views.
+Voice and control mutations lower into typed command jobs. Automation, feedback, confirmation, response, and job-control commands call HTTP or runtime surfaces that create automation records, append feedback events, create `text_delivery` jobs, or create `runtime_control` jobs. Read commands query rendered timeline and runtime views.
 
 Agent-facing reads default to compact JSON. Large outputs can be written with `--file <path> --format json`, leaving stdout as a short confirmation plus counts, ids, or window bounds. `--ephemeral` includes transient runtime events such as wake and audio internals. `--verbose` expands fields for the selected records.
 
@@ -27,7 +27,7 @@ Member and room-occupant commands are part of the agent contract. `members searc
 
 ## HTTP
 
-HTTP routes are mounted over the runtime handle. They cover health, status, voice state, commands, responses, automations, timeline, transcripts, conversations, context, participants, members, jobs, confirmations, debug views, and the dashboard.
+HTTP routes are mounted over the runtime handle. They cover health, status, voice state, commands, responses, automations, feedback, timeline, transcripts, conversations, context, participants, members, jobs, confirmations, debug views, and the dashboard.
 
 ```text
 /healthz

@@ -106,6 +106,115 @@ fn voice_transition_event(event_kind: &str, previous: Option<&Value>, current: &
     })
 }
 
+fn attach_event_room_snapshot(
+    event: &mut Value,
+    previous: Option<&Value>,
+    current: &Value,
+    after_occupants: &[Value],
+) -> Result<()> {
+    let event_kind = first_value_string(event, &["event_kind", "kind"]);
+    let before_occupants = match event_kind.as_str() {
+        "participant_joined" | "participant_moved" => {
+            occupants_without_user(after_occupants, &voice_state_user_id(current))
+        }
+        "participant_left" => occupants_with_state(
+            after_occupants,
+            previous.context("participant_left event is missing previous voice state")?,
+        ),
+        "participant_mute_changed"
+        | "participant_deafen_changed"
+        | "participant_stream_changed"
+        | "participant_video_changed"
+        | "participant_suppress_changed" => occupants_with_state(
+            after_occupants,
+            previous.context("voice flag change event is missing previous voice state")?,
+        ),
+        _ => after_occupants.to_vec(),
+    };
+    let snapshot = json!({
+        "before": room_snapshot(before_occupants),
+        "after": room_snapshot(after_occupants.to_vec()),
+    });
+    if let Some(object) = event.as_object_mut() {
+        object.insert("event_room".to_string(), snapshot);
+    }
+    Ok(())
+}
+
+fn room_snapshot(occupants: Vec<Value>) -> Value {
+    let participants = room_participant_map(&occupants);
+    json!({
+        "liveOccupants": occupants,
+        "participants": participants,
+    })
+}
+
+fn room_participant_map(occupants: &[Value]) -> BTreeMap<String, Value> {
+    occupants
+        .iter()
+        .filter_map(|occupant| {
+            let user_id = voice_state_user_id(occupant);
+            (!user_id.is_empty()).then(|| {
+                (
+                    user_id.clone(),
+                    json!({
+                        "present": true,
+                        "user_id": user_id,
+                        "display_name": first_value_string(occupant, &["display_name", "member_display_name", "global_name", "globalName", "username"]),
+                        "username": first_value_string(occupant, &["username"]),
+                    }),
+                )
+            })
+        })
+        .collect()
+}
+
+fn occupants_without_user(occupants: &[Value], user_id: &str) -> Vec<Value> {
+    sorted_occupants(
+        occupants
+            .iter()
+            .filter(|occupant| voice_state_user_id(occupant) != user_id)
+            .cloned()
+            .collect(),
+    )
+}
+
+fn occupants_with_state(occupants: &[Value], state: &Value) -> Vec<Value> {
+    let user_id = voice_state_user_id(state);
+    let mut with_state = occupants_without_user(occupants, &user_id);
+    with_state.push(state.clone());
+    sorted_occupants(with_state)
+}
+
+fn sorted_occupants(mut occupants: Vec<Value>) -> Vec<Value> {
+    occupants.sort_by(|left, right| {
+        occupant_sort_key(left)
+            .cmp(&occupant_sort_key(right))
+            .then_with(|| voice_state_user_id(left).cmp(&voice_state_user_id(right)))
+    });
+    occupants
+}
+
+fn occupant_sort_key(occupant: &Value) -> String {
+    non_empty(
+        first_value_string(
+            occupant,
+            &[
+                "display_name",
+                "member_display_name",
+                "global_name",
+                "globalName",
+                "username",
+            ],
+        ),
+        voice_state_user_id(occupant),
+    )
+}
+
+fn voice_state_user_id(state: &Value) -> String {
+    first_value_string(state, &["user_id", "userId", "speaker_user_id"])
+}
+
 fn voice_flag_changes(
     previous: Option<&Value>,
     current: &Value,
@@ -411,9 +520,25 @@ impl TimelineStore {
             previous
         };
 
-        let mut appended = Vec::new();
-        for (voice_channel_id, event) in voice_state_transition_events(previous.as_ref(), &current)
+        let transition_events = voice_state_transition_events(previous.as_ref(), &current);
+        let mut after_occupants_by_channel = BTreeMap::new();
+        for voice_channel_id in transition_events
+            .iter()
+            .map(|(voice_channel_id, _)| voice_channel_id.clone())
+            .collect::<BTreeSet<_>>()
         {
+            after_occupants_by_channel.insert(
+                voice_channel_id.clone(),
+                self.room_occupants(&guild_id, &voice_channel_id).await?,
+            );
+        }
+
+        let mut appended = Vec::new();
+        for (voice_channel_id, mut event) in transition_events {
+            let after_occupants = after_occupants_by_channel
+                .get(&voice_channel_id)
+                .with_context(|| format!("missing room occupants for {voice_channel_id}"))?;
+            attach_event_room_snapshot(&mut event, previous.as_ref(), &current, after_occupants)?;
             appended.push(
                 self.append_participant_event(&guild_id, &voice_channel_id, event)
                     .await?,

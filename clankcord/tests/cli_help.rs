@@ -26,6 +26,7 @@ fn top_level_help_describes_command_groups_and_agent_workflows() {
     assert!(help.contains("Common agent workflows"));
     assert!(help.contains("clankcord responses send <<'EOF'"));
     assert!(help.contains("clankcord automations validate < automation.json"));
+    assert!(help.contains("clankcord feedback submit <<'EOF'"));
 }
 
 #[test]
@@ -64,4 +65,15 @@ fn automation_stdin_flag_is_rejected_before_runtime_submission() {
     let output = clankcord(&["automations", "create", "--stdin"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("unexpected argument '--stdin'"));
+}
+
+#[test]
+fn feedback_help_uses_stdin_or_file_body_transport() {
+    let output = clankcord(&["feedback", "submit", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    assert!(help.contains("Record feedback text in the current room timeline"));
+    assert!(help.contains("--file <PATH>"));
+    assert!(!help.contains("--content"));
+    assert!(!help.contains("--stdin"));
 }

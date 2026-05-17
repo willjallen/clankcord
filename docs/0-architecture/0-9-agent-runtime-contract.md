@@ -36,7 +36,7 @@ The CLI uses these variables for agent-friendly defaults. `responses send`, `res
 
 ## Prompt
 
-The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The master instructions describe Clankcord authority boundaries, the CLI surface, response behavior, private DM handling, automation workflow, web research policy, and runtime-work commands.
+The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The master instructions describe Clankcord authority boundaries, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
 
 The per-job prompt is compact and stable. It contains job identity, session identity, guild, voice channel, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
 
@@ -69,7 +69,7 @@ The context note tells the agent to fetch more history when the request depends 
 
 ## Preflight
 
-Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, response sending, member resolution, room occupants, and automation creation/spec commands.
+Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, response sending, feedback submission, member resolution, room occupants, and automation creation/spec commands.
 
 Preflight results are stored with the agent-task metadata. They make tool-surface failures visible in job inspection and the debug dashboard.
 
