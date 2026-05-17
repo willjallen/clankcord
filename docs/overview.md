@@ -34,19 +34,20 @@ Runtime code owns policy. Adapters own external mechanics. A Discord gateway mod
 
 ## Reading Order
 
-The architecture sequence starts with jobs because every subsystem eventually touches them. Runtime service and timeline store define process lifetime and durability. Adapter, voice, agent, automation, command, transcript, and privacy chapters then describe the main workflows.
+The architecture sequence starts with jobs because every subsystem eventually touches them. Runtime service, timeline store, and database architecture define process lifetime, durability, and storage behavior. Adapter, voice, agent, automation, command, transcript, and privacy chapters then describe the main workflows.
 
 1. [Jobs](0-architecture/0-0-jobs.md)
 2. [Runtime Service](0-architecture/0-1-runtime-service.md)
 3. [Timeline Store](0-architecture/0-2-timeline-store.md)
-4. [Adapters](0-architecture/0-3-adapters.md)
-5. [Voice And Wake](0-architecture/0-4-voice-and-wake.md)
-6. [Agents And Sessions](0-architecture/0-5-agents-and-sessions.md)
-7. [Automations](0-architecture/0-6-automations.md)
-8. [Command Surfaces](0-architecture/0-7-command-surfaces.md)
-9. [Transcripts And Publications](0-architecture/0-8-transcripts-and-publications.md)
-10. [Agent Runtime Contract](0-architecture/0-9-agent-runtime-contract.md)
-11. [Privacy And Retention](0-architecture/0-10-privacy-and-retention.md)
+4. [Database Architecture](0-architecture/0-3-database-architecture.md)
+5. [Adapters](0-architecture/0-4-adapters.md)
+6. [Voice And Wake](0-architecture/0-5-voice-and-wake.md)
+7. [Agents And Sessions](0-architecture/0-6-agents-and-sessions.md)
+8. [Automations](0-architecture/0-7-automations.md)
+9. [Command Surfaces](0-architecture/0-8-command-surfaces.md)
+10. [Transcripts And Publications](0-architecture/0-9-transcripts-and-publications.md)
+11. [Agent Runtime Contract](0-architecture/0-10-agent-runtime-contract.md)
+12. [Privacy And Retention](0-architecture/0-11-privacy-and-retention.md)
 
 Reference documents live under [1-reference](1-reference/README.md). They describe exact JSON and CLI-facing contracts, including the automation spec printed by `clankcord automations spec`.
 
