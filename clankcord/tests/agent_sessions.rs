@@ -311,7 +311,7 @@ async fn search_returns_retired_sessions_with_resume_command() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn agent_session_thread_intro_uses_room_name_and_voice_occupants() {
+async fn agent_session_thread_uses_readable_default_name_and_intro() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());
     let store = common::test_store(&raw.path().join("voice")).await;
@@ -323,7 +323,7 @@ async fn agent_session_thread_intro_uses_room_name_and_voice_occupants() {
         .record_voice_state_update(None, voice_state("code", "user-b", "Nia"))
         .await
         .unwrap();
-    let created_at = Utc::now();
+    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
     let max_active_until = created_at + chrono::Duration::hours(8);
     store
         .create_agent_session_record(AgentSessionRecord::new_voice_starting(
@@ -367,6 +367,7 @@ async fn agent_session_thread_intro_uses_room_name_and_voice_occupants() {
     let JobPayload::DiscordForumThreadCreate(payload) = &thread_create.payload else {
         panic!("expected forum thread create payload");
     };
+    assert_eq!(payload.name, "Code Lounge 2026-05-17 03:28");
     assert!(payload.content.contains("- Voice channel: `Code Lounge`"));
     assert!(
         payload
@@ -419,7 +420,7 @@ async fn maintenance_queues_one_thread_title_refresh_after_two_visible_agent_res
     assert_eq!(payload.agent_session_id, "ags_title");
     assert_eq!(payload.discord_thread_id, "thread-1");
     assert_eq!(payload.response_count, 2);
-    assert_eq!(payload.current_thread_name, "agent code ags_title");
+    assert_eq!(payload.current_thread_name, "Code Lounge 2026-05-17 03:28");
 
     let completed = store.get_job(&maintenance.id).await.unwrap();
     let output = completed.metadata.output.unwrap().to_json();
@@ -505,7 +506,7 @@ fn voice_state(channel_id: &str, user_id: &str, display_name: &str) -> serde_jso
 }
 
 async fn insert_active_thread_session(store: &TimelineStore, id: &str) {
-    let created_at = Utc::now();
+    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
     let max_active_until = created_at + chrono::Duration::hours(8);
     store
         .create_agent_session_record(AgentSessionRecord::new_voice(

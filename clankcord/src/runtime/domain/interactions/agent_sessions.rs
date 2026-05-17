@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use anyhow::Context;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
@@ -222,10 +224,7 @@ impl Runtime {
                         payload.requested_by_user_id.clone(),
                         DiscordForumThreadCreatePayload {
                             parent_channel_id: payload.discord_parent_channel_id.clone(),
-                            name: agent_thread_name(
-                                &payload.voice_channel_id,
-                                &payload.agent_session_id,
-                            ),
+                            name: self.default_agent_thread_name(&record).await?,
                             content: self
                                 .agent_thread_content(
                                     &payload.guild_id,
@@ -448,10 +447,7 @@ impl Runtime {
                         payload.requested_by_user_id.clone(),
                         DiscordForumThreadCreatePayload {
                             parent_channel_id: record.discord_parent_channel_id.clone(),
-                            name: agent_thread_name(
-                                &record.voice_channel_id,
-                                &record.agent_session_id,
-                            ),
+                            name: self.default_agent_thread_name(&record).await?,
                             content: self
                                 .agent_thread_content(
                                     &record.guild_id,
@@ -764,6 +760,22 @@ impl Runtime {
             room.channel_name, requested_by, agent_session_id
         ))
     }
+
+    pub(crate) async fn default_agent_thread_name(
+        &self,
+        record: &AgentSessionRecord,
+    ) -> Result<String> {
+        let room = self
+            .room_for_channel_ids(&record.guild_id, &record.voice_channel_id, None)
+            .await?;
+        let created_at = parse_instant(&record.created_at).with_context(|| {
+            format!(
+                "agent session {} has invalid created_at `{}`",
+                record.agent_session_id, record.created_at
+            )
+        })?;
+        Ok(agent_thread_name(&room.channel_name, created_at))
+    }
 }
 
 fn agent_session_max_active_seconds() -> i64 {
@@ -782,8 +794,19 @@ fn trim_thread_name(value: &str) -> String {
     trimmed.chars().take(DISCORD_THREAD_NAME_LIMIT).collect()
 }
 
-pub(crate) fn agent_thread_name(voice_channel_id: &str, agent_session_id: &str) -> String {
-    trim_thread_name(&format!("agent {voice_channel_id} {agent_session_id}"))
+fn agent_thread_name(voice_channel_name: &str, created_at: DateTime<Utc>) -> String {
+    let timestamp = created_at
+        .with_timezone(&config::local_tz())
+        .format("%Y-%m-%d %H:%M")
+        .to_string();
+    let suffix = format!(" {timestamp}");
+    let room_name_limit = DISCORD_THREAD_NAME_LIMIT.saturating_sub(suffix.chars().count());
+    let room_name = voice_channel_name
+        .trim()
+        .chars()
+        .take(room_name_limit)
+        .collect::<String>();
+    trim_thread_name(&format!("{room_name}{suffix}"))
 }
 
 fn agent_session_resume_command(record: &AgentSessionRecord) -> String {

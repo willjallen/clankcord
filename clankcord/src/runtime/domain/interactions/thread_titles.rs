@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::agent_sessions::agent_thread_name;
 use super::prompts::{
     render_agent_thread_title_prompt_from_dir, render_configured_agent_thread_title_prompt,
 };
@@ -74,12 +73,10 @@ impl Runtime {
             if response_count < last_attempt_count.saturating_add(THREAD_TITLE_RESPONSE_INTERVAL) {
                 continue;
             }
-            let current_thread_name = self
-                .latest_agent_thread_title(&record)
-                .await?
-                .unwrap_or_else(|| {
-                    agent_thread_name(&record.voice_channel_id, &record.agent_session_id)
-                });
+            let current_thread_name = match self.latest_agent_thread_title(&record).await? {
+                Some(title) => title,
+                None => self.default_agent_thread_name(&record).await?,
+            };
             jobs.push(Job::agent_thread_title_refresh(
                 source_job.id.clone(),
                 record.agent_session_id,
