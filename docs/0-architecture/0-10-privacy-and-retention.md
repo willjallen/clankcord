@@ -23,11 +23,11 @@ The user-facing state is carried through durable or rendered fields. `control.li
 
 ## Pause, Resume, And Deafen
 
-`pause_listening` sets `listening_paused_until` on the Postgres room-control record and appends `listening_paused`. The built-in room-placement automation reads that marker from the timeline store, treats the room as undesired for capture while the marker is active, and emits leave work for an assigned voice bot.
+`pause_listening` sets `listening_paused_until` on the Postgres room-control record and appends `listening_paused`.
 
-`resume_listening` clears `listening_paused_until`, appends `listening_resumed`, and creates an undeafen cue playback job for the active room when applicable.
+`resume_listening` clears `listening_paused_until`, appends `listening_resumed`, creates `discord_voice_deafen(false)` for the active session when one exists, and creates an undeafen cue playback job for the active room when applicable.
 
-`deafen_listening` plays the deafen cue and sets the room pause marker for the manual leave cooldown duration. Voice capture drops packets while an active session is in `deafened_paused` mode, and room placement can release the voice bot according to the active controls.
+`deafen_listening` creates `discord_voice_deafen(true)` for the active session when one exists, plays the deafen cue, and sets the room pause marker for the manual leave cooldown duration. Voice capture drops packets while an active session is in `deafened_paused` mode. The voice bot remains in the room until an explicit leave command or Discord-side disconnect ends the session.
 
 The `/deafen` and `/undeafen` Discord slash commands lower to `deafen_listening` and `resume_listening` for the invoking user's current voice room.
 

@@ -1186,6 +1186,7 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::DiscordVoiceLeave
         | crate::runtime::JobKind::DiscordVoicePlayback
         | crate::runtime::JobKind::DiscordVoiceMute
+        | crate::runtime::JobKind::DiscordVoiceDeafen
         | crate::runtime::JobKind::DiscordVoicePlayAudio => "voice_control",
         crate::runtime::JobKind::TextDelivery
         | crate::runtime::JobKind::ConfirmationRequired
@@ -1331,6 +1332,9 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::DiscordVoiceMute(payload) => {
             format!("voice:session:{}", payload.session_id)
         }
+        crate::runtime::JobPayload::DiscordVoiceDeafen(payload) => {
+            format!("voice:session:{}", payload.session_id)
+        }
         crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => {
             format!("voice:session:{}", payload.session_id)
         }
@@ -1363,6 +1367,7 @@ fn source_job_id(job: &Job) -> String {
         }
         crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
+        crate::runtime::JobPayload::DiscordVoiceDeafen(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::VoiceStatusSync(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::DiscordVoiceStatusSnapshot(payload) => {

@@ -7,24 +7,25 @@ mod util;
 pub use kind::{JobKind, JobState};
 pub use output::{
     AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordTextSendOutput,
-    DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, DiscordVoiceStatusSnapshotOutput,
-    JobCreatedOutput, JobFailure, JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
-    TextDeliveryOutput, TranscriptPublicationOutput,
+    DiscordVoiceDeafenOutput, DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput,
+    DiscordVoiceMuteOutput, DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput,
+    DiscordVoiceStatusSnapshotOutput, JobCreatedOutput, JobFailure, JobOutput,
+    RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
+    TranscriptPublicationOutput,
 };
 pub use payload::{
     AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
     BinaryPayload, CommandAction, CommandArguments, CommandKind, CommandPayload, CommandRequest,
     ConfirmationContext, ConfirmationRequiredPayload, DiscordForumThreadCreatePayload,
     DiscordSlashCommandPayload, DiscordTextMessagePayload, DiscordTextSendPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload,
-    DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobPayload, OpaqueValue,
-    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
+    DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
+    JobPayload, OpaqueValue, RefineTranscriptPayload, RoomAgentPlacementAction,
+    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
+    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
+    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

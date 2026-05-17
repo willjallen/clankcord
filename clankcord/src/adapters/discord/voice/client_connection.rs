@@ -188,6 +188,20 @@ pub(super) async fn set_voice_mute(voice: Arc<Songbird>, guild_id: u64, muted: b
         .map_err(|error| anyhow!("failed to set voice mute={muted}: {error}"))
 }
 
+pub(super) async fn set_voice_deafen(
+    voice: Arc<Songbird>,
+    guild_id: u64,
+    deafened: bool,
+) -> Result<()> {
+    let call = voice
+        .get(GuildId::new(guild_id))
+        .ok_or_else(|| anyhow!("voice call for guild {guild_id} is not active"))?;
+    let mut call = call.lock().await;
+    call.deafen(deafened)
+        .await
+        .map_err(|error| anyhow!("failed to set voice deafen={deafened}: {error}"))
+}
+
 pub(super) async fn play_voice_file(
     voice: Arc<Songbird>,
     guild_id: u64,

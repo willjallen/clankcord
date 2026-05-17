@@ -7,7 +7,7 @@ use clankcord::runtime::automations::{
 use clankcord::runtime::timeline::TimelineStore;
 use clankcord::runtime::{
     CommandRequest, Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind,
+    TextTarget, TextTargetKind, VoiceBotStatus,
 };
 
 mod common;
@@ -470,6 +470,25 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
             .unwrap()
             .state,
         AutomationState::Expired
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_is_disabled() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    assert_eq!(result["createdJobs"], json!([]));
+    assert!(
+        store
+            .list_jobs_by_scope_kind("guild", "code", JobKind::RoomAgentPlacement)
+            .await
+            .unwrap()
+            .is_empty()
     );
 }
 
@@ -1286,4 +1305,20 @@ fn voice_state(voice_channel_id: &str, user_id: &str, display_name: &str) -> Val
         "self_video": false,
         "suppress": false,
     })
+}
+
+fn ready_bot() -> VoiceBotStatus {
+    VoiceBotStatus {
+        bot_id: "clanky-vc1".to_string(),
+        ready: true,
+        current_guild_id: String::new(),
+        current_channel_id: String::new(),
+        last_error: String::new(),
+        pending_disconnect_events: 0,
+        pending_disconnect_until: 0,
+        user_id: "bot-user".to_string(),
+        username: "Clanky".to_string(),
+        gateway_running: true,
+        receive_backend: "songbird".to_string(),
+    }
 }

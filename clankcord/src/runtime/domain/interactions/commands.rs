@@ -165,6 +165,15 @@ impl Runtime {
                 self.resume_room(&room, &command.requested_by_user_id)
                     .await?;
                 let _ = self
+                    .create_voice_deafen_job_for_room(
+                        &room,
+                        &command.requested_by_user_id,
+                        false,
+                        "resume_listening",
+                        &parent_job.id,
+                    )
+                    .await?;
+                let _ = self
                     .create_voice_playback_job_for_room(
                         &room,
                         &command.requested_by_user_id,
@@ -180,6 +189,15 @@ impl Runtime {
             "deafen_listening" => {
                 let room = self
                     .room_for_identifier(Some(&target_room_identifier))
+                    .await?;
+                let _ = self
+                    .create_voice_deafen_job_for_room(
+                        &room,
+                        &command.requested_by_user_id,
+                        true,
+                        "deafen_listening",
+                        &parent_job.id,
+                    )
                     .await?;
                 let _ = self
                     .create_voice_playback_job_for_room(

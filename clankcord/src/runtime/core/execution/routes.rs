@@ -104,6 +104,11 @@ where
                 .execute_discord_voice_mute_job(payload, external_api)
                 .await
         }
+        JobPayload::DiscordVoiceDeafen(payload) => {
+            runtime
+                .execute_discord_voice_deafen_job(payload, external_api)
+                .await
+        }
         JobPayload::DiscordVoicePlayAudio(payload) => {
             runtime
                 .execute_discord_voice_play_audio_job(payload, external_api)

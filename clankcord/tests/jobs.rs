@@ -9,13 +9,13 @@ use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordSlashCommandPayload, DiscordTextMessagePayload,
-    DiscordTextSendPayload, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput,
-    DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobPayload, JobState,
-    RefineTranscriptPayload, RoomConfig, Runtime, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload,
-    WakeProbePayload,
+    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
+    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime,
+    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -1155,6 +1155,36 @@ async fn discord_voice_jobs_are_first_class_binary_jobs() {
     assert!(matches!(
         completed.metadata.output,
         Some(JobOutput::DiscordVoiceMute(_))
+    ));
+
+    let deafen = Job::discord_voice_deafen(
+        "guild",
+        "code",
+        "user-a",
+        DiscordVoiceDeafenPayload {
+            session_id: "cap_1".to_string(),
+            deafened: true,
+            source_job_id: "job_parent".to_string(),
+            reason: "deafen_listening".to_string(),
+        },
+    );
+    let decoded = Job::decode(&deafen.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordVoiceDeafen);
+    assert!(decoded.discord_voice_deafen_payload().unwrap().deafened);
+
+    let mut completed = decoded;
+    completed.metadata.output = Some(JobOutput::DiscordVoiceDeafen(DiscordVoiceDeafenOutput {
+        session_id: "cap_1".to_string(),
+        deafened: true,
+        status: "set".to_string(),
+        guild_id: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        message: String::new(),
+    }));
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordVoiceDeafen(_))
     ));
 
     let play_audio = Job::discord_voice_play_audio(

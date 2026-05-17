@@ -10,14 +10,14 @@ use super::{
     AgentSessionStartPayload, AgentTaskPayload, AudioSegmentPayload, AutomationEvaluationPayload,
     BinaryPayload, CommandPayload, CommandRequest, ConfirmationContext,
     ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceJoinPayload,
-    DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
-    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
-    TextDeliveryPayload, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload,
+    EphemeralJobGcPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
+    RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
+    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -679,6 +679,21 @@ impl Job {
         )
     }
 
+    pub fn discord_voice_deafen(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordVoiceDeafenPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordVoiceDeafen(payload),
+        )
+    }
+
     pub fn discord_voice_play_audio(
         guild_id: impl Into<String>,
         voice_channel_id: impl Into<String>,
@@ -1017,6 +1032,13 @@ impl Job {
     pub fn discord_voice_mute_payload(&self) -> Option<&DiscordVoiceMutePayload> {
         match &self.payload {
             JobPayload::DiscordVoiceMute(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_voice_deafen_payload(&self) -> Option<&DiscordVoiceDeafenPayload> {
+        match &self.payload {
+            JobPayload::DiscordVoiceDeafen(payload) => Some(payload),
             _ => None,
         }
     }

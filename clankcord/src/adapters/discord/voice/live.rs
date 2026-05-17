@@ -17,7 +17,7 @@ use crate::Result;
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
-    load_client_token_specs, parse_discord_id, play_voice_file, set_voice_mute,
+    load_client_token_specs, parse_discord_id, play_voice_file, set_voice_deafen, set_voice_mute,
 };
 use crate::adapters::discord::voice::session::WakeProbeConfig;
 use crate::adapters::discord::voice::types::LiveVoiceSession;
@@ -25,10 +25,11 @@ use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
 use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
 use crate::runtime::{
-    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
-    RuntimeJobSink, VoiceBotStatus, log,
+    DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
+    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, RuntimeJobSink, VoiceBotStatus,
+    log,
 };
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
@@ -379,6 +380,62 @@ impl LiveVoiceAdapter {
         Ok(DiscordVoiceMuteOutput {
             session_id,
             muted: request.muted,
+            status: "set".to_string(),
+            guild_id: session.guild_id,
+            voice_channel_id: session.voice_channel_id,
+            message: String::new(),
+        })
+    }
+
+    pub(crate) async fn set_session_deafen(
+        self: &Arc<Self>,
+        request: DiscordVoiceDeafenPayload,
+    ) -> Result<DiscordVoiceDeafenOutput> {
+        let session_id = request.session_id.clone();
+        let Some(live_session) = self.session(&session_id).await else {
+            return Ok(DiscordVoiceDeafenOutput {
+                session_id,
+                status: "missing_session".to_string(),
+                deafened: request.deafened,
+                guild_id: String::new(),
+                voice_channel_id: String::new(),
+                message: "Voice session is not active.".to_string(),
+            });
+        };
+
+        let session = {
+            let mut live_session = live_session.lock().await;
+            if request.deafened {
+                live_session.set_deafened(true);
+            }
+            live_session.metadata(local_tz())
+        };
+        if request.deafened {
+            self.persist_capture_session_status(&session).await;
+        }
+
+        let voice = {
+            let clients = self.voice_clients_lock.lock().await;
+            let client = clients.get(&session.bot_id).ok_or_else(|| {
+                discord_tool_error(format!("voice bot {} is not running", session.bot_id))
+            })?;
+            client.voice()
+        };
+        let guild_id = parse_discord_id("guild_id", &session.guild_id)?;
+        set_voice_deafen(voice, guild_id, request.deafened).await?;
+
+        let session = {
+            let mut live_session = live_session.lock().await;
+            if !request.deafened {
+                live_session.set_deafened(false);
+            }
+            live_session.metadata(local_tz())
+        };
+        self.persist_capture_session_status(&session).await;
+
+        Ok(DiscordVoiceDeafenOutput {
+            session_id,
+            deafened: request.deafened,
             status: "set".to_string(),
             guild_id: session.guild_id,
             voice_channel_id: session.voice_channel_id,

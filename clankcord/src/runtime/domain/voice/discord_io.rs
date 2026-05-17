@@ -2,8 +2,8 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::{
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioPayload, JobOutput, Runtime,
+    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, JobOutput, Runtime,
 };
 
 impl Runtime {
@@ -41,6 +41,18 @@ impl Runtime {
     {
         let output = external_api.discord_voice_mute(payload.clone()).await?;
         Ok(JobDecision::Complete(JobOutput::DiscordVoiceMute(output)))
+    }
+
+    pub(crate) async fn execute_discord_voice_deafen_job<A>(
+        &self,
+        payload: &DiscordVoiceDeafenPayload,
+        external_api: &A,
+    ) -> Result<JobDecision>
+    where
+        A: RuntimeExternalApi,
+    {
+        let output = external_api.discord_voice_deafen(payload.clone()).await?;
+        Ok(JobDecision::Complete(JobOutput::DiscordVoiceDeafen(output)))
     }
 
     pub(crate) async fn execute_discord_voice_play_audio_job<A>(

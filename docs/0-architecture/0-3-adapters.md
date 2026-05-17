@@ -25,6 +25,7 @@ Discord IO jobs remain ordinary durable jobs. Their payloads, states, dependenci
 discord_voice_join
 discord_voice_leave
 discord_voice_mute
+discord_voice_deafen
 discord_voice_play_audio
 discord_voice_status_snapshot
 discord_text_send

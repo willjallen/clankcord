@@ -1042,6 +1042,14 @@ pub struct DiscordVoiceMutePayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceDeafenPayload {
+    pub session_id: String,
+    pub deafened: bool,
+    pub source_job_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscordVoicePlayAudioPayload {
     pub session_id: String,
     pub cue: DiscordVoicePlaybackCue,
@@ -1141,6 +1149,7 @@ pub enum JobPayload {
     StaleWakeProbeSweep(StaleWakeProbeSweepPayload),
     StaleRunningJobSweep(StaleRunningJobSweepPayload),
     EphemeralJobGc(EphemeralJobGcPayload),
+    DiscordVoiceDeafen(DiscordVoiceDeafenPayload),
 }
 
 impl JobPayload {
@@ -1174,6 +1183,7 @@ impl JobPayload {
             Self::StaleWakeProbeSweep(_) => JobKind::StaleWakeProbeSweep,
             Self::StaleRunningJobSweep(_) => JobKind::StaleRunningJobSweep,
             Self::EphemeralJobGc(_) => JobKind::EphemeralJobGc,
+            Self::DiscordVoiceDeafen(_) => JobKind::DiscordVoiceDeafen,
         }
     }
 
@@ -1188,6 +1198,7 @@ impl JobPayload {
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
+            Self::DiscordVoiceDeafen(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1221,6 +1232,7 @@ impl JobPayload {
             Self::StaleWakeProbeSweep(_) => None,
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
+            Self::DiscordVoiceDeafen(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1406,6 +1418,12 @@ impl JobPayload {
             Self::DiscordVoiceMute(payload) => json!({
                 "session_id": payload.session_id,
                 "muted": payload.muted,
+                "source_job_id": payload.source_job_id,
+                "reason": payload.reason,
+            }),
+            Self::DiscordVoiceDeafen(payload) => json!({
+                "session_id": payload.session_id,
+                "deafened": payload.deafened,
                 "source_job_id": payload.source_job_id,
                 "reason": payload.reason,
             }),

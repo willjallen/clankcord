@@ -15,6 +15,9 @@ impl Automation for RoomAgentPlacementAutomation {
     }
 
     fn evaluate(&self, context: &AutomationContext<'_>) -> Result<AutomationOutput> {
+        if !room_placement_automation_enabled() {
+            return Ok(AutomationOutput::empty());
+        }
         let voice_state = context.voice_state();
         let available_bot = has_available_voice_bot(voice_state);
         let mut output = AutomationOutput::empty();
@@ -38,6 +41,10 @@ impl Automation for RoomAgentPlacementAutomation {
         }
         Ok(output)
     }
+}
+
+fn room_placement_automation_enabled() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -4,10 +4,10 @@ use std::pin::Pin;
 use crate::Result;
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload, DiscordTextSendOutput,
-    DiscordTextSendPayload, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
-    DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload, DiscordVoiceMuteOutput,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoiceStatusSnapshotOutput,
+    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
 pub(crate) type ExternalApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -37,6 +37,11 @@ pub(crate) trait RuntimeExternalApi: Send + Sync {
         &'a self,
         payload: DiscordVoiceMutePayload,
     ) -> ExternalApiFuture<'a, DiscordVoiceMuteOutput>;
+
+    fn discord_voice_deafen<'a>(
+        &'a self,
+        payload: DiscordVoiceDeafenPayload,
+    ) -> ExternalApiFuture<'a, DiscordVoiceDeafenOutput>;
 
     fn discord_voice_play_audio<'a>(
         &'a self,

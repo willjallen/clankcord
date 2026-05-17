@@ -86,6 +86,27 @@ async fn voice_segmenter_buffers_pcm_and_drops_short_segments() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn deafened_voice_session_drops_packets_before_buffering() {
+    let raw = tempfile::tempdir().unwrap();
+    let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
+    let mut session = test_voice_session(raw.path());
+    session.mode = "deafened_paused".to_string();
+    let pcm = vec![0_u8; PCM_20MS_SILENCE.len()];
+
+    let outcome = pipeline.handle_pcm_packet(Some(&mut session), "user-a", "Will", "will", &pcm);
+    assert_eq!(outcome, AudioPipelineOutcome::Paused);
+    assert!(session.buffers.is_empty());
+    assert!(session.last_pcm_at.is_none());
+    assert_eq!(session.packet_debug["droppedPausedPcmPackets"], 1);
+
+    let outcome =
+        pipeline.handle_speaking_state(Some(&mut session), "user-a", "Will", "will", true);
+    assert_eq!(outcome, AudioPipelineOutcome::Paused);
+    assert!(session.participants.is_empty());
+    assert_eq!(session.packet_debug["droppedPausedSpeakingStates"], 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn voice_segmenter_emits_ready_wav_artifact_job_payload() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);

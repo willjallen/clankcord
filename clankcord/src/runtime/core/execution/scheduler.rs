@@ -10,7 +10,7 @@ use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 29] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -53,6 +53,11 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 28] = [
     ),
     JobExecutionPolicy::runtime_snapshot(
         JobKind::DiscordVoiceMute,
+        JobLane::VoiceControl,
+        JobOrdering::VoiceTarget,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::DiscordVoiceDeafen,
         JobLane::VoiceControl,
         JobOrdering::VoiceTarget,
     ),

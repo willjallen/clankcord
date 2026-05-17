@@ -276,6 +276,14 @@ impl LiveCaptureSession {
 
     pub(super) fn note_speaking_state(&mut self, ssrc: u32, user: CaptureUser, active: bool) {
         self.ssrc_users.insert(ssrc, user.clone());
+        if self.is_deafened() {
+            *self
+                .session
+                .packet_debug
+                .entry("deafenedSpeakingStateDrops".to_string())
+                .or_insert(0) += 1;
+            return;
+        }
         let pipeline = self.pipeline.clone();
         let session_id = self.session.session_id.clone();
         let mut handler = SessionCaptureHandler {
@@ -317,6 +325,24 @@ impl LiveCaptureSession {
         speaking: Vec<(u32, VoiceData)>,
         silent: Vec<u32>,
     ) -> Vec<Job> {
+        if self.is_deafened() {
+            *self
+                .session
+                .packet_debug
+                .entry("deafenedVoiceTicks".to_string())
+                .or_insert(0) += 1;
+            *self
+                .session
+                .packet_debug
+                .entry("deafenedSpeakingPackets".to_string())
+                .or_insert(0) += speaking.len() as i64;
+            *self
+                .session
+                .packet_debug
+                .entry("deafenedSilencePackets".to_string())
+                .or_insert(0) += silent.len() as i64;
+            return Vec::new();
+        }
         let mut touched_user_ids = BTreeSet::new();
         for (ssrc, data) in speaking {
             let user = self.ssrc_users.get(&ssrc).cloned();
@@ -349,7 +375,7 @@ impl LiveCaptureSession {
     }
 
     pub(super) fn flush_ready_buffers(&mut self, max_segment_ms: i64, silence_ms: i64) -> Vec<Job> {
-        if self.session.ended_at.is_some() || self.session.finalizing {
+        if self.session.ended_at.is_some() || self.session.finalizing || self.is_deafened() {
             return Vec::new();
         }
         let now = monotonic_seconds();
@@ -444,6 +470,27 @@ impl LiveCaptureSession {
         };
         sink.write(&mut handler, data);
         self.sink = sink;
+    }
+
+    pub(super) fn set_deafened(&mut self, deafened: bool) {
+        if deafened {
+            self.session.mode = "deafened_paused".to_string();
+            let buffered_speakers = self.session.buffers.len() as i64;
+            if buffered_speakers > 0 {
+                *self
+                    .session
+                    .packet_debug
+                    .entry("deafenedBufferDrops".to_string())
+                    .or_insert(0) += buffered_speakers;
+            }
+            self.session.buffers.clear();
+        } else if self.is_deafened() {
+            self.session.mode = "local_buffering".to_string();
+        }
+    }
+
+    pub(super) fn is_deafened(&self) -> bool {
+        self.session.mode == "deafened_paused"
     }
 }
 

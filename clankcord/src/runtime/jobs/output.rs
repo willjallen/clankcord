@@ -133,6 +133,16 @@ pub struct DiscordVoiceMuteOutput {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordVoiceDeafenOutput {
+    pub session_id: String,
+    pub deafened: bool,
+    pub status: String,
+    pub guild_id: String,
+    pub voice_channel_id: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiscordVoicePlayAudioOutput {
     pub session_id: String,
     pub cue: DiscordVoicePlaybackCue,
@@ -168,6 +178,7 @@ pub enum JobOutput {
     DiscordVoicePlayAudio(DiscordVoicePlayAudioOutput),
     DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotOutput),
     Record(BinaryPayload),
+    DiscordVoiceDeafen(DiscordVoiceDeafenOutput),
 }
 
 impl JobOutput {
@@ -330,6 +341,17 @@ impl JobOutput {
                 object.insert("kind".to_string(), json!("discord_voice_mute"));
                 object.insert("session_id".to_string(), json!(output.session_id));
                 object.insert("muted".to_string(), json!(output.muted));
+                object.insert("status".to_string(), json!(output.status));
+                insert_non_empty(&mut object, "guild_id", &output.guild_id);
+                insert_non_empty(&mut object, "voice_channel_id", &output.voice_channel_id);
+                insert_non_empty(&mut object, "message", &output.message);
+                Value::Object(object)
+            }
+            Self::DiscordVoiceDeafen(output) => {
+                let mut object = Map::new();
+                object.insert("kind".to_string(), json!("discord_voice_deafen"));
+                object.insert("session_id".to_string(), json!(output.session_id));
+                object.insert("deafened".to_string(), json!(output.deafened));
                 object.insert("status".to_string(), json!(output.status));
                 insert_non_empty(&mut object, "guild_id", &output.guild_id);
                 insert_non_empty(&mut object, "voice_channel_id", &output.voice_channel_id);

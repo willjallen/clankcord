@@ -2,9 +2,9 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::util::single_child_of_kind;
 use crate::runtime::{
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
-    DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind, JobOutput, JobState,
-    RoomConfig, Runtime, VoiceCaptureSessionStatus,
+    DiscordVoiceDeafenPayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
+    JobOutput, JobState, RoomConfig, Runtime, VoiceCaptureSessionStatus,
 };
 
 impl Runtime {
@@ -147,6 +147,37 @@ impl Runtime {
             source_job_id,
         )
         .await
+    }
+
+    pub(crate) async fn create_voice_deafen_job_for_room(
+        &self,
+        room: &RoomConfig,
+        requested_by_user_id: &str,
+        deafened: bool,
+        reason: &str,
+        source_job_id: &str,
+    ) -> Result<Option<Job>> {
+        let Some(session) = self
+            .active_session_for_channel(&room.guild_id, &room.channel_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(
+            self.timeline_store
+                .create_job(Job::discord_voice_deafen(
+                    session.guild_id,
+                    session.voice_channel_id,
+                    requested_by_user_id.to_string(),
+                    DiscordVoiceDeafenPayload {
+                        session_id: session.session_id,
+                        deafened,
+                        source_job_id: source_job_id.to_string(),
+                        reason: reason.to_string(),
+                    },
+                ))
+                .await?,
+        ))
     }
 
     pub(crate) async fn active_session_for_channel(

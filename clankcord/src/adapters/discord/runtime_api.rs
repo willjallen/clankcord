@@ -5,10 +5,10 @@ use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::runtime::domain::external::{ExternalApiFuture, RuntimeExternalApi};
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload, DiscordTextSendOutput,
-    DiscordTextSendPayload, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
-    DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload, DiscordVoiceMuteOutput,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoiceStatusSnapshotOutput,
+    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
 #[derive(Clone)]
@@ -58,6 +58,15 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
         payload: DiscordVoiceMutePayload,
     ) -> ExternalApiFuture<'a, DiscordVoiceMuteOutput> {
         Box::pin(async move { LiveVoiceAdapter::set_session_mute(&self.live_voice, payload).await })
+    }
+
+    fn discord_voice_deafen<'a>(
+        &'a self,
+        payload: DiscordVoiceDeafenPayload,
+    ) -> ExternalApiFuture<'a, DiscordVoiceDeafenOutput> {
+        Box::pin(
+            async move { LiveVoiceAdapter::set_session_deafen(&self.live_voice, payload).await },
+        )
     }
 
     fn discord_voice_play_audio<'a>(
