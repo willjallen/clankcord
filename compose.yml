@@ -51,6 +51,8 @@ services:
     restart: unless-stopped
     user: "${CLANKCORD_UID:-1000}:${CLANKCORD_GID:-1000}"
     network_mode: host
+    environment:
+      CLANKCORD_CODEX_BYPASS_SANDBOX: "${CLANKCORD_CODEX_BYPASS_SANDBOX:-}"
     depends_on:
       postgres:
         condition: service_healthy

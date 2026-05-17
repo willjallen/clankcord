@@ -36,6 +36,7 @@ home = "/codex"
 workdir = "/workspace/clankcord"
 task_model = ""
 sandbox = ""
+# Docker deployments can set CLANKCORD_CODEX_BYPASS_SANDBOX=true in .env.
 bypass_sandbox = false
 approval_policy = "never"
 

@@ -285,10 +285,36 @@ fn config_file_path() -> Result<PathBuf> {
 
 fn load_app_config(path: &Path) -> Result<AppConfig> {
     let text = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let config = toml::from_str::<AppConfig>(&text)
+    let mut config = toml::from_str::<AppConfig>(&text)
         .with_context(|| format!("parsing {}", path.display()))?;
+    apply_env_overrides(&mut config)?;
     validate_config(&config)?;
     Ok(config)
+}
+
+fn apply_env_overrides(config: &mut AppConfig) -> Result<()> {
+    if let Some(value) = env_bool("CLANKCORD_CODEX_BYPASS_SANDBOX")? {
+        config.codex.bypass_sandbox = value;
+    }
+    Ok(())
+}
+
+fn env_bool(key: &str) -> Result<Option<bool>> {
+    let Ok(value) = env::var(key) else {
+        return Ok(None);
+    };
+    let normalized = value.trim().to_ascii_lowercase();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+    let parsed = match normalized.as_str() {
+        "true" | "1" | "yes" | "on" => true,
+        "false" | "0" | "no" | "off" => false,
+        _ => {
+            anyhow::bail!("invalid {key} `{value}`: expected true or false");
+        }
+    };
+    Ok(Some(parsed))
 }
 
 fn validate_config(config: &AppConfig) -> Result<()> {
