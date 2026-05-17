@@ -389,12 +389,11 @@ impl TimelineStore {
         set_default_string(&mut payload, "event_kind", &kind);
         set_default_string(&mut payload, "kind", &kind);
         let payload_value = Value::Object(payload.clone());
-        let started_ms =
-            event_started_ms(&payload_value).or_else(|| instant_ms_str(Some(&created_at)));
-        let ended_ms = event_ended_ms(&payload_value).or(started_ms);
-        let created_ms = instant_ms_str(Some(&created_at))
-            .or(started_ms)
+        let started_ms = event_started_ms(&payload_value)
+            .or_else(|| instant_ms_str(Some(&created_at)))
             .unwrap_or_else(|| instant_ms_dt(utc_now()));
+        let ended_ms = event_ended_ms(&payload_value).unwrap_or(started_ms);
+        let created_ms = instant_ms_str(Some(&created_at)).unwrap_or(started_ms);
         let text = event_text(&payload_value);
         let speaker = first_string(&payload, &["speaker_user_id", "speakerId", "user_id"]);
         let speaker_label = if !speaker.is_empty() || SPEECH_KINDS.contains(&kind.as_str()) {
@@ -698,18 +697,18 @@ impl TimelineStore {
         }
         if let Some(start) = start {
             query
-                .push(" AND COALESCE(e.ended_at_ms, e.started_at_ms, e.created_at_ms) > ")
+                .push(" AND e.ended_at_ms > ")
                 .push_bind(instant_ms_dt(start));
         }
         if let Some(end) = end {
             query
-                .push(" AND COALESCE(e.started_at_ms, e.created_at_ms) < ")
+                .push(" AND e.started_at_ms < ")
                 .push_bind(instant_ms_dt(end));
         }
         if !include_forgotten {
             query.push(" AND e.forgotten = FALSE");
         }
-        query.push(" ORDER BY COALESCE(e.started_at_ms, e.created_at_ms), e.sequence, e.event_id");
+        query.push(" ORDER BY e.started_at_ms, e.sequence, e.event_id");
         let rows = query.build().fetch_all(&self.pool).await?;
         rows.iter().map(timeline_event_payload).collect()
     }

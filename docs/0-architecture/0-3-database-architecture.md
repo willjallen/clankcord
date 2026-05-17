@@ -62,7 +62,7 @@ history-scaled path
         -> discard most rows
 ```
 
-The scheduler, room status views, dashboard health views, and transcript range readers are hot paths. They select by projected columns and apply limits before reading payload blobs where the store method provides a bounded query. Interaction context builders that call broad job-listing helpers filter decoded jobs in Rust, so those reads scale with visible job history. Historical inspection commands read broader ranges through explicit operator actions with bounded request limits.
+The scheduler, room status views, command interaction context, dashboard health views, and transcript range readers are hot paths. They select by projected columns and apply limits before reading payload blobs. Historical inspection commands read broader ranges through explicit operator actions with bounded request limits.
 
 ## Index Contracts
 
@@ -82,9 +82,15 @@ index
 global scheduler clock query
   WHERE state = 'queued'
   ORDER BY ready_at_ms, created_at_ms, job_id
+
+index
+  jobs(ready_at_ms, created_at_ms, job_id, kind)
+  WHERE state = 'queued'
 ```
 
 Boolean projections such as `terminal`, `failed`, and `ephemeral` exist because they make partial indexes and operational filters planner-visible. The state machine lives in Rust. Postgres can use a partial index when the SQL predicate carries the same projected boolean fact, such as `terminal = FALSE` for active-job indexes or `ephemeral = FALSE` for visible-job indexes.
+
+Command interaction context uses scoped partial indexes. Cancellable-job context reads visible, active, cancellable rows for one voice scope ordered by recent update time. Recent agent-task context reads scoped `agent_task` rows through partial indexes, with requester-owned rows queried first and the remaining result slots filled from non-requester rows. Both paths bound payload decoding by the command context limit.
 
 Timeline event indexes follow the same rule. Room-time reads use scope and timestamp columns in index order. Kind-filtered reads add `event_kind` after the room scope. Capture-run, conversation, and speaker reads use their projected identifiers first, then event time. Range predicates operate on stored timestamp columns so the planner can use ordinary B-tree ordering without expression indexes.
 
@@ -134,7 +140,7 @@ timeline_events
   payload_json
 ```
 
-The primary timeline access pattern is a room-scoped time range. Room-time indexes are defined over `(scope_kind, scope_id, started_at_ms, sequence)` with optional kind, capture-run, conversation, and speaker indexes for narrower views. The range loader applies event time predicates over `started_at_ms`, `ended_at_ms`, and `created_at_ms` because the table permits null start and end times. Draft transcript search loads speech and transcript event ranges, then matches event text in Rust. Refined transcript search reads authoritative span metadata from Postgres and text artifacts from durable publication storage.
+The primary timeline access pattern is a room-scoped time range. Room-time indexes are defined over `(scope_kind, scope_id, started_at_ms, sequence)` with optional kind, capture-run, conversation, and speaker indexes for narrower views. `started_at_ms` and `ended_at_ms` are required columns. Instant events store the same value in both columns. The range loader uses `ended_at_ms > range_start` and `started_at_ms < range_end`, then orders by `started_at_ms`, `sequence`, and `event_id`. Draft transcript search loads speech and transcript event ranges, then matches event text in Rust. Refined transcript search reads authoritative span metadata from Postgres and text artifacts from durable publication storage.
 
 Forgotten events remain rows with `forgotten = TRUE`. That keeps sequence, audit, and retention behavior explicit while ordinary timeline readers filter them with a projected boolean. Forget and retention operations update the projection first, then append privacy-relevant events that describe the operation.
 
@@ -149,7 +155,7 @@ payload_blob
   bincode body
 ```
 
-Job payload blobs use the `CLANKJOB` envelope. The header is a hard boundary between durable job bytes and Rust structs. It gives startup, migrations, and runtime reads a deterministic failure point before domain code executes a job record. Agent session and automation records store typed bincode blobs with queryable projection columns for selection.
+Job payload blobs use the `CLANKJOB` envelope. Automation payload blobs use `CLANKAUT`. Agent session payload blobs use `CLANKAGS`. The header is a hard boundary between durable bytes and Rust structs. Startup, migrations, and runtime reads get a deterministic failure point before domain code executes a typed record.
 
 Payload blobs are loaded by identity or after a projection query over the corresponding record table. Fields that affect scheduling, routing, lifecycle, retention, idempotency, or user-facing query filters are projected into columns.
 
@@ -161,12 +167,18 @@ Hot scheduling paths use projected columns. JSON operators appear in narrow plac
 
 ## Retention And Table Growth
 
-Retention keeps operational tables within their intended working set. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. The broader retention sweep applies a seven-day cutoff to draft speech and transcript events and a thirty-day creation-time cutoff to job rows. Draft transcript events and source audio expire through forgotten-state marking and artifact deletion. Publication artifacts remain durable publication state.
+Retention keeps operational tables within their intended working set. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. The broader retention sweep applies a seven-day cutoff to draft speech and transcript events and a thirty-day creation-time cutoff to terminal job rows through the terminal-retention index. Draft transcript events and source audio expire through forgotten-state marking and artifact deletion. Publication artifacts remain durable publication state.
 
 ```text
 ephemeral job
   terminal = TRUE
   gc_after_ms <= now
+      -> delete job row
+      -> cascade job payload and dependency edges
+
+terminal retained job
+  terminal = TRUE
+  created_at_ms < cutoff
       -> delete job row
       -> cascade job payload and dependency edges
 

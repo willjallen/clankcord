@@ -175,8 +175,8 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("guild_id", "text", false),
             column("scope_id", "text", false),
             column("event_kind", "text", false),
-            column("started_at_ms", "bigint", true),
-            column("ended_at_ms", "bigint", true),
+            column("started_at_ms", "bigint", false),
+            column("ended_at_ms", "bigint", false),
             column("created_at_ms", "bigint", false),
             column("capture_run_id", "text", false),
             column("conversation_id", "text", false),
@@ -416,15 +416,20 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
         &[
             "idx_jobs_active_ordering",
             "idx_jobs_active_visible_scope",
+            "idx_jobs_agent_task_requester_recent",
+            "idx_jobs_agent_task_scope_recent",
             "idx_jobs_audio_segment_pending_speaker",
+            "idx_jobs_cancellable_scope_recent",
             "idx_jobs_due_kind",
             "idx_jobs_ephemeral_gc",
             "idx_jobs_failed_visible",
             "idx_jobs_kind_updated",
+            "idx_jobs_queued_ready",
             "idx_jobs_recent_visible",
             "idx_jobs_scope_kind_updated",
             "idx_jobs_scope_state_kind_updated",
             "idx_jobs_state_updated",
+            "idx_jobs_terminal_retention",
             "idx_jobs_text_delivery_source",
             "idx_jobs_wake_stream_queued",
             "jobs_pkey",
@@ -587,8 +592,8 @@ impl TimelineStore {
               guild_id TEXT NOT NULL,
               scope_id TEXT NOT NULL,
               event_kind TEXT NOT NULL,
-              started_at_ms BIGINT,
-              ended_at_ms BIGINT,
+              started_at_ms BIGINT NOT NULL,
+              ended_at_ms BIGINT NOT NULL,
               created_at_ms BIGINT NOT NULL,
               capture_run_id TEXT NOT NULL DEFAULT '',
               conversation_id TEXT NOT NULL DEFAULT '',
@@ -910,12 +915,28 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_due_kind
               ON jobs(kind, ready_at_ms, created_at_ms, job_id)
               WHERE state = 'queued';
+            CREATE INDEX IF NOT EXISTS idx_jobs_queued_ready
+              ON jobs(ready_at_ms, created_at_ms, job_id, kind)
+              WHERE state = 'queued';
             CREATE INDEX IF NOT EXISTS idx_jobs_active_ordering
               ON jobs(ordering_key)
               WHERE terminal = FALSE AND ordering_key <> '';
             CREATE INDEX IF NOT EXISTS idx_jobs_active_visible_scope
               ON jobs(scope_kind, scope_id, updated_at_ms DESC, job_id)
               WHERE terminal = FALSE AND ephemeral = FALSE;
+            CREATE INDEX IF NOT EXISTS idx_jobs_cancellable_scope_recent
+              ON jobs(guild_id, scope_kind, scope_id, updated_at_ms DESC, created_at_ms DESC, job_id DESC)
+              WHERE terminal = FALSE AND ephemeral = FALSE AND cancellable = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_jobs_agent_task_scope_recent
+              ON jobs(guild_id, scope_kind, scope_id, updated_at_ms DESC, created_at_ms DESC, job_id DESC)
+              WHERE kind = 'agent_task'
+                AND ephemeral = FALSE
+                AND state IN ('queued', 'running', 'waiting', 'cancel_requested', 'complete', 'failed', 'failed_timeout');
+            CREATE INDEX IF NOT EXISTS idx_jobs_agent_task_requester_recent
+              ON jobs(guild_id, scope_kind, scope_id, requested_by_user_id, updated_at_ms DESC, created_at_ms DESC, job_id DESC)
+              WHERE kind = 'agent_task'
+                AND ephemeral = FALSE
+                AND state IN ('queued', 'running', 'waiting', 'cancel_requested', 'complete', 'failed', 'failed_timeout');
             CREATE INDEX IF NOT EXISTS idx_jobs_recent_visible
               ON jobs(updated_at_ms DESC, job_id)
               WHERE ephemeral = FALSE;
@@ -933,6 +954,9 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_ephemeral_gc
               ON jobs(gc_after_ms, job_id)
               WHERE ephemeral = TRUE AND terminal = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_jobs_terminal_retention
+              ON jobs(created_at_ms, job_id)
+              WHERE terminal = TRUE;
             CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
               ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
               WHERE kind = 'wake_probe' AND state = 'queued';

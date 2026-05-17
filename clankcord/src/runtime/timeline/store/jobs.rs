@@ -237,6 +237,7 @@ impl TimelineStore {
             SELECT DISTINCT ordering_key
             FROM jobs
             WHERE ordering_key <> ''
+              AND terminal = FALSE
               AND (
                 state IN ('running', 'cancel_requested')
                 OR (state = 'waiting' AND kind = 'agent_task')
@@ -421,6 +422,149 @@ impl TimelineStore {
         .fetch_all(&self.pool)
         .await?;
         decode_job_rows(rows)
+    }
+
+    pub async fn list_cancellable_jobs_for_scope(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.guild_id = $1
+              AND j.scope_kind = 'voice_channel'
+              AND j.scope_id = $2
+              AND j.terminal = FALSE
+              AND j.ephemeral = FALSE
+              AND j.cancellable = TRUE
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+            LIMIT $3
+            "#,
+        )
+        .bind(guild_id)
+        .bind(scope_id)
+        .bind(limit.clamp(1, 500) as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
+    pub async fn list_recent_agent_task_jobs_for_scope(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+        requester_user_id: &str,
+        limit: usize,
+    ) -> Result<Vec<Job>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let limit = limit.clamp(1, 500);
+        let requester = requester_user_id.trim();
+        if requester.is_empty() {
+            let rows = sqlx::query(
+                r#"
+                SELECT p.payload_blob
+                FROM jobs j
+                JOIN job_payloads p ON p.job_id = j.job_id
+                WHERE j.guild_id = $1
+                  AND j.scope_kind = 'voice_channel'
+                  AND j.scope_id = $2
+                  AND j.kind = 'agent_task'
+                  AND j.ephemeral = FALSE
+                  AND j.state IN (
+                    'queued',
+                    'running',
+                    'waiting',
+                    'cancel_requested',
+                    'complete',
+                    'failed',
+                    'failed_timeout'
+                  )
+                ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+                LIMIT $3
+                "#,
+            )
+            .bind(guild_id)
+            .bind(scope_id)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await?;
+            return decode_job_rows(rows);
+        }
+        let preferred_rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.guild_id = $1
+              AND j.scope_kind = 'voice_channel'
+              AND j.scope_id = $2
+              AND j.kind = 'agent_task'
+              AND j.ephemeral = FALSE
+              AND j.state IN (
+                'queued',
+                'running',
+                'waiting',
+                'cancel_requested',
+                'complete',
+                'failed',
+                'failed_timeout'
+              )
+              AND j.requested_by_user_id = $3
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+            LIMIT $4
+            "#,
+        )
+        .bind(guild_id)
+        .bind(scope_id)
+        .bind(requester)
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut jobs = decode_job_rows(preferred_rows)?;
+        if jobs.len() < limit {
+            let remaining = (limit - jobs.len()) as i64;
+            let other_rows = sqlx::query(
+                r#"
+                SELECT p.payload_blob
+                FROM jobs j
+                JOIN job_payloads p ON p.job_id = j.job_id
+                WHERE j.guild_id = $1
+                  AND j.scope_kind = 'voice_channel'
+                  AND j.scope_id = $2
+                  AND j.kind = 'agent_task'
+                  AND j.ephemeral = FALSE
+                  AND j.state IN (
+                    'queued',
+                    'running',
+                    'waiting',
+                    'cancel_requested',
+                    'complete',
+                    'failed',
+                    'failed_timeout'
+                  )
+                  AND j.requested_by_user_id <> $3
+                ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
+                LIMIT $4
+                "#,
+            )
+            .bind(guild_id)
+            .bind(scope_id)
+            .bind(requester)
+            .bind(remaining)
+            .fetch_all(&self.pool)
+            .await?;
+            jobs.extend(decode_job_rows(other_rows)?);
+        }
+        Ok(jobs)
     }
 
     pub async fn list_active_jobs_by_scope_kind(
@@ -714,6 +858,7 @@ impl TimelineStore {
                 AND speaker_user_id = $3
                 AND segment_end_ms >= $4
                 AND kind = 'audio_segment'
+                AND terminal = FALSE
                 AND state IN ('queued', 'running', 'waiting', 'cancel_requested')
             ) AS exists
             "#,
@@ -747,6 +892,7 @@ impl TimelineStore {
                 AND segment_end_ms >= $4
                 AND segment_end_ms <= $5
                 AND kind = 'audio_segment'
+                AND terminal = FALSE
                 AND state IN ('queued', 'running', 'waiting', 'cancel_requested')
             ) AS exists
             "#,

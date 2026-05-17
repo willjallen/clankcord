@@ -45,17 +45,19 @@ job_dependencies
   parent/child edges and resolution policy
 ```
 
-That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. In Clankcord `0.2.0`, `job_payloads.payload_blob` begins with the `CLANKJOB` envelope and a little-endian payload version, followed by the bincode-encoded `Job`. The envelope is decoded before the typed body, so an unsupported payload schema fails at the storage contract boundary. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
+That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. `job_payloads.payload_blob` begins with the `CLANKJOB` envelope and a little-endian payload version, followed by the bincode-encoded `Job`. The envelope is decoded before the typed body, so an unknown payload schema fails at the storage contract boundary. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
 
 ## Schema Migrations
 
-Timeline migrations are Rust modules under `timeline/migrations/` named for the Clankcord version that activates them. Version `0.2.0` is implemented in `v0_2_0.rs`. Future durable changes follow the same naming pattern, such as `v0_7_0.rs` or `v1_0_0.rs`.
+Timeline migrations are Rust modules under `timeline/migrations/` named for the Clankcord version that activates them. Version `0.2.0` is implemented in `v0_2_0.rs`. Registered durable changes use the same naming pattern, such as `v0_7_0.rs` or `v1_0_0.rs`.
 
 At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
-Automations and agent sessions follow the same pattern. Automations have queryable projections for expiry, scope, and state. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state. Both store typed payload data that Rust code validates and executes.
+The `0.4.0` migration enforces the database hard-cut performance contracts. It sets timeline event start and end times to `NOT NULL` after asserting existing rows already carry both projected times. It also asserts that automation and agent-session payload blobs use the current storage envelopes.
+
+Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 
 ## Code Layout
 
@@ -96,7 +98,7 @@ Job payloads and timeline events store the paths and checksums needed to interpr
 
 ## Events And Views
 
-Timeline events are JSONB records with stable projections for room, time, event kind, capture run, speaker, and text. Speech, wake detections, Discord text ingress, slash commands, feedback submissions, agent-session creation, automation firing, job creation, occupancy changes, participant transitions, forget, retention, publication, and refinement all enter through this event stream.
+Timeline events are JSONB records with stable projections for room, non-null start and end time, event kind, capture run, speaker, and text. Speech, wake detections, Discord text ingress, slash commands, feedback submissions, agent-session creation, automation firing, job creation, occupancy changes, participant transitions, forget, retention, publication, and refinement all enter through this event stream.
 
 The store loads ranges by guild, channel, time window, event kinds, capture run, and forgotten-state filtering. Timeline tails, transcript rendering, conversation lists, participant traces, context resolution, and dashboard diagnostics are all derived from these stored events and the records around them.
 

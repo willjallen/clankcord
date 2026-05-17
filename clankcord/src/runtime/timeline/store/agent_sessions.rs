@@ -24,7 +24,8 @@ impl TimelineStore {
                 .bind(agent_session_id)
                 .fetch_one(&self.pool)
                 .await?;
-        decode_agent_session(row.try_get("payload_blob")?)
+        let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+        AgentSessionRecord::decode(&payload_blob)
     }
 
     pub async fn maybe_agent_session_record(
@@ -36,8 +37,11 @@ impl TimelineStore {
                 .bind(agent_session_id)
                 .fetch_optional(&self.pool)
                 .await?;
-        row.map(|row| decode_agent_session(row.try_get("payload_blob")?))
-            .transpose()
+        row.map(|row| {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            AgentSessionRecord::decode(&payload_blob)
+        })
+        .transpose()
     }
 
     pub async fn active_agent_session_for_route(
@@ -60,8 +64,11 @@ impl TimelineStore {
         .bind(now_ms)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| decode_agent_session(row.try_get("payload_blob")?))
-            .transpose()
+        row.map(|row| {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            AgentSessionRecord::decode(&payload_blob)
+        })
+        .transpose()
     }
 
     pub async fn starting_agent_session_for_route(
@@ -84,8 +91,11 @@ impl TimelineStore {
         .bind(now_ms)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| decode_agent_session(row.try_get("payload_blob")?))
-            .transpose()
+        row.map(|row| {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            AgentSessionRecord::decode(&payload_blob)
+        })
+        .transpose()
     }
 
     pub async fn agent_session_for_thread(
@@ -104,8 +114,11 @@ impl TimelineStore {
         .bind(thread_id)
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| decode_agent_session(row.try_get("payload_blob")?))
-            .transpose()
+        row.map(|row| {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            AgentSessionRecord::decode(&payload_blob)
+        })
+        .transpose()
     }
 
     pub async fn list_agent_session_records(
@@ -135,7 +148,10 @@ impl TimelineStore {
         query.push_bind(limit.max(1).min(500) as i64);
         let rows = query.build().fetch_all(&self.pool).await?;
         rows.into_iter()
-            .map(|row| decode_agent_session(row.try_get("payload_blob")?))
+            .map(|row| {
+                let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+                AgentSessionRecord::decode(&payload_blob)
+            })
             .collect()
     }
 
@@ -159,7 +175,8 @@ impl TimelineStore {
             .collect::<BTreeSet<_>>();
         let mut retired = Vec::new();
         for row in rows {
-            let mut record = decode_agent_session(row.try_get("payload_blob")?)?;
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            let mut record = AgentSessionRecord::decode(&payload_blob)?;
             let reason = if instant_ms_str(Some(&record.max_active_until))
                 .map(|deadline| deadline <= now_ms)
                 .unwrap_or(false)
@@ -245,12 +262,8 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
     .bind(&record.retirement_reason)
     .bind(&record.retired_by_user_id)
     .bind(&record.resumed_from_agent_session_id)
-    .bind(bincode::serialize(record)?)
+    .bind(record.encode()?)
     .execute(pool)
     .await?;
     Ok(())
-}
-
-fn decode_agent_session(payload_blob: Vec<u8>) -> Result<AgentSessionRecord> {
-    Ok(bincode::deserialize(&payload_blob)?)
 }

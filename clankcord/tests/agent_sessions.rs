@@ -50,6 +50,49 @@ async fn agent_session_records_route_by_voice_and_thread() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn agent_session_payload_blob_uses_current_envelope() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let created_at = Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    let record = AgentSessionRecord::new_voice(
+        "ags_blob",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-blob",
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+
+    store
+        .create_agent_session_record(record.clone())
+        .await
+        .unwrap();
+    let row = sqlx::query("SELECT payload_blob FROM agent_sessions WHERE agent_session_id = $1")
+        .bind("ags_blob")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert_eq!(&payload_blob[..8], b"CLANKAGS");
+    assert_eq!(u16::from_le_bytes([payload_blob[8], payload_blob[9]]), 1);
+
+    sqlx::query("UPDATE agent_sessions SET payload_blob = $1 WHERE agent_session_id = $2")
+        .bind(bincode::serialize(&record).unwrap())
+        .bind("ags_blob")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let error = store
+        .get_agent_session_record("ags_blob")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid blob envelope"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retired_agent_sessions_stop_matching_active_route() {
     let raw = tempfile::tempdir().unwrap();
     let store = common::test_store(&raw.path().join("voice")).await;

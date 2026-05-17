@@ -8,6 +8,11 @@ use sqlx::Row;
 use crate::runtime::timeline::{TimelineStore, instant_ms_str, isoformat_z, new_id, parse_instant};
 use crate::runtime::{JobKind, JobState, Runtime, RuntimeScopeKind};
 
+const AUTOMATION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAUT";
+const AUTOMATION_PAYLOAD_BLOB_VERSION: u16 = 1;
+const AUTOMATION_PAYLOAD_BLOB_HEADER_LEN: usize =
+    AUTOMATION_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AutomationSpec {
     #[serde(default = "default_schema")]
@@ -449,12 +454,31 @@ impl AutomationRecord {
         serde_json::to_value(self).unwrap_or_else(|_| json!({}))
     }
 
-    fn encode(&self) -> Result<Vec<u8>> {
-        Ok(bincode::serialize(self)?)
+    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+        let body = bincode::serialize(self)?;
+        let mut blob = Vec::with_capacity(AUTOMATION_PAYLOAD_BLOB_HEADER_LEN + body.len());
+        blob.extend_from_slice(AUTOMATION_PAYLOAD_BLOB_MAGIC);
+        blob.extend_from_slice(&AUTOMATION_PAYLOAD_BLOB_VERSION.to_le_bytes());
+        blob.extend_from_slice(&body);
+        Ok(blob)
     }
 
-    fn decode(payload: &[u8]) -> Result<Self> {
-        Ok(bincode::deserialize(payload)?)
+    pub(crate) fn decode(payload: &[u8]) -> Result<Self> {
+        if !Self::is_current_payload_blob(payload) {
+            anyhow::bail!("automation payload has invalid blob envelope");
+        }
+        Ok(bincode::deserialize(
+            &payload[AUTOMATION_PAYLOAD_BLOB_HEADER_LEN..],
+        )?)
+    }
+
+    pub(crate) fn is_current_payload_blob(payload: &[u8]) -> bool {
+        payload.len() >= AUTOMATION_PAYLOAD_BLOB_HEADER_LEN
+            && &payload[..AUTOMATION_PAYLOAD_BLOB_MAGIC.len()] == AUTOMATION_PAYLOAD_BLOB_MAGIC
+            && u16::from_le_bytes([
+                payload[AUTOMATION_PAYLOAD_BLOB_MAGIC.len()],
+                payload[AUTOMATION_PAYLOAD_BLOB_MAGIC.len() + 1],
+            ]) == AUTOMATION_PAYLOAD_BLOB_VERSION
     }
 
     pub(crate) fn mark_evaluated(&mut self) {

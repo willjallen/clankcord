@@ -287,7 +287,6 @@ impl TimelineStore {
             WHERE e.scope_kind = 'voice_channel'
               AND e.event_kind IN ('speech_segment', 'transcript')
               AND e.forgotten = FALSE
-              AND e.started_at_ms IS NOT NULL
               AND e.started_at_ms < $1
             ORDER BY e.guild_id, e.scope_id, e.started_at_ms
             "#,
@@ -334,16 +333,14 @@ impl TimelineStore {
         }
         let job_cutoff_ms = instant_ms_dt(job_cutoff);
         let deleted_jobs = if dry_run {
-            sqlx::query(
-                "SELECT job_id FROM jobs WHERE created_at_ms IS NOT NULL AND created_at_ms < $1",
-            )
-            .bind(job_cutoff_ms)
-            .fetch_all(&self.pool)
-            .await?
-            .len()
+            sqlx::query("SELECT job_id FROM jobs WHERE terminal = TRUE AND created_at_ms < $1")
+                .bind(job_cutoff_ms)
+                .fetch_all(&self.pool)
+                .await?
+                .len()
         } else {
             sqlx::query(
-                "DELETE FROM jobs WHERE created_at_ms IS NOT NULL AND created_at_ms < $1 RETURNING job_id",
+                "DELETE FROM jobs WHERE terminal = TRUE AND created_at_ms < $1 RETURNING job_id",
             )
             .bind(job_cutoff_ms)
             .fetch_all(&self.pool)

@@ -134,12 +134,17 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.3.0".to_string()
+                "0.4.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.3.0".to_string()
+                "0.4.0".to_string()
+            ),
+            (
+                "0.4.0".to_string(),
+                "database hard-cut performance contracts".to_string(),
+                "0.4.0".to_string()
             ),
         ]
     );
@@ -178,15 +183,16 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.3.0'")
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0')")
         .execute(&store.pool)
         .await
         .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].version, "0.3.0");
+    assert_eq!(applied[1].version, "0.4.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -211,6 +217,38 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .unwrap();
     let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
     assert!(Job::is_current_payload_blob(&payload_blob));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+
+    sqlx::raw_sql(
+        r#"
+        ALTER TABLE timeline_events
+          ALTER COLUMN started_at_ms DROP NOT NULL,
+          ALTER COLUMN ended_at_ms DROP NOT NULL
+        "#,
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    assert!(column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
+    assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
+
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.4.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.4.0");
+    assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
+    assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1433,6 +1471,24 @@ async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
     .await
     .unwrap();
     sqlx::Row::try_get(&row, "exists").unwrap()
+}
+
+async fn column_nullable(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
+    let row = sqlx::query(
+        r#"
+        SELECT is_nullable
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = $1
+          AND column_name = $2
+        "#,
+    )
+    .bind(table)
+    .bind(column)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::Row::try_get::<String, _>(&row, "is_nullable").unwrap() == "YES"
 }
 
 fn raw_path(path: &str) -> std::path::PathBuf {

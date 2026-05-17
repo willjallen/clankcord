@@ -353,15 +353,9 @@ pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
     let speaker_user_id: String = row.try_get("speaker_user_id")?;
     let speaker_label: String = row.try_get("speaker_label")?;
     let text: String = row.try_get("text")?;
-    let started = row
-        .try_get::<Option<i64>, _>("started_at_ms")?
-        .and_then(ms_to_datetime);
-    let ended = row
-        .try_get::<Option<i64>, _>("ended_at_ms")?
-        .and_then(ms_to_datetime);
-    let created = row
-        .try_get::<Option<i64>, _>("created_at_ms")?
-        .and_then(ms_to_datetime);
+    let started = ms_to_datetime(row.try_get::<i64, _>("started_at_ms")?);
+    let ended = ms_to_datetime(row.try_get::<i64, _>("ended_at_ms")?);
+    let created = ms_to_datetime(row.try_get::<i64, _>("created_at_ms")?);
     set_default_string(&mut payload, "event_id", &event_id);
     set_default_string(&mut payload, "eventId", &event_id);
     set_default_string(&mut payload, "event_kind", &kind);

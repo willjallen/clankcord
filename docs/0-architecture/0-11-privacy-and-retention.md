@@ -63,7 +63,7 @@ Timeline queries and transcript views use the store's forgotten-state filter. Th
 
 ## Retention
 
-Retention sweep is store maintenance. The sweep marks old draft speech and transcript events as forgotten, deletes referenced source audio files, appends `retention_retired` events per affected channel, and removes old job rows after their retention window.
+Retention sweep is store maintenance. The sweep marks old draft speech and transcript events as forgotten, deletes referenced source audio files, appends `retention_retired` events per affected channel, and removes old terminal job rows after their retention window.
 
 The default capture-run retention policy is:
 

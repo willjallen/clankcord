@@ -364,12 +364,12 @@ impl Runtime {
         );
         if let Some(start) = start {
             query
-                .push(" AND COALESCE(ended_at_ms, started_at_ms, created_at_ms) > ")
+                .push(" AND ended_at_ms > ")
                 .push_bind(instant_ms_dt(start));
         }
         if let Some(end) = end {
             query
-                .push(" AND COALESCE(started_at_ms, created_at_ms) < ")
+                .push(" AND started_at_ms < ")
                 .push_bind(instant_ms_dt(end));
         }
         query.push(" ORDER BY scope_kind, guild_id, scope_id");
@@ -1342,11 +1342,11 @@ async fn diagnostic_event_rows(
 ) -> Result<Vec<EventDiagnosticRow>> {
     let rows = sqlx::query(
         r#"
-        SELECT event_kind, COALESCE(started_at_ms, created_at_ms) AS at_ms,
+        SELECT event_kind, started_at_ms AS at_ms,
                ended_at_ms, speaker_user_id
         FROM timeline_events
         WHERE forgotten = FALSE
-          AND COALESCE(started_at_ms, created_at_ms) >= $1
+          AND started_at_ms >= $1
           AND (
             event_kind IN (
               'speech_segment',
@@ -1360,7 +1360,7 @@ async fn diagnostic_event_rows(
             )
             OR event_kind LIKE 'wake_%'
           )
-        ORDER BY COALESCE(started_at_ms, created_at_ms) DESC
+        ORDER BY started_at_ms DESC
         "#,
     )
     .bind(since_ms)

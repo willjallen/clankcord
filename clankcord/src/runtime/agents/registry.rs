@@ -9,6 +9,11 @@ use crate::runtime::agents::AgentRole;
 use crate::runtime::jobs::{TextTarget, TextTargetKind};
 use crate::runtime::timeline::isoformat_z;
 
+const AGENT_SESSION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAGS";
+const AGENT_SESSION_PAYLOAD_BLOB_VERSION: u16 = 1;
+const AGENT_SESSION_PAYLOAD_BLOB_HEADER_LEN: usize =
+    AGENT_SESSION_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
+
 #[derive(Debug, Clone, Default)]
 pub struct AgentRuntime {
     codex: CodexAdapter,
@@ -326,6 +331,34 @@ impl AgentSessionRecord {
             Value::String(self.resumed_from_agent_session_id.clone()),
         );
         Value::Object(object)
+    }
+
+    pub(crate) fn encode(&self) -> Result<Vec<u8>> {
+        let body = bincode::serialize(self)?;
+        let mut blob = Vec::with_capacity(AGENT_SESSION_PAYLOAD_BLOB_HEADER_LEN + body.len());
+        blob.extend_from_slice(AGENT_SESSION_PAYLOAD_BLOB_MAGIC);
+        blob.extend_from_slice(&AGENT_SESSION_PAYLOAD_BLOB_VERSION.to_le_bytes());
+        blob.extend_from_slice(&body);
+        Ok(blob)
+    }
+
+    pub(crate) fn decode(payload: &[u8]) -> Result<Self> {
+        if !Self::is_current_payload_blob(payload) {
+            anyhow::bail!("agent session payload has invalid blob envelope");
+        }
+        Ok(bincode::deserialize(
+            &payload[AGENT_SESSION_PAYLOAD_BLOB_HEADER_LEN..],
+        )?)
+    }
+
+    pub(crate) fn is_current_payload_blob(payload: &[u8]) -> bool {
+        payload.len() >= AGENT_SESSION_PAYLOAD_BLOB_HEADER_LEN
+            && &payload[..AGENT_SESSION_PAYLOAD_BLOB_MAGIC.len()]
+                == AGENT_SESSION_PAYLOAD_BLOB_MAGIC
+            && u16::from_le_bytes([
+                payload[AGENT_SESSION_PAYLOAD_BLOB_MAGIC.len()],
+                payload[AGENT_SESSION_PAYLOAD_BLOB_MAGIC.len() + 1],
+            ]) == AGENT_SESSION_PAYLOAD_BLOB_VERSION
     }
 }
 

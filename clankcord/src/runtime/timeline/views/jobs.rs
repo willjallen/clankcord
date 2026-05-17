@@ -122,25 +122,12 @@ impl Runtime {
         channel_id: &str,
         limit: usize,
     ) -> Result<Vec<Value>> {
-        let mut jobs = self
+        let jobs = self
             .timeline_store
-            .list_jobs(Some(guild_id), None)
-            .await?
-            .into_iter()
-            .filter(|job| {
-                job.scope_kind == RuntimeScopeKind::VoiceChannel
-                    && job.scope_id == channel_id
-                    && job.state.is_cancellable()
-            })
-            .collect::<Vec<_>>();
-        jobs.sort_by(|left, right| {
-            let left_time = first_non_empty([left.updated_at.clone(), left.created_at.clone()]);
-            let right_time = first_non_empty([right.updated_at.clone(), right.created_at.clone()]);
-            right_time.cmp(&left_time)
-        });
+            .list_cancellable_jobs_for_scope(guild_id, channel_id, limit)
+            .await?;
         Ok(jobs
             .into_iter()
-            .take(limit)
             .map(|job| Self::public_job_view(&job))
             .collect())
     }
@@ -152,40 +139,12 @@ impl Runtime {
         requester_user_id: &str,
         limit: usize,
     ) -> Result<Vec<Value>> {
-        let requester = requester_user_id.trim();
-        let mut jobs = self
+        let jobs = self
             .timeline_store
-            .list_jobs(Some(guild_id), None)
-            .await?
-            .into_iter()
-            .filter(|job| {
-                job.scope_kind == RuntimeScopeKind::VoiceChannel
-                    && job.scope_id == channel_id
-                    && job.kind.is_agent_task()
-                    && matches!(
-                        job.state,
-                        JobState::Queued
-                            | JobState::Running
-                            | JobState::Waiting
-                            | JobState::CancelRequested
-                            | JobState::Complete
-                            | JobState::Failed
-                            | JobState::FailedTimeout
-                    )
-            })
-            .collect::<Vec<_>>();
-        jobs.sort_by(|left, right| {
-            let left_preferred = requester.is_empty() || left.requested_by_user_id == requester;
-            let right_preferred = requester.is_empty() || right.requested_by_user_id == requester;
-            let left_time = first_non_empty([left.updated_at.clone(), left.created_at.clone()]);
-            let right_time = first_non_empty([right.updated_at.clone(), right.created_at.clone()]);
-            right_preferred
-                .cmp(&left_preferred)
-                .then_with(|| right_time.cmp(&left_time))
-        });
+            .list_recent_agent_task_jobs_for_scope(guild_id, channel_id, requester_user_id, limit)
+            .await?;
         Ok(jobs
             .into_iter()
-            .take(limit)
             .map(|job| Self::public_interaction_job_context(&job))
             .collect())
     }

@@ -230,7 +230,7 @@ async fn migrate_agent_sessions(
         .bind(&record.scope_id)
         .bind(&record.dm_user_id)
         .bind(&record.route_key)
-        .bind(bincode::serialize(&record)?)
+        .bind(record.encode()?)
         .execute(transaction.as_mut())
         .await?;
     }
@@ -335,7 +335,7 @@ async fn migrate_automations(
         .bind(&record.spec.scope.guild_id)
         .bind(&record.spec.scope.scope_id)
         .bind(&record.spec.idempotency_key)
-        .bind(bincode::serialize(&record)?)
+        .bind(record.encode()?)
         .execute(transaction.as_mut())
         .await?;
     }

@@ -451,6 +451,39 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn automation_payload_blob_uses_current_envelope() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(reminder_spec("job_1:blob-envelope"))
+        .await
+        .unwrap();
+
+    let row = sqlx::query("SELECT payload_blob FROM automations WHERE automation_id = $1")
+        .bind(&record.automation_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert_eq!(&payload_blob[..8], b"CLANKAUT");
+    assert_eq!(u16::from_le_bytes([payload_blob[8], payload_blob[9]]), 1);
+
+    sqlx::query("UPDATE automations SET payload_blob = $1 WHERE automation_id = $2")
+        .bind(bincode::serialize(&record).unwrap())
+        .bind(&record.automation_id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let error = store
+        .get_automation(&record.automation_id)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid blob envelope"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and_blob() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
@@ -479,15 +512,16 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.3.0'")
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0')")
         .execute(&store.pool)
         .await
         .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].version, "0.3.0");
+    assert_eq!(applied[1].version, "0.4.0");
     assert!(!column_exists(&store.pool, "automations", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM automations WHERE automation_id = $1")
         .bind(&record.automation_id)
