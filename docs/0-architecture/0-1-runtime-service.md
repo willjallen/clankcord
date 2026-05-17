@@ -54,7 +54,7 @@ This intake path gives boundary code a narrow contract. Adapters translate exter
 
 ## Dispatch
 
-The dispatcher runs a hot drain loop. Each drain pass resolves waiting parents with terminal children, claims due queued jobs, and starts the workers allowed by each lane and ordering key. When a worker finishes, it releases its lane permit and wakes the dispatcher again. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is reached.
+The dispatcher runs a hot drain loop. Each drain pass resolves waiting parents with terminal children, claims due queued jobs, and starts the workers allowed by each lane and ordering key. When a worker finishes, it releases its lane permit and wakes the dispatcher again. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is reached. If due queued work remains after a drain pass, the dispatcher uses a short bounded retry interval and drains again.
 
 Workers reconstruct a `Runtime` from the shared timeline store when they need domain behavior. That runtime contains the timeline store and executes domain methods against durable rows. Live Discord voice clients remain in the live voice adapter because those are process capabilities. Jobs, room controls, runtime config, voice bot state, voice assignments, capture sessions, events, automations, agent sessions, publications, and artifacts remain durable state.
 

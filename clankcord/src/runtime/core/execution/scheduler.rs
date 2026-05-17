@@ -284,13 +284,6 @@ where
         self.timeline_store.next_queued_job_ready_at().await
     }
 
-    pub(crate) async fn next_queued_job_ready_after(
-        &self,
-        after: DateTime<Utc>,
-    ) -> Result<Option<DateTime<Utc>>> {
-        self.timeline_store.next_queued_job_ready_after(after).await
-    }
-
     pub(crate) async fn drain_ready_jobs(&self) -> Result<Value> {
         let max_passes = dispatch_drain_max_passes();
         let mut passes = Vec::new();

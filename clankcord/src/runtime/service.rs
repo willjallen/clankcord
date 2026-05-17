@@ -15,6 +15,7 @@ use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
 type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;
+const DISPATCH_DUE_BACKLOG_RETRY_MS: u64 = 25;
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
@@ -368,17 +369,7 @@ fn spawn_dispatch_loop(handle: RuntimeHandle) {
             let now = utc_now();
             let next_wake_at = match next_ready_at {
                 Some(ready_at) if ready_at <= now => {
-                    match handle.executor.next_queued_job_ready_after(now).await {
-                        Ok(value) => value,
-                        Err(error) => {
-                            log(&format!(
-                                "runtime future-ready lookup failed: {}",
-                                error_chain(&error)
-                            ));
-                            notify.notified().await;
-                            continue;
-                        }
-                    }
+                    Some(now + chrono::Duration::milliseconds(DISPATCH_DUE_BACKLOG_RETRY_MS as i64))
                 }
                 value => value,
             };
