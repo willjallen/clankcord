@@ -12,7 +12,13 @@ resolve AgentSessionRecord
 agent_task ordered by session
       |
       v
+discord_typing_indicator start
+      |
+      v
 Codex process invocation
+      |
+      v
+discord_typing_indicator stop
       |
       v
 Clankcord response command
@@ -70,13 +76,13 @@ retired_by_user_id
 resumed_from_agent_session_id
 ```
 
-Voice sessions start in `starting` while `agent_session_start` is queued. The start job marks the session `active` and creates the first `agent_task`. A voice session stores its managed Discord thread when the first session-targeted `text_delivery` needs a Discord channel. DM sessions are created active with a DM target. Active session lifetime is capped at eight hours from `created_at`; activity updates `last_activity_at` and does not extend `max_active_until`.
+Voice sessions start in `starting` while `agent_session_start` is queued. The start job marks the session `active` and creates the first `agent_task`. A voice session stores its managed Discord thread when the first response-surface operation needs a Discord channel. Agent-task typing start and session-targeted text delivery use that same managed-thread allocation path. DM sessions are created active with a DM target. Active session lifetime is capped at eight hours from `created_at`; activity updates `last_activity_at` and does not extend `max_active_until`.
 
 ## Voice Sessions
 
 A wake activation or voice command resolves the voice route. The runtime retires due sessions, reuses an active session for the route, or reuses a starting session for the same route. A route without a selectable session creates a new `AgentSessionRecord` and an `agent_session_start` job.
 
-`agent_session_start` marks the session active and creates the first `agent_task`. It does not create a Discord thread. `text_delivery` with the `session` target resolves the current session target when the message is sent. If the selected voice session has no `discord_thread_id`, `text_delivery` creates a `discord_forum_thread_create` child, stores the resulting channel target on the session, and then creates the concrete Discord send. The thread starts with a readable name from the voice room name and the session creation timestamp in the configured local timezone, such as `Code Lounge 2026-05-17 03:28`. The opening post names the actual voice room, mentions the requester and the other users currently present in that voice channel, and records the `agent_session_id`. Later messages inside that managed thread route back to the same session through `discord_thread_id`.
+`agent_session_start` marks the session active and creates the first `agent_task`. The agent task creates a `discord_typing_indicator` start child before Codex runs. For a voice session that needs its managed thread, the typing start job creates a `discord_forum_thread_create` child, stores the resulting channel target on the session, and starts the typing heartbeat in that thread. `text_delivery` with the `session` target resolves the current session target when the message is sent and reuses the stored thread. The thread starts with a readable name from the voice room name and the session creation timestamp in the configured local timezone, such as `Code Lounge 2026-05-17 03:28`. The opening post names the actual voice room, mentions the requester and the other users currently present in that voice channel, and records the `agent_session_id`. Later messages inside that managed thread route back to the same session through `discord_thread_id`.
 
 ```text
 wake activation or command
@@ -94,9 +100,16 @@ resolve voice route
               +--> mark session active
               +--> agent_task
                       |
+                      +--> discord_typing_indicator(start)
+                      |       |
+                      |       +--> discord_forum_thread_create when needed
+                      |
+                      +--> Codex process
+                      |
+                      +--> discord_typing_indicator(stop)
+                      |
                       +--> text_delivery(session)
                               |
-                              +--> discord_forum_thread_create when needed
                               +--> discord_text_send
 ```
 
@@ -136,7 +149,7 @@ retired AgentSessionRecord
 
 ## Agent Task
 
-`agent_task` is a blocking snapshot job on the `agent` lane. It validates the job and session identity, creates or reuses the session workspace under `paths.agent_workspaces_root`, runs preflight checks, builds a prompt from templates loaded through `prompts.dir` and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, and stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata. The Codex process uses the runtime-selected workspace, skips the Git repository trust check for that workspace, and ignores user Codex config.
+`agent_task` is a blocking snapshot job on the `agent` lane. It waits for a `discord_typing_indicator` start child before launching Codex, validates the job and session identity, creates or reuses the session workspace under `paths.agent_workspaces_root`, runs preflight checks, builds a prompt from templates loaded through `prompts.dir` and a compact five-minute timeline context, includes master session instructions on the first Codex invocation for the session, invokes Codex with the prior session id when present, stores prompt, result, raw JSONL output, stderr preview, command display, model, session id, and usage metadata, then waits for a `discord_typing_indicator` stop child before final result handling. The Codex process uses the runtime-selected workspace, skips the Git repository trust check for that workspace, and ignores user Codex config.
 
 The detailed process contract is documented in [Agent Runtime Contract](0-9-agent-runtime-contract.md).
 

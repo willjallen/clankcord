@@ -7,11 +7,11 @@ mod util;
 pub use kind::{JobKind, JobState};
 pub use output::{
     AgentSessionStartOutput, DiscordForumThreadCreateOutput, DiscordForumThreadRenameOutput,
-    DiscordTextSendOutput, DiscordVoiceDeafenOutput, DiscordVoiceJoinOutput,
-    DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlaybackOutput, DiscordVoiceStatusSnapshotOutput, JobCreatedOutput, JobFailure,
-    JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
-    TranscriptPublicationOutput,
+    DiscordTextSendOutput, DiscordTypingIndicatorOutput, DiscordVoiceDeafenOutput,
+    DiscordVoiceJoinOutput, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
+    DiscordVoicePlayAudioOutput, DiscordVoicePlaybackOutput, DiscordVoiceStatusSnapshotOutput,
+    JobCreatedOutput, JobFailure, JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput,
+    TextDeliveryOutput, TranscriptPublicationOutput,
 };
 pub use payload::{
     AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
@@ -20,14 +20,15 @@ pub use payload::{
     CommandArguments, CommandKind, CommandPayload, CommandRequest, ConfirmationContext,
     ConfirmationRequiredPayload, DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload,
     DiscordSlashCommandPayload, DiscordTextMessagePayload, DiscordTextSendPayload,
-    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue,
-    DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
-    JobPayload, OpaqueValue, RefineTranscriptPayload, RoomAgentPlacementAction,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlPayload,
-    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
-    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    DiscordTypingAction, DiscordTypingIndicatorPayload, DiscordVoiceDeafenPayload,
+    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
+    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload,
+    DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobPayload, OpaqueValue,
+    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind, TranscriptPublicationPayload, VoiceStatusSyncPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

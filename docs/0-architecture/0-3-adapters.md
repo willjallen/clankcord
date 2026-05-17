@@ -30,6 +30,7 @@ discord_voice_play_audio
 discord_voice_status_snapshot
 discord_text_send
 discord_forum_thread_create
+discord_typing_indicator
 ```
 
 ## HTTP
@@ -42,7 +43,7 @@ The CLI uses HTTP when it is talking to a running service. That keeps command-li
 
 The Discord gateway adapter owns text gateway mechanics. It starts the Serenity client, receives messages and interactions, registers slash commands, handles component buttons, sends concrete Discord messages, and creates managed forum threads. Gateway code also acknowledges or defers Discord interactions when the protocol requires it.
 
-Once the gateway has translated a protocol event into a runtime request, the runtime takes over. Slash commands become `discord_slash_command` jobs. Text messages become `discord_text_message` jobs. Confirmation buttons become runtime-control jobs. Response delivery becomes `discord_text_send` only after the `text_delivery` parent resolves the target. The domain handler for `discord_text_send` calls the Discord text API to perform the post.
+Once the gateway has translated a protocol event into a runtime request, the runtime takes over. Slash commands become `discord_slash_command` jobs. Text messages become `discord_text_message` jobs. Confirmation buttons become runtime-control jobs. Response delivery becomes `discord_text_send` only after the `text_delivery` parent resolves the target. The domain handler for `discord_text_send` calls the Discord text API to perform the post. The `discord_typing_indicator` domain handler resolves the same Discord target used by the agent session, then the gateway adapter sends the typing request and maintains the process-local heartbeat until the paired stop action cancels it.
 
 ## Discord Voice
 

@@ -23,7 +23,8 @@ use crate::runtime::timeline::{
 };
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
-    Job, JobKind, JobState, Runtime, TextDeliveryKind, TextDeliveryPayload, TextTarget,
+    DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind, JobState, Runtime,
+    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 const AGENT_UNAVAILABLE_MESSAGE: &str =
@@ -72,13 +73,31 @@ impl Runtime {
 
     pub(crate) async fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
         let job_id = job.id.clone();
-        let attempts = job
+        let mut latest = self.timeline_store.get_job(&job_id).await.unwrap_or(job);
+        let children = self.timeline_store.list_child_jobs(&latest.id).await?;
+        let mut task_metadata = latest
             .metadata
             .agent_task()
-            .map(|task| task.dispatch_attempts)
-            .unwrap_or(0);
+            .cloned()
+            .unwrap_or_else(AgentTaskMetadata::default);
+        if agent_task_retry_after_stopped_error(&task_metadata, &children) {
+            latest.metadata.agent_task_mut().dispatch_error.clear();
+            self.timeline_store.update_job(&latest).await?;
+            task_metadata = latest
+                .metadata
+                .agent_task()
+                .cloned()
+                .unwrap_or_else(AgentTaskMetadata::default);
+        }
+        if agent_task_has_dispatch_outcome(&task_metadata) {
+            return self
+                .finish_agent_task_after_typing_stop(latest, task_metadata)
+                .await;
+        }
+
+        let attempts = task_metadata.dispatch_attempts;
         if attempts >= 3 {
-            let mut failed = job.clone();
+            let mut failed = latest.clone();
             failed.set_state(JobState::Failed);
             failed.metadata.error = "agent task dispatch attempts exhausted".to_string();
             self.timeline_store.update_job(&failed).await?;
@@ -87,18 +106,131 @@ impl Runtime {
             );
         }
 
-        match self.dispatch_agent_task(&job).await {
-            Ok(dispatch_result) => {
-                match self
-                    .complete_agent_task_job(job_id.clone(), dispatch_result)
-                    .await
-                {
-                    Ok(value) => Ok(value),
-                    Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
-                }
+        match agent_task_typing_child(&children, DiscordTypingAction::Start, Some(attempts)) {
+            Some(start) if !start.state.is_terminal() => {
+                return self.wait_dispatched_job(&job_id, latest, Vec::new()).await;
             }
-            Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
+            Some(start) if start.state != JobState::Complete => {
+                return self
+                    .fail_dispatched_job(
+                        &job_id,
+                        latest,
+                        anyhow::anyhow!(
+                            "agent task typing start dependency {} ended as {}: {}",
+                            start.id,
+                            start.state,
+                            start.metadata.error
+                        ),
+                    )
+                    .await;
+            }
+            Some(_) => {}
+            None => {
+                return self
+                    .wait_dispatched_job(
+                        &job_id,
+                        latest.clone(),
+                        vec![agent_task_typing_job(
+                            &latest,
+                            DiscordTypingAction::Start,
+                            attempts,
+                        )],
+                    )
+                    .await;
+            }
         }
+
+        match self.dispatch_agent_task(&latest).await {
+            Ok(dispatch_result) => {
+                let mut prepared = self.timeline_store.get_job(&job_id).await?;
+                prepared.metadata.set_agent_task(dispatch_result);
+                self.timeline_store.update_job(&prepared).await?;
+                self.wait_for_agent_task_typing_stop(prepared, attempts)
+                    .await
+            }
+            Err(error) => {
+                let preflight = error
+                    .downcast_ref::<AgentInfrastructureError>()
+                    .and_then(AgentInfrastructureError::preflight)
+                    .cloned();
+                let error_text = error.to_string();
+                let mut failed = self.timeline_store.get_job(&job_id).await?;
+                if let Some(preflight) = preflight {
+                    failed.metadata.agent_task_mut().preflight = Some(preflight);
+                }
+                failed.metadata.agent_task_mut().dispatch_error = error_text;
+                self.timeline_store.update_job(&failed).await?;
+                self.wait_for_agent_task_typing_stop(failed, attempts).await
+            }
+        }
+    }
+
+    async fn finish_agent_task_after_typing_stop(
+        &self,
+        job: Job,
+        task_metadata: AgentTaskMetadata,
+    ) -> Result<Value> {
+        let job_id = job.id.clone();
+        let children = self.timeline_store.list_child_jobs(&job_id).await?;
+        if let Some(stop) = agent_task_typing_child(&children, DiscordTypingAction::Stop, None) {
+            if !stop.state.is_terminal() {
+                return self.wait_dispatched_job(&job_id, job, Vec::new()).await;
+            }
+            if stop.state != JobState::Complete {
+                return self
+                    .fail_dispatched_job(
+                        &job_id,
+                        job,
+                        anyhow::anyhow!(
+                            "agent task typing stop dependency {} ended as {}: {}",
+                            stop.id,
+                            stop.state,
+                            stop.metadata.error
+                        ),
+                    )
+                    .await;
+            }
+            let attempts = stop
+                .discord_typing_indicator_payload()
+                .map(|payload| payload.agent_task_attempt)
+                .unwrap_or(task_metadata.dispatch_attempts);
+            if !task_metadata.dispatch_error.trim().is_empty() {
+                return self
+                    .fail_agent_task_job(
+                        job_id,
+                        attempts,
+                        anyhow::anyhow!(task_metadata.dispatch_error),
+                    )
+                    .await;
+            }
+            return match self
+                .complete_agent_task_job(job_id.clone(), task_metadata)
+                .await
+            {
+                Ok(value) => Ok(value),
+                Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
+            };
+        }
+
+        let attempts = agent_task_typing_child(&children, DiscordTypingAction::Start, None)
+            .and_then(|start| start.discord_typing_indicator_payload())
+            .map(|payload| payload.agent_task_attempt)
+            .unwrap_or(task_metadata.dispatch_attempts);
+        self.wait_for_agent_task_typing_stop(job, attempts).await
+    }
+
+    async fn wait_for_agent_task_typing_stop(&self, job: Job, attempts: i64) -> Result<Value> {
+        let job_id = job.id.clone();
+        self.wait_dispatched_job(
+            &job_id,
+            job.clone(),
+            vec![agent_task_typing_job(
+                &job,
+                DiscordTypingAction::Stop,
+                attempts,
+            )],
+        )
+        .await
     }
 
     async fn dispatch_agent_task(&self, job: &Job) -> Result<AgentTaskMetadata> {
@@ -330,9 +462,10 @@ impl Runtime {
         attempts: i64,
         error: anyhow::Error,
     ) -> Result<Value> {
-        let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
-        let is_infrastructure_error = infrastructure_error.is_some();
         let error_text = error.to_string();
+        let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
+        let is_infrastructure_error =
+            infrastructure_error.is_some() || agent_task_error_text_is_infrastructure(&error_text);
         let publish_unavailable_text =
             is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
         let mut latest = self.timeline_store.get_job(&job_id).await?;
@@ -457,6 +590,59 @@ fn agent_task_requester_id(job: &Job) -> String {
         .map(|command| command.requested_by_user_id.clone())
         .unwrap_or_default();
     first_non_empty([job.requested_by_user_id.clone(), command_requester])
+}
+
+fn agent_task_typing_job(job: &Job, action: DiscordTypingAction, attempts: i64) -> Job {
+    let requested_by_user_id = agent_task_requester_id(job);
+    Job::discord_typing_indicator(
+        job.guild_id.clone(),
+        job.voice_channel_id.clone(),
+        requested_by_user_id.clone(),
+        DiscordTypingIndicatorPayload {
+            action,
+            target: TextTarget {
+                kind: TextTargetKind::AgentSession,
+                channel_id: String::new(),
+                user_id: String::new(),
+            },
+            source_job_id: job.id.clone(),
+            requested_by_user_id,
+            agent_task_attempt: attempts,
+        },
+    )
+}
+
+fn agent_task_typing_child(
+    children: &[Job],
+    action: DiscordTypingAction,
+    attempts: Option<i64>,
+) -> Option<&Job> {
+    children.iter().rev().find(|child| {
+        child
+            .discord_typing_indicator_payload()
+            .is_some_and(|payload| {
+                payload.action == action
+                    && attempts.is_none_or(|attempts| payload.agent_task_attempt == attempts)
+            })
+    })
+}
+
+fn agent_task_has_dispatch_outcome(task: &AgentTaskMetadata) -> bool {
+    !task.dispatch_error.trim().is_empty()
+        || !task.agent.provider.trim().is_empty()
+        || !task.command.trim().is_empty()
+}
+
+fn agent_task_retry_after_stopped_error(task: &AgentTaskMetadata, children: &[Job]) -> bool {
+    !task.dispatch_error.trim().is_empty()
+        && agent_task_typing_child(children, DiscordTypingAction::Stop, None)
+            .and_then(Job::discord_typing_indicator_payload)
+            .is_some_and(|payload| task.dispatch_attempts > payload.agent_task_attempt)
+}
+
+fn agent_task_error_text_is_infrastructure(error_text: &str) -> bool {
+    error_text.starts_with("agent task preflight failed:")
+        || agent_invocation_infrastructure_failure(error_text)
 }
 
 fn agent_task_no_response_reason(response_text: &str) -> Option<&'static str> {

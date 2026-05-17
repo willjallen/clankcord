@@ -239,7 +239,10 @@ impl TimelineStore {
             SELECT DISTINCT ordering_key
             FROM jobs
             WHERE ordering_key <> ''
-              AND state IN ('running', 'cancel_requested')
+              AND (
+                state IN ('running', 'cancel_requested')
+                OR (state = 'waiting' AND kind = 'agent_task')
+              )
             "#,
         )
         .fetch_all(&self.pool)
@@ -786,8 +789,10 @@ impl TimelineStore {
                     | crate::runtime::JobKind::AgentSessionStart
                     | crate::runtime::JobKind::AgentSessionResume
                     | crate::runtime::JobKind::AgentThreadTitleRefresh
+                    | crate::runtime::JobKind::AgentTask
                     | crate::runtime::JobKind::TranscriptPublication
                     | crate::runtime::JobKind::VoiceStatusSync
+                    | crate::runtime::JobKind::DiscordTypingIndicator
             ) {
                 parent.set_state(crate::runtime::JobState::Queued);
                 parent.next_run_at = None;
@@ -1198,7 +1203,8 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::TranscriptPublication => "general_async",
         crate::runtime::JobKind::DiscordTextSend
         | crate::runtime::JobKind::DiscordForumThreadCreate
-        | crate::runtime::JobKind::DiscordForumThreadRename => "discord_text",
+        | crate::runtime::JobKind::DiscordForumThreadRename
+        | crate::runtime::JobKind::DiscordTypingIndicator => "discord_text",
         crate::runtime::JobKind::RefineTranscript => "refinement",
         crate::runtime::JobKind::AgentTask | crate::runtime::JobKind::AgentThreadTitleRefresh => {
             "agent"
@@ -1304,6 +1310,24 @@ fn job_ordering_key(job: &Job) -> String {
         crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
             format!("discord:thread:{}", normalize_key_part(&payload.thread_id))
         }
+        crate::runtime::JobPayload::DiscordTypingIndicator(payload) => {
+            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
+                return format!(
+                    "discord:typing:source:{}",
+                    normalize_key_part(&payload.source_job_id)
+                );
+            }
+            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+                payload.target.user_id.as_str()
+            } else {
+                payload.target.channel_id.as_str()
+            };
+            format!(
+                "discord:typing:{}:{}",
+                payload.target.kind.as_str(),
+                normalize_key_part(target_id)
+            )
+        }
         crate::runtime::JobPayload::ConfirmationRequired(payload) => {
             if payload.confirmation.delivery == "dm" {
                 format!(
@@ -1407,6 +1431,9 @@ fn source_job_id(job: &Job) -> String {
             payload.source_job_id.clone()
         }
         crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::runtime::JobPayload::DiscordTypingIndicator(payload) => {
             payload.source_job_id.clone()
         }
         crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),

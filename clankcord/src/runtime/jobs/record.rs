@@ -12,14 +12,14 @@ use super::{
     AudioSegmentPayload, AutomationEvaluationPayload, BinaryPayload, CommandPayload,
     CommandRequest, ConfirmationContext, ConfirmationRequiredPayload,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenPayload,
-    DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload,
-    EphemeralJobGcPayload, JobKind, JobOutput, JobPayload, JobState, RefineTranscriptPayload,
-    RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
-    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
-    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordTypingIndicatorPayload,
+    DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
+    DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload,
+    DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind, JobOutput, JobPayload,
+    JobState, RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
+    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -511,6 +511,21 @@ impl Job {
             requested_by_user_id,
             JobState::Queued,
             JobPayload::DiscordForumThreadRename(payload),
+        )
+    }
+
+    pub fn discord_typing_indicator(
+        guild_id: impl Into<String>,
+        voice_channel_id: impl Into<String>,
+        requested_by_user_id: impl Into<String>,
+        payload: DiscordTypingIndicatorPayload,
+    ) -> Self {
+        Self::new(
+            guild_id,
+            voice_channel_id,
+            requested_by_user_id,
+            JobState::Queued,
+            JobPayload::DiscordTypingIndicator(payload),
         )
     }
 
@@ -1088,6 +1103,13 @@ impl Job {
     pub fn discord_forum_thread_create_payload(&self) -> Option<&DiscordForumThreadCreatePayload> {
         match &self.payload {
             JobPayload::DiscordForumThreadCreate(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn discord_typing_indicator_payload(&self) -> Option<&DiscordTypingIndicatorPayload> {
+        match &self.payload {
+            JobPayload::DiscordTypingIndicator(payload) => Some(payload),
             _ => None,
         }
     }

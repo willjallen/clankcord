@@ -6,8 +6,8 @@ use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::runtime::rooms::RoomConfig;
 
 use super::payload::{
-    BinaryPayload, DiscordVoicePlaybackCue, RoomAgentPlacementAction, RuntimeControlAction,
-    TextTarget,
+    BinaryPayload, DiscordTypingAction, DiscordVoicePlaybackCue, RoomAgentPlacementAction,
+    RuntimeControlAction, TextTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +65,14 @@ pub struct DiscordForumThreadRenameOutput {
     pub thread_id: String,
     pub name: String,
     pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordTypingIndicatorOutput {
+    pub action: DiscordTypingAction,
+    pub target: TextTarget,
+    pub source_job_id: String,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,6 +195,7 @@ pub enum JobOutput {
     DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotOutput),
     Record(BinaryPayload),
     DiscordVoiceDeafen(DiscordVoiceDeafenOutput),
+    DiscordTypingIndicator(DiscordTypingIndicatorOutput),
 }
 
 impl JobOutput {
@@ -242,6 +251,15 @@ impl JobOutput {
                     "thread_id": output.thread_id,
                     "name": output.name,
                     "source_job_id": output.source_job_id,
+                })
+            }
+            Self::DiscordTypingIndicator(output) => {
+                json!({
+                    "kind": "discord_typing_indicator",
+                    "action": output.action.as_str(),
+                    "target": output.target.to_json(),
+                    "source_job_id": output.source_job_id,
+                    "status": output.status,
                 })
             }
             Self::AgentSessionStart(output) => {

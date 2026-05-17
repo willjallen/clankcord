@@ -1,25 +1,30 @@
 use std::sync::Arc;
 
-use crate::adapters::discord::gateway::{forum_thread, text_send};
+use crate::adapters::discord::gateway::{forum_thread, text_send, typing};
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::runtime::domain::external::{ExternalApiFuture, RuntimeExternalApi};
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
-    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
-    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
+    DiscordTextSendPayload, DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload,
+    DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
+    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
 #[derive(Clone)]
 pub(crate) struct DiscordRuntimeApi {
     live_voice: Arc<LiveVoiceAdapter>,
+    typing: Arc<typing::DiscordTypingSupervisor>,
 }
 
 impl DiscordRuntimeApi {
     pub(crate) fn new(live_voice: Arc<LiveVoiceAdapter>) -> Self {
-        Self { live_voice }
+        Self {
+            live_voice,
+            typing: Arc::new(typing::DiscordTypingSupervisor::default()),
+        }
     }
 }
 
@@ -43,6 +48,13 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
         payload: DiscordForumThreadRenamePayload,
     ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput> {
         Box::pin(async move { forum_thread::rename(payload).await })
+    }
+
+    fn discord_typing_indicator<'a>(
+        &'a self,
+        payload: DiscordTypingIndicatorPayload,
+    ) -> ExternalApiFuture<'a, DiscordTypingIndicatorOutput> {
+        Box::pin(async move { typing::execute(payload, self.typing.clone()).await })
     }
 
     fn discord_voice_join<'a>(

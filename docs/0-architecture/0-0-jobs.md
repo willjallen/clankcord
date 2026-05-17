@@ -23,7 +23,7 @@ runtime handler or adapter
       +--> wait for child jobs
 ```
 
-The same model carries very different kinds of work. A configured room can produce a `room_agent_placement` job, which creates a `discord_voice_join` child when a bot needs to enter voice. A response command becomes `text_delivery`, which resolves the target and creates `discord_text_send`. A wake phrase becomes a wake event, a `wake_activation`, cue playback, an agent session, an `agent_task`, and response delivery. Each step leaves behind a record with a payload, state transition, dependency edge, output, failure, event, or artifact path.
+The same model carries very different kinds of work. A configured room can produce a `room_agent_placement` job, which creates a `discord_voice_join` child when a bot needs to enter voice. A response command becomes `text_delivery`, which resolves the target and creates `discord_text_send`. A wake phrase becomes a wake event, a `wake_activation`, cue playback, an agent session, an `agent_task`, Discord typing start and stop jobs, and response delivery. Each step leaves behind a record with a payload, state transition, dependency edge, output, failure, event, or artifact path.
 
 ## Record Shape
 
@@ -33,7 +33,7 @@ The row uses stable projections for scheduling and filtering. The payload blob h
 
 Job states describe lifecycle, not domain-specific causes. Runtime code uses generic terminal states such as `complete`, `failed`, `failed_timeout`, and `cancelled`; job kind, typed output, `metadata.error`, and detail metadata record why that lifecycle transition happened. An agent dispatch failure is an `agent_task` in `failed` state with the dispatch cause recorded in `metadata.error` and `metadata.agent_task.dispatch_error`.
 
-Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, forum thread creation and rename, agent session startup, agent session sunset, agent session resume, agent tasks, agent thread title refresh, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute and deafen control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, `agent_session_retirement`, `agent_thread_title_refresh`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
+Job kinds cover capture, wake, Discord ingress, text delivery, concrete Discord IO, forum thread creation and rename, Discord typing indicators, agent session startup, agent session sunset, agent session resume, agent tasks, agent thread title refresh, transcript work, confirmations, runtime commands, room placement, voice join and leave, playback, mute and deafen control, runtime control, and runtime background work. High-volume internal kinds such as `audio_segment`, `wake_probe`, `runtime_maintenance`, `voice_status_sync`, `automation_evaluation`, `agent_session_retirement`, `agent_thread_title_refresh`, stale-job sweeps, and ephemeral job garbage collection use the same scheduler and are hidden from normal user-facing job lists unless the caller asks for ephemeral detail.
 
 ## Decisions
 
@@ -53,7 +53,7 @@ WaitFor(children)
     persists child jobs, records dependency edges, and marks the parent waiting
 ```
 
-Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for session-thread creation when needed and then for the concrete Discord send. Transcript publication waits for forum-thread creation and message chunks. Agent thread title refresh waits for a Discord forum thread rename child. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, agent session resume, title refresh, and publication jobs resume because child output determines the parent result.
+Many handlers finish immediately. Others create children because the parent needs an adapter or another domain operation to complete first. Room placement waits for join, leave, and cue playback children. Text delivery waits for session-thread creation when needed and then for the concrete Discord send. Agent tasks wait for Discord typing start before launching Codex and wait for Discord typing stop before final result handling. Transcript publication waits for forum-thread creation and message chunks. Agent thread title refresh waits for a Discord forum thread rename child. Voice playback waits for mute and play-audio children. Voice status sync waits for a Discord voice status snapshot child before committing durable runtime state. Confirmations, agent session startup, agent session resume, agent tasks, typing indicator jobs, title refresh, and publication jobs resume because child output determines the parent result.
 
 ## Dependency Resolution
 
@@ -90,6 +90,8 @@ Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapsho
 
 Lanes bound concurrency by class of work. Wake probes have separate capacity from audio transcription. Agent tasks have separate capacity from Discord text sends. Voice control has its own lane. Ordering keys serialize work that would race while allowing unrelated work to proceed.
 
+An `agent_task` keeps its `agent:session:<agent_session_id>` ordering key active while it is waiting on typing start or stop children. This keeps one Codex turn at a time bound to a session even though Discord typing is handled by separate Discord text jobs.
+
 ```text
 wake_probe                wake:stream:<stream_id>
 agent_task                agent:session:<agent_session_id>
@@ -100,6 +102,7 @@ DM text ingress           agent:route:dm:<user_id>
 session text delivery     text:session_route:<guild>:<channel>
 discord_text_send         discord:text:<target-kind>:<target-id>
 discord_forum_thread_rename discord:thread:<thread_id>
+discord_typing_indicator  discord:typing:source:<source_job_id> or discord:typing:<target-kind>:<target-id>
 voice playback/mute/deafen voice:session:<session_id>
 discord_voice_join        voice:bot:<bot_id>
 room_agent_placement      room:placement:<guild>:<room>

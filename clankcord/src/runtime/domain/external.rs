@@ -5,10 +5,11 @@ use crate::Result;
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
-    DiscordTextSendPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
-    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
-    DiscordVoiceLeavePayload, DiscordVoiceMuteOutput, DiscordVoiceMutePayload,
-    DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
+    DiscordTextSendPayload, DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload,
+    DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
+    DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
+    DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
 pub(crate) type ExternalApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
@@ -28,6 +29,11 @@ pub(crate) trait RuntimeExternalApi: Send + Sync {
         &'a self,
         payload: DiscordForumThreadRenamePayload,
     ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput>;
+
+    fn discord_typing_indicator<'a>(
+        &'a self,
+        payload: DiscordTypingIndicatorPayload,
+    ) -> ExternalApiFuture<'a, DiscordTypingIndicatorOutput>;
 
     fn discord_voice_join<'a>(
         &'a self,

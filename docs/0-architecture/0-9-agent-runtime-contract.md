@@ -1,17 +1,21 @@
 # Agent Runtime Contract
 
-Agent tasks are Codex process invocations owned by runtime jobs. The runtime chooses the agent session, creates the workspace, builds the prompt, launches Codex, captures the result, stores process metadata, and verifies that visible output was submitted through Clankcord response commands.
+Agent tasks are Codex process invocations owned by runtime jobs. The runtime chooses the agent session, starts the Discord typing indicator for the response surface, creates the workspace, builds the prompt, launches Codex, captures the result, stops the typing indicator, stores process metadata, and verifies that visible output was submitted through Clankcord response commands.
 
 ```text
 agent_task job
       |
       +--> resolve persisted AgentSessionRecord
+      +--> wait for discord_typing_indicator start
       +--> prepare workspace and environment
       +--> build prompt and context
       +--> run Codex process
       +--> record output and metadata
+      +--> wait for discord_typing_indicator stop
       +--> verify response contract
 ```
+
+The typing indicator is a durable Discord job with `start` and `stop` actions. A start job resolves the same agent-session text target used by response delivery. For a voice session awaiting its first forum thread, the start job creates the managed Discord thread and records it on the agent session before the Codex process begins. The Discord adapter sends the initial typing request and maintains the indicator with a heartbeat while the agent task is running. The stop job cancels that heartbeat after the Codex process returns and before the agent task reaches a terminal state.
 
 ## Workspace
 

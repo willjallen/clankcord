@@ -850,6 +850,42 @@ pub struct DiscordForumThreadRenamePayload {
     pub source_job_id: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiscordTypingAction {
+    Start,
+    Stop,
+}
+
+impl DiscordTypingAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+impl FromStr for DiscordTypingAction {
+    type Err = anyhow::Error;
+
+    fn from_str(raw: &str) -> Result<Self> {
+        match raw.trim() {
+            "start" => Ok(Self::Start),
+            "stop" => Ok(Self::Stop),
+            value => anyhow::bail!("unknown Discord typing action: {value}"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscordTypingIndicatorPayload {
+    pub action: DiscordTypingAction,
+    pub target: TextTarget,
+    pub source_job_id: String,
+    pub requested_by_user_id: String,
+    pub agent_task_attempt: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentTaskPayload {
     pub agent_session_id: String,
@@ -1197,6 +1233,7 @@ pub enum JobPayload {
     StaleRunningJobSweep(StaleRunningJobSweepPayload),
     EphemeralJobGc(EphemeralJobGcPayload),
     DiscordVoiceDeafen(DiscordVoiceDeafenPayload),
+    DiscordTypingIndicator(DiscordTypingIndicatorPayload),
 }
 
 impl JobPayload {
@@ -1236,6 +1273,7 @@ impl JobPayload {
             Self::StaleRunningJobSweep(_) => JobKind::StaleRunningJobSweep,
             Self::EphemeralJobGc(_) => JobKind::EphemeralJobGc,
             Self::DiscordVoiceDeafen(_) => JobKind::DiscordVoiceDeafen,
+            Self::DiscordTypingIndicator(_) => JobKind::DiscordTypingIndicator,
         }
     }
 
@@ -1253,6 +1291,7 @@ impl JobPayload {
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
+            Self::DiscordTypingIndicator(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1292,6 +1331,7 @@ impl JobPayload {
             Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
+            Self::DiscordTypingIndicator(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1422,6 +1462,13 @@ impl JobPayload {
                 "thread_id": payload.thread_id,
                 "name": payload.name,
                 "source_job_id": payload.source_job_id,
+            }),
+            Self::DiscordTypingIndicator(payload) => json!({
+                "action": payload.action.as_str(),
+                "target": payload.target.to_json(),
+                "source_job_id": payload.source_job_id,
+                "requested_by_user_id": payload.requested_by_user_id,
+                "agent_task_attempt": payload.agent_task_attempt,
             }),
             Self::AgentSessionStart(payload) => json!({
                 "agent_session_id": payload.agent_session_id,

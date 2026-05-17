@@ -103,6 +103,11 @@ where
                 .execute_discord_forum_thread_rename_job(payload, external_api)
                 .await
         }
+        JobPayload::DiscordTypingIndicator(payload) => {
+            runtime
+                .execute_discord_typing_indicator_job(job, payload, external_api)
+                .await
+        }
         JobPayload::DiscordVoiceJoin(payload) => {
             runtime
                 .execute_discord_voice_join_job(payload, external_api)

@@ -41,6 +41,7 @@ pub enum JobKind {
     StaleRunningJobSweep,
     EphemeralJobGc,
     DiscordVoiceDeafen,
+    DiscordTypingIndicator,
 }
 
 impl JobKind {
@@ -80,6 +81,7 @@ impl JobKind {
             Self::StaleRunningJobSweep => "stale_running_job_sweep",
             Self::EphemeralJobGc => "ephemeral_job_gc",
             Self::DiscordVoiceDeafen => "discord_voice_deafen",
+            Self::DiscordTypingIndicator => "discord_typing_indicator",
         }
     }
 
@@ -150,6 +152,7 @@ impl FromStr for JobKind {
             "stale_running_job_sweep" => Ok(Self::StaleRunningJobSweep),
             "ephemeral_job_gc" => Ok(Self::EphemeralJobGc),
             "discord_voice_deafen" => Ok(Self::DiscordVoiceDeafen),
+            "discord_typing_indicator" => Ok(Self::DiscordTypingIndicator),
             value => anyhow::bail!("unknown job kind: {value}"),
         }
     }

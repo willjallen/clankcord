@@ -9,7 +9,8 @@ use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordVoiceDeafenOutput,
+    DiscordTextMessagePayload, DiscordTextSendPayload, DiscordTypingAction,
+    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput,
     DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
     DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput,
@@ -631,6 +632,75 @@ fn discord_text_io_jobs_round_trip() {
     assert_eq!(decoded.payload.to_json()["name"], "gRPC and REST");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn discord_typing_indicator_job_round_trips_and_requeues_agent_parent() {
+    let typing = Job::discord_typing_indicator(
+        "guild",
+        "code",
+        "user-a",
+        DiscordTypingIndicatorPayload {
+            action: DiscordTypingAction::Start,
+            target: TextTarget {
+                kind: TextTargetKind::AgentSession,
+                channel_id: String::new(),
+                user_id: String::new(),
+            },
+            source_job_id: "job_agent".to_string(),
+            requested_by_user_id: "user-a".to_string(),
+            agent_task_attempt: 2,
+        },
+    );
+    let decoded = Job::decode(&typing.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordTypingIndicator);
+    assert_eq!(decoded.payload.to_json()["action"], "start");
+    assert_eq!(decoded.payload.to_json()["source_job_id"], "job_agent");
+    assert_eq!(decoded.payload.to_json()["agent_task_attempt"], 2);
+
+    let mut completed = decoded;
+    completed.metadata.output = Some(JobOutput::DiscordTypingIndicator(
+        DiscordTypingIndicatorOutput {
+            action: DiscordTypingAction::Stop,
+            target: TextTarget {
+                kind: TextTargetKind::Channel,
+                channel_id: "thread-1".to_string(),
+                user_id: String::new(),
+            },
+            source_job_id: "job_agent".to_string(),
+            status: "stopped".to_string(),
+        },
+    ));
+    let completed = Job::decode(&completed.encode().unwrap()).unwrap();
+    assert!(matches!(
+        completed.metadata.output,
+        Some(JobOutput::DiscordTypingIndicator(_))
+    ));
+
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let parent = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            "guild",
+            "code",
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "summarize this"),
+        ))
+        .await
+        .unwrap();
+    let child = store.create_child_job(&parent, completed).await.unwrap();
+    let mut completed_child = store.get_job(&child.id).await.unwrap();
+    completed_child.mark_complete();
+    store.update_job(&completed_child).await.unwrap();
+
+    let resolved = store.resolve_waiting_jobs().await.unwrap();
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(
+        store.get_job(&parent.id).await.unwrap().state,
+        JobState::Queued
+    );
+}
+
 #[test]
 fn agent_session_start_and_publication_jobs_round_trip() {
     let command = CommandRequest::agent_task(
@@ -871,6 +941,67 @@ async fn timeline_claim_due_jobs_can_skip_active_agent_sessions() {
     assert_eq!(
         store.get_job(&job_id).await.unwrap().state,
         JobState::Running
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn waiting_agent_task_holds_session_ordering_key() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let command = CommandRequest::agent_task("guild", "code", "user-a", "summarize this");
+    let first = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            "guild",
+            "code",
+            "user-a",
+            command.clone(),
+        ))
+        .await
+        .unwrap();
+    store
+        .create_child_job(
+            &first,
+            Job::discord_typing_indicator(
+                "guild",
+                "code",
+                "user-a",
+                DiscordTypingIndicatorPayload {
+                    action: DiscordTypingAction::Start,
+                    target: TextTarget {
+                        kind: TextTargetKind::AgentSession,
+                        channel_id: String::new(),
+                        user_id: String::new(),
+                    },
+                    source_job_id: first.id.clone(),
+                    requested_by_user_id: "user-a".to_string(),
+                    agent_task_attempt: 0,
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    let second = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test", "guild", "code", "user-a", command,
+        ))
+        .await
+        .unwrap();
+
+    let mut blocked = store.active_ordering_keys().await.unwrap();
+    let claimed = store
+        .claim_due_jobs(JobKind::AgentTask, 4, &mut blocked)
+        .await
+        .unwrap();
+
+    assert!(claimed.is_empty());
+    assert_eq!(
+        store.get_job(&first.id).await.unwrap().state,
+        JobState::Waiting
+    );
+    assert_eq!(
+        store.get_job(&second.id).await.unwrap().state,
+        JobState::Queued
     );
 }
 
