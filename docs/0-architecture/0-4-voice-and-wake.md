@@ -69,6 +69,8 @@ room_agent_placement(leave)
 
 When a voice transition is slow, inspect the concrete operation on the path: adapter locks, Songbird join or leave calls, audio playback, WAV writes, STT and wake provider calls, Postgres contention, scheduler ordering keys, lane capacity, or configured timers.
 
+Join cue analysis uses the capture-session debug notes for `botVoiceStateAt`, `joinStartedAt`, and `joinReadyAt`, then uses playback job lifecycle timestamps for the durable handoff into cue playback. A first-packet playback marker is the missing measurement for packet-egress timing.
+
 ## Capture Pipeline
 
 `LiveCaptureSession` receives Discord voice packets. It filters voice bot users, resolves speaker profiles, records voice-state updates for human users, buffers per-speaker PCM, preserves decode-loss frames as silence where appropriate, commits live capture stats for active sessions, and flushes ready speaker buffers by maximum segment duration or silence timeout.

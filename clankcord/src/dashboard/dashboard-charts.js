@@ -75,9 +75,9 @@
       xAxis: { type: 'category', data: rows.map((row) => row.kind), axisLabel: { ...axisText(), rotate: 24 } },
       yAxis: { type: 'value', axisLabel: { ...axisText(), formatter: (value) => app.millis(value) }, splitLine: { lineStyle: { color: '#343b38' } } },
       series: [
-        { name: 'p50 total', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p50')) },
-        { name: 'p95 total', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p95')) },
-        { name: 'max total', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'max')) },
+        { name: 'p50 lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p50')) },
+        { name: 'p95 lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p95')) },
+        { name: 'max lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'max')) },
       ],
     };
     setChart('latency-kind-chart', option, (params) => {

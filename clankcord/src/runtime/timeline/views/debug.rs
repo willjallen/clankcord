@@ -742,6 +742,31 @@ struct JobDiagnosticRow {
     cancellable: bool,
 }
 
+#[derive(Debug, Default)]
+struct LatencyExclusions {
+    ready_delay_ms: usize,
+    queue_ms: usize,
+    run_ms: usize,
+    total_ms: usize,
+    phase_contaminated: usize,
+    missing_started_at: usize,
+    invalid_timestamp_order: usize,
+}
+
+impl LatencyExclusions {
+    fn to_json(&self) -> Value {
+        json!({
+            "readyDelayMs": self.ready_delay_ms,
+            "queueMs": self.queue_ms,
+            "runMs": self.run_ms,
+            "totalMs": self.total_ms,
+            "phaseContaminated": self.phase_contaminated,
+            "missingStartedAt": self.missing_started_at,
+            "invalidTimestampOrder": self.invalid_timestamp_order,
+        })
+    }
+}
+
 impl JobDiagnosticRow {
     fn activity_ms(&self) -> i64 {
         let mut activity = self.created_at_ms.max(self.updated_at_ms);
@@ -1567,6 +1592,7 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
     let mut queue_ms = Vec::new();
     let mut run_ms = Vec::new();
     let mut total_ms = Vec::new();
+    let mut excluded = LatencyExclusions::default();
     let mut count = 0_usize;
     let mut failed = 0_usize;
     let mut latest_ms = None::<i64>;
@@ -1584,11 +1610,48 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
         if row.is_failed() {
             failed += 1;
         }
-        ready_delay_ms.push((row.ready_at_ms - row.created_at_ms).max(0));
-        total_ms.push((completed_at_ms - row.ready_at_ms).max(0));
-        if let Some(started_at_ms) = row.started_at_ms {
-            queue_ms.push((started_at_ms - row.ready_at_ms).max(0));
-            run_ms.push((completed_at_ms - started_at_ms).max(0));
+        let mut invalid_timestamp_order = false;
+        if completed_at_ms >= row.created_at_ms {
+            total_ms.push(completed_at_ms - row.created_at_ms);
+        } else {
+            excluded.total_ms += 1;
+            invalid_timestamp_order = true;
+        }
+        let phase_contaminated = row
+            .started_at_ms
+            .is_some_and(|started_at_ms| started_at_ms < row.ready_at_ms);
+        if phase_contaminated {
+            excluded.phase_contaminated += 1;
+        }
+        if row.ready_at_ms >= row.created_at_ms && !phase_contaminated {
+            ready_delay_ms.push(row.ready_at_ms - row.created_at_ms);
+        } else {
+            excluded.ready_delay_ms += 1;
+            invalid_timestamp_order |= row.ready_at_ms < row.created_at_ms;
+        }
+        match row.started_at_ms {
+            Some(started_at_ms) => {
+                if started_at_ms >= row.ready_at_ms {
+                    queue_ms.push(started_at_ms - row.ready_at_ms);
+                } else {
+                    excluded.queue_ms += 1;
+                    invalid_timestamp_order |= !phase_contaminated;
+                }
+                if completed_at_ms >= started_at_ms {
+                    run_ms.push(completed_at_ms - started_at_ms);
+                } else {
+                    excluded.run_ms += 1;
+                    invalid_timestamp_order = true;
+                }
+            }
+            None => {
+                excluded.missing_started_at += 1;
+                excluded.queue_ms += 1;
+                excluded.run_ms += 1;
+            }
+        }
+        if invalid_timestamp_order {
+            excluded.invalid_timestamp_order += 1;
         }
         latest_ms = Some(latest_ms.map_or(completed_at_ms, |latest| latest.max(completed_at_ms)));
     }
@@ -1600,6 +1663,7 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
         "queueMs": latency_metric(queue_ms),
         "runMs": latency_metric(run_ms),
         "totalMs": latency_metric(total_ms),
+        "excluded": excluded.to_json(),
         "latestAt": latest_ms.map(ms_iso).unwrap_or_default(),
     })
 }

@@ -457,10 +457,10 @@
             </div>
           </section>
           <section>
-            <h2><span>Job Latency Windows</span><small>ready delay / queue / run / total</small></h2>
+            <h2><span>Job Latency Windows</span><small>lifetime / ready / queue / start wall</small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Window</th><th>Jobs</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Run p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Failed</th></tr></thead>
+                <thead><tr><th>Window</th><th>Jobs</th><th>Lifetime p50</th><th>Lifetime p95</th><th>Lifetime max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Gaps</th><th>Failed</th></tr></thead>
                 <tbody>
                   <template x-for="window in latencyWindows()" :key="window.label">
                     <tr>
@@ -474,6 +474,7 @@
                       <td x-text="latencyValue(window.all, 'queueMs', 'p95')"></td>
                       <td x-text="latencyValue(window.stt, 'totalMs', 'p95')"></td>
                       <td x-text="latencyValue(window.wakeword, 'totalMs', 'p95')"></td>
+                      <td x-text="latencyGapLabel(window.all)"></td>
                       <td x-text="int(window.all?.failed)"></td>
                     </tr>
                   </template>
@@ -532,7 +533,7 @@
             <h2><span>Latency By Job Type</span><small>last hour</small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Run p95</th><th>Queue p95</th></tr></thead>
+                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Lifetime p50</th><th>Lifetime p95</th><th>Lifetime max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>Gaps</th></tr></thead>
                 <tbody>
                   <template x-for="row in latencyKindRows()" :key="row.kind">
                     <tr>
@@ -545,6 +546,7 @@
                       <td x-text="latencyValue(row, 'readyDelayMs', 'p95')"></td>
                       <td x-text="latencyValue(row, 'runMs', 'p95')"></td>
                       <td x-text="latencyValue(row, 'queueMs', 'p95')"></td>
+                      <td x-text="latencyGapLabel(row)"></td>
                     </tr>
                   </template>
                 </tbody>

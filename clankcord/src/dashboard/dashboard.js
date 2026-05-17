@@ -1378,6 +1378,15 @@ window.dashboard = function dashboard() {
       return this.millis(stats?.[name]?.[field]);
     },
 
+    latencyGapLabel(stats) {
+      const excluded = stats?.excluded || {};
+      const phase = Number(excluded.phaseContaminated || 0);
+      const missing = Number(excluded.missingStartedAt || 0);
+      const invalid = Number(excluded.invalidTimestampOrder || 0);
+      if (!phase && !missing && !invalid) return '0';
+      return `${this.int(phase)} phase / ${this.int(missing)} start / ${this.int(invalid)} invalid`;
+    },
+
     jobWindowLabel(window, key) {
       const stats = window?.[key] || {};
       return `${this.int(stats.total)} / ${this.int(stats.active)} active / ${this.int(stats.failed)} failed`;

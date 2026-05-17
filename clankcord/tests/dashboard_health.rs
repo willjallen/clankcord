@@ -1,3 +1,4 @@
+use chrono::Utc;
 use serde_json::json;
 
 mod common;
@@ -72,4 +73,66 @@ async fn dashboard_health_includes_http_request_snapshot() {
         .unwrap();
 
     assert_eq!(overview["requests"], requests);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(raw.path()).await;
+    let base_ms = Utc::now().timestamp_millis() - 30_000;
+
+    sqlx::query(
+        r#"
+        INSERT INTO jobs(
+          job_id, guild_id, voice_channel_id, kind, state, terminal, failed,
+          ephemeral, cancellable, lane, ordering_key, ready_at_ms, created_at_ms,
+          updated_at_ms, started_at_ms, completed_at_ms
+        )
+        VALUES
+          ('job_latency_clean', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
+           FALSE, FALSE, 'voice_control', 'latency-test', $1, $2, $5, $3, $4),
+          ('job_latency_phase', 'guild', 'code', 'wake_activation', 'complete', TRUE, FALSE,
+           FALSE, FALSE, 'voice_control', 'latency-test', $8, $6, $10, $7, $9)
+        "#,
+    )
+    .bind(base_ms + 250)
+    .bind(base_ms)
+    .bind(base_ms + 500)
+    .bind(base_ms + 1000)
+    .bind(base_ms + 1000)
+    .bind(base_ms + 2000)
+    .bind(base_ms + 3000)
+    .bind(base_ms + 5000)
+    .bind(base_ms + 6000)
+    .bind(base_ms + 6000)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let runtime = Runtime::from_store(store).unwrap();
+    let overview = runtime
+        .debug_overview(DebugOverviewRequest::default())
+        .await
+        .unwrap();
+    let latency_rows = overview["operations"]["latencies"]["byKind"]
+        .as_array()
+        .unwrap();
+    let wake_activation = latency_rows
+        .iter()
+        .find(|row| row["kind"].as_str() == Some("wake_activation"))
+        .unwrap();
+
+    assert_eq!(wake_activation["count"], json!(2));
+    assert_eq!(wake_activation["totalMs"]["count"], json!(2));
+    assert_eq!(wake_activation["totalMs"]["max"], json!(4000));
+    assert_eq!(wake_activation["readyDelayMs"]["count"], json!(1));
+    assert_eq!(wake_activation["readyDelayMs"]["p50"], json!(250));
+    assert_eq!(wake_activation["queueMs"]["count"], json!(1));
+    assert_eq!(wake_activation["queueMs"]["p50"], json!(250));
+    assert_eq!(wake_activation["runMs"]["count"], json!(2));
+    assert_eq!(wake_activation["runMs"]["max"], json!(3000));
+    assert_eq!(wake_activation["excluded"]["phaseContaminated"], json!(1));
+    assert_eq!(wake_activation["excluded"]["readyDelayMs"], json!(1));
+    assert_eq!(wake_activation["excluded"]["queueMs"], json!(1));
 }
