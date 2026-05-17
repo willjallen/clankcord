@@ -561,6 +561,72 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(10);
+    let close_at = wake_started_at + chrono::Duration::seconds(5);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: close_at - chrono::Duration::seconds(2),
+            segment_end_time: close_at + chrono::Duration::milliseconds(200),
+            segment_index: 2,
+            duration_ms: 2200,
+            source_audio_path: raw.path().join("pending-overlap.wav"),
+            audio_checksum: "sha256:pending-overlap".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;

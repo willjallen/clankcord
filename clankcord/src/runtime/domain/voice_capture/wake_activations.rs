@@ -730,16 +730,22 @@ async fn has_pending_speaker_audio_segment(
     latest_wake_at: DateTime<Utc>,
     closed_at: DateTime<Utc>,
 ) -> Result<bool> {
-    runtime
+    let jobs = runtime
         .timeline_store
-        .has_pending_audio_segment_for_speaker_until(
+        .list_active_jobs_by_scope_kind(
             &payload.guild_id,
             &payload.voice_channel_id,
-            &payload.speaker_user_id,
-            latest_wake_at,
-            closed_at,
+            JobKind::AudioSegment,
         )
-        .await
+        .await?;
+    Ok(jobs
+        .iter()
+        .filter_map(|job| job.audio_segment_payload())
+        .any(|segment| {
+            segment.speaker_user_id == payload.speaker_user_id
+                && segment.segment_end_time >= latest_wake_at
+                && segment.segment_start_time <= closed_at
+        }))
 }
 
 fn activation_agent_task_command(
