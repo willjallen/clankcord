@@ -41,6 +41,8 @@ fn agent_task_prompt_is_compact_and_packet_free() {
     assert!(prompt.contains("clankcord responses dm"));
     assert!(prompt.contains("single-quoted heredoc"));
     assert!(prompt.contains("treat the request and the answer as private"));
+    assert!(prompt.contains("If you use a Clankcord command that writes or mutates state"));
+    assert!(prompt.contains("Session lifecycle commands, automations, room controls"));
     assert!(prompt.contains("speech-to-text transcription of live voice"));
     assert!(prompt.contains("interpret it charitably"));
     assert!(prompt.contains(

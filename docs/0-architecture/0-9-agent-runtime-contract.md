@@ -125,4 +125,6 @@ NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
+Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success. Session lifecycle commands, automations, room controls, feedback, publication, transcript creation, reminders, and sound playback are state-changing actions. A command that publishes the requested response, such as `clankcord responses send` or `clankcord responses dm`, satisfies the visible-response requirement.
+
 DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. Response bodies are read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.

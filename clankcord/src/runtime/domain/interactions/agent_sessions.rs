@@ -320,11 +320,12 @@ impl Runtime {
             .await?
             && active.agent_session_id != payload.new_agent_session_id
         {
-            anyhow::bail!(
-                "route {} already has active agent session {}",
-                route_key,
-                active.agent_session_id
-            );
+            self.retire_agent_session(
+                &active.agent_session_id,
+                "agent_session_resume_route_takeover",
+                &payload.requested_by_user_id,
+            )
+            .await?;
         }
 
         let children = self.timeline_store.list_child_jobs(&job.id).await?;

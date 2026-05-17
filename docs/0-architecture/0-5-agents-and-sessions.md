@@ -120,7 +120,7 @@ Agent session retirement is runtime maintenance and an explicit user action. `ag
 
 Retired sessions remain queryable by id, list, and search. Route lookup and managed-thread ingress do not select them.
 
-`agent_session_resume` creates a new active session linked to a retired source through `resumed_from_agent_session_id`. A DM resume creates an active DM session. A voice resume creates a starting voice session, creates a managed Discord thread, then marks the new session active. The new session reuses the source `codex_session_id` when the source has one, and it has its own route binding, timestamps, cap, jobs, thread, and audit events.
+`agent_session_resume` creates a new active session linked to a retired source through `resumed_from_agent_session_id`. Resume takes over the target route by retiring the current active session with `agent_session_resume_route_takeover`. A DM resume creates an active DM session. A voice resume creates a starting voice session, creates a managed Discord thread, and marks the new session active. The new session reuses the source `codex_session_id` when the source has one, and it has its own route binding, timestamps, cap, jobs, thread, and audit events.
 
 ```text
 retired AgentSessionRecord
@@ -149,6 +149,8 @@ RESPONSE_SUBMITTED
 NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
+
+Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success.
 
 Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and domain-executed Discord text jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
 
