@@ -123,6 +123,8 @@ audio_checksum
 
 `wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, waits for pending `audio_segment` STT work, closes the request window, plays an acknowledgement cue, and creates `agent_session_start` or `agent_task` when usable request text exists.
 
+The normal close path is voice-driven. After the minimum post-wake window has elapsed, wake activation follows the speaker's committed capture stats and speech segments. The window closes once the latest activating-speaker PCM timestamp has been idle for `speaker_idle_seconds`, then the runtime waits for overlapping `audio_segment` jobs to finish STT before dispatching the agent work. The maximum activation window remains a long emergency bound around malformed capture state or a permanently active speaker stream.
+
 `/wake` uses the same activation path. The slash-command ingress appends a manual `wake_detected` event for the invoking user's current voice room, then schedules `wake_activation` from that event. Follow-up, replacement, cue playback, window closing, and agent dispatch follow the normal wake activation rules.
 
 Follow-up wakes can amend an activation before work has spawned. Inside the preempt window, replacement logic can cancel still-cancellable activation work and schedule preempt cue playback. When the request window closes without usable text, the runtime records `wake_activation_no_request`.
@@ -133,7 +135,7 @@ The default timing model is:
 lookback                         30 seconds
 minimum post-wake window          5 seconds
 speaker idle                      2 seconds
-max activation window            60 seconds
+max activation window         86400 seconds
 STT settle deadline             120 seconds
 additive preempt                 10 seconds
 independent activation threshold 45 seconds

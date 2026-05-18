@@ -16,6 +16,8 @@ use clankcord::runtime::{
 
 use common::{dt, test_store};
 
+const EXPECTED_WAKE_ACTIVATION_MAX_WINDOW_SECONDS: i64 = 86_400;
+
 fn string_field(value: &Value, key: &str) -> String {
     match value.get(key) {
         Some(Value::String(text)) => text.trim().to_string(),
@@ -23,6 +25,41 @@ fn string_field(value: &Value, key: &str) -> String {
         Some(Value::Bool(boolean)) => boolean.to_string(),
         _ => String::new(),
     }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_uses_long_default_max_window() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let runtime = test_runtime(store);
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(1),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true, "score": 0.88}),
+        1,
+    )
+    .await;
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job
+        .wake_activation_payload()
+        .expect("missing wake activation payload");
+
+    assert_eq!(
+        payload.max_window_seconds,
+        EXPECTED_WAKE_ACTIVATION_MAX_WINDOW_SECONDS
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
