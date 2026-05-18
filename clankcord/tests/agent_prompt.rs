@@ -45,6 +45,8 @@ fn agent_task_prompt_is_compact_and_packet_free() {
     assert!(prompt.contains("command-group `--help`"));
     assert!(prompt.contains("clankcord responses dm"));
     assert!(prompt.contains("single-quoted heredoc"));
+    assert!(prompt.contains("INVOCATION_RESPONSE_CONTRACT"));
+    assert!(prompt.contains("After successful private delivery"));
     assert!(prompt.contains("If you use a Clankcord command that writes or mutates state"));
     assert!(prompt.contains("Session lifecycle commands, automations, room controls"));
     assert!(prompt.contains("speech-to-text transcription of live voice"));
@@ -57,6 +59,43 @@ fn agent_task_prompt_is_compact_and_packet_free() {
     assert!(!prompt.contains("\"tools\""));
     assert!(!prompt.contains("\"manuals\""));
     assert!(!prompt.contains("\"policy\""));
+}
+
+#[test]
+fn voice_dm_request_prompt_forbids_public_confirmation_after_private_delivery() {
+    let prompt = build_agent_task_message_from_template_dir(
+        &AgentTaskPromptContext {
+            job_id: "job_1".to_string(),
+            agent_session_id: "ags_1".to_string(),
+            resumed_from_agent_session_id: String::new(),
+            route_kind: AgentSessionRouteKind::Voice,
+            request_origin: AgentPromptRequestOrigin::Voice,
+            response_surface: TextTargetKind::Channel,
+            guild_id: "guild".to_string(),
+            scope_id: "voice".to_string(),
+            requested_by_user_id: "user".to_string(),
+            requested_by: "Will".to_string(),
+            request: "send me a DM with the message test".to_string(),
+            workdir: "/clankcord/state/agent-workspaces/task/ags_1".to_string(),
+            recent_scope_events: vec![],
+            source_request_events: vec![
+                "[2026-05-18T01:31:55.234Z] Will (user): send me a DM with the message test"
+                    .to_string(),
+            ],
+        },
+        false,
+        &prompt_dir(),
+    )
+    .expect("build voice dm request prompt");
+
+    assert!(prompt.contains("route_kind: voice"));
+    assert!(prompt.contains("response_surface: channel"));
+    assert!(prompt.contains("VOICE_REQUEST_CONTEXT"));
+    assert!(prompt.contains("INVOCATION_RESPONSE_CONTRACT"));
+    assert!(prompt.contains("clankcord responses dm --to"));
+    assert!(prompt.contains("Do not also use `clankcord responses send`"));
+    assert!(prompt.contains("post a session/channel confirmation"));
+    assert!(!prompt.contains("SESSION_INSTRUCTIONS"));
 }
 
 #[test]
@@ -188,6 +227,11 @@ fn agent_task_prompt_can_render_from_custom_template_dir() {
         "CUSTOM TASK CONTEXT\n{{source_request_events}}",
     )
     .expect("write agent task local context prompt template");
+    std::fs::write(
+        tempdir.path().join("agent-task-response-contract.md"),
+        "CUSTOM TASK RESPONSE CONTRACT",
+    )
+    .expect("write agent task response contract prompt template");
 
     let prompt = build_agent_task_message_from_template_dir(
         &AgentTaskPromptContext {
@@ -219,6 +263,7 @@ fn agent_task_prompt_can_render_from_custom_template_dir() {
     assert!(prompt.contains("CUSTOM RUNTIME"));
     assert!(prompt.contains("CUSTOM TASK BASE"));
     assert!(prompt.contains("CUSTOM TASK CONTEXT"));
+    assert!(prompt.contains("CUSTOM TASK RESPONSE CONTRACT"));
     assert!(prompt.contains("job=job_1"));
     assert!(prompt.contains("request=summarize the floating point discussion"));
     assert!(prompt.contains("hey clanky summarize this"));
@@ -237,6 +282,11 @@ fn agent_task_prompt_rejects_legacy_context_template_variables() {
         "CUSTOM TASK CONTEXT\n{{previous_context}}",
     )
     .expect("write agent task local context prompt template");
+    std::fs::write(
+        tempdir.path().join("agent-task-response-contract.md"),
+        "CUSTOM TASK RESPONSE CONTRACT",
+    )
+    .expect("write agent task response contract prompt template");
 
     let error = build_agent_task_message_from_template_dir(
         &AgentTaskPromptContext {

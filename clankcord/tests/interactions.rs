@@ -20,6 +20,8 @@ fn agent_task_message_uses_compact_invocation_context() {
     assert!(message.contains("RESPONSE_SUBMITTED"));
     assert!(message.contains("NO_RESPONSE_NEEDED"));
     assert!(message.contains("Codex final text is a control signal"));
+    assert!(message.contains("INVOCATION_RESPONSE_CONTRACT"));
+    assert!(message.contains("After successful private delivery"));
     assert!(message.contains("You may search the web"));
     assert!(message.contains("Do not be sycophantic"));
     assert!(message.contains("VOICE_REQUEST_CONTEXT"));
@@ -47,6 +49,8 @@ fn resumed_agent_task_message_omits_large_session_instructions() {
 
     assert!(message.contains("JOB:"));
     assert!(!message.contains("SESSION_INSTRUCTIONS:"));
+    assert!(message.contains("INVOCATION_RESPONSE_CONTRACT"));
+    assert!(message.contains("After successful private delivery"));
     assert!(message.contains("VOICE_REQUEST_CONTEXT"));
     assert!(message.contains("===== CURRENT REQUEST EVENTS ====="));
     assert!(!message.contains("JOB_PACKET_JSON"));

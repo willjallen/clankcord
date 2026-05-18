@@ -46,7 +46,7 @@ The runtime loads prompt templates from `prompts.dir` in `config.toml`. Deployme
 
 Session bootstrap sections are `base.md`, `clankcord-tools.md`, `response-contract.md`, and `runtime-work.md`. These sections describe Clankcord identity, authority boundaries, the CLI surface, environment variables, response publication, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
 
-Every agent task includes the invocation base sections `agent-task-base.md` and `agent-task-local-context.md`. The runtime adds conditional invocation sections from typed route and origin fields. Voice-channel routes add `agent-task-route-voice.md`. DM routes add `agent-task-route-dm.md`. Typed Discord requests add `agent-task-origin-text.md`; public and managed text surfaces also add `agent-task-origin-public-text.md`. Spoken wake activations add `agent-task-origin-voice.md`.
+Every agent task includes the invocation base sections `agent-task-base.md`, `agent-task-local-context.md`, and `agent-task-response-contract.md`. The runtime adds conditional invocation sections from typed route and origin fields. Voice-channel routes add `agent-task-route-voice.md`. DM routes add `agent-task-route-dm.md`. Typed Discord requests add `agent-task-origin-text.md`; public and managed text surfaces also add `agent-task-origin-public-text.md`. Spoken wake activations add `agent-task-origin-voice.md`.
 
 Prompt section selection uses Rust types before Markdown rendering. The route comes from `AgentSessionRouteKind`, the request origin comes from `AgentPromptRequestOrigin`, and the response surface comes from `TextTargetKind`. The template value map is generated from `AgentTaskPromptVars`, so raw string template names are confined to the renderer boundary.
 
@@ -84,6 +84,8 @@ CONTEXT NOTE:
 The captured context is a bounded local window of user-visible speech and Discord text messages from the task scope. It includes all speakers in that window, split into recent scope events and source request events. The prompt excludes raw job packets, wake internals, audio paths, checksums, provider metadata, token details, and duplicated field aliases.
 
 The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broader scope context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
+
+The invocation response contract is repeated on every task because resumed Codex sessions receive invocation sections without the session bootstrap sections. It covers private delivery requests across all routes: a request to DM, direct-message, privately reply, or message a specific private recipient is satisfied by the private delivery itself. After successful private delivery, the agent finishes with `RESPONSE_SUBMITTED` and does not publish a session or channel confirmation unless the user explicitly asks for public acknowledgement.
 
 Typed requests are treated as intentional Discord text. DM route prompts describe the response as private to the DM participant and direct the agent to answer through the current DM session. Public text prompts keep the answer tied to the visible text surface. Voice-origin prompts describe speech-to-text uncertainty and require a short summary of the understood request before a visible answer.
 

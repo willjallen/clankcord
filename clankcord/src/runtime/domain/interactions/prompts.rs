@@ -33,6 +33,7 @@ enum PromptSection {
     RuntimeWork,
     AgentTaskBase,
     AgentTaskLocalContext,
+    AgentTaskResponseContract,
     AgentTaskRouteVoice,
     AgentTaskRouteDm,
     AgentTaskOriginText,
@@ -48,6 +49,7 @@ impl PromptSection {
             }
             Self::AgentTaskBase
             | Self::AgentTaskLocalContext
+            | Self::AgentTaskResponseContract
             | Self::AgentTaskRouteVoice
             | Self::AgentTaskRouteDm
             | Self::AgentTaskOriginText
@@ -64,6 +66,7 @@ impl PromptSection {
             Self::RuntimeWork => "runtime-work.md",
             Self::AgentTaskBase => "agent-task-base.md",
             Self::AgentTaskLocalContext => "agent-task-local-context.md",
+            Self::AgentTaskResponseContract => "agent-task-response-contract.md",
             Self::AgentTaskRouteVoice => "agent-task-route-voice.md",
             Self::AgentTaskRouteDm => "agent-task-route-dm.md",
             Self::AgentTaskOriginText => "agent-task-origin-text.md",
@@ -83,6 +86,7 @@ const SESSION_BOOTSTRAP_SECTIONS: &[PromptSection] = &[
 const AGENT_INVOCATION_BASE_SECTIONS: &[PromptSection] = &[
     PromptSection::AgentTaskBase,
     PromptSection::AgentTaskLocalContext,
+    PromptSection::AgentTaskResponseContract,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
