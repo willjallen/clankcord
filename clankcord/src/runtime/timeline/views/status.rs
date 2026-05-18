@@ -26,7 +26,13 @@ impl Runtime {
         let retention_policy = occupancy
             .get("retention_policy")
             .cloned()
-            .unwrap_or_else(|| json!({"draftTranscriptEvents": "7d", "sourceAudio": "7d"}));
+            .unwrap_or_else(|| {
+                json!({
+                    "transcript_events": "forever",
+                    "source_audio": "7d",
+                    "job_metadata": "forever"
+                })
+            });
         let live_publications = self
             .timeline_store
             .list_publications(

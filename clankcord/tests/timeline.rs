@@ -4,7 +4,8 @@ use serde_json::json;
 
 mod common;
 
-use clankcord::runtime::timeline::CaptureRunInput;
+use clankcord::runtime::timeline::{CaptureRunInput, SpeechEventInput};
+use clankcord::runtime::{CommandRequest, Job, JobState, RuntimeScope};
 
 use common::{append_speech, dt, test_store};
 
@@ -333,23 +334,59 @@ async fn retention_sweep_dry_run_and_idempotence() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let start = dt(2026, 4, 1, 16, 0, 0);
-    let source = raw.path().join("old-source.wav");
+    let run = store
+        .create_capture_run(CaptureRunInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            started_at: Some(start),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let capture_run_id = string_field(&run, "capture_run_id");
+    let source = store
+        .capture_run_scratch_dir("guild", "code", start, &capture_run_id)
+        .join("segments")
+        .join("speaker-user-a")
+        .join("old-source.wav");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
     std::fs::write(&source, b"audio").unwrap();
-    append_speech(
-        &store,
-        raw.path(),
-        start,
-        start + chrono::Duration::seconds(2),
-        "old draft words",
-        1,
-        Some(source.clone()),
-    )
-    .await;
+    store
+        .append_speech_event(SpeechEventInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: capture_run_id.clone(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: start,
+            segment_end_time: start + chrono::Duration::seconds(2),
+            text_draft: "old draft words".to_string(),
+            source_audio_path: source.clone(),
+            audio_checksum: "sha256:test".to_string(),
+            segment_index: 1,
+            duration_ms: 2000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     let dry = store
         .retention_sweep(Some(start + chrono::Duration::days(8)), true)
         .await
         .unwrap();
-    assert_eq!(dry["retired_events"], json!(1));
+    assert_eq!(dry["transcript_event_candidates"], json!(0));
+    assert_eq!(dry["source_audio_candidates"], json!(1));
+    assert_eq!(dry["job_candidates"], json!(0));
     assert!(source.exists());
     let kinds = BTreeSet::from(["speech_segment".to_string()]);
     assert_eq!(
@@ -369,8 +406,110 @@ async fn retention_sweep_dry_run_and_idempotence() {
         .retention_sweep(Some(start + chrono::Duration::days(8)), false)
         .await
         .unwrap();
-    assert_eq!(first["retired_events"], json!(1));
+    assert_eq!(first["transcript_event_candidates"], json!(0));
+    assert_eq!(first["source_audio_candidates"], json!(1));
+    assert_eq!(first["deleted_audio"], json!(1));
     assert!(!source.exists());
+    assert_eq!(
+        store
+            .load_events("guild", "code", None, None, Some(&kinds), None, false)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(second["transcript_event_candidates"], json!(0));
+    assert_eq!(second["source_audio_candidates"], json!(0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retention_sweep_respects_transcript_and_source_audio_policy() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let start = dt(2026, 4, 1, 16, 0, 0);
+    let run = store
+        .create_capture_run(CaptureRunInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            started_at: Some(start),
+            retention_policy: Some(json!({
+                "transcript_events": "7d",
+                "source_audio": "forever",
+                "job_metadata": "1d"
+            })),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let capture_run_id = string_field(&run, "capture_run_id");
+    let source = store
+        .capture_run_scratch_dir("guild", "code", start, &capture_run_id)
+        .join("segments")
+        .join("speaker-user-a")
+        .join("retained-source.wav");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"audio").unwrap();
+    store
+        .append_speech_event(SpeechEventInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id,
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: start,
+            segment_end_time: start + chrono::Duration::seconds(2),
+            text_draft: "old policy words".to_string(),
+            source_audio_path: source.clone(),
+            audio_checksum: "sha256:test".to_string(),
+            segment_index: 1,
+            duration_ms: 2000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let mut job = Job::agent_task_for_session(
+        "ags_retention",
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
+    );
+    let started = start.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    job.created_at = started.clone();
+    job.updated_at = started.clone();
+    job.completed_at = Some(started);
+    job.state = JobState::Complete;
+    let job_id = job.id.clone();
+    store.create_job(job).await.unwrap();
+
+    let result = store
+        .retention_sweep(Some(start + chrono::Duration::days(8)), false)
+        .await
+        .unwrap();
+
+    assert_eq!(result["transcript_event_candidates"], json!(1));
+    assert_eq!(result["forgotten_events"], json!(1));
+    assert_eq!(result["source_audio_candidates"], json!(0));
+    assert_eq!(result["job_candidates"], json!(1));
+    assert_eq!(result["deleted_jobs"], json!(1));
+    assert!(source.exists());
+    let row = sqlx::query("SELECT COUNT(*) AS count FROM jobs WHERE job_id = $1")
+        .bind(&job_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "count").unwrap(), 0);
+    let kinds = BTreeSet::from(["speech_segment".to_string()]);
     assert!(
         store
             .load_events("guild", "code", None, None, Some(&kinds), None, false)
@@ -378,7 +517,44 @@ async fn retention_sweep_dry_run_and_idempotence() {
             .unwrap()
             .is_empty()
     );
-    assert_eq!(second["retired_events"], json!(0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn retention_sweep_retires_untranscribed_wake_probe_audio_from_capture_directory() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let start = dt(2026, 4, 1, 16, 0, 0);
+    let run = store
+        .create_capture_run(CaptureRunInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            started_at: Some(start),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let capture_run_id = string_field(&run, "capture_run_id");
+    let source = store
+        .capture_run_scratch_dir("guild", "code", start, &capture_run_id)
+        .join("wake-probes")
+        .join("speaker-user-a")
+        .join("no-wake.wav");
+    std::fs::create_dir_all(source.parent().unwrap()).unwrap();
+    std::fs::write(&source, b"audio").unwrap();
+
+    let result = store
+        .retention_sweep(Some(start + chrono::Duration::days(8)), false)
+        .await
+        .unwrap();
+
+    assert_eq!(result["source_audio_candidates"], json!(1));
+    assert_eq!(result["deleted_audio"], json!(1));
+    assert!(!source.exists());
 }
 
 fn voice_state(

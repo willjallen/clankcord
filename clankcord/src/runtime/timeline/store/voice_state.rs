@@ -324,9 +324,9 @@ impl TimelineStore {
             release_reason: String::new(),
         };
         let retention_policy = json!({
-            "draft_transcript_events": "7d",
+            "transcript_events": "forever",
             "source_audio": "7d",
-            "job_metadata": "30d"
+            "job_metadata": "forever"
         });
         let run = json!({
             "capture_run_id": capture_run_id,

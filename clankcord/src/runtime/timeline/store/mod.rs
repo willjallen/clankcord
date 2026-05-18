@@ -29,7 +29,7 @@ pub(crate) use sqlx::{Postgres, QueryBuilder, Row as SqlxRow};
 
 pub(crate) use crate::Result;
 pub(crate) use crate::runtime::Job;
-pub(crate) use crate::runtime::util::{first_value_string, non_empty, slugify, string_field};
+pub(crate) use crate::runtime::util::{first_value_string, non_empty, string_field};
 
 pub(crate) use super::util::{
     SPEECH_KINDS, compact_timeline_payload, event_ended_ms, event_started_ms, excerpt,
@@ -197,28 +197,19 @@ impl TimelineStore {
             .join(format!("channel-{voice_channel_id}"))
     }
 
-    pub fn source_audio_path(
+    pub fn capture_run_scratch_dir(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
+        started_at: DateTime<Utc>,
         capture_run_id: &str,
-        speaker_user_id: &str,
-        segment_id: &str,
-        suffix: &str,
     ) -> PathBuf {
-        let safe_speaker = {
-            let slug = slugify(speaker_user_id);
-            if slug.is_empty() {
-                speaker_user_id.to_string()
-            } else {
-                slug
-            }
-        };
+        let local = started_at.with_timezone(&config::local_tz());
+        let prefix = capture_run_id.chars().take(8).collect::<String>();
         self.channel_dir(guild_id, voice_channel_id)
-            .join("audio")
-            .join(capture_run_id)
-            .join(format!("speaker-{safe_speaker}"))
-            .join(format!("{segment_id}{suffix}"))
+            .join("capture-run-scratch")
+            .join(local.format("%Y/%m/%d").to_string())
+            .join(format!("{}-{prefix}", local.format("%H-%M-%S")))
     }
 
     pub(crate) async fn get_payload_by_id(

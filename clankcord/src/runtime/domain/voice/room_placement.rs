@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::config::local_tz;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::{first_non_empty, single_child_of_kind};
@@ -716,14 +715,12 @@ fn session_directory(
     started_at: chrono::DateTime<chrono::Utc>,
     session_id: &str,
 ) -> std::path::PathBuf {
-    let local = started_at.with_timezone(&local_tz());
-    let prefix = session_id.chars().take(8).collect::<String>();
-    runtime
-        .timeline_store
-        .channel_dir(&room.guild_id, &room.channel_id)
-        .join("capture-run-scratch")
-        .join(local.format("%Y/%m/%d").to_string())
-        .join(format!("{}-{prefix}", local.format("%H-%M-%S")))
+    runtime.timeline_store.capture_run_scratch_dir(
+        &room.guild_id,
+        &room.channel_id,
+        started_at,
+        session_id,
+    )
 }
 
 fn should_record_manual_hold_for_join(reason: &str) -> bool {

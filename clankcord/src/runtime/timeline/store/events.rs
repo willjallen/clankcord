@@ -881,9 +881,9 @@ impl TimelineStore {
         let assignment_id = new_id("assign");
         let policy = input.retention_policy.unwrap_or_else(|| {
             serde_json::json!({
-                "draft_transcript_events": "7d",
+                "transcript_events": "forever",
                 "source_audio": "7d",
-                "job_metadata": "30d"
+                "job_metadata": "forever"
             })
         });
         let run = serde_json::json!({

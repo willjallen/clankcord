@@ -19,7 +19,7 @@ timeline memory
 
 Room status renders the current voice mode, active voice assignment, assigned voice bot, capture run, retention policy, room controls, occupancy payload, live publications, active jobs, active capture session, and pool capacity. The dashboard and CLI read those status views from Postgres-backed runtime views.
 
-The user-facing state is carried through durable or rendered fields. `control.listeningPaused` shows an active room pause marker. `livePublications` shows live draft transcript publications in Discord. `activeJobs` shows queued, running, and waiting work affecting the room. `retentionPolicy` shows draft transcript, source audio, and job metadata retention windows. Status answers what Clankcord is doing in the room: whether a voice bot is assigned, whether listening is paused, whether transcript publication is active, and which jobs are changing state.
+The user-facing state is carried through durable or rendered fields. `control.listeningPaused` shows an active room pause marker. `livePublications` shows live draft transcript publications in Discord. `activeJobs` shows queued, running, and waiting work affecting the room. `retentionPolicy` shows transcript event, source audio, and job metadata retention windows. Status answers what Clankcord is doing in the room: whether a voice bot is assigned, whether listening is paused, whether transcript publication is active, and which jobs are changing state.
 
 ## Pause, Resume, And Deafen
 
@@ -63,17 +63,19 @@ Timeline queries and transcript views use the store's forgotten-state filter. Th
 
 ## Retention
 
-Retention sweep is store maintenance. The sweep marks old draft speech and transcript events as forgotten, deletes referenced source audio files, appends `retention_retired` events per affected channel, and removes old terminal job rows after their retention window.
+Retention sweep is store maintenance. The sweep reads capture-run retention policies and applies each policy axis independently. `transcript_events` controls forgotten-state marking for `speech_segment` and `transcript` timeline rows. `source_audio` controls deletion of WAV files under capture-run scratch audio directories. `job_metadata` controls age-based deletion for terminal non-ephemeral job rows. Ephemeral jobs continue to use their `gc_after_ms` lifecycle.
 
 The default capture-run retention policy is:
 
 ```text
-draft_transcript_events   7d
+transcript_events         forever
 source_audio              7d
-job_metadata              30d
+job_metadata              forever
 ```
 
-Retention uses the same local delete and forgotten-state mechanism as explicit forget. Publication artifacts under `durable/publications/` remain publication state and are handled through transcript publication and refinement policy.
+The source-audio pass walks capture-run scratch directories during maintenance. Wake probe and audio segment enqueue paths write the WAV artifact and create their jobs. This keeps live capture latency tied to audio file creation and job insertion. `source_audio = forever` leaves the files in place.
+
+`transcript_events = forever` keeps speech and transcript timeline rows visible. A finite `transcript_events` value uses the same forgotten-state mechanism as explicit forget and appends `retention_retired` for the affected channel. `job_metadata = forever` keeps terminal non-ephemeral job rows. A finite `job_metadata` value deletes eligible terminal non-ephemeral jobs through the retention sweep. Publication artifacts under `durable/publications/` remain publication state and are handled through transcript publication and refinement policy.
 
 ## Publication Boundary
 
@@ -82,7 +84,7 @@ Draft local speech and source audio are internal memory until a transcript is pu
 ```text
 local timeline memory
       |
-      +--> forget and retention
+      +--> forget and retention policy
       |
       +--> materialize transcript
               |

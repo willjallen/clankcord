@@ -429,7 +429,6 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
             "idx_jobs_scope_kind_updated",
             "idx_jobs_scope_state_kind_updated",
             "idx_jobs_state_updated",
-            "idx_jobs_terminal_retention",
             "idx_jobs_text_delivery_source",
             "idx_jobs_wake_stream_queued",
             "jobs_pkey",
@@ -954,9 +953,6 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_ephemeral_gc
               ON jobs(gc_after_ms, job_id)
               WHERE ephemeral = TRUE AND terminal = TRUE;
-            CREATE INDEX IF NOT EXISTS idx_jobs_terminal_retention
-              ON jobs(created_at_ms, job_id)
-              WHERE terminal = TRUE;
             CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
               ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
               WHERE kind = 'wake_probe' AND state = 'queued';

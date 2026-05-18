@@ -142,7 +142,7 @@ timeline_events
 
 The primary timeline access pattern is a room-scoped time range. Room-time indexes are defined over `(scope_kind, scope_id, started_at_ms, sequence)` with optional kind, capture-run, conversation, and speaker indexes for narrower views. `started_at_ms` and `ended_at_ms` are required columns. Instant events store the same value in both columns. The range loader uses `ended_at_ms > range_start` and `started_at_ms < range_end`, then orders by `started_at_ms`, `sequence`, and `event_id`. Draft transcript search loads speech and transcript event ranges, then matches event text in Rust. Refined transcript search reads authoritative span metadata from Postgres and text artifacts from durable publication storage.
 
-Forgotten events remain rows with `forgotten = TRUE`. That keeps sequence, audit, and retention behavior explicit while ordinary timeline readers filter them with a projected boolean. Forget and retention operations update the projection first, then append privacy-relevant events that describe the operation.
+Forgotten events remain rows with `forgotten = TRUE`. That keeps sequence, audit, and transcript retention behavior explicit while ordinary timeline readers filter them with a projected boolean. Forget and finite `transcript_events` retention update the projection first, then append privacy-relevant events that describe the operation.
 
 ## Blob Contracts
 
@@ -167,7 +167,7 @@ Hot scheduling paths use projected columns. JSON operators appear in narrow plac
 
 ## Retention And Table Growth
 
-Retention keeps operational tables within their intended working set. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. The broader retention sweep applies a seven-day cutoff to draft speech and transcript events and a thirty-day creation-time cutoff to terminal job rows through the terminal-retention index. Draft transcript events and source audio expire through forgotten-state marking and artifact deletion. Publication artifacts remain durable publication state.
+Retention applies the configured capture-run policy from the maintenance path. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. Transcript event retention uses projected timeline kind, time, capture-run, and forgotten-state columns. With the default durable transcript and job metadata policy, maintenance skips the transcript-event and terminal-job scans. Source audio retention walks capture-run scratch directories during maintenance and deletes expired WAV artifacts. Wake probe and audio segment enqueue paths stay limited to artifact creation and job insertion. Non-ephemeral job metadata retention is policy-driven; the default policy keeps terminal job rows durable. Publication artifacts remain durable publication state.
 
 ```text
 ephemeral job
@@ -178,20 +178,26 @@ ephemeral job
 
 terminal retained job
   terminal = TRUE
-  created_at_ms < cutoff
+  ephemeral = FALSE
+  job_metadata policy expired
       -> delete job row
       -> cascade job payload and dependency edges
 
-old draft transcript event
+old transcript event
   event_kind in speech/transcript
   forgotten = FALSE
-  started_at_ms < cutoff
-      -> delete source audio artifact
+  transcript_events policy expired
       -> set forgotten = TRUE
+      -> append retention_retired
+
+source audio artifact
+  under capture-run scratch segments/wake-probes
+  source_audio policy expired
+      -> delete source audio artifact
       -> append retention_retired
 ```
 
-Queued, running, waiting, confirmation-pending, and cancel-requested jobs are durable coordination state while they remain in the job table. Maintenance deletions cascade through `job_payloads` and `job_dependencies` through the foreign keys defined in the schema.
+Queued, running, waiting, confirmation-pending, and cancel-requested jobs are durable coordination state while they remain in the job table. Policy-driven job metadata deletion and ephemeral job GC cascade through `job_payloads` and `job_dependencies` through the foreign keys defined in the schema.
 
 ## Concurrency And Maintenance
 

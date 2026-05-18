@@ -57,6 +57,8 @@ The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `C
 
 The `0.4.0` migration enforces the database hard-cut performance contracts. It sets timeline event start and end times to `NOT NULL` after asserting existing rows already carry both projected times. It also asserts that automation and agent-session payload blobs use the current storage envelopes.
 
+The `0.5.0` migration removes the obsolete terminal-job retention index. Retention is policy-driven: transcript events, source audio artifacts, and non-ephemeral job metadata each use the configured capture-run policy, while ephemeral jobs keep their `gc_after_ms` lifecycle.
+
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 
 ## Code Layout
