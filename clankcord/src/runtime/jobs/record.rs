@@ -95,6 +95,8 @@ pub(crate) struct AgentInvocationMetadata {
     pub session_id: String,
     pub provider: String,
     pub model: String,
+    pub reasoning_effort: String,
+    pub fast_mode: bool,
     pub usage: BinaryPayload,
 }
 
@@ -104,6 +106,10 @@ impl AgentInvocationMetadata {
         insert_non_empty(&mut object, "session_id", &self.session_id);
         insert_non_empty(&mut object, "provider", &self.provider);
         insert_non_empty(&mut object, "model", &self.model);
+        insert_non_empty(&mut object, "reasoning_effort", &self.reasoning_effort);
+        if self.fast_mode {
+            object.insert("fast_mode".to_string(), Value::Bool(true));
+        }
         if !self.usage.is_empty() {
             object.insert("usage".to_string(), self.usage.to_json());
         }

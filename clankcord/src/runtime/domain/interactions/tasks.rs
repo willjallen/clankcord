@@ -307,6 +307,8 @@ impl Runtime {
             prompt,
             cwd: Some(workdir.clone()),
             model: agent_task_model(),
+            reasoning_effort: config::codex_reasoning_effort(),
+            fast_mode: config::codex_fast_mode(),
             env: agent_env,
             result_path: result_path.clone(),
             raw_result_path: raw_result_path.clone(),
@@ -361,6 +363,8 @@ impl Runtime {
                 session_id: completed_session.codex_session_id,
                 provider: "codex".to_string(),
                 model: invocation.model,
+                reasoning_effort: invocation.reasoning_effort.as_str().to_string(),
+                fast_mode: invocation.fast_mode,
                 usage: BinaryPayload::from_json(&extract_codex_usage(&invocation.stdout))
                     .unwrap_or_else(|_| BinaryPayload::empty()),
             },
@@ -946,7 +950,7 @@ fn agent_repo_dir() -> Option<PathBuf> {
 }
 
 fn agent_task_model() -> Option<String> {
-    config::codex_task_model()
+    config::codex_model()
 }
 
 fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPreflightMetadata {

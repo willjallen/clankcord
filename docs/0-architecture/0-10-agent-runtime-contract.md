@@ -21,7 +21,9 @@ The typing indicator is a durable Discord job with `start` and `stop` actions. A
 
 Each persisted agent session has a writable directory under `paths.agent_workspaces_root` from `config.toml`. Codex runs with that directory as its current working directory. The directory holds notes, temporary files, command output, and intermediate artifacts. The source checkout is exposed through `CLANKCORD_REPO_DIR`.
 
-Codex sandbox behavior comes from the `[codex]` configuration. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
+Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
+
+Codex sandbox behavior also comes from `[codex]`. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
 
 Every invocation receives job and session context through environment variables.
 

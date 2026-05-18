@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use crate::Result;
 use crate::adapters::codex::{CodexRunRequest, CodexRunResult};
+use crate::config::CodexReasoningEffort;
 use crate::runtime::agents::{AgentInfrastructureError, AgentRuntime, AgentSession};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +33,8 @@ pub(crate) struct AgentInvocationRequest {
     pub prompt: String,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
+    pub reasoning_effort: CodexReasoningEffort,
+    pub fast_mode: bool,
     pub env: BTreeMap<String, String>,
     pub result_path: PathBuf,
     pub raw_result_path: PathBuf,
@@ -45,6 +48,8 @@ pub(crate) struct AgentInvocationResult {
     pub success: bool,
     pub session_id: String,
     pub model: String,
+    pub reasoning_effort: CodexReasoningEffort,
+    pub fast_mode: bool,
     pub final_message: String,
     pub command_display: String,
     pub session: Option<AgentSession>,
@@ -72,6 +77,8 @@ impl AgentRuntime {
             },
             cwd: request.cwd,
             model: request.model,
+            reasoning_effort: request.reasoning_effort,
+            fast_mode: request.fast_mode,
             env: request.env,
             output_last_message_path: request.result_path,
             stdout_path: Some(request.raw_result_path),
@@ -94,6 +101,8 @@ impl AgentRuntime {
             success: codex_result.success,
             session_id: codex_result.session_id,
             model: codex_result.model,
+            reasoning_effort: codex_result.reasoning_effort,
+            fast_mode: codex_result.fast_mode,
             final_message: codex_result.final_message,
             command_display: codex_result.command_display,
             session: Some(completed_session),

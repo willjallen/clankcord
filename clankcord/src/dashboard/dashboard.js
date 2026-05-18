@@ -541,6 +541,8 @@ window.dashboard = function dashboard() {
         ['Scope ID', job.scope_id],
         ['Requester', job.requested_by_user_id],
         ['Model', codex.model || metadata.agent?.model || ''],
+        ['Reasoning', codex.reasoningEffort || metadata.agent?.reasoning_effort || ''],
+        ['Fast Mode', textValue(codex.fastMode ?? metadata.agent?.fast_mode ?? false)],
         ['Session', codex.sessionId || metadata.agent?.session_id || ''],
         ['Trace Scope', entry?.session?.scope || ''],
         ['Workdir', entry?.workdir?.path || metadata.workdir_path || ''],

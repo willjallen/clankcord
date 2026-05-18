@@ -85,14 +85,38 @@ pub struct DiscordConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CodexConfig {
     pub bin: String,
     pub home: PathBuf,
     pub workdir: PathBuf,
-    pub task_model: String,
+    pub model: String,
+    pub reasoning_effort: CodexReasoningEffort,
+    pub fast_mode: bool,
     pub sandbox: String,
     pub bypass_sandbox: bool,
     pub approval_policy: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexReasoningEffort {
+    Low,
+    Medium,
+    High,
+    #[serde(rename = "xhigh")]
+    XHigh,
+}
+
+impl CodexReasoningEffort {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::XHigh => "xhigh",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -540,8 +564,16 @@ pub fn codex_workdir() -> PathBuf {
     app_config().codex.workdir.clone()
 }
 
-pub fn codex_task_model() -> Option<String> {
-    non_empty_option(&app_config().codex.task_model)
+pub fn codex_model() -> Option<String> {
+    non_empty_option(&app_config().codex.model)
+}
+
+pub fn codex_reasoning_effort() -> CodexReasoningEffort {
+    app_config().codex.reasoning_effort
+}
+
+pub fn codex_fast_mode() -> bool {
+    app_config().codex.fast_mode
 }
 
 pub fn codex_sandbox() -> Option<String> {

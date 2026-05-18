@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use crate::Result;
-use crate::config;
+use crate::config::{self, CodexReasoningEffort};
 use crate::runtime::util::non_empty;
 
 use super::output::{extract_codex_model, extract_codex_session_id};
@@ -30,6 +30,8 @@ pub(crate) struct CodexRunRequest {
     pub session_id: Option<String>,
     pub cwd: Option<PathBuf>,
     pub model: Option<String>,
+    pub reasoning_effort: CodexReasoningEffort,
+    pub fast_mode: bool,
     pub env: BTreeMap<String, String>,
     pub output_last_message_path: PathBuf,
     pub stdout_path: Option<PathBuf>,
@@ -43,6 +45,8 @@ pub(crate) struct CodexRunResult {
     pub success: bool,
     pub session_id: String,
     pub model: String,
+    pub reasoning_effort: CodexReasoningEffort,
+    pub fast_mode: bool,
     pub final_message: String,
     pub command_display: String,
 }
@@ -97,6 +101,8 @@ impl CodexAdapter {
             success: status.success(),
             session_id,
             model,
+            reasoning_effort: request.reasoning_effort,
+            fast_mode: request.fast_mode,
             final_message,
             command_display,
         })
@@ -144,6 +150,18 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
     {
         args.push(OsString::from("-m"));
         args.push(OsString::from(model));
+    }
+    args.push(OsString::from("-c"));
+    args.push(OsString::from(format!(
+        "model_reasoning_effort=\"{}\"",
+        request.reasoning_effort.as_str()
+    )));
+    if request.fast_mode {
+        args.push(OsString::from("--enable"));
+        args.push(OsString::from("fast_mode"));
+    } else {
+        args.push(OsString::from("--disable"));
+        args.push(OsString::from("fast_mode"));
     }
     if let Some(sandbox) = config::codex_sandbox() {
         args.push(OsString::from("-s"));
