@@ -1,14 +1,16 @@
 use serde_json::{Value, json};
+use std::path::Path;
 
 use crate::Result;
 use crate::config;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::timeline::sha256_file;
 use crate::runtime::util::{single_child_of_kind, string_field};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, BinaryPayload,
     DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState,
-    Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget,
-    TextTargetKind,
+    Runtime, RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryOutput,
+    TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 enum TextDeliveryTarget {
@@ -78,6 +80,7 @@ impl Runtime {
             TextDeliveryTarget::Ready(target) => target,
             TextDeliveryTarget::WaitFor(child) => return Ok(JobDecision::WaitFor(vec![child])),
         };
+        let attachments = resolve_text_delivery_attachments(&payload.attachments)?;
         let child = Job::discord_text_send(
             job.scope(),
             job.requested_by_user_id.clone(),
@@ -89,6 +92,7 @@ impl Runtime {
                 requested_by_user_id: payload.requested_by_user_id.clone(),
                 allowed_mentions: BinaryPayload::empty(),
                 components: BinaryPayload::empty(),
+                attachments,
             },
         );
         Ok(JobDecision::WaitFor(vec![child]))
@@ -308,6 +312,46 @@ fn require_target_id(value: &str, label: &str, job: &Job) -> Result<()> {
         anyhow::bail!("text delivery job {} has no {label} target id", job.id);
     }
     Ok(())
+}
+
+fn resolve_text_delivery_attachments(
+    attachments: &[TextAttachmentPayload],
+) -> Result<Vec<TextAttachmentPayload>> {
+    attachments
+        .iter()
+        .map(|attachment| {
+            let path_text = attachment.path.trim();
+            if path_text.is_empty() {
+                anyhow::bail!("text delivery attachment has empty path");
+            }
+            let path = Path::new(path_text);
+            if !path.is_file() {
+                anyhow::bail!("text delivery attachment is not a readable file: {path_text}");
+            }
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if !extension.eq_ignore_ascii_case("zip") {
+                anyhow::bail!("text delivery attachment must be a .zip file: {path_text}");
+            }
+            let filename = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if filename.is_empty() {
+                anyhow::bail!("text delivery attachment has no filename: {path_text}");
+            }
+            Ok(TextAttachmentPayload {
+                path: path_text.to_string(),
+                filename,
+                size_bytes: path.metadata()?.len(),
+                sha256: sha256_file(path)?,
+            })
+        })
+        .collect()
 }
 
 fn text_delivery_scope_from_value(value: &Value, source: Option<&Job>) -> Result<RuntimeScope> {

@@ -1,5 +1,6 @@
 pub mod agents;
 pub mod automations;
+pub mod coding;
 pub(crate) mod core;
 pub mod domain;
 pub mod jobs;
@@ -38,9 +39,9 @@ pub use jobs::{
     RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementOutput,
     RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload,
     RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
-    TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationOutput, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    TextAttachmentPayload, TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget,
+    TextTargetKind, TranscriptPublicationOutput, TranscriptPublicationPayload,
+    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};

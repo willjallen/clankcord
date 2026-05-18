@@ -960,6 +960,9 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         vec![codex_bin, "--version".to_string()],
         vec!["rg".to_string(), "--version".to_string()],
         vec!["jq".to_string(), "--version".to_string()],
+        vec!["clang".to_string(), "--version".to_string()],
+        vec!["python".to_string(), "--version".to_string()],
+        vec!["zip".to_string(), "--version".to_string()],
         vec![
             "clankcord".to_string(),
             "transcripts".to_string(),
@@ -1047,6 +1050,11 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
         vec![
             "clankcord".to_string(),
             "automations".to_string(),
+            "spec".to_string(),
+        ],
+        vec![
+            "clankcord".to_string(),
+            "coding".to_string(),
             "spec".to_string(),
         ],
         vec![

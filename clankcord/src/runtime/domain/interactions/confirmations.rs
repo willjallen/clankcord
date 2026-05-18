@@ -205,6 +205,7 @@ impl Runtime {
                         },
                     ],
                 }]))?,
+                attachments: Vec::new(),
             },
         )]))
     }

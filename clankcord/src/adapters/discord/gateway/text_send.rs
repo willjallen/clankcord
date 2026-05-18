@@ -1,5 +1,11 @@
+use std::fs;
+
+use reqwest::blocking::multipart::{Form, Part};
+
 use crate::Result;
-use crate::adapters::discord::api::{create_dm_channel, discord_request};
+use crate::adapters::discord::api::{
+    create_dm_channel, discord_multipart_request, discord_request,
+};
 use crate::runtime::jobs::{DiscordPostMetadata, DiscordPostedMessageMetadata};
 use crate::runtime::util::{MESSAGE_CHUNK_LIMIT, split_message_chunks, string_field};
 use crate::runtime::{
@@ -36,7 +42,9 @@ fn send_blocking(payload: DiscordTextSendPayload) -> Result<DiscordTextSendOutpu
             kind.as_str()
         ),
     };
-    let discord_post = if payload.components.is_empty() && payload.allowed_mentions.is_empty() {
+    let discord_post = if !payload.attachments.is_empty() {
+        post_message_with_attachments(&channel_id, &payload)?
+    } else if payload.components.is_empty() && payload.allowed_mentions.is_empty() {
         post_chunks(&channel_id, &render_text_content(&payload))?
     } else {
         post_single_message(&channel_id, &payload)?
@@ -110,6 +118,72 @@ fn post_single_message(
         None,
         None,
         30,
+    )?;
+    Ok(DiscordPostMetadata {
+        channel_id: channel_id.to_string(),
+        messages: vec![DiscordPostedMessageMetadata {
+            channel_id: channel_id.to_string(),
+            message_id: string_field(&response, "id"),
+        }],
+    })
+}
+
+fn post_message_with_attachments(
+    channel_id: &str,
+    payload: &DiscordTextSendPayload,
+) -> Result<DiscordPostMetadata> {
+    let content = render_text_content(payload);
+    if content.len() > MESSAGE_CHUNK_LIMIT {
+        anyhow::bail!("discord text send with attachments exceeds message limit");
+    }
+    let mut body = serde_json::Map::new();
+    body.insert("content".to_string(), serde_json::Value::String(content));
+    if !payload.allowed_mentions.is_empty() {
+        body.insert(
+            "allowed_mentions".to_string(),
+            payload.allowed_mentions.to_json(),
+        );
+    }
+    if !payload.components.is_empty() {
+        body.insert("components".to_string(), payload.components.to_json());
+    }
+    body.insert(
+        "attachments".to_string(),
+        serde_json::Value::Array(
+            payload
+                .attachments
+                .iter()
+                .enumerate()
+                .map(|(index, attachment)| {
+                    serde_json::json!({
+                        "id": index,
+                        "filename": attachment.filename.clone(),
+                    })
+                })
+                .collect(),
+        ),
+    );
+
+    let mut form = Form::new().text("payload_json", serde_json::Value::Object(body).to_string());
+    for (index, attachment) in payload.attachments.iter().enumerate() {
+        let filename = attachment.filename.trim();
+        if filename.is_empty() {
+            anyhow::bail!("discord text send attachment has no filename");
+        }
+        let bytes = fs::read(&attachment.path)?;
+        let part = Part::bytes(bytes)
+            .file_name(filename.to_string())
+            .mime_str("application/zip")?;
+        form = form.part(format!("files[{index}]"), part);
+    }
+
+    let response = discord_multipart_request(
+        "POST",
+        &format!("/channels/{channel_id}/messages"),
+        form,
+        None,
+        None,
+        60,
     )?;
     Ok(DiscordPostMetadata {
         channel_id: channel_id.to_string(),

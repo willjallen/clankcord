@@ -760,7 +760,61 @@ pub struct TextDeliveryPayload {
     pub source_job_id: String,
     pub requested_by_user_id: String,
     pub expects_reply: bool,
+    pub attachments: Vec<TextAttachmentPayload>,
     opaque: BinaryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct TextAttachmentPayload {
+    pub path: String,
+    pub filename: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+impl TextAttachmentPayload {
+    pub fn path(path: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            filename: String::new(),
+            size_bytes: 0,
+            sha256: String::new(),
+        }
+    }
+
+    pub fn from_json(value: &Value) -> Result<Self> {
+        if !value.is_object() {
+            anyhow::bail!("text attachment must be a JSON object");
+        }
+        let path = string_field(value, "path");
+        if path.is_empty() {
+            anyhow::bail!("text attachment requires path");
+        }
+        let size_bytes = value
+            .get("size_bytes")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        Ok(Self {
+            path,
+            filename: string_field(value, "filename"),
+            size_bytes,
+            sha256: string_field(value, "sha256"),
+        })
+    }
+
+    pub fn to_json(&self) -> Value {
+        let mut map = Map::new();
+        map.insert("path".to_string(), Value::String(self.path.clone()));
+        insert_non_empty(&mut map, "filename", &self.filename);
+        if self.size_bytes > 0 {
+            map.insert(
+                "size_bytes".to_string(),
+                Value::Number(Number::from(self.size_bytes)),
+            );
+        }
+        insert_non_empty(&mut map, "sha256", &self.sha256);
+        Value::Object(map)
+    }
 }
 
 impl TextDeliveryPayload {
@@ -779,6 +833,7 @@ impl TextDeliveryPayload {
             source_job_id: source_job_id.into(),
             requested_by_user_id: requested_by_user_id.into(),
             expects_reply,
+            attachments: Vec::new(),
             opaque: BinaryPayload::empty(),
         }
     }
@@ -798,12 +853,14 @@ impl TextDeliveryPayload {
                 value.get("expects_reply"),
                 intent == TextDeliveryKind::Question,
             ),
-            opaque: BinaryPayload::from_json(value)?,
+            attachments: text_attachments_from_json(value.get("attachments"))?,
+            opaque: text_delivery_opaque_payload(value)?,
         })
     }
 
     pub fn to_json(&self) -> Value {
         let mut map = object_from_payload(&self.opaque);
+        map.remove("attachments");
         map.insert(
             "intent".to_string(),
             Value::String(self.intent.as_str().to_string()),
@@ -814,6 +871,17 @@ impl TextDeliveryPayload {
         insert_non_empty(&mut map, "requested_by_user_id", &self.requested_by_user_id);
         if self.expects_reply {
             map.insert("expects_reply".to_string(), Value::Bool(true));
+        }
+        if !self.attachments.is_empty() {
+            map.insert(
+                "attachments".to_string(),
+                Value::Array(
+                    self.attachments
+                        .iter()
+                        .map(TextAttachmentPayload::to_json)
+                        .collect(),
+                ),
+            );
         }
         Value::Object(map)
     }
@@ -828,6 +896,7 @@ pub struct DiscordTextSendPayload {
     pub requested_by_user_id: String,
     pub allowed_mentions: BinaryPayload,
     pub components: BinaryPayload,
+    pub attachments: Vec<TextAttachmentPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1446,6 +1515,7 @@ impl JobPayload {
                 "requested_by_user_id": payload.requested_by_user_id,
                 "allowed_mentions": payload.allowed_mentions.to_json(),
                 "components": payload.components.to_json(),
+                "attachments": payload.attachments.iter().map(TextAttachmentPayload::to_json).collect::<Vec<_>>(),
             }),
             Self::DiscordForumThreadCreate(payload) => json!({
                 "parent_channel_id": payload.parent_channel_id,
@@ -1644,6 +1714,24 @@ impl JobPayload {
 
 fn object_from_payload(payload: &BinaryPayload) -> Map<String, Value> {
     payload.to_json().as_object().cloned().unwrap_or_default()
+}
+
+fn text_attachments_from_json(value: Option<&Value>) -> Result<Vec<TextAttachmentPayload>> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    let Some(items) = value.as_array() else {
+        anyhow::bail!("text attachments must be a JSON array");
+    };
+    items.iter().map(TextAttachmentPayload::from_json).collect()
+}
+
+fn text_delivery_opaque_payload(value: &Value) -> Result<BinaryPayload> {
+    let mut value = value.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("attachments");
+    }
+    BinaryPayload::from_json(&value)
 }
 
 fn i64_field(value: &Value, keys: &[&str]) -> Option<i64> {

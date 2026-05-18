@@ -25,9 +25,40 @@ use super::{
 use crate::Result;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
-const JOB_PAYLOAD_BLOB_VERSION: u16 = 4;
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 5;
 const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
     JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
+
+const _: () = assert!(
+    JOB_PAYLOAD_BLOB_VERSION == job_payload_blob_version_for_clankcord(env!("CARGO_PKG_VERSION")),
+    "JOB_PAYLOAD_BLOB_VERSION must be mapped to the current Cargo version; update the schema migration ledger when the blob format changes"
+);
+
+const fn job_payload_blob_version_for_clankcord(version: &str) -> u16 {
+    if const_str_eq(version, "0.7.0") {
+        5
+    } else if const_str_eq(version, "0.6.0") {
+        4
+    } else {
+        0
+    }
+}
+
+const fn const_str_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct AgentPreflightCheck {

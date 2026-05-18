@@ -1,8 +1,10 @@
+mod job_payload_pre_v0_7;
 mod v0_2_0;
 mod v0_3_0;
 mod v0_4_0;
 mod v0_5_0;
 mod v0_6_0;
+mod v0_7_0;
 
 use std::cmp::Ordering;
 
@@ -56,7 +58,12 @@ const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
     RegisteredMigration {
         version: SchemaVersion::new(0, 6, 0),
         version_text: "0.6.0",
-        name: "job payload blob v4 agent invocation metadata",
+        name: "job payload blob agent invocation metadata",
+    },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 7, 0),
+        version_text: "0.7.0",
+        name: "job payload blob text response attachments",
     },
 ];
 
@@ -125,6 +132,7 @@ impl TimelineStore {
             "0.4.0" => v0_4_0::run(&mut transaction).await?,
             "0.5.0" => v0_5_0::run(&mut transaction).await?,
             "0.6.0" => v0_6_0::run(&mut transaction).await?,
+            "0.7.0" => v0_7_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

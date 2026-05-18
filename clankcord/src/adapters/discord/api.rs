@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::Context;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, multipart::Form};
 use serde_json::Value;
 
 use crate::Result;
@@ -38,6 +38,52 @@ pub fn discord_request(
     if let Some(body) = json_body {
         request = request.json(body);
     }
+    if let Some(query) = params {
+        request = request.query(query);
+    }
+    let response = request.send()?;
+    if response.status().as_u16() == 204 {
+        return Ok(Value::Null);
+    }
+    let status = response.status();
+    let text = response.text().unwrap_or_default();
+    if !status.is_success() {
+        let detail = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        return Err(discord_tool_error(format!(
+            "discord api {method} {path} failed ({}): {}",
+            status.as_u16(),
+            detail.chars().take(500).collect::<String>()
+        )));
+    }
+    if text.trim().is_empty() {
+        Ok(Value::Null)
+    } else {
+        serde_json::from_str(&text).context("Discord API returned invalid JSON")
+    }
+}
+
+pub fn discord_multipart_request(
+    method: &str,
+    path: &str,
+    form: Form,
+    params: Option<&BTreeMap<String, String>>,
+    token: Option<&str>,
+    timeout_seconds: u64,
+) -> Result<Value> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout_seconds))
+        .build()
+        .context("failed to create Discord HTTP client")?;
+    let method_value = reqwest::Method::from_bytes(method.as_bytes())
+        .with_context(|| format!("invalid HTTP method {method}"))?;
+    let resolved_token = match token {
+        Some(value) => value.to_string(),
+        None => load_discord_bot_token()?,
+    };
+    let mut request = client
+        .request(method_value, format!("{}{}", discord_api_base(), path))
+        .header("Authorization", format!("Bot {resolved_token}"))
+        .multipart(form);
     if let Some(query) = params {
         request = request.query(query);
     }

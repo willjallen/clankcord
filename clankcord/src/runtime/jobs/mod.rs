@@ -26,9 +26,9 @@ pub use payload::{
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobPayload, OpaqueValue,
     RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextAttachmentPayload,
+    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

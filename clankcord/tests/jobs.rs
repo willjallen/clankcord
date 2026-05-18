@@ -17,8 +17,8 @@ use clankcord::runtime::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
     JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime, RuntimeScope,
-    RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
+    RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload, TextTarget,
+    TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -140,6 +140,62 @@ struct PreV0_6_0Job {
     metadata: PreV0_6_0JobMetadata,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_7_0TextDeliveryPayload {
+    intent: TextDeliveryKind,
+    target: TextTarget,
+    content: String,
+    source_job_id: String,
+    requested_by_user_id: String,
+    expects_reply: bool,
+    opaque: BinaryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_7_0DiscordTextSendPayload {
+    intent: TextDeliveryKind,
+    target: TextTarget,
+    content: String,
+    source_job_id: String,
+    requested_by_user_id: String,
+    allowed_mentions: BinaryPayload,
+    components: BinaryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum PreV0_7_0JobPayload {
+    AudioSegment,
+    WakeActivation,
+    AgentTask,
+    DiscordTextMessage,
+    DiscordSlashCommand,
+    TextDelivery(PreV0_7_0TextDeliveryPayload),
+    DiscordTextSend(PreV0_7_0DiscordTextSendPayload),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_7_0Job {
+    id: String,
+    kind: JobKind,
+    scope_kind: RuntimeScopeKind,
+    guild_id: String,
+    scope_id: String,
+    state: JobState,
+    requested_by_user_id: String,
+    payload: PreV0_7_0JobPayload,
+    attempts: i64,
+    created_at: String,
+    updated_at: String,
+    next_run_at: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    cancelled_at: Option<String>,
+    parent_job_id: Option<String>,
+    root_job_id: String,
+    lineage_depth: u8,
+    metadata: JobMetadata,
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
     let command = CommandRequest::from_json(&json!({
@@ -175,7 +231,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 4);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 5);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -229,27 +285,32 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.6.0".to_string()
+                "0.7.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.6.0".to_string()
+                "0.7.0".to_string()
             ),
             (
                 "0.4.0".to_string(),
                 "database hard-cut performance contracts".to_string(),
-                "0.6.0".to_string()
+                "0.7.0".to_string()
             ),
             (
                 "0.5.0".to_string(),
                 "policy-driven durable retention".to_string(),
-                "0.6.0".to_string()
+                "0.7.0".to_string()
             ),
             (
                 "0.6.0".to_string(),
-                "job payload blob v4 agent invocation metadata".to_string(),
-                "0.6.0".to_string()
+                "job payload blob agent invocation metadata".to_string(),
+                "0.7.0".to_string()
+            ),
+            (
+                "0.7.0".to_string(),
+                "job payload blob text response attachments".to_string(),
+                "0.7.0".to_string()
             ),
         ]
     );
@@ -289,7 +350,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0')",
     )
     .execute(&store.pool)
     .await
@@ -297,11 +358,12 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 4);
+    assert_eq!(applied.len(), 5);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
     assert_eq!(applied[3].version, "0.6.0");
+    assert_eq!(applied[4].version, "0.7.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -348,7 +410,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0')",
     )
     .execute(&store.pool)
     .await
@@ -356,10 +418,11 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].version, "0.4.0");
     assert_eq!(applied[1].version, "0.5.0");
     assert_eq!(applied[2].version, "0.6.0");
+    assert_eq!(applied[3].version, "0.7.0");
     assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
@@ -382,16 +445,19 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     .unwrap();
     assert!(index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0')")
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0')",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), 3);
     assert_eq!(applied[0].version, "0.5.0");
     assert_eq!(applied[1].version, "0.6.0");
+    assert_eq!(applied[2].version, "0.7.0");
     assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 }
 
@@ -417,15 +483,16 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.6.0'")
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0')")
         .execute(&store.pool)
         .await
         .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].version, "0.6.0");
+    assert_eq!(applied[1].version, "0.7.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let metadata = migrated.metadata.to_json();
     let agent = &metadata["agent_task"]["agent"];
@@ -434,6 +501,67 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
     assert_eq!(agent["model"], json!("codex-default"));
     assert!(agent.get("reasoning_effort").is_none());
     assert!(agent.get("fast_mode").is_none());
+    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert!(Job::is_current_payload_blob(&payload_blob));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::text_delivery(
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            TextDeliveryPayload::from_json(&json!({
+                "intent": "message",
+                "target": "agent_chat",
+                "source_job_id": "job_source",
+                "requested_by_user_id": "user-a",
+                "content": "Attached a benchmark.",
+            }))
+            .unwrap(),
+        ))
+        .await
+        .unwrap();
+    let legacy_blob = encode_pre_v0_7_0_text_delivery_job(
+        &created,
+        BinaryPayload::from_json(&json!({
+            "extra_boundary_field": {"kept": true},
+            "attachments": [{"path": "/workspace/old-opaque.zip"}]
+        }))
+        .unwrap(),
+    );
+
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(legacy_blob)
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.7.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.7.0");
+    let migrated = store.get_job(&created.id).await.unwrap();
+    let payload = migrated.text_delivery_payload().unwrap();
+    assert!(payload.attachments.is_empty());
+    assert_eq!(
+        payload.to_json()["extra_boundary_field"]["kept"],
+        json!(true)
+    );
+    assert!(payload.to_json()["attachments"].is_null());
     let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
         .bind(&created.id)
         .fetch_one(&store.pool)
@@ -767,6 +895,62 @@ async fn text_delivery_payload_is_a_first_class_binary_job() {
         delivery.to_json()["extra_boundary_field"]["kept"],
         json!(true)
     );
+
+    let without_attachments = TextDeliveryPayload::from_json(&json!({
+        "intent": "message",
+        "target": "agent_chat",
+        "requested_by_user_id": "user-a",
+        "content": "No attachment here.",
+        "attachments": []
+    }))
+    .unwrap();
+    assert!(without_attachments.attachments.is_empty());
+    assert!(without_attachments.to_json()["attachments"].is_null());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn text_delivery_attachments_are_first_class_payload_fields() {
+    let payload = TextDeliveryPayload::from_json(&json!({
+        "intent": "message",
+        "target": "channel:thread-1",
+        "source_job_id": "job_source",
+        "requested_by_user_id": "user-a",
+        "content": "Attached a benchmark.",
+        "attachments": [
+            {
+                "path": "/workspace/agent/artifact.zip",
+                "filename": "artifact.zip",
+                "size_bytes": 128,
+                "sha256": "sha256:abc123"
+            }
+        ],
+        "extra_boundary_field": {"kept": true}
+    }))
+    .unwrap();
+    let job = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        payload,
+    );
+    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+    let delivery = decoded.text_delivery_payload().unwrap();
+
+    assert_eq!(delivery.attachments.len(), 1);
+    assert_eq!(
+        delivery.attachments[0].path,
+        "/workspace/agent/artifact.zip"
+    );
+    assert_eq!(delivery.attachments[0].filename, "artifact.zip");
+    assert_eq!(delivery.attachments[0].size_bytes, 128);
+    assert_eq!(delivery.attachments[0].sha256, "sha256:abc123");
+    assert_eq!(
+        delivery.to_json()["attachments"][0]["path"],
+        json!("/workspace/agent/artifact.zip")
+    );
+    assert_eq!(
+        delivery.to_json()["extra_boundary_field"]["kept"],
+        json!(true)
+    );
 }
 
 #[test]
@@ -786,11 +970,21 @@ fn discord_text_io_jobs_round_trip() {
             requested_by_user_id: String::new(),
             allowed_mentions: BinaryPayload::from_json(&json!({"parse": []})).unwrap(),
             components: BinaryPayload::from_json(&json!([{"type": 1}])).unwrap(),
+            attachments: vec![TextAttachmentPayload {
+                path: "/workspace/agent/artifact.zip".to_string(),
+                filename: "artifact.zip".to_string(),
+                size_bytes: 128,
+                sha256: "sha256:abc123".to_string(),
+            }],
         },
     );
     let decoded = Job::decode(&text.encode().unwrap()).unwrap();
     assert_eq!(decoded.kind, JobKind::DiscordTextSend);
     assert_eq!(decoded.payload.to_json()["components"][0]["type"], 1);
+    assert_eq!(
+        decoded.payload.to_json()["attachments"][0]["filename"],
+        json!("artifact.zip")
+    );
 
     let thread = Job::discord_forum_thread_create(
         RuntimeScope::voice_channel("guild", "code"),
@@ -1686,6 +1880,47 @@ fn encode_pre_v0_6_0_agent_task_job(job: &Job) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
     bytes.extend_from_slice(&3_u16.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn encode_pre_v0_7_0_text_delivery_job(job: &Job, opaque: BinaryPayload) -> Vec<u8> {
+    let JobPayload::TextDelivery(payload) = &job.payload else {
+        panic!("expected text delivery payload");
+    };
+    let previous = PreV0_7_0Job {
+        id: job.id.clone(),
+        kind: job.kind,
+        scope_kind: job.scope_kind,
+        guild_id: job.guild_id.clone(),
+        scope_id: job.scope_id.clone(),
+        state: job.state,
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        payload: PreV0_7_0JobPayload::TextDelivery(PreV0_7_0TextDeliveryPayload {
+            intent: payload.intent,
+            target: payload.target.clone(),
+            content: payload.content.clone(),
+            source_job_id: payload.source_job_id.clone(),
+            requested_by_user_id: payload.requested_by_user_id.clone(),
+            expects_reply: payload.expects_reply,
+            opaque,
+        }),
+        attempts: job.attempts,
+        created_at: job.created_at.clone(),
+        updated_at: job.updated_at.clone(),
+        next_run_at: job.next_run_at.clone(),
+        started_at: job.started_at.clone(),
+        completed_at: job.completed_at.clone(),
+        cancelled_at: job.cancelled_at.clone(),
+        parent_job_id: job.parent_job_id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        lineage_depth: job.lineage_depth,
+        metadata: job.metadata.clone(),
+    };
+    let body = bincode::serialize(&previous).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&4_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }

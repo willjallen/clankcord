@@ -21,6 +21,8 @@ The typing indicator is a durable Discord job with `start` and `stop` actions. A
 
 Each persisted agent session has a writable directory under `paths.agent_workspaces_root` from `config.toml`. Codex runs with that directory as its current working directory. The directory holds notes, temporary files, command output, and intermediate artifacts. The source checkout is exposed through `CLANKCORD_REPO_DIR`.
 
+The runtime image provides the agent process with `clang`, `python`, and `zip` alongside the Clankcord CLI, `rg`, and `jq`. Coding work happens inside the session workspace. Generated source files, benchmark outputs, and notes can be packaged there as zip artifacts and submitted through the response command surface.
+
 Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
 
 Codex sandbox behavior also comes from `[codex]`. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
@@ -46,7 +48,7 @@ The runtime builds prompts in two stages: session bootstrap and agent invocation
 
 The runtime loads prompt templates from `prompts.dir` in `config.toml`. Deployments provide the same section filenames under their configured prompt directory. Missing prompt section files and unknown template variables fail prompt construction.
 
-Session bootstrap sections are `base.md`, `clankcord-tools.md`, `response-contract.md`, and `runtime-work.md`. These sections describe Clankcord identity, authority boundaries, the CLI surface, environment variables, response publication, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
+Session bootstrap sections are `base.md`, `clankcord-tools.md`, `response-contract.md`, and `runtime-work.md`. These sections describe Clankcord identity, authority boundaries, the CLI surface, environment variables, response publication, automation workflow, coding-artifact workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
 
 Every agent task includes the invocation base sections `agent-task-base.md`, `agent-task-local-context.md`, and `agent-task-response-contract.md`. The runtime adds conditional invocation sections from typed route and origin fields. Voice-channel routes add `agent-task-route-voice.md`. DM routes add `agent-task-route-dm.md`. Typed Discord requests add `agent-task-origin-text.md`; public and managed text surfaces also add `agent-task-origin-public-text.md`. Spoken wake activations add `agent-task-origin-voice.md`.
 
@@ -95,7 +97,7 @@ Agent thread title refresh uses its own prompt template, `agent-thread-title.md`
 
 ## Preflight
 
-Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, agent-session search, agent-session sunset, agent-session resume, response sending, feedback submission, member resolution, room occupants, and automation creation/spec commands.
+Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, `clang`, `python`, `zip`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, agent-session search, agent-session sunset, agent-session resume, response sending, feedback submission, member resolution, room occupants, automation creation/spec commands, and the coding spec command.
 
 Preflight results are stored with the agent-task metadata. They make tool-surface failures visible in job inspection and the debug dashboard.
 
@@ -148,4 +150,4 @@ NO_RESPONSE_NEEDED
 
 Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success. Session lifecycle commands, automations, room controls, feedback, publication, transcript creation, reminders, and sound playback are state-changing actions. A command that publishes the requested response, such as `clankcord responses send` or `clankcord responses dm`, satisfies the visible-response requirement.
 
-DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. Response bodies are read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.
+DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. Response bodies are read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. `--attachment <ZIP>` carries one or more generated zip files through the same response command. The CLI sends canonical artifact paths to the runtime. `text_delivery` stores only attachment path metadata in Postgres, verifies the files, records filename, size, and checksum on the Discord send child, and the Discord adapter uploads the files with the message through multipart HTTP. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.

@@ -26,6 +26,8 @@ fn top_level_help_describes_command_groups_and_agent_workflows() {
     assert!(help.contains("Common agent workflows"));
     assert!(help.contains("clankcord responses send <<'EOF'"));
     assert!(help.contains("clankcord automations validate < automation.json"));
+    assert!(help.contains("clankcord coding spec"));
+    assert!(help.contains("clankcord responses send --attachment result.zip"));
     assert!(help.contains("clankcord agent-sessions search"));
     assert!(help.contains("clankcord feedback submit <<'EOF'"));
 }
@@ -49,6 +51,8 @@ fn response_help_requires_stdin_or_file_body_transport() {
     assert!(help.contains("Read Markdown/plain text from stdin by default"));
     assert!(help.contains("single-quoted heredoc"));
     assert!(help.contains("--file <PATH>"));
+    assert!(help.contains("--attachment <ZIP>"));
+    assert!(help.contains("Each attachment must be a .zip file"));
     assert!(!help.contains("--content"));
     assert!(!help.contains("--stdin"));
 }
@@ -77,6 +81,19 @@ fn automation_stdin_flag_is_rejected_before_runtime_submission() {
     let output = clankcord(&["automations", "create", "--stdin"]);
     assert!(!output.status.success());
     assert!(stderr(&output).contains("unexpected argument '--stdin'"));
+}
+
+#[test]
+fn coding_spec_describes_single_file_c_and_zip_submission() {
+    let output = clankcord(&["coding", "spec"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let spec = stdout(&output);
+    assert!(spec.contains("single-file C program"));
+    assert!(spec.contains("Compiler Explorer"));
+    assert!(spec.contains("CLANKCORD_OBSERVE"));
+    assert!(spec.contains("volatile"));
+    assert!(spec.contains("zip -r artifact.zip"));
+    assert!(spec.contains("clankcord responses send --attachment artifact.zip"));
 }
 
 #[test]

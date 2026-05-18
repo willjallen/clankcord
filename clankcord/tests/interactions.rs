@@ -23,6 +23,8 @@ fn agent_task_message_uses_compact_invocation_context() {
     assert!(message.contains("INVOCATION_RESPONSE_CONTRACT"));
     assert!(message.contains("After successful private delivery"));
     assert!(message.contains("You may search the web"));
+    assert!(message.contains("clankcord coding spec"));
+    assert!(message.contains("clankcord responses send --attachment"));
     assert!(message.contains("Do not be sycophantic"));
     assert!(message.contains("VOICE_REQUEST_CONTEXT"));
     assert!(message.contains("begin with one short sentence summarizing what you understood"));

@@ -102,6 +102,8 @@ Discord text messages enter as `discord_text_message` jobs. Runtime ingress deci
 
 ## Responses
 
-`responses send`, `responses dm`, `responses submit`, and `responses ask` create `text_delivery` jobs. The response body is read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. `text_delivery` resolves the target to an agent session, agent-chat sink, concrete channel, or DM target, then creates `discord_text_send`.
+`responses send`, `responses dm`, `responses submit`, and `responses ask` create `text_delivery` jobs. The response body is read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. `--attachment <ZIP>` adds generated zip artifacts to the response. The CLI validates that each attachment is a readable zip file and posts canonical paths to the runtime. `text_delivery` resolves the target to an agent session, agent-chat sink, concrete channel, or DM target, verifies attachment paths, records filename, size, and checksum on the child payload, then creates `discord_text_send`. Postgres stores path metadata for attachments; archive bytes remain in the workspace until the Discord adapter reads and uploads them.
 
 Agents publish visible responses through the CLI. The supported path is command submission, `text_delivery`, and `discord_text_send`, which keeps Discord delivery under runtime job state and records delivery metadata with the source job.
+
+`clankcord coding spec` prints the coding artifact workflow used by agents before coding, performance, benchmark, disassembly, and packaged-artifact work. The spec describes the available `clang`, `python`, and `zip` tools, single-file C probes for Compiler Explorer, anti-optimization guards for inspected code, zip packaging, and response submission with attachments.

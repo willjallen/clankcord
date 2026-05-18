@@ -1,5 +1,6 @@
 use std::fs;
 use std::io::Read;
+use std::path::Path;
 use std::time::Duration;
 
 use clap::{Args as ClapArgs, CommandFactory, Parser, Subcommand};
@@ -26,6 +27,10 @@ const CLI_AFTER_HELP: &str = r#"Common agent workflows:
   Create automation:          clankcord automations spec
                               clankcord automations validate < automation.json
                               clankcord automations create < automation.json
+  Package coding artifact:    clankcord coding spec
+                              clankcord responses send --attachment result.zip <<'EOF'
+                              attached artifact summary
+                              EOF
   Submit product feedback:    clankcord feedback submit <<'EOF'
                               feedback body
                               EOF
@@ -42,6 +47,12 @@ const RESPONSE_BODY_AFTER_HELP: &str = r#"Response body input:
   Or read the body from a UTF-8 file:
 
     clankcord responses send --file response.md
+
+  Attach generated code, benchmark data, or analysis artifacts as one or more zip files:
+
+    clankcord responses send --attachment result.zip <<'EOF'
+    summary of the attached artifact
+    EOF
 
 Common forms:
     clankcord responses send <<'EOF'
@@ -60,6 +71,7 @@ Targets:
   send/submit default to the current session.
   ask sends a visible question and marks expects_reply=true.
   dm resolves --to through guild member lookup and sends a private Discord DM.
+  --attachment may be repeated. Each attachment must be a .zip file.
   Explicit sink values include session, agent-chat, channel:<id>, and dm:<user-id>."#;
 
 const AUTOMATION_BODY_AFTER_HELP: &str = r#"Automation JSON input:
@@ -154,6 +166,11 @@ enum Command {
     Automations {
         #[command(subcommand)]
         command: AutomationsCommand,
+    },
+    #[command(about = "Print the coding artifact workflow spec for agents.")]
+    Coding {
+        #[command(subcommand)]
+        command: CodingCommand,
     },
     #[command(about = "Submit durable feedback about missing or unsupported Clankcord behavior.")]
     Feedback {
@@ -324,6 +341,12 @@ enum AutomationsCommand {
     Get(AutomationIdArg),
     #[command(about = "Cancel one automation by id.")]
     Cancel(AutomationIdArg),
+}
+
+#[derive(Debug, Subcommand)]
+enum CodingCommand {
+    #[command(about = "Print the coding artifact workflow spec.")]
+    Spec,
 }
 
 #[derive(Debug, Subcommand)]
@@ -702,6 +725,12 @@ struct ResponseSubmitArgs {
         help = "Read response body from a UTF-8 file instead of stdin."
     )]
     file: Option<String>,
+    #[arg(
+        long = "attachment",
+        value_name = "ZIP",
+        help = "Attach a generated .zip artifact to the Discord response. May be repeated."
+    )]
+    attachments: Vec<String>,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -728,6 +757,12 @@ struct ResponseDmArgs {
         help = "Read DM body from a UTF-8 file instead of stdin."
     )]
     file: Option<String>,
+    #[arg(
+        long = "attachment",
+        value_name = "ZIP",
+        help = "Attach a generated .zip artifact to the Discord DM. May be repeated."
+    )]
+    attachments: Vec<String>,
 }
 
 #[derive(Debug, ClapArgs, Default, Clone)]
@@ -944,6 +979,12 @@ fn run_cli(cli: Cli) -> Result<i32> {
                 None,
                 None,
             ),
+        },
+        Command::Coding { command } => match command {
+            CodingCommand::Spec => {
+                print!("{}", crate::runtime::coding::CODING_SPEC_MANUAL);
+                Ok(0)
+            }
         },
         Command::Feedback { command } => match command {
             FeedbackCommand::Submit(args) => feedback_submit(args),
@@ -1314,6 +1355,7 @@ fn agent_sessions_resume(args: AgentSessionResumeArgs) -> Result<i32> {
 
 fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32> {
     let content = read_required_payload(args.file, "response body")?;
+    let attachments = response_attachment_values(args.attachments)?;
     api_emit(
         "POST",
         "/v1/responses",
@@ -1327,6 +1369,7 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": response_kind == "question",
+            "attachments": attachments,
         })),
         None,
     )
@@ -1334,6 +1377,7 @@ fn response_submit(args: ResponseSubmitArgs, response_kind: &str) -> Result<i32>
 
 fn response_dm(args: ResponseDmArgs) -> Result<i32> {
     let content = read_required_payload(args.file, "DM body")?;
+    let attachments = response_attachment_values(args.attachments)?;
     let guild_id = agent_context_guild(args.guild.clone());
     let resolved = api_request(
         "GET",
@@ -1369,9 +1413,35 @@ fn response_dm(args: ResponseDmArgs) -> Result<i32> {
             "requested_by_user_id": agent_context_requested_by(args.requested_by_user_id),
             "content": content,
             "expects_reply": false,
+            "attachments": attachments,
         })),
         None,
     )
+}
+
+fn response_attachment_values(paths: Vec<String>) -> Result<Vec<Value>> {
+    paths
+        .into_iter()
+        .map(|raw| {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                anyhow::bail!("response attachment path is empty");
+            }
+            let path = Path::new(trimmed);
+            if !path.is_file() {
+                anyhow::bail!("response attachment is not a readable file: {trimmed}");
+            }
+            let extension = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or_default();
+            if !extension.eq_ignore_ascii_case("zip") {
+                anyhow::bail!("response attachment must be a .zip file: {trimmed}");
+            }
+            let canonical = fs::canonicalize(path)?;
+            Ok(json!({"path": canonical.display().to_string()}))
+        })
+        .collect()
 }
 
 fn feedback_submit(args: FeedbackSubmitArgs) -> Result<i32> {

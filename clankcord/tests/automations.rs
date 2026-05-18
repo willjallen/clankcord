@@ -513,7 +513,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0')",
     )
     .execute(&store.pool)
     .await
@@ -521,11 +521,12 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 4);
+    assert_eq!(applied.len(), 5);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
     assert_eq!(applied[3].version, "0.6.0");
+    assert_eq!(applied[4].version, "0.7.0");
     assert!(!column_exists(&store.pool, "automations", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM automations WHERE automation_id = $1")
         .bind(&record.automation_id)

@@ -31,7 +31,7 @@ RUN --mount=type=cache,id=clankcord-cargo-registry,target=/usr/local/cargo/regis
 FROM node:24-bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl jq libopus0 postgresql-client ripgrep \
+    && apt-get install -y --no-install-recommends bash ca-certificates clang curl jq libopus0 postgresql-client python-is-python3 python3 ripgrep zip \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex@0.130.0 \
     && mkdir -p /app /clankcord/durable /clankcord/state /codex /workspace \

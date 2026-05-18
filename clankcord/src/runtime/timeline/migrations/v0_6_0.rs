@@ -4,9 +4,9 @@ use crate::Result;
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightMetadata, AgentTaskMetadata, DiscordPostMetadata,
 };
-use crate::runtime::{
-    BinaryPayload, Job, JobKind, JobOutput, JobPayload, JobState, RuntimeScopeKind,
-};
+use crate::runtime::{BinaryPayload, Job, JobKind, JobOutput, JobState, RuntimeScopeKind};
+
+use super::job_payload_pre_v0_7::PreV0_7_0JobPayload;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
 const PRE_V0_6_0_JOB_PAYLOAD_BLOB_VERSION: u16 = 3;
@@ -74,7 +74,7 @@ struct PreV0_6_0Job {
     scope_id: String,
     state: JobState,
     requested_by_user_id: String,
-    payload: JobPayload,
+    payload: PreV0_7_0JobPayload,
     attempts: i64,
     created_at: String,
     updated_at: String,
@@ -128,7 +128,7 @@ fn decode_pre_v0_6_0_job_payload_blob(bytes: &[u8]) -> Result<Job> {
         return Ok(job);
     }
     let previous: PreV0_6_0Job = bincode::deserialize(body)?;
-    Ok(previous.into_current())
+    previous.into_current()
 }
 
 fn pre_v0_6_0_envelope_body(bytes: &[u8]) -> Result<&[u8]> {
@@ -148,8 +148,8 @@ fn pre_v0_6_0_envelope_body(bytes: &[u8]) -> Result<&[u8]> {
 }
 
 impl PreV0_6_0Job {
-    fn into_current(self) -> Job {
-        Job {
+    fn into_current(self) -> Result<Job> {
+        Ok(Job {
             id: self.id,
             kind: self.kind,
             scope_kind: self.scope_kind,
@@ -157,7 +157,7 @@ impl PreV0_6_0Job {
             scope_id: self.scope_id,
             state: self.state,
             requested_by_user_id: self.requested_by_user_id,
-            payload: self.payload,
+            payload: self.payload.into_current()?,
             attempts: self.attempts,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -169,7 +169,7 @@ impl PreV0_6_0Job {
             root_job_id: self.root_job_id,
             lineage_depth: self.lineage_depth,
             metadata: self.metadata.into_current(),
-        }
+        })
     }
 }
 

@@ -140,6 +140,7 @@ impl Runtime {
                                 requested_by_user_id: String::new(),
                                 allowed_mentions: BinaryPayload::empty(),
                                 components: BinaryPayload::empty(),
+                                attachments: Vec::new(),
                             },
                         )
                     })

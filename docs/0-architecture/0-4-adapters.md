@@ -45,6 +45,8 @@ The Discord gateway adapter owns text gateway mechanics. It starts the Serenity 
 
 Once the gateway has translated a protocol event into a runtime request, the runtime takes over. Slash commands become `discord_slash_command` jobs. Text messages become `discord_text_message` jobs. Confirmation buttons become runtime-control jobs. Response delivery becomes `discord_text_send` only after the `text_delivery` parent resolves the target. The domain handler for `discord_text_send` calls the Discord text API to perform the post. The `discord_typing_indicator` domain handler resolves the same Discord target used by the agent session, then the gateway adapter sends the typing request and maintains the process-local heartbeat until the paired stop action cancels it.
 
+Plain `discord_text_send` payloads use normal JSON requests. Attachment payloads use Discord's multipart message endpoint. The domain payload carries the local zip path, filename, size, and checksum; the gateway adapter reads the file at send time, builds `payload_json` for the message content and components, adds `files[n]` parts, and records the Discord message id returned by the API.
+
 ## Discord Voice
 
 Discord voice integration owns Songbird wiring, voice-state tracking, RTP packet capture, per-user buffering, silence handling, WAV artifact creation, wake-probe artifact creation, audio playback, and voice connection mechanics. The live voice adapter holds the process-local handles it needs: the job sink, the timeline store used for voice-state recording, live Discord voice clients, active capture sessions, and the speaker profile cache.
