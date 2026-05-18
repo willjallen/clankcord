@@ -93,9 +93,8 @@ async fn append_thread_message_event(
 ) -> Result<String> {
     let event = runtime
         .timeline_store
-        .append_event(
-            &session.guild_id,
-            &session.scope_id,
+        .append_scope_event(
+            &agent_session_scope(session),
             json!({
                 "event_kind": "discord_text_message",
                 "kind": "discord_text_message",

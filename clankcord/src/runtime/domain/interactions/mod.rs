@@ -7,6 +7,7 @@ mod tasks;
 mod thread_titles;
 
 pub use policy::requires_confirmation;
+pub use prompts::AgentPromptRequestOrigin;
 pub use tasks::{
     AgentTaskPromptContext, agent_invocation_infrastructure_failure,
     agent_invocation_warning_event_kind, build_agent_task_message,

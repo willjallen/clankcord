@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::prompts::{
-    render_agent_task_prompt_from_dir, render_configured_agent_task_prompt,
-    render_configured_master_prompt, render_master_prompt_from_dir,
+    AgentPromptRequestOrigin, AgentTaskPromptVars, render_agent_task_prompt_from_dir,
+    render_configured_agent_task_prompt, render_configured_master_prompt,
+    render_master_prompt_from_dir,
 };
 use crate::Result;
 use crate::adapters::codex::{codex_response_text, extract_codex_usage};
@@ -23,8 +24,9 @@ use crate::runtime::timeline::{
 };
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
-    DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind, JobState, Runtime,
-    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    AgentSessionRouteKind, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
+    JobState, Runtime, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget,
+    TextTargetKind,
 };
 
 const AGENT_UNAVAILABLE_MESSAGE: &str =
@@ -684,19 +686,22 @@ fn agent_invocation_warning_message(event_kind: &str) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AgentTaskPromptContext {
     pub job_id: String,
     pub agent_session_id: String,
     pub resumed_from_agent_session_id: String,
+    pub route_kind: AgentSessionRouteKind,
+    pub request_origin: AgentPromptRequestOrigin,
+    pub response_surface: TextTargetKind,
     pub guild_id: String,
     pub scope_id: String,
     pub requested_by_user_id: String,
     pub requested_by: String,
     pub request: String,
     pub workdir: String,
-    pub previous_context: Vec<String>,
-    pub question: Vec<String>,
+    pub recent_scope_events: Vec<String>,
+    pub source_request_events: Vec<String>,
 }
 
 impl Runtime {
@@ -723,12 +728,14 @@ impl Runtime {
             .map(|command| command.requested_by_speaker_label.clone())
             .unwrap_or_default();
         let source_event_ids = agent_task_source_event_ids(job);
+        let source_events = self.agent_task_source_events(&source_event_ids).await?;
         let end = parse_instant(&job.created_at).unwrap_or_else(utc_now);
         let start = end - chrono::Duration::minutes(5);
         let speech_kinds = set(["speech_segment", "transcript", "discord_text_message"]);
         let events = self
             .timeline_store
-            .load_events(
+            .load_scope_events(
+                job.scope_kind,
                 &job.guild_id,
                 &job.scope_id,
                 Some(start),
@@ -738,8 +745,8 @@ impl Runtime {
                 false,
             )
             .await?;
-        let mut previous_context = Vec::new();
-        let mut question = Vec::new();
+        let mut recent_scope_events = Vec::new();
+        let mut source_request_events = Vec::new();
         for event in events {
             let line = agent_prompt_event_line(&event);
             if line.is_empty() {
@@ -747,13 +754,13 @@ impl Runtime {
             }
             let event_id = first_value_string(&event, &["event_id", "eventId"]);
             if source_event_ids.contains(&event_id) {
-                question.push(line);
+                source_request_events.push(line);
             } else {
-                previous_context.push(line);
+                recent_scope_events.push(line);
             }
         }
-        if question.is_empty() && !request.trim().is_empty() {
-            question.push(format!(
+        if source_request_events.is_empty() && !request.trim().is_empty() {
+            source_request_events.push(format!(
                 "[{}] {} ({}): {}",
                 job.created_at,
                 non_empty(requested_by.clone(), "requester".to_string()),
@@ -762,24 +769,51 @@ impl Runtime {
             ));
         }
         let agent_session_id = agent_task_session_id(job)?;
-        let resumed_from_agent_session_id = self
+        let agent_session = self
             .timeline_store
             .get_agent_session_record(&agent_session_id)
-            .await?
-            .resumed_from_agent_session_id;
+            .await?;
+        let parent = self.agent_task_parent_job(job).await?;
+        let request_origin = agent_task_request_origin(
+            command,
+            &agent_session.route_kind,
+            &source_events,
+            parent.as_ref(),
+        );
         Ok(AgentTaskPromptContext {
             job_id: job.id.clone(),
             agent_session_id,
-            resumed_from_agent_session_id,
+            resumed_from_agent_session_id: agent_session.resumed_from_agent_session_id,
+            route_kind: agent_session.route_kind,
+            request_origin,
+            response_surface: agent_session.text_target.kind,
             guild_id: job.guild_id.clone(),
             scope_id: job.scope_id.clone(),
             requested_by_user_id: job.requested_by_user_id.clone(),
             requested_by,
             request,
             workdir: workdir.display().to_string(),
-            previous_context,
-            question,
+            recent_scope_events,
+            source_request_events,
         })
+    }
+
+    async fn agent_task_source_events(
+        &self,
+        source_event_ids: &std::collections::BTreeSet<String>,
+    ) -> Result<Vec<Value>> {
+        let mut events = Vec::new();
+        for event_id in source_event_ids {
+            events.push(self.timeline_store.get_event(event_id).await?);
+        }
+        Ok(events)
+    }
+
+    async fn agent_task_parent_job(&self, job: &Job) -> Result<Option<Job>> {
+        let Some(parent_job_id) = job.parent_job_id.as_deref() else {
+            return Ok(None);
+        };
+        Ok(Some(self.timeline_store.get_job(parent_job_id).await?))
     }
 }
 
@@ -796,7 +830,7 @@ pub fn build_agent_task_message_for_session(
         sections.push(render_configured_master_prompt()?);
     }
     sections.push(render_configured_agent_task_prompt(
-        &agent_task_template_vars(context),
+        &agent_task_prompt_vars(context),
     )?);
     Ok(sections.join("\n\n"))
 }
@@ -812,43 +846,36 @@ pub fn build_agent_task_message_from_template_dir(
     }
     sections.push(render_agent_task_prompt_from_dir(
         prompt_dir,
-        &agent_task_template_vars(context),
+        &agent_task_prompt_vars(context),
     )?);
     Ok(sections.join("\n\n"))
 }
 
-fn agent_task_template_vars(context: &AgentTaskPromptContext) -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("job_id".to_string(), context.job_id.clone()),
-        (
-            "agent_session_id".to_string(),
-            context.agent_session_id.clone(),
-        ),
-        (
-            "resumed_from_agent_session_id".to_string(),
-            context.resumed_from_agent_session_id.clone(),
-        ),
-        ("guild_id".to_string(), context.guild_id.clone()),
-        ("scope_id".to_string(), context.scope_id.clone()),
-        (
-            "requested_by_user_id".to_string(),
-            context.requested_by_user_id.clone(),
-        ),
-        ("requested_by".to_string(), context.requested_by.clone()),
-        ("request".to_string(), context.request.clone()),
-        ("workdir".to_string(), context.workdir.clone()),
-        (
-            "previous_context".to_string(),
-            context.previous_context.join("\n"),
-        ),
-        ("question".to_string(), context.question.join("\n")),
-    ])
+fn agent_task_prompt_vars(context: &AgentTaskPromptContext) -> AgentTaskPromptVars {
+    AgentTaskPromptVars {
+        job_id: context.job_id.clone(),
+        agent_session_id: context.agent_session_id.clone(),
+        resumed_from_agent_session_id: context.resumed_from_agent_session_id.clone(),
+        route_kind: context.route_kind,
+        request_origin: context.request_origin,
+        response_surface: context.response_surface,
+        guild_id: context.guild_id.clone(),
+        scope_id: context.scope_id.clone(),
+        requested_by_user_id: context.requested_by_user_id.clone(),
+        requested_by: context.requested_by.clone(),
+        request: context.request.clone(),
+        workdir: context.workdir.clone(),
+        recent_scope_events: context.recent_scope_events.clone(),
+        source_request_events: context.source_request_events.clone(),
+    }
 }
 
 fn validate_agent_task_job(job: &Job) -> Result<()> {
-    if job.id.trim().is_empty() || job.guild_id.trim().is_empty() || job.scope_id.trim().is_empty()
-    {
-        anyhow::bail!("agent task job is missing job/guild/channel identity");
+    if job.id.trim().is_empty() || job.scope_id.trim().is_empty() {
+        anyhow::bail!("agent task job is missing job/scope identity");
+    }
+    if job.scope_kind == RuntimeScopeKind::VoiceChannel && job.guild_id.trim().is_empty() {
+        anyhow::bail!("voice agent task job is missing guild identity");
     }
     agent_task_session_id(job)?;
     Ok(())
@@ -1087,6 +1114,39 @@ fn agent_task_source_event_ids(job: &Job) -> std::collections::BTreeSet<String> 
         }
     }
     ids
+}
+
+fn agent_task_request_origin(
+    command: Option<&crate::runtime::CommandRequest>,
+    route_kind: &crate::runtime::AgentSessionRouteKind,
+    source_events: &[Value],
+    parent: Option<&Job>,
+) -> AgentPromptRequestOrigin {
+    if command
+        .map(|command| command.arguments.to_json().get("activation").is_some())
+        .unwrap_or(false)
+    {
+        return AgentPromptRequestOrigin::Voice;
+    }
+    if source_events
+        .iter()
+        .any(|event| first_value_string(event, &["event_kind", "kind"]) == "discord_text_message")
+    {
+        return AgentPromptRequestOrigin::Text;
+    }
+    if *route_kind == crate::runtime::AgentSessionRouteKind::Dm {
+        return AgentPromptRequestOrigin::Text;
+    }
+    if parent.is_some_and(|job| {
+        matches!(
+            &job.payload,
+            crate::runtime::JobPayload::AgentSessionResume(payload)
+                if !payload.message.trim().is_empty()
+        )
+    }) {
+        return AgentPromptRequestOrigin::Text;
+    }
+    AgentPromptRequestOrigin::Internal
 }
 
 fn agent_prompt_event_line(event: &Value) -> String {

@@ -40,11 +40,19 @@ The CLI uses these variables for agent-friendly defaults. `responses send`, `res
 
 ## Prompt
 
-The first Codex invocation for an agent session includes the master session instructions. Later invocations in the same Codex session send the per-job prompt. The runtime loads prompt templates from `prompts.dir` in `config.toml`. The current agent task templates are `master.md` and `agent-task.md` under `res/prompts`; deployments can point `prompts.dir` at another directory with files of the same names. Missing template files and unknown template variables fail prompt construction. `agent-task.md` uses `{{job_id}}`, `{{agent_session_id}}`, `{{resumed_from_agent_session_id}}`, `{{guild_id}}`, `{{scope_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{previous_context}}`, and `{{question}}`.
+The runtime builds prompts in two stages: session bootstrap and agent invocation. The first Codex invocation for an agent session includes the session bootstrap sections and the current invocation sections. Later invocations in the same Codex session send the invocation sections. The persisted Codex session id is the runtime boundary; a populated session id means the next task resumes the existing Codex session with invocation-specific context. Codex-side compaction remains part of the same persisted session id from the runtime's perspective, and the invocation prompt carries current-job context on every task.
 
-The master instructions describe Clankcord authority boundaries, transcript handling for speech-to-text context, the CLI surface, response behavior, private DM handling, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
+The runtime loads prompt templates from `prompts.dir` in `config.toml`. Deployments provide the same section filenames under their configured prompt directory. Missing prompt section files and unknown template variables fail prompt construction.
 
-The per-job prompt template is compact and stable. It contains job identity, session identity, guild, runtime scope, requester, request text, workdir, previous local context, the wake or question segment, and a context note.
+Session bootstrap sections are `base.md`, `clankcord-tools.md`, `response-contract.md`, and `runtime-work.md`. These sections describe Clankcord identity, authority boundaries, the CLI surface, environment variables, response publication, automation workflow, unsupported-automation feedback submission, web research policy, and runtime-work commands.
+
+Every agent task includes the invocation base sections `agent-task-base.md` and `agent-task-local-context.md`. The runtime adds conditional invocation sections from typed route and origin fields. Voice-channel routes add `agent-task-route-voice.md`. DM routes add `agent-task-route-dm.md`. Typed Discord requests add `agent-task-origin-text.md`; public and managed text surfaces also add `agent-task-origin-public-text.md`. Spoken wake activations add `agent-task-origin-voice.md`.
+
+Prompt section selection uses Rust types before Markdown rendering. The route comes from `AgentSessionRouteKind`, the request origin comes from `AgentPromptRequestOrigin`, and the response surface comes from `TextTargetKind`. The template value map is generated from `AgentTaskPromptVars`, so raw string template names are confined to the renderer boundary.
+
+The invocation templates use `{{job_id}}`, `{{agent_session_id}}`, `{{resumed_from_agent_session_id}}`, `{{route_kind}}`, `{{request_origin}}`, `{{response_surface}}`, `{{guild_id}}`, `{{scope_id}}`, `{{requested_by_user_id}}`, `{{requested_by}}`, `{{request}}`, `{{workdir}}`, `{{recent_scope_events}}`, and `{{source_request_events}}`.
+
+The per-job prompt is compact and stable. It contains job identity, session identity, route kind, request origin, response surface, guild, runtime scope, requester, request text, workdir, recent local scope events, the source request events, and a context note.
 
 ```text
 JOB:
@@ -55,24 +63,29 @@ guild_id: ...
 scope_id: ...
 requested_by_user_id: ...
 requested_by: ...
+route_kind: ...
+request_origin: ...
+response_surface: ...
 request: ...
 
 WORKDIR:
 CLANKCORD_AGENT_WORKDIR=...
 
-===== PREVIOUS CONTEXT =====
+===== RECENT SCOPE EVENTS =====
 ...
 
-===== QUESTION / ACTIVATION =====
+===== CURRENT REQUEST EVENTS =====
 ...
 
 CONTEXT NOTE:
 ...
 ```
 
-The captured context is a compact five-minute local window of user-visible speech from the same guild and voice channel. It includes all speakers in that window, split into lead-in context and the wake or question segment. The prompt excludes raw job packets, wake internals, audio paths, checksums, provider metadata, token details, and duplicated field aliases.
+The captured context is a bounded local window of user-visible speech and Discord text messages from the task scope. It includes all speakers in that window, split into recent scope events and source request events. The prompt excludes raw job packets, wake internals, audio paths, checksums, provider metadata, token details, and duplicated field aliases.
 
-The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broad room context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
+The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broader scope context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
+
+Typed requests are treated as intentional Discord text. DM route prompts describe the response as private to the DM participant and direct the agent to answer through the current DM session. Public text prompts keep the answer tied to the visible text surface. Voice-origin prompts describe speech-to-text uncertainty and require a short summary of the understood request before a visible answer.
 
 Agent thread title refresh uses its own prompt template, `agent-thread-title.md`. The template asks Codex for a single Discord forum thread title from `{{agent_session_id}}`, `{{current_thread_title}}`, `{{voice_channel_name}}`, `{{response_count}}`, and `{{responses}}`. The title invocation uses a `thread_title` agent role and a workspace under `paths.agent_workspaces_root/thread-title/<agent_session_id>`.
 

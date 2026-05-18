@@ -7,8 +7,9 @@ use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
     CommandRequest, DiscordForumThreadCreateOutput, DiscordTextMessagePayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, Runtime, RuntimeScope, TextDeliveryKind, TextDeliveryOutput,
-    TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key, voice_route_key,
+    JobOutput, JobPayload, JobState, Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryKind,
+    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
+    voice_route_key,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -312,6 +313,64 @@ async fn resume_reactivates_retired_dm_session() {
             .len(),
         1
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dm_text_message_creates_dm_scoped_agent_task_and_event() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let text = store
+        .create_job(Job::discord_text_message(DiscordTextMessagePayload {
+            guild_id: String::new(),
+            channel_id: "dm-channel".to_string(),
+            message_id: "message-1".to_string(),
+            author_user_id: "user-a".to_string(),
+            author_username: "will".to_string(),
+            author_display_name: "Will".to_string(),
+            content: "what did we decide?".to_string(),
+            created_at: "2026-05-17T17:44:57.000Z".to_string(),
+            referenced_message_id: String::new(),
+        }))
+        .await
+        .unwrap();
+    let mut running_text = text.clone();
+    running_text.mark_running();
+    store.update_job(&running_text).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime
+        .dispatch_claimed_runtime_job(running_text)
+        .await
+        .unwrap();
+
+    let updated_text = store.get_job(&text.id).await.unwrap();
+    assert_eq!(updated_text.state, JobState::Waiting);
+    let children = store.list_child_jobs(&text.id).await.unwrap();
+    assert_eq!(children.len(), 1);
+    let agent_task = &children[0];
+    assert_eq!(agent_task.kind, JobKind::AgentTask);
+    assert_eq!(agent_task.scope_kind, RuntimeScopeKind::Dm);
+    assert_eq!(agent_task.scope_id, "user-a");
+
+    let events = store
+        .load_scope_events(
+            RuntimeScopeKind::Dm,
+            "",
+            "user-a",
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event.get("event_kind") == Some(&json!("discord_text_message"))
+            && event.get("text") == Some(&json!("what did we decide?"))
+            && event.get("speaker_user_id") == Some(&json!("user-a"))
+    }));
 }
 
 #[tokio::test(flavor = "current_thread")]

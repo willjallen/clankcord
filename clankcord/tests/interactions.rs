@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clankcord::runtime::domain::interactions::{
-    AgentTaskPromptContext, build_agent_task_message_from_template_dir,
+    AgentPromptRequestOrigin, AgentTaskPromptContext, build_agent_task_message_from_template_dir,
 };
+use clankcord::runtime::{AgentSessionRouteKind, TextTargetKind};
 
 #[test]
-fn agent_task_message_uses_compact_transcript_context() {
+fn agent_task_message_uses_compact_invocation_context() {
     let context = prompt_context();
     let message = build_agent_task_message_from_template_dir(&context, true, &prompt_dir())
         .expect("build agent task message");
@@ -16,21 +17,19 @@ fn agent_task_message_uses_compact_transcript_context() {
     assert!(message.contains("clankcord responses send"));
     assert!(message.contains("clankcord responses dm"));
     assert!(message.contains("single-quoted heredoc"));
-    assert!(message.contains("treat the request and the answer as private"));
-    assert!(message.contains(
-        "do not publish the topic, answer, summary, result, or confirmation to a public channel"
-    ));
     assert!(message.contains("RESPONSE_SUBMITTED"));
     assert!(message.contains("NO_RESPONSE_NEEDED"));
-    assert!(message.contains("Final text is not a publication path"));
+    assert!(message.contains("Codex final text is a control signal"));
     assert!(message.contains("You may search the web"));
     assert!(message.contains("Do not be sycophantic"));
+    assert!(message.contains("VOICE_REQUEST_CONTEXT"));
+    assert!(message.contains("begin with one short sentence summarizing what you understood"));
     assert!(
         message
             .contains("CLANKCORD_AGENT_WORKDIR=/clankcord/state/agent-workspaces/task/guild/code")
     );
-    assert!(message.contains("===== PREVIOUS CONTEXT ====="));
-    assert!(message.contains("===== QUESTION / ACTIVATION ====="));
+    assert!(message.contains("===== RECENT SCOPE EVENTS ====="));
+    assert!(message.contains("===== CURRENT REQUEST EVENTS ====="));
     assert!(message.contains("vince (user-2): prior context"));
     assert!(message.contains("will (user-1): summarize this"));
     assert!(!message.contains("JOB_PACKET_JSON"));
@@ -48,7 +47,8 @@ fn resumed_agent_task_message_omits_large_session_instructions() {
 
     assert!(message.contains("JOB:"));
     assert!(!message.contains("SESSION_INSTRUCTIONS:"));
-    assert!(message.contains("===== QUESTION / ACTIVATION ====="));
+    assert!(message.contains("VOICE_REQUEST_CONTEXT"));
+    assert!(message.contains("===== CURRENT REQUEST EVENTS ====="));
     assert!(!message.contains("JOB_PACKET_JSON"));
 }
 
@@ -57,14 +57,21 @@ fn prompt_context() -> AgentTaskPromptContext {
         job_id: "job_test".to_string(),
         agent_session_id: "ags_test".to_string(),
         resumed_from_agent_session_id: String::new(),
+        route_kind: AgentSessionRouteKind::Voice,
+        request_origin: AgentPromptRequestOrigin::Voice,
+        response_surface: TextTargetKind::Channel,
         guild_id: "guild".to_string(),
         scope_id: "code".to_string(),
         requested_by_user_id: "user-1".to_string(),
         requested_by: "will".to_string(),
         request: "summarize this".to_string(),
         workdir: "/clankcord/state/agent-workspaces/task/guild/code".to_string(),
-        previous_context: vec!["[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string()],
-        question: vec!["[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string()],
+        recent_scope_events: vec![
+            "[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string(),
+        ],
+        source_request_events: vec![
+            "[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string(),
+        ],
     }
 }
 
