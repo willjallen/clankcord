@@ -4,6 +4,7 @@ use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use clankcord::runtime::jobs::DiscordPostMetadata;
 use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::timeline::views::JobsRequest;
@@ -45,6 +46,100 @@ struct PreV0_3_0Job {
     metadata: JobMetadata,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0AgentInvocationMetadata {
+    session_id: String,
+    provider: String,
+    model: String,
+    usage: BinaryPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0AgentPreflightCheck {
+    command: String,
+    returncode: Option<i32>,
+    ok: bool,
+    stdout_preview: String,
+    stderr_preview: String,
+    error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0AgentPreflightMetadata {
+    ok: bool,
+    checked_at: String,
+    checks: Vec<PreV0_6_0AgentPreflightCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0AgentTaskMetadata {
+    dispatch_attempts: i64,
+    dispatch_error: String,
+    dispatch_error_after_cancel: String,
+    workdir_path: String,
+    prompt_path: String,
+    result_path: String,
+    raw_result_path: String,
+    dispatch_stdout_preview: String,
+    dispatch_stderr: String,
+    agent: PreV0_6_0AgentInvocationMetadata,
+    preflight: Option<PreV0_6_0AgentPreflightMetadata>,
+    response_text: String,
+    command: String,
+    result_suppressed: bool,
+    discord_post: Option<DiscordPostMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0ConfirmationJobMetadata {
+    delivery: String,
+    channel_id: String,
+    message_id: String,
+    post_error: String,
+    approved_by_user_id: String,
+    approved_at: String,
+    approval_error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+enum PreV0_6_0JobMetadataDetail {
+    AgentTask(PreV0_6_0AgentTaskMetadata),
+    Confirmation(PreV0_6_0ConfirmationJobMetadata),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+struct PreV0_6_0JobMetadata {
+    detail: Option<Box<PreV0_6_0JobMetadataDetail>>,
+    error: String,
+    timed_out_at: String,
+    cancel_requested: bool,
+    cancelled_by_user_id: String,
+    output: Option<JobOutput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct PreV0_6_0Job {
+    id: String,
+    kind: JobKind,
+    scope_kind: RuntimeScopeKind,
+    guild_id: String,
+    scope_id: String,
+    state: JobState,
+    requested_by_user_id: String,
+    payload: JobPayload,
+    attempts: i64,
+    created_at: String,
+    updated_at: String,
+    next_run_at: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    cancelled_at: Option<String>,
+    parent_job_id: Option<String>,
+    root_job_id: String,
+    lineage_depth: u8,
+    metadata: PreV0_6_0JobMetadata,
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
     let command = CommandRequest::from_json(&json!({
@@ -80,7 +175,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 3);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 4);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -134,22 +229,27 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.5.0".to_string()
+                "0.6.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.5.0".to_string()
+                "0.6.0".to_string()
             ),
             (
                 "0.4.0".to_string(),
                 "database hard-cut performance contracts".to_string(),
-                "0.5.0".to_string()
+                "0.6.0".to_string()
             ),
             (
                 "0.5.0".to_string(),
                 "policy-driven durable retention".to_string(),
-                "0.5.0".to_string()
+                "0.6.0".to_string()
+            ),
+            (
+                "0.6.0".to_string(),
+                "job payload blob v4 agent invocation metadata".to_string(),
+                "0.6.0".to_string()
             ),
         ]
     );
@@ -189,7 +289,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0')",
     )
     .execute(&store.pool)
     .await
@@ -197,10 +297,11 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
+    assert_eq!(applied[3].version, "0.6.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -246,16 +347,19 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert!(column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0')")
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0')",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), 3);
     assert_eq!(applied[0].version, "0.4.0");
     assert_eq!(applied[1].version, "0.5.0");
+    assert_eq!(applied[2].version, "0.6.0");
     assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
@@ -278,7 +382,42 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     .unwrap();
     assert!(index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.5.0'")
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0')")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 2);
+    assert_eq!(applied[0].version, "0.5.0");
+    assert_eq!(applied[1].version, "0.6.0");
+    assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let created = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
+        ))
+        .await
+        .unwrap();
+    let legacy_blob = encode_pre_v0_6_0_agent_task_job(&created);
+
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(legacy_blob)
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.6.0'")
         .execute(&store.pool)
         .await
         .unwrap();
@@ -286,8 +425,22 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
     assert_eq!(applied.len(), 1);
-    assert_eq!(applied[0].version, "0.5.0");
-    assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
+    assert_eq!(applied[0].version, "0.6.0");
+    let migrated = store.get_job(&created.id).await.unwrap();
+    let metadata = migrated.metadata.to_json();
+    let agent = &metadata["agent_task"]["agent"];
+    assert_eq!(agent["session_id"], json!("codex-session-v3"));
+    assert_eq!(agent["provider"], json!("codex"));
+    assert_eq!(agent["model"], json!("codex-default"));
+    assert!(agent.get("reasoning_effort").is_none());
+    assert!(agent.get("fast_mode").is_none());
+    let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+        .bind(&created.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert!(Job::is_current_payload_blob(&payload_blob));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1488,6 +1641,51 @@ fn encode_pre_v0_3_0_job(job: &Job) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
     bytes.extend_from_slice(&2_u16.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn encode_pre_v0_6_0_agent_task_job(job: &Job) -> Vec<u8> {
+    let previous = PreV0_6_0Job {
+        id: job.id.clone(),
+        kind: job.kind,
+        scope_kind: job.scope_kind,
+        guild_id: job.guild_id.clone(),
+        scope_id: job.scope_id.clone(),
+        state: job.state,
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        payload: job.payload.clone(),
+        attempts: job.attempts,
+        created_at: job.created_at.clone(),
+        updated_at: job.updated_at.clone(),
+        next_run_at: job.next_run_at.clone(),
+        started_at: job.started_at.clone(),
+        completed_at: job.completed_at.clone(),
+        cancelled_at: job.cancelled_at.clone(),
+        parent_job_id: job.parent_job_id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        lineage_depth: job.lineage_depth,
+        metadata: PreV0_6_0JobMetadata {
+            detail: Some(Box::new(PreV0_6_0JobMetadataDetail::AgentTask(
+                PreV0_6_0AgentTaskMetadata {
+                    dispatch_stdout_preview: "done".to_string(),
+                    agent: PreV0_6_0AgentInvocationMetadata {
+                        session_id: "codex-session-v3".to_string(),
+                        provider: "codex".to_string(),
+                        model: "codex-default".to_string(),
+                        usage: BinaryPayload::empty(),
+                    },
+                    response_text: "done".to_string(),
+                    ..PreV0_6_0AgentTaskMetadata::default()
+                },
+            ))),
+            ..PreV0_6_0JobMetadata::default()
+        },
+    };
+    let body = bincode::serialize(&previous).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&3_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }

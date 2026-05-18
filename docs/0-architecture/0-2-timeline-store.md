@@ -59,6 +59,8 @@ The `0.4.0` migration enforces the database hard-cut performance contracts. It s
 
 The `0.5.0` migration removes the obsolete terminal-job retention index. Retention is policy-driven: transcript events, source audio artifacts, and non-ephemeral job metadata each use the configured capture-run policy, while ephemeral jobs keep their `gc_after_ms` lifecycle.
 
+The `0.6.0` migration rewrites version-3 `CLANKJOB` payload blobs into version 4. Version 4 records Codex agent invocation reasoning effort and fast-mode metadata on agent-task jobs. Existing version-3 agent-task metadata is decoded through the previous Rust shape, converted into the current `Job` value, and re-encoded under the new envelope version.
+
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 
 ## Code Layout
