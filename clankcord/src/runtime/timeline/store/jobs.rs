@@ -1856,9 +1856,15 @@ fn audio_segment_end_ms(job: &Job) -> Option<i64> {
     }
 }
 
+#[derive(Debug, Clone)]
+struct ActiveWakeActivation {
+    payload: crate::runtime::WakeActivationPayload,
+    request_audio_closed_at: Option<DateTime<Utc>>,
+}
+
 async fn active_wake_activation_payloads(
     transaction: &mut sqlx::Transaction<'_, Postgres>,
-) -> Result<Vec<crate::runtime::WakeActivationPayload>> {
+) -> Result<Vec<ActiveWakeActivation>> {
     let rows = sqlx::query(
         r#"
         SELECT p.payload_blob
@@ -1878,12 +1884,56 @@ async fn active_wake_activation_payloads(
             payloads.push(payload.clone());
         }
     }
-    Ok(payloads)
+    let activation_ids = payloads
+        .iter()
+        .map(|payload| payload.activation_id.clone())
+        .collect::<Vec<_>>();
+    let mut closed_at_by_activation = BTreeMap::new();
+    if !activation_ids.is_empty() {
+        let rows = sqlx::query(
+            r#"
+            SELECT payload_json, started_at_ms
+            FROM timeline_events
+            WHERE event_kind = 'wake_activation_window_closed'
+              AND forgotten = FALSE
+              AND payload_json->>'activation_id' = ANY($1)
+            ORDER BY started_at_ms, sequence
+            "#,
+        )
+        .bind(&activation_ids)
+        .fetch_all(transaction.as_mut())
+        .await?;
+        for row in rows {
+            let payload = json_value(&row, "payload_json")?;
+            let activation_id = first_value_string(&payload, &["activation_id"]);
+            if activation_id.is_empty() {
+                continue;
+            }
+            let closed_at =
+                parse_instant(&first_value_string(&payload, &["request_audio_closed_at"])).or_else(
+                    || {
+                        row.try_get::<i64, _>("started_at_ms")
+                            .ok()
+                            .and_then(ms_to_datetime)
+                    },
+                );
+            if let Some(closed_at) = closed_at {
+                closed_at_by_activation.insert(activation_id, closed_at);
+            }
+        }
+    }
+    Ok(payloads
+        .into_iter()
+        .map(|payload| ActiveWakeActivation {
+            request_audio_closed_at: closed_at_by_activation.get(&payload.activation_id).copied(),
+            payload,
+        })
+        .collect())
 }
 
 fn audio_segment_has_active_wake_priority(
     job: &Job,
-    wake_activations: &[crate::runtime::WakeActivationPayload],
+    wake_activations: &[ActiveWakeActivation],
 ) -> bool {
     let Some(segment) = job.audio_segment_payload() else {
         return false;
@@ -1895,20 +1945,21 @@ fn audio_segment_has_active_wake_priority(
 
 fn audio_segment_overlaps_wake_window(
     segment: &crate::runtime::AudioSegmentPayload,
-    wake: &crate::runtime::WakeActivationPayload,
+    wake: &ActiveWakeActivation,
 ) -> bool {
-    if segment.guild_id != wake.guild_id
-        || segment.voice_channel_id != wake.voice_channel_id
-        || segment.speaker_user_id != wake.speaker_user_id
+    let payload = &wake.payload;
+    if segment.guild_id != payload.guild_id
+        || segment.voice_channel_id != payload.voice_channel_id
+        || segment.speaker_user_id != payload.speaker_user_id
     {
         return false;
     }
-    let Some(latest_wake_at) = parse_instant(&wake.latest_wake_at) else {
+    let Some(latest_wake_at) = parse_instant(&payload.latest_wake_at) else {
         return false;
     };
-    let window_end = parse_instant(&wake.request_audio_closed_at).unwrap_or_else(|| {
-        let original_wake_at = parse_instant(&wake.wake_started_at).unwrap_or(latest_wake_at);
-        let hard_cap = original_wake_at + chrono::Duration::seconds(wake.max_window_seconds);
+    let window_end = wake.request_audio_closed_at.unwrap_or_else(|| {
+        let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or(latest_wake_at);
+        let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
         std::cmp::min(utc_now(), hard_cap)
     });
     segment.segment_end_time >= latest_wake_at && segment.segment_start_time <= window_end

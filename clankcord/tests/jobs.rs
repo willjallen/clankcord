@@ -1152,7 +1152,6 @@ async fn wake_activation_payload_is_a_first_class_binary_job() {
         wake_ended_at: "2026-05-14T12:00:01.000Z".to_string(),
         latest_wake_event_id: "evt_wake".to_string(),
         latest_wake_at: "2026-05-14T12:00:00.000Z".to_string(),
-        request_audio_closed_at: String::new(),
         lookback_seconds: 30,
         min_post_seconds: 5,
         speaker_idle_seconds: 5,
@@ -1282,9 +1281,25 @@ async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake
     let mut wake_payload = wake_activation_payload("guild", "code");
     wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(30)));
     wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(30)));
-    wake_payload.request_audio_closed_at = isoformat_z(Some(now - Duration::seconds(20)));
+    let activation_id = wake_payload.activation_id.clone();
+    let closed_at = now - Duration::seconds(20);
     store
         .create_job(Job::wake_activation(wake_payload))
+        .await
+        .unwrap();
+    store
+        .append_event(
+            "guild",
+            "code",
+            json!({
+                "event_kind": "wake_activation_window_closed",
+                "kind": "wake_activation_window_closed",
+                "activation_id": activation_id,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "startedAt": closed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                "endedAt": closed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            }),
+        )
         .await
         .unwrap();
 
@@ -2262,7 +2277,6 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
         wake_ended_at: "2026-05-14T12:00:01.000Z".to_string(),
         latest_wake_event_id: "evt_wake".to_string(),
         latest_wake_at: "2026-05-14T12:00:00.000Z".to_string(),
-        request_audio_closed_at: String::new(),
         lookback_seconds: 30,
         min_post_seconds: 5,
         speaker_idle_seconds: 5,

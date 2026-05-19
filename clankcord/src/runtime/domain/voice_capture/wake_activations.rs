@@ -9,8 +9,7 @@ use crate::runtime::timeline::{
 };
 use crate::runtime::util::{first_value_string, non_empty};
 use crate::runtime::{
-    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobPayload, JobState, Runtime,
-    WakeActivationPayload,
+    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -143,7 +142,6 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
         wake_ended_at: isoformat_z(Some(wake_ended_at)),
         latest_wake_event_id: wake_event_id,
         latest_wake_at: isoformat_z(Some(wake_started_at)),
-        request_audio_closed_at: String::new(),
         lookback_seconds: activation.lookback_seconds.max(0),
         min_post_seconds: activation.min_post_seconds.max(0),
         speaker_idle_seconds: activation.speaker_idle_seconds.max(0),
@@ -249,13 +247,12 @@ pub async fn execute(
     }
 
     let closed_at = if now >= hard_cap { hard_cap } else { due_at };
-    let payload = persist_request_audio_closed_at(runtime, job, payload, closed_at).await?;
-    record_activation_window_closed(runtime, job, &payload, closed_at).await?;
+    record_activation_window_closed(runtime, job, payload, closed_at).await?;
 
     dispatch_after_request_audio(
         runtime,
         job,
-        &payload,
+        payload,
         window_start,
         latest_wake_at,
         closed_at,
@@ -279,7 +276,6 @@ async fn dispatch_after_request_audio(
         deferred.next_run_at = Some(isoformat_z(Some(
             now + chrono::Duration::milliseconds(active_capture_poll_ms()),
         )));
-        deferred.payload = JobPayload::WakeActivation(payload.clone());
         runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
@@ -353,24 +349,6 @@ async fn dispatch_after_request_audio(
         "request_audio_closed_at": isoformat_z(Some(closed_at)),
         "created": created,
     }))
-}
-
-async fn persist_request_audio_closed_at(
-    runtime: &Runtime,
-    job: &Job,
-    payload: &WakeActivationPayload,
-    closed_at: DateTime<Utc>,
-) -> Result<WakeActivationPayload> {
-    let closed_at_text = isoformat_z(Some(closed_at));
-    if payload.request_audio_closed_at == closed_at_text {
-        return Ok(payload.clone());
-    }
-    let mut updated_payload = payload.clone();
-    updated_payload.request_audio_closed_at = closed_at_text;
-    let mut updated_job = job.clone();
-    updated_job.payload = JobPayload::WakeActivation(updated_payload.clone());
-    runtime.timeline_store.update_job(&updated_job).await?;
-    Ok(updated_payload)
 }
 
 async fn record_activation_window_closed(
@@ -600,7 +578,6 @@ fn amend_payload(
 ) {
     payload.latest_wake_event_id = wake_event_id.to_string();
     payload.latest_wake_at = isoformat_z(Some(wake_started_at));
-    payload.request_audio_closed_at.clear();
     payload.speaker_user_id = speaker_user_id;
     payload.speaker_label = speaker_label;
     if payload.wake_event_id != wake_event_id
@@ -674,20 +651,17 @@ fn activation_window_closed_at(
     payload: &WakeActivationPayload,
     events: &[Value],
 ) -> Option<DateTime<Utc>> {
-    parse_instant(&payload.request_audio_closed_at).or_else(|| {
-        events
-            .iter()
-            .filter(|event| {
-                first_value_string(event, &["event_kind", "kind"])
-                    == "wake_activation_window_closed"
-                    && first_value_string(event, &["activation_id"]) == payload.activation_id
-            })
-            .filter_map(|event| {
-                parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
-                    .or_else(|| event_start(event))
-            })
-            .max()
-    })
+    events
+        .iter()
+        .filter(|event| {
+            first_value_string(event, &["event_kind", "kind"]) == "wake_activation_window_closed"
+                && first_value_string(event, &["activation_id"]) == payload.activation_id
+        })
+        .filter_map(|event| {
+            parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
+                .or_else(|| event_start(event))
+        })
+        .max()
 }
 
 async fn activation_voice_capture_hold(

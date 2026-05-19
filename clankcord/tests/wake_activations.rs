@@ -932,18 +932,6 @@ async fn wake_activation_waits_for_pending_request_audio_after_old_settlement_wi
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
     assert!(string_field(&result, "request_audio_closed_at").len() > 0);
-    let updated = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
-    assert!(
-        !updated
-            .wake_activation_payload()
-            .unwrap()
-            .request_audio_closed_at
-            .is_empty()
-    );
 }
 
 #[tokio::test(flavor = "current_thread")]
