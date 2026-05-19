@@ -802,6 +802,358 @@ async fn overlap_automation_can_match_current_room_participants() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn room_participants_exposes_voice_state_flags_for_conditions() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "undeafened overlap watcher",
+                "idempotency_key": "job_1:participant-voice-flags",
+                "trigger": {"kind": "event", "event_kinds": ["participant_joined"]},
+                "condition": {
+                    "kind": "all",
+                    "conditions": [
+                        {"kind": "predicate", "path": "event.user_id", "op": "eq", "value": "blake"},
+                        {"kind": "predicate", "path": "room.participants.blake.present", "op": "eq", "value": true},
+                        {"kind": "predicate", "path": "room.participants.blake.deaf", "op": "eq", "value": false},
+                        {"kind": "predicate", "path": "room.participants.blake.self_deaf", "op": "eq", "value": false},
+                        {"kind": "predicate", "path": "room.participants.blake.mute", "op": "eq", "value": false},
+                        {"kind": "predicate", "path": "room.participants.blake.self_mute", "op": "eq", "value": false}
+                    ]
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake is present and can hear."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    assert_eq!(
+        job.text_delivery_payload().unwrap().content,
+        "Blake is present and can hear."
+    );
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn event_room_participants_exposes_voice_state_flags_for_transition_conditions() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "undeafened join watcher",
+                "idempotency_key": "job_1:event-room-participant-flags",
+                "trigger": {"kind": "event", "event_kinds": ["participant_joined"]},
+                "condition": {
+                    "kind": "all",
+                    "conditions": [
+                        {"kind": "predicate", "path": "event.user_id", "op": "eq", "value": "blake"},
+                        {"kind": "predicate", "path": "event_room.after.participants.blake.present", "op": "eq", "value": true},
+                        {"kind": "predicate", "path": "event_room.after.participants.blake.deaf", "op": "eq", "value": false},
+                        {"kind": "predicate", "path": "event_room.after.participants.blake.self_deaf", "op": "eq", "value": false}
+                    ]
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake joined undeafened."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    store
+        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    assert_eq!(
+        job.text_delivery_payload().unwrap().content,
+        "Blake joined undeafened."
+    );
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_state_changed_trigger_fires_for_participant_deafen_changes() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    store
+        .record_voice_state_update(
+            None,
+            voice_state_with_flags("code", "blake", "Blake", false, false, false, true),
+        )
+        .await
+        .unwrap();
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "undeafen watcher",
+                "idempotency_key": "job_1:room-state-deafen",
+                "trigger": {"kind": "room_state_changed"},
+                "condition": {
+                    "kind": "all",
+                    "conditions": [
+                        {"kind": "predicate", "path": "event.kind", "op": "eq", "value": "participant_deafen_changed"},
+                        {"kind": "predicate", "path": "event.user_id", "op": "eq", "value": "blake"},
+                        {"kind": "predicate", "path": "event.self_deaf", "op": "eq", "value": false}
+                    ]
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake undeafened."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    store
+        .record_voice_state_update(
+            None,
+            voice_state_with_flags("code", "blake", "Blake", false, false, false, false),
+        )
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    assert_eq!(
+        job.text_delivery_payload().unwrap().content,
+        "Blake undeafened."
+    );
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_state_changed_trigger_fires_for_participant_mute_changes() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    store
+        .record_voice_state_update(
+            None,
+            voice_state_with_flags("code", "blake", "Blake", false, false, true, false),
+        )
+        .await
+        .unwrap();
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "unmute watcher",
+                "idempotency_key": "job_1:room-state-mute",
+                "trigger": {"kind": "room_state_changed"},
+                "condition": {
+                    "kind": "all",
+                    "conditions": [
+                        {"kind": "predicate", "path": "event.kind", "op": "eq", "value": "participant_mute_changed"},
+                        {"kind": "predicate", "path": "event.user_id", "op": "eq", "value": "blake"},
+                        {"kind": "predicate", "path": "event.self_mute", "op": "eq", "value": false}
+                    ]
+                },
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake unmuted."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    store
+        .record_voice_state_update(
+            None,
+            voice_state_with_flags("code", "blake", "Blake", false, false, false, false),
+        )
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    assert_eq!(
+        job.text_delivery_payload().unwrap().content,
+        "Blake unmuted."
+    );
+    assert_eq!(
+        runtime
+            .timeline_store
+            .get_automation(&record.automation_id)
+            .await
+            .unwrap()
+            .state,
+        AutomationState::Expired
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recurring_event_automation_processes_all_matching_events_seen_in_one_pass() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "multi event watcher",
+                "idempotency_key": "job_1:multi-event",
+                "trigger": {"kind": "event", "event_kinds": ["room.member_joined"]},
+                "condition": {
+                    "kind": "predicate",
+                    "path": "event.speaker_user_id",
+                    "op": "eq",
+                    "value": "blake"
+                },
+                "expiry": {"max_fires": 2},
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "Blake joined."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    append_speech(
+        &store,
+        "room.member_joined",
+        "blake",
+        "Blake joined again",
+        2,
+    )
+    .await;
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 2);
+    let updated = runtime
+        .timeline_store
+        .get_automation(&record.automation_id)
+        .await
+        .unwrap();
+    assert_eq!(updated.fire_count, 2);
+    assert_eq!(updated.state, AutomationState::Expired);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn recurring_job_automation_processes_all_matching_jobs_seen_in_one_pass() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    insert_agent_source_job(&store).await;
+    let record = store
+        .create_automation(
+            AutomationSpec::from_json(&spec_value(json!({
+                "name": "multi job watcher",
+                "idempotency_key": "job_1:multi-job",
+                "trigger": {
+                    "kind": "job",
+                    "job_kinds": ["text_delivery"],
+                    "states": ["complete"]
+                },
+                "condition": {"kind": "true"},
+                "expiry": {"max_fires": 2},
+                "actions": [{
+                    "kind": "response.send",
+                    "sink": {"kind": "agent_chat"},
+                    "content": "A delivery completed."
+                }]
+            })))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    create_completed_text_delivery(&store, "source-delivery-1", "first").await;
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    create_completed_text_delivery(&store, "source-delivery-2", "second").await;
+    let mut runtime = test_runtime(store);
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 2);
+    let updated = runtime
+        .timeline_store
+        .get_automation(&record.automation_id)
+        .await
+        .unwrap();
+    assert_eq!(updated.fire_count, 2);
+    assert_eq!(updated.state, AutomationState::Expired);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn event_room_snapshot_matches_presence_at_transition_time() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
@@ -1474,6 +1826,24 @@ async fn append_speech(
         .unwrap();
 }
 
+async fn create_completed_text_delivery(store: &TimelineStore, source_job_id: &str, content: &str) {
+    let mut delivery = Job::text_delivery(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            TextTarget::default(),
+            content,
+            source_job_id,
+            "user-a",
+            false,
+        ),
+    );
+    delivery = store.create_job(delivery).await.unwrap();
+    delivery.mark_complete();
+    store.update_job(&delivery).await.unwrap();
+}
+
 fn voice_state(voice_channel_id: &str, user_id: &str, display_name: &str) -> Value {
     json!({
         "guild_id": "guild",
@@ -1490,6 +1860,23 @@ fn voice_state(voice_channel_id: &str, user_id: &str, display_name: &str) -> Val
         "self_video": false,
         "suppress": false,
     })
+}
+
+fn voice_state_with_flags(
+    voice_channel_id: &str,
+    user_id: &str,
+    display_name: &str,
+    mute: bool,
+    deaf: bool,
+    self_mute: bool,
+    self_deaf: bool,
+) -> Value {
+    let mut state = voice_state(voice_channel_id, user_id, display_name);
+    state["mute"] = json!(mute);
+    state["deaf"] = json!(deaf);
+    state["self_mute"] = json!(self_mute);
+    state["self_deaf"] = json!(self_deaf);
+    state
 }
 
 fn ready_bot() -> VoiceBotStatus {

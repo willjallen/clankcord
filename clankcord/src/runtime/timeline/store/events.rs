@@ -162,6 +162,17 @@ fn room_participant_map(occupants: &[Value]) -> BTreeMap<String, Value> {
                         "user_id": user_id,
                         "display_name": first_value_string(occupant, &["display_name", "member_display_name", "global_name", "globalName", "username"]),
                         "username": first_value_string(occupant, &["username"]),
+                        "mute": voice_state_bool(occupant, "mute"),
+                        "deaf": voice_state_bool(occupant, "deaf"),
+                        "self_mute": voice_state_bool(occupant, "self_mute"),
+                        "self_deaf": voice_state_bool(occupant, "self_deaf"),
+                        "server_mute": voice_state_bool(occupant, "mute"),
+                        "server_deaf": voice_state_bool(occupant, "deaf"),
+                        "muted": voice_muted(occupant),
+                        "deafened": voice_deafened(occupant),
+                        "streaming": voice_state_bool(occupant, "self_stream"),
+                        "video": voice_state_bool(occupant, "self_video"),
+                        "suppress": voice_state_bool(occupant, "suppress"),
                     }),
                 )
             })

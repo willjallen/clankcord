@@ -265,10 +265,12 @@ async fn run_stored_automations(
         if outcome.evaluated {
             if let Some(pending) = outcome.pending_recheck {
                 updated.mark_pending_recheck(pending.due_at, pending.event_json, pending.job_json);
-            } else if outcome.jobs.is_empty() {
-                updated.mark_evaluated();
+            } else if outcome.fire_count > 0 {
+                for _ in 0..outcome.fire_count {
+                    updated.mark_fired();
+                }
             } else {
-                updated.mark_fired();
+                updated.mark_evaluated();
             }
             runtime
                 .timeline_store
@@ -305,6 +307,7 @@ async fn run_stored_automations(
 struct StoredAutomationOutcome {
     evaluated: bool,
     jobs: Vec<Job>,
+    fire_count: u64,
     pending_recheck: Option<PendingRecheck>,
 }
 
@@ -348,9 +351,11 @@ async fn evaluate_stored_automation(
         } else {
             Vec::new()
         };
+        let fire_count = if jobs.is_empty() { 0 } else { 1 };
         return Ok(StoredAutomationOutcome {
             evaluated: true,
             jobs,
+            fire_count,
             pending_recheck: None,
         });
     }
@@ -361,7 +366,13 @@ async fn evaluate_stored_automation(
     }
 
     let mut jobs = Vec::new();
+    let mut fire_count = 0;
+    let max_fires = record.spec.expiry.max_fires.unwrap_or(u64::MAX);
+    let remaining_fires = max_fires.saturating_sub(record.fire_count);
     for context in contexts {
+        if fire_count >= remaining_fires {
+            break;
+        }
         if !condition_matches(&record.spec.condition, &context)? {
             continue;
         }
@@ -372,6 +383,7 @@ async fn evaluate_stored_automation(
             return Ok(StoredAutomationOutcome {
                 evaluated: true,
                 jobs,
+                fire_count,
                 pending_recheck: Some(PendingRecheck {
                     due_at,
                     event_json: context_value_json(&context, "event")?,
@@ -379,12 +391,16 @@ async fn evaluate_stored_automation(
                 }),
             });
         }
-        jobs = jobs_for_actions(runtime, record).await?;
-        break;
+        let action_jobs = jobs_for_actions(runtime, record).await?;
+        if !action_jobs.is_empty() {
+            fire_count += 1;
+            jobs.extend(action_jobs);
+        }
     }
     Ok(StoredAutomationOutcome {
         evaluated: true,
         jobs,
+        fire_count,
         pending_recheck: None,
     })
 }
@@ -462,6 +478,11 @@ async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Resul
                     "occupancy_updated".to_string(),
                     "participant_joined".to_string(),
                     "participant_left".to_string(),
+                    "participant_mute_changed".to_string(),
+                    "participant_deafen_changed".to_string(),
+                    "participant_stream_changed".to_string(),
+                    "participant_video_changed".to_string(),
+                    "participant_suppress_changed".to_string(),
                 ],
             )
             .await
@@ -592,11 +613,34 @@ fn room_participants(occupants: &[Value]) -> BTreeMap<String, Value> {
                         "user_id": user_id,
                         "display_name": first_value_string(occupant, &["display_name", "member_display_name", "global_name", "globalName", "username"]),
                         "username": first_value_string(occupant, &["username"]),
+                        "mute": occupant_bool(occupant, "mute"),
+                        "deaf": occupant_bool(occupant, "deaf"),
+                        "self_mute": occupant_bool(occupant, "self_mute"),
+                        "self_deaf": occupant_bool(occupant, "self_deaf"),
+                        "server_mute": occupant_bool(occupant, "mute"),
+                        "server_deaf": occupant_bool(occupant, "deaf"),
+                        "muted": occupant_muted(occupant),
+                        "deafened": occupant_deafened(occupant),
+                        "streaming": occupant_bool(occupant, "self_stream"),
+                        "video": occupant_bool(occupant, "self_video"),
+                        "suppress": occupant_bool(occupant, "suppress"),
                     }),
                 )
             })
         })
         .collect()
+}
+
+fn occupant_muted(occupant: &Value) -> bool {
+    occupant_bool(occupant, "mute") || occupant_bool(occupant, "self_mute")
+}
+
+fn occupant_deafened(occupant: &Value) -> bool {
+    occupant_bool(occupant, "deaf") || occupant_bool(occupant, "self_deaf")
+}
+
+fn occupant_bool(occupant: &Value, key: &str) -> bool {
+    occupant.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
 
 fn job_for_action(record: &AutomationRecord, action: &AutomationAction) -> Result<Job> {

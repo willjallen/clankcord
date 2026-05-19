@@ -140,7 +140,7 @@ Job triggers evaluate scoped jobs of selected kinds and states.
 }
 ```
 
-`room_state_changed` is a shortcut over room state, occupancy, participant join, and participant leave activity.
+`room_state_changed` is a shortcut over room state, occupancy, participant join and leave activity, and participant voice-state changes such as mute, deafen, stream, video, and suppress transitions.
 
 ```json
 {"kind": "room_state_changed"}
@@ -150,9 +150,9 @@ Job kinds parse through `JobKind`; job states parse through `JobState`. Trigger 
 
 ## Evaluation Context
 
-Conditions evaluate against a context object built for the trigger. The object always contains the automation record, runtime clock, room payload, event-room payload, and nullable event and job fields. `room.liveOccupants` comes from current voice state. `room.participants` is keyed by Discord user id and adds `present: true` for present users.
+Conditions evaluate against a context object built for the trigger. The object always contains the automation record, runtime clock, room payload, event-room payload, and nullable event and job fields. `room.liveOccupants` comes from current voice state. `room.participants` is keyed by Discord user id and adds `present: true` for present users, plus display identity, server mute/deafen, self mute/deafen, aggregate muted/deafened, stream, video, and suppress fields.
 
-Voice transition events carry durable room snapshots captured when the transition was recorded. `event_room.before` and `event_room.after` expose `liveOccupants` and `participants` for the scoped room at transition time. These snapshots are the right surface for conditions such as "when Blake joins while I am already present" because they do not depend on who is still present when automation evaluation runs.
+Voice transition events carry durable room snapshots captured when the transition was recorded. `event_room.before` and `event_room.after` expose `liveOccupants` and `participants` for the scoped room at transition time, including the same participant voice-state fields. These snapshots are the right surface for conditions such as "when Blake joins while I am already present" because they do not depend on who is still present when automation evaluation runs.
 
 ```json
 {
@@ -276,7 +276,7 @@ Delayed rechecks cover settled-state semantics such as "if Blake is still gone a
 
 ## Expiry
 
-Expiry controls how long the automation remains active and how many times it can fire.
+Expiry controls how long the automation remains active and how many trigger contexts can fire actions. When one evaluation pass observes multiple matching event or job contexts, the runtime processes matches until the automation reaches its remaining `max_fires` budget.
 
 Default one-shot:
 
