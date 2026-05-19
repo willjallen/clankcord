@@ -4,10 +4,11 @@ use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use clankcord::config;
 use clankcord::runtime::jobs::DiscordPostMetadata;
 use clankcord::runtime::jobs::JobMetadata;
-use clankcord::runtime::timeline::JobVisibility;
 use clankcord::runtime::timeline::views::JobsRequest;
+use clankcord::runtime::timeline::{JobVisibility, isoformat_z};
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
@@ -223,6 +224,20 @@ async fn job_round_trips_as_binary_record() {
         parsed.command().unwrap().arguments.question,
         "what happened?"
     );
+}
+
+#[test]
+fn example_config_throttles_stt_audio_without_throttling_wake() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+
+    let concurrency = config::job_concurrency();
+    let batch = config::job_batch_limits();
+
+    assert_eq!(concurrency.audio, 2);
+    assert_eq!(batch.audio, 2);
+    assert_eq!(concurrency.wake, 32);
+    assert_eq!(batch.wake, 32);
 }
 
 #[test]
@@ -1137,6 +1152,7 @@ async fn wake_activation_payload_is_a_first_class_binary_job() {
         wake_ended_at: "2026-05-14T12:00:01.000Z".to_string(),
         latest_wake_event_id: "evt_wake".to_string(),
         latest_wake_at: "2026-05-14T12:00:00.000Z".to_string(),
+        request_audio_closed_at: String::new(),
         lookback_seconds: 30,
         min_post_seconds: 5,
         speaker_idle_seconds: 5,
@@ -1202,6 +1218,222 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
             .await
             .unwrap()
             .is_empty()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let now = Utc::now();
+    let mut wake_payload = wake_activation_payload("guild", "code");
+    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.max_window_seconds = 3600;
+    store
+        .create_job(Job::wake_activation(wake_payload))
+        .await
+        .unwrap();
+
+    let mut normal = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-b",
+        now - Duration::seconds(40),
+        now - Duration::seconds(39),
+        1,
+    ));
+    normal.created_at = isoformat_z(Some(now - Duration::seconds(40)));
+    normal.updated_at = normal.created_at.clone();
+    let normal_id = normal.id.clone();
+    store.create_job(normal).await.unwrap();
+
+    let mut priority = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(10),
+        now - Duration::seconds(9),
+        2,
+    ));
+    priority.created_at = isoformat_z(Some(now - Duration::seconds(10)));
+    priority.updated_at = priority.created_at.clone();
+    let priority_id = priority.id.clone();
+    store.create_job(priority).await.unwrap();
+
+    let claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, priority_id);
+    assert_eq!(
+        store.get_job(&normal_id).await.unwrap().state,
+        JobState::Queued
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake_window() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let now = Utc::now();
+    let mut wake_payload = wake_activation_payload("guild", "code");
+    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(30)));
+    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(30)));
+    wake_payload.request_audio_closed_at = isoformat_z(Some(now - Duration::seconds(20)));
+    store
+        .create_job(Job::wake_activation(wake_payload))
+        .await
+        .unwrap();
+
+    let mut normal = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-b",
+        now - Duration::seconds(40),
+        now - Duration::seconds(39),
+        1,
+    ));
+    normal.created_at = isoformat_z(Some(now - Duration::seconds(40)));
+    normal.updated_at = normal.created_at.clone();
+    let normal_id = normal.id.clone();
+    store.create_job(normal).await.unwrap();
+
+    let mut after_closed = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(10),
+        now - Duration::seconds(9),
+        2,
+    ));
+    after_closed.created_at = isoformat_z(Some(now - Duration::seconds(10)));
+    after_closed.updated_at = after_closed.created_at.clone();
+    let after_closed_id = after_closed.id.clone();
+    store.create_job(after_closed).await.unwrap();
+
+    let claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, normal_id);
+    assert_eq!(
+        store.get_job(&after_closed_id).await.unwrap().state,
+        JobState::Queued
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let now = Utc::now();
+    let mut retryable_transport = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(10),
+        now - Duration::seconds(9),
+        1,
+    ));
+    retryable_transport.set_state(JobState::Failed);
+    retryable_transport.started_at = Some(isoformat_z(Some(now - Duration::seconds(8))));
+    retryable_transport.metadata.error =
+        "retryable STT connection error: error sending request for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    let retryable_transport_id = retryable_transport.id.clone();
+    store.create_job(retryable_transport).await.unwrap();
+
+    let mut retryable_rate_limit = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(9),
+        now - Duration::seconds(8),
+        2,
+    ));
+    retryable_rate_limit.set_state(JobState::Failed);
+    retryable_rate_limit.metadata.error =
+        "HTTP status client error (429 Too Many Requests) for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    let retryable_rate_limit_id = retryable_rate_limit.id.clone();
+    store.create_job(retryable_rate_limit).await.unwrap();
+
+    let mut retryable_server = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(8),
+        now - Duration::seconds(7),
+        3,
+    ));
+    retryable_server.set_state(JobState::Failed);
+    retryable_server.metadata.error =
+        "HTTP status server error (503 Service Unavailable) for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    let retryable_server_id = retryable_server.id.clone();
+    store.create_job(retryable_server).await.unwrap();
+
+    let mut non_retryable_client = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-b",
+        now - Duration::seconds(7),
+        now - Duration::seconds(6),
+        4,
+    ));
+    non_retryable_client.set_state(JobState::Failed);
+    non_retryable_client.metadata.error =
+        "HTTP status client error (401 Unauthorized) for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    let non_retryable_client_id = non_retryable_client.id.clone();
+    store.create_job(non_retryable_client).await.unwrap();
+
+    let mut permanent = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-b",
+        now - Duration::seconds(6),
+        now - Duration::seconds(5),
+        5,
+    ));
+    permanent.set_state(JobState::Failed);
+    permanent.metadata.error = "audio segment artifact is missing: /tmp/missing.wav".to_string();
+    let permanent_id = permanent.id.clone();
+    store.create_job(permanent).await.unwrap();
+
+    let requeued = store.requeue_failed_audio_segment_jobs(10).await.unwrap();
+    let requeued_ids = requeued
+        .iter()
+        .map(|job| job["job_id"].as_str().unwrap().to_string())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(requeued.len(), 3);
+    assert!(requeued_ids.contains(&retryable_transport_id));
+    assert!(requeued_ids.contains(&retryable_rate_limit_id));
+    assert!(requeued_ids.contains(&retryable_server_id));
+    for job_id in [
+        retryable_transport_id,
+        retryable_rate_limit_id,
+        retryable_server_id,
+    ] {
+        let retryable = store.get_job(&job_id).await.unwrap();
+        assert_eq!(retryable.state, JobState::Queued);
+        assert_eq!(retryable.attempts, 1);
+        assert!(retryable.next_run_at.is_some());
+        assert!(retryable.started_at.is_none());
+    }
+    assert_eq!(
+        store.get_job(&non_retryable_client_id).await.unwrap().state,
+        JobState::Failed
+    );
+    assert_eq!(
+        store.get_job(&permanent_id).await.unwrap().state,
+        JobState::Failed
     );
 }
 
@@ -2030,6 +2262,7 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
         wake_ended_at: "2026-05-14T12:00:01.000Z".to_string(),
         latest_wake_event_id: "evt_wake".to_string(),
         latest_wake_at: "2026-05-14T12:00:00.000Z".to_string(),
+        request_audio_closed_at: String::new(),
         lookback_seconds: 30,
         min_post_seconds: 5,
         speaker_idle_seconds: 5,
@@ -2039,6 +2272,41 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
         independent_after_seconds: 45,
         amended_wake_event_ids: Vec::new(),
         replacement_of_job_ids: Vec::new(),
+    }
+}
+
+fn audio_segment_payload(
+    guild_id: &str,
+    voice_channel_id: &str,
+    speaker_user_id: &str,
+    start: chrono::DateTime<Utc>,
+    end: chrono::DateTime<Utc>,
+    segment_index: i64,
+) -> AudioSegmentPayload {
+    AudioSegmentPayload {
+        guild_id: guild_id.to_string(),
+        guild_slug: "guild".to_string(),
+        voice_channel_id: voice_channel_id.to_string(),
+        voice_channel_name: "Code".to_string(),
+        voice_channel_slug: "code".to_string(),
+        capture_run_id: "cap_test".to_string(),
+        voice_bot_id: "clanky-vc1".to_string(),
+        voice_bot_discord_user_id: "bot-user".to_string(),
+        speaker_user_id: speaker_user_id.to_string(),
+        speaker_label: "Will".to_string(),
+        speaker_username: "will".to_string(),
+        segment_start_time: start,
+        segment_end_time: end,
+        segment_index,
+        duration_ms: (end - start).num_milliseconds(),
+        source_audio_path: std::path::PathBuf::from(format!("/tmp/audio-{segment_index}.wav")),
+        audio_checksum: format!("sha256:{segment_index}"),
+        audio_bytes: 123,
+        audio_format: "wav".to_string(),
+        sample_rate_hz: 48_000,
+        channels: 2,
+        sample_width_bits: 16,
+        post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
     }
 }
 

@@ -71,6 +71,8 @@ response_format = "json"
 include_logprobs = true
 max_token_logprobs = 64
 timeout_seconds = 120
+retry_backoff_initial_seconds = 5
+retry_backoff_max_seconds = 300
 drop_no_speech_probability = 0.7
 drop_avg_token_logprob = -0.8
 api_key_secret = ""
@@ -93,7 +95,6 @@ stt_flush_grace_seconds = 0
 max_window_seconds = 86400
 additive_preempt_seconds = 10
 independent_after_seconds = 45
-stt_settle_seconds = 120
 active_capture_poll_ms = 200
 
 [elevenlabs]
@@ -120,11 +121,12 @@ event_paths = false
 runtime_maintenance_interval_seconds = 15.0
 intake_queue_depth = 256
 ephemeral_gc_batch_limit = 256
+failed_audio_segment_retry_batch_limit = 256
 dispatch_drain_max_passes = 64
 
 [jobs.concurrency]
-wake = 4
-audio = 32
+wake = 32
+audio = 2
 voice_control = 32
 discord_text = 12
 refinement = 4
@@ -133,8 +135,8 @@ maintenance = 1
 general_async = 16
 
 [jobs.batch]
-wake = 8
-audio = 32
+wake = 32
+audio = 2
 voice_control = 32
 discord_text = 12
 refinement = 4

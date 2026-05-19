@@ -1,6 +1,7 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::config;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::maintenance::definitions::evaluate_maintenance_job_definitions;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
@@ -30,12 +31,17 @@ impl Runtime {
                 "job_kind": created.kind.as_str(),
             }));
         }
+        let requeued_audio_segments = self
+            .timeline_store
+            .requeue_failed_audio_segment_jobs(config::failed_audio_segment_retry_batch_limit())
+            .await?;
         Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "runtime_maintenance",
                 "next_job_id": next.id,
                 "next_run_at": next.next_run_at,
                 "submitted_jobs": submitted,
+                "requeued_audio_segments": requeued_audio_segments,
             }),
         )?))
     }

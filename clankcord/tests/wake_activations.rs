@@ -737,6 +737,72 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let start = now - chrono::Duration::seconds(20);
+    let wake = append_event(
+        &runtime.timeline_store,
+        start,
+        start + chrono::Duration::seconds(2),
+        "Will",
+        "user-a",
+        "Hey Clanky are you working",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let mut audio = Job::audio_segment(AudioSegmentPayload {
+        guild_id: "guild".to_string(),
+        guild_slug: "guild".to_string(),
+        voice_channel_id: "code".to_string(),
+        voice_channel_name: "Code Lounge".to_string(),
+        voice_channel_slug: "code-lounge".to_string(),
+        capture_run_id: "cap_test".to_string(),
+        voice_bot_id: "clanky-vc1".to_string(),
+        voice_bot_discord_user_id: "bot-user".to_string(),
+        speaker_user_id: "user-a".to_string(),
+        speaker_label: "Will".to_string(),
+        speaker_username: "will".to_string(),
+        segment_start_time: now - chrono::Duration::seconds(18),
+        segment_end_time: now - chrono::Duration::seconds(16),
+        segment_index: 2,
+        duration_ms: 2000,
+        source_audio_path: raw.path().join("failed-retryable.wav"),
+        audio_checksum: "sha256:failed-retryable".to_string(),
+        audio_bytes: 123,
+        audio_format: "wav".to_string(),
+        sample_rate_hz: 48_000,
+        channels: 2,
+        sample_width_bits: 16,
+        post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+    });
+    audio.set_state(JobState::Failed);
+    audio.metadata.error =
+        "HTTP status server error (503 Service Unavailable) for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    runtime.timeline_store.create_job(audio).await.unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
@@ -800,6 +866,84 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_pending_request_audio_after_old_settlement_window() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(300);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: wake_started_at + chrono::Duration::seconds(1),
+            segment_end_time: wake_started_at + chrono::Duration::seconds(4),
+            segment_index: 2,
+            duration_ms: 3000,
+            source_audio_path: raw.path().join("pending-after-old-settlement.wav"),
+            audio_checksum: "sha256:pending-after-old-settlement".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+    assert!(string_field(&result, "request_audio_closed_at").len() > 0);
+    let updated = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    assert!(
+        !updated
+            .wake_activation_payload()
+            .unwrap()
+            .request_audio_closed_at
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -944,6 +1088,167 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
             .unwrap()
             .contains(&speech["event_id"])
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(20);
+    let request_one_start = wake_started_at + chrono::Duration::seconds(1);
+    let request_one_end = wake_started_at + chrono::Duration::seconds(3);
+    let request_two_start = wake_started_at + chrono::Duration::seconds(3);
+    let request_two_end = wake_started_at + chrono::Duration::seconds(5);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let first_audio = runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: request_one_start,
+            segment_end_time: request_one_end,
+            segment_index: 2,
+            duration_ms: 2000,
+            source_audio_path: raw.path().join("pending-one.wav"),
+            audio_checksum: "sha256:pending-one".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+    let second_audio = runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: request_two_start,
+            segment_end_time: request_two_end,
+            segment_index: 3,
+            duration_ms: 2000,
+            source_audio_path: raw.path().join("pending-two.wav"),
+            audio_checksum: "sha256:pending-two".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let deferred = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+    assert_eq!(deferred["status"], json!("deferred"));
+
+    append_event(
+        &runtime.timeline_store,
+        request_one_start,
+        request_one_end,
+        "Will",
+        "user-a",
+        "send Vince",
+        json!({}),
+        4,
+    )
+    .await;
+    let mut first_audio = first_audio;
+    first_audio.mark_complete();
+    runtime
+        .timeline_store
+        .update_job(&first_audio)
+        .await
+        .unwrap();
+
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let still_deferred = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+    assert_eq!(still_deferred["status"], json!("deferred"));
+    assert_eq!(
+        still_deferred["reason"],
+        json!("waiting_for_request_transcription")
+    );
+
+    append_event(
+        &runtime.timeline_store,
+        request_two_start,
+        request_two_end,
+        "Will",
+        "user-a",
+        "the note",
+        json!({}),
+        5,
+    )
+    .await;
+    let mut second_audio = second_audio;
+    second_audio.mark_complete();
+    runtime
+        .timeline_store
+        .update_job(&second_audio)
+        .await
+        .unwrap();
+
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let dispatched = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(dispatched["status"], json!("dispatched"));
 }
 
 #[tokio::test(flavor = "current_thread")]

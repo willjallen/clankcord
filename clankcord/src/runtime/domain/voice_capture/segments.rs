@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde_json::{Value, json};
 
 use crate::Result;
@@ -6,6 +8,106 @@ use crate::adapters::stt::{
 };
 use crate::runtime::timeline::{SpeechEventInput, sha256_file};
 use crate::runtime::{AudioSegmentPayload, Runtime};
+
+pub(crate) struct AudioSegmentRetryPlan {
+    pub delay_for_attempt: fn(i64) -> chrono::Duration,
+    pub error: String,
+    pub log_prefix: &'static str,
+}
+
+#[derive(Debug)]
+pub(crate) struct RetryableAudioSegmentError {
+    class: RetryableSttErrorClass,
+    message: String,
+}
+
+impl RetryableAudioSegmentError {
+    fn new(class: RetryableSttErrorClass, error: anyhow::Error) -> Self {
+        Self {
+            class,
+            message: error.to_string(),
+        }
+    }
+}
+
+impl fmt::Display for RetryableAudioSegmentError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "retryable STT {} error: {}",
+            self.class.as_str(),
+            self.message
+        )
+    }
+}
+
+impl std::error::Error for RetryableAudioSegmentError {}
+
+#[derive(Debug, Clone, Copy)]
+enum RetryableSttErrorClass {
+    Timeout,
+    Connection,
+    RateLimit,
+    Server,
+}
+
+impl RetryableSttErrorClass {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Timeout => "timeout",
+            Self::Connection => "connection",
+            Self::RateLimit => "rate_limit",
+            Self::Server => "server",
+        }
+    }
+}
+
+pub(crate) fn is_retryable_audio_segment_error(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<RetryableAudioSegmentError>().is_some()
+}
+
+pub(crate) fn is_retryable_audio_segment_error_text(error: &str) -> bool {
+    let error = error.trim().to_ascii_lowercase();
+    if error.is_empty() {
+        return false;
+    }
+    error.starts_with("retryable stt timeout error:")
+        || error.starts_with("retryable stt connection error:")
+        || error.starts_with("retryable stt rate_limit error:")
+        || error.starts_with("retryable stt server error:")
+        || error.contains("operation timed out")
+        || error.contains("timed out")
+        || error.contains("connection refused")
+        || error.contains("connection reset")
+        || error.contains("connection closed")
+        || error.contains("connect error")
+        || error.contains("too many requests")
+        || error.contains("client error (429")
+        || error.contains("429 too many requests")
+        || error.contains("408 request timeout")
+        || error.contains("http status server error")
+}
+
+pub(crate) fn retry_delay_seconds(attempts: i64) -> i64 {
+    let initial = crate::config::stt_retry_backoff_initial_seconds();
+    let max = crate::config::stt_retry_backoff_max_seconds();
+    let exponent = attempts.saturating_sub(1).clamp(0, 30) as u32;
+    initial
+        .saturating_mul(2_i64.saturating_pow(exponent))
+        .min(max)
+}
+
+pub(crate) fn retry_plan(error: anyhow::Error) -> AudioSegmentRetryPlan {
+    AudioSegmentRetryPlan {
+        delay_for_attempt: retry_delay,
+        error: error.to_string(),
+        log_prefix: "audio segment job retry scheduled",
+    }
+}
+
+fn retry_delay(attempts: i64) -> chrono::Duration {
+    chrono::Duration::seconds(retry_delay_seconds(attempts))
+}
 
 pub(crate) async fn execute_segment_job(
     runtime: &Runtime,
@@ -62,7 +164,15 @@ pub(crate) async fn execute_segment_job(
         "post_processing": payload.post_processing,
     });
 
-    let transcription = transcribe_file_result_sync(&wav_path)?;
+    let transcription = match transcribe_file_result_sync(&wav_path) {
+        Ok(transcription) => transcription,
+        Err(error) => {
+            let Some(class) = retryable_stt_error_class(&error) else {
+                return Err(error);
+            };
+            return Err(RetryableAudioSegmentError::new(class, error).into());
+        }
+    };
     let text = transcription.text.trim().to_string();
     let stt_metadata = transcription.metadata;
     if text.is_empty() {
@@ -122,6 +232,26 @@ pub(crate) async fn execute_segment_job(
         json!({"status": "transcribed", "event": event}),
     );
     Ok(capture)
+}
+
+fn retryable_stt_error_class(error: &anyhow::Error) -> Option<RetryableSttErrorClass> {
+    error.chain().find_map(|cause| {
+        let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
+            return None;
+        };
+        if error.is_timeout() {
+            return Some(RetryableSttErrorClass::Timeout);
+        }
+        if error.is_connect() {
+            return Some(RetryableSttErrorClass::Connection);
+        }
+        match error.status() {
+            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Some(RetryableSttErrorClass::RateLimit),
+            Some(reqwest::StatusCode::REQUEST_TIMEOUT) => Some(RetryableSttErrorClass::Timeout),
+            Some(status) if status.is_server_error() => Some(RetryableSttErrorClass::Server),
+            _ => None,
+        }
+    })
 }
 
 fn merge_object(target: &mut Value, source: Value) {

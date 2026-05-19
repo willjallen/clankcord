@@ -36,6 +36,15 @@ struct JobSummary {
     state: crate::runtime::JobState,
 }
 
+#[derive(Debug)]
+struct ClaimCandidate {
+    job: Job,
+    ordering_key: String,
+    ready_at_ms: i64,
+    created_at_ms: i64,
+    priority: bool,
+}
+
 impl TimelineStore {
     pub async fn create_job(&self, job: Job) -> Result<Job> {
         self.ensure_job_voice_room(&job).await?;
@@ -258,6 +267,11 @@ impl TimelineStore {
         limit: usize,
         blocked_ordering_keys: &mut BTreeSet<String>,
     ) -> Result<Vec<Job>> {
+        if kind == crate::runtime::JobKind::AudioSegment {
+            return self
+                .claim_due_audio_segment_jobs(limit, blocked_ordering_keys)
+                .await;
+        }
         if limit == 0 {
             return Ok(Vec::new());
         }
@@ -351,6 +365,136 @@ impl TimelineStore {
         Ok(claimed)
     }
 
+    async fn claim_due_audio_segment_jobs(
+        &self,
+        limit: usize,
+        blocked_ordering_keys: &mut BTreeSet<String>,
+    ) -> Result<Vec<Job>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let now_ms = instant_ms_dt(utc_now());
+        let candidate_limit = limit.saturating_mul(128).clamp(limit, 2048) as i64;
+        let blocked = blocked_ordering_keys
+            .iter()
+            .filter(|key| !key.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut transaction = self.pool.begin().await?;
+        let wake_activations = active_wake_activation_payloads(&mut transaction).await?;
+        let rows = sqlx::query(
+            r#"
+            SELECT j.job_id, j.ordering_key, j.ready_at_ms, j.created_at_ms, p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.state = 'queued'
+              AND j.kind = 'audio_segment'
+              AND j.ready_at_ms <= $1
+              AND (cardinality($2::text[]) = 0 OR j.ordering_key = '' OR NOT (j.ordering_key = ANY($2)))
+            ORDER BY
+              CASE WHEN EXISTS (
+                SELECT 1
+                FROM jobs wake
+                WHERE wake.kind = 'wake_activation'
+                  AND wake.terminal = FALSE
+                  AND wake.guild_id = j.guild_id
+                  AND wake.scope_id = j.scope_id
+                  AND wake.speaker_user_id = j.speaker_user_id
+              ) THEN 0 ELSE 1 END,
+              j.ready_at_ms,
+              j.created_at_ms,
+              j.job_id
+            LIMIT $3
+            FOR UPDATE OF j SKIP LOCKED
+            "#,
+        )
+        .bind(now_ms)
+        .bind(&blocked)
+        .bind(candidate_limit)
+        .fetch_all(transaction.as_mut())
+        .await?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            let job = Job::decode(&payload_blob)?;
+            candidates.push(ClaimCandidate {
+                priority: audio_segment_has_active_wake_priority(&job, &wake_activations),
+                job,
+                ordering_key: row.try_get("ordering_key")?,
+                ready_at_ms: row.try_get("ready_at_ms")?,
+                created_at_ms: row.try_get("created_at_ms")?,
+            });
+        }
+        candidates.sort_by(|left, right| {
+            right
+                .priority
+                .cmp(&left.priority)
+                .then_with(|| left.ready_at_ms.cmp(&right.ready_at_ms))
+                .then_with(|| left.created_at_ms.cmp(&right.created_at_ms))
+                .then_with(|| left.job.id.cmp(&right.job.id))
+        });
+        let mut claimed = Vec::new();
+        for candidate in candidates {
+            if claimed.len() >= limit {
+                break;
+            }
+            if !candidate.ordering_key.trim().is_empty()
+                && blocked_ordering_keys.contains(&candidate.ordering_key)
+            {
+                continue;
+            }
+            let mut job = candidate.job;
+            job.mark_running();
+            let payload = job.touched();
+            let projection = project_job(&payload);
+            let changed = sqlx::query(
+                r#"
+                UPDATE jobs
+                SET state = $1,
+                    updated_at_ms = $2,
+                    ready_at_ms = $3,
+                    started_at_ms = $4,
+                    terminal = $5,
+                    failed = $6,
+                    cancellable = $7,
+                    gc_after_ms = $8
+                WHERE job_id = $9 AND state = 'queued'
+                "#,
+            )
+            .bind(payload.state.as_str())
+            .bind(projection.updated_at_ms)
+            .bind(projection.ready_at_ms)
+            .bind(projection.started_at_ms)
+            .bind(projection.terminal)
+            .bind(projection.failed)
+            .bind(projection.cancellable)
+            .bind(projection.gc_after_ms)
+            .bind(&payload.id)
+            .execute(transaction.as_mut())
+            .await?
+            .rows_affected();
+            if changed == 1 {
+                sqlx::query(
+                    r#"
+                    INSERT INTO job_payloads(job_id, payload_blob)
+                    VALUES ($1, $2)
+                    ON CONFLICT(job_id) DO UPDATE SET payload_blob = EXCLUDED.payload_blob
+                    "#,
+                )
+                .bind(&payload.id)
+                .bind(payload.encode()?)
+                .execute(transaction.as_mut())
+                .await?;
+                if !candidate.ordering_key.trim().is_empty() {
+                    blocked_ordering_keys.insert(candidate.ordering_key);
+                }
+                claimed.push(payload);
+            }
+        }
+        transaction.commit().await?;
+        Ok(claimed)
+    }
+
     pub async fn replace_runtime_maintenance_job(&self, job: Job) -> Result<Job> {
         sqlx::query(
             r#"
@@ -364,6 +508,51 @@ impl TimelineStore {
         .execute(&self.pool)
         .await?;
         self.create_job(job).await
+    }
+
+    pub async fn requeue_failed_audio_segment_jobs(&self, limit: usize) -> Result<Vec<Value>> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.kind = 'audio_segment'
+              AND j.failed = TRUE
+            ORDER BY j.updated_at_ms, j.job_id
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut requeued = Vec::new();
+        for row in rows {
+            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+            let mut job = Job::decode(&payload_blob)?;
+            let retryable = job.state == crate::runtime::JobState::FailedTimeout
+                || crate::runtime::domain::voice_capture::segments::is_retryable_audio_segment_error_text(
+                    &job.metadata.error,
+                );
+            if !retryable {
+                continue;
+            }
+            job.attempts = job.attempts.saturating_add(1);
+            job.set_state(crate::runtime::JobState::Queued);
+            job.started_at = None;
+            job.completed_at = None;
+            job.next_run_at = Some(isoformat_z(Some(
+                utc_now()
+                    + chrono::Duration::seconds(
+                        crate::runtime::domain::voice_capture::segments::retry_delay_seconds(
+                            job.attempts,
+                        ),
+                    ),
+            )));
+            self.update_job(&job).await?;
+            requeued.push(job.to_value());
+        }
+        Ok(requeued)
     }
 
     pub async fn list_jobs(
@@ -589,6 +778,31 @@ impl TimelineStore {
         .bind(guild_id)
         .bind(scope_id)
         .bind(kind.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        decode_job_rows(rows)
+    }
+
+    pub async fn list_incomplete_or_failed_audio_segment_jobs_by_scope(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+    ) -> Result<Vec<Job>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.guild_id = $1
+              AND j.scope_kind = 'voice_channel'
+              AND j.scope_id = $2
+              AND j.kind = 'audio_segment'
+              AND (j.terminal = FALSE OR j.failed = TRUE)
+            ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
+            "#,
+        )
+        .bind(guild_id)
+        .bind(scope_id)
         .fetch_all(&self.pool)
         .await?;
         decode_job_rows(rows)
@@ -1640,6 +1854,64 @@ fn audio_segment_end_ms(job: &Job) -> Option<i64> {
         }
         _ => None,
     }
+}
+
+async fn active_wake_activation_payloads(
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
+) -> Result<Vec<crate::runtime::WakeActivationPayload>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT p.payload_blob
+        FROM jobs j
+        JOIN job_payloads p ON p.job_id = j.job_id
+        WHERE j.kind = 'wake_activation'
+          AND j.terminal = FALSE
+        "#,
+    )
+    .fetch_all(transaction.as_mut())
+    .await?;
+    let mut payloads = Vec::new();
+    for row in rows {
+        let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
+        let job = Job::decode(&payload_blob)?;
+        if let Some(payload) = job.wake_activation_payload() {
+            payloads.push(payload.clone());
+        }
+    }
+    Ok(payloads)
+}
+
+fn audio_segment_has_active_wake_priority(
+    job: &Job,
+    wake_activations: &[crate::runtime::WakeActivationPayload],
+) -> bool {
+    let Some(segment) = job.audio_segment_payload() else {
+        return false;
+    };
+    wake_activations
+        .iter()
+        .any(|wake| audio_segment_overlaps_wake_window(segment, wake))
+}
+
+fn audio_segment_overlaps_wake_window(
+    segment: &crate::runtime::AudioSegmentPayload,
+    wake: &crate::runtime::WakeActivationPayload,
+) -> bool {
+    if segment.guild_id != wake.guild_id
+        || segment.voice_channel_id != wake.voice_channel_id
+        || segment.speaker_user_id != wake.speaker_user_id
+    {
+        return false;
+    }
+    let Some(latest_wake_at) = parse_instant(&wake.latest_wake_at) else {
+        return false;
+    };
+    let window_end = parse_instant(&wake.request_audio_closed_at).unwrap_or_else(|| {
+        let original_wake_at = parse_instant(&wake.wake_started_at).unwrap_or(latest_wake_at);
+        let hard_cap = original_wake_at + chrono::Duration::seconds(wake.max_window_seconds);
+        std::cmp::min(utc_now(), hard_cap)
+    });
+    segment.segment_end_time >= latest_wake_at && segment.segment_start_time <= window_end
 }
 
 fn normalize_key_part(value: &str) -> String {

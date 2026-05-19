@@ -107,11 +107,13 @@ wake.probe_minimum_ms                 250 ms
 wake.probe_window_ms                 2000 ms
 wake.probe_interval_ms                500 ms
 wake.activation.active_capture_poll_ms 200 ms
+stt.retry_backoff_initial_seconds       5 seconds
+stt.retry_backoff_max_seconds         300 seconds
 ```
 
 ## Speech And Wake Jobs
 
-An `audio_segment` job validates the WAV artifact and checksum, calls the STT adapter, handles empty or low-confidence provider results, appends `speech_segment` events for accepted speech, and updates room occupancy with the latest speech time. Speech segment `endedAt` uses the speaker's last PCM timestamp. Wake activation idle timing follows that timestamp, while the later silence-triggered flush controls WAV and STT job creation. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
+An `audio_segment` job validates the WAV artifact and checksum, calls the STT adapter, handles empty or low-confidence provider results, appends `speech_segment` events for accepted speech, and updates room occupancy with the latest speech time. STT timeouts, connection failures, rate limits, and server errors requeue the same job with capped exponential backoff and no attempt limit. Local artifact integrity failures are terminal because the job does not have a valid audio artifact to submit. Speech segment `startedAt` and `endedAt` come from the original segment payload, so late STT completion inserts transcript events at the time the speech occurred while `created_at` records the later insertion time. Wake activation idle timing follows the speaker PCM timestamp, while the later silence-triggered flush controls WAV and STT job creation. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
 
 A `wake_probe` job validates its wake artifact and checksum, calls the wake adapter, and completes with `no_wake`, `duplicate_wake`, or `wake_detected` data. A positive detection appends a `wake_detected` timeline event and schedules wake activation. Overlapping speaker and probe time suppress duplicate wake events.
 
@@ -129,9 +131,9 @@ audio_checksum
 
 ## Wake Activation
 
-`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, waits for pending `audio_segment` STT work, closes the request window, plays an acknowledgement cue, and creates `agent_session_start` or `agent_task` when usable request text exists.
+`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, closes the request window, plays an acknowledgement cue, waits for every same-speaker `audio_segment` overlapping that closed window to finish STT, and creates `agent_session_start` or `agent_task` when usable request text exists.
 
-The normal close path is voice-driven. After the minimum post-wake window has elapsed, wake activation follows the speaker's committed capture stats and speech segments. The window closes once the latest activating-speaker PCM timestamp has been idle for `speaker_idle_seconds`, then the runtime waits for overlapping `audio_segment` jobs to finish STT before dispatching the agent work. The maximum activation window remains a long emergency bound around malformed capture state or a permanently active speaker stream.
+The normal close path is voice-driven. After the minimum post-wake window has elapsed, wake activation follows the speaker's committed capture stats and speech segments. The window closes once the latest activating-speaker PCM timestamp has been idle for `speaker_idle_seconds`. The closed request time is persisted on the wake activation payload and in the `wake_activation_window_closed` event. The agent request waits on the closed window's overlapping audio jobs for as long as STT needs, including retryable failed audio that maintenance returns to the queue. Audio segments for a speaker with an active wake activation receive priority inside the audio lane when they overlap the active or closed wake window; wake probes keep their own lane and priority model. The maximum activation window remains a long emergency bound around malformed capture state or a permanently active speaker stream.
 
 `/wake` uses the same activation path. The slash-command ingress appends a manual `wake_detected` event for the invoking user's current voice room, then schedules `wake_activation` from that event. Follow-up, replacement, cue playback, window closing, and agent dispatch follow the normal wake activation rules.
 
@@ -144,9 +146,9 @@ lookback                         30 seconds
 minimum post-wake window          5 seconds
 speaker idle                      2 seconds
 max activation window         86400 seconds
-STT settle deadline             120 seconds
 additive preempt                 10 seconds
 independent activation threshold 45 seconds
+request-audio poll              200 ms
 ```
 
 ## Playback

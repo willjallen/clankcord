@@ -3,12 +3,14 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::runtime::domain::voice_capture::segments;
 use crate::runtime::timeline::{
     event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
 };
 use crate::runtime::util::{first_value_string, non_empty};
 use crate::runtime::{
-    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, Runtime, WakeActivationPayload,
+    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobPayload, JobState, Runtime,
+    WakeActivationPayload,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +143,7 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
         wake_ended_at: isoformat_z(Some(wake_ended_at)),
         latest_wake_event_id: wake_event_id,
         latest_wake_at: isoformat_z(Some(wake_started_at)),
+        request_audio_closed_at: String::new(),
         lookback_seconds: activation.lookback_seconds.max(0),
         min_post_seconds: activation.min_post_seconds.max(0),
         speaker_idle_seconds: activation.speaker_idle_seconds.max(0),
@@ -201,7 +204,7 @@ pub async fn execute(
         .await?;
 
     if let Some(closed_at) = activation_window_closed_at(payload, &events) {
-        return dispatch_after_stt_settles(
+        return dispatch_after_request_audio(
             runtime,
             job,
             payload,
@@ -246,12 +249,13 @@ pub async fn execute(
     }
 
     let closed_at = if now >= hard_cap { hard_cap } else { due_at };
-    record_activation_window_closed(runtime, job, payload, closed_at).await?;
+    let payload = persist_request_audio_closed_at(runtime, job, payload, closed_at).await?;
+    record_activation_window_closed(runtime, job, &payload, closed_at).await?;
 
-    dispatch_after_stt_settles(
+    dispatch_after_request_audio(
         runtime,
         job,
-        payload,
+        &payload,
         window_start,
         latest_wake_at,
         closed_at,
@@ -260,7 +264,7 @@ pub async fn execute(
     .await
 }
 
-async fn dispatch_after_stt_settles(
+async fn dispatch_after_request_audio(
     runtime: &mut Runtime,
     job: &Job,
     payload: &WakeActivationPayload,
@@ -269,32 +273,20 @@ async fn dispatch_after_stt_settles(
     closed_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Value> {
-    let settle_deadline = closed_at
-        + chrono::Duration::seconds(config::wake_activation_config().stt_settle_seconds.max(0));
     if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at, closed_at).await? {
-        if now < settle_deadline {
-            let mut deferred = job.clone();
-            deferred.state = JobState::Queued;
-            deferred.next_run_at = Some(isoformat_z(Some(std::cmp::min(
-                now + chrono::Duration::milliseconds(active_capture_poll_ms()),
-                settle_deadline,
-            ))));
-            runtime.timeline_store.update_job(&deferred).await?;
-            return Ok(json!({
-                "kind": "wake_activation",
-                "status": "deferred",
-                "reason": "waiting_for_request_transcription",
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
-                "next_run_at": deferred.next_run_at,
-            }));
-        }
-        record_activation_no_request(runtime, job, payload, closed_at, "stt_settlement_expired")
-            .await?;
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(
+            now + chrono::Duration::milliseconds(active_capture_poll_ms()),
+        )));
+        deferred.payload = JobPayload::WakeActivation(payload.clone());
+        runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
-            "status": "no_request_captured",
-            "reason": "stt_settlement_expired",
+            "status": "deferred",
+            "reason": "waiting_for_request_transcription",
             "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "next_run_at": deferred.next_run_at,
         }));
     }
 
@@ -361,6 +353,24 @@ async fn dispatch_after_stt_settles(
         "request_audio_closed_at": isoformat_z(Some(closed_at)),
         "created": created,
     }))
+}
+
+async fn persist_request_audio_closed_at(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+) -> Result<WakeActivationPayload> {
+    let closed_at_text = isoformat_z(Some(closed_at));
+    if payload.request_audio_closed_at == closed_at_text {
+        return Ok(payload.clone());
+    }
+    let mut updated_payload = payload.clone();
+    updated_payload.request_audio_closed_at = closed_at_text;
+    let mut updated_job = job.clone();
+    updated_job.payload = JobPayload::WakeActivation(updated_payload.clone());
+    runtime.timeline_store.update_job(&updated_job).await?;
+    Ok(updated_payload)
 }
 
 async fn record_activation_window_closed(
@@ -590,6 +600,7 @@ fn amend_payload(
 ) {
     payload.latest_wake_event_id = wake_event_id.to_string();
     payload.latest_wake_at = isoformat_z(Some(wake_started_at));
+    payload.request_audio_closed_at.clear();
     payload.speaker_user_id = speaker_user_id;
     payload.speaker_label = speaker_label;
     if payload.wake_event_id != wake_event_id
@@ -663,17 +674,20 @@ fn activation_window_closed_at(
     payload: &WakeActivationPayload,
     events: &[Value],
 ) -> Option<DateTime<Utc>> {
-    events
-        .iter()
-        .filter(|event| {
-            first_value_string(event, &["event_kind", "kind"]) == "wake_activation_window_closed"
-                && first_value_string(event, &["activation_id"]) == payload.activation_id
-        })
-        .filter_map(|event| {
-            parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
-                .or_else(|| event_start(event))
-        })
-        .max()
+    parse_instant(&payload.request_audio_closed_at).or_else(|| {
+        events
+            .iter()
+            .filter(|event| {
+                first_value_string(event, &["event_kind", "kind"])
+                    == "wake_activation_window_closed"
+                    && first_value_string(event, &["activation_id"]) == payload.activation_id
+            })
+            .filter_map(|event| {
+                parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
+                    .or_else(|| event_start(event))
+            })
+            .max()
+    })
 }
 
 async fn activation_voice_capture_hold(
@@ -732,20 +746,26 @@ async fn has_pending_speaker_audio_segment(
 ) -> Result<bool> {
     let jobs = runtime
         .timeline_store
-        .list_active_jobs_by_scope_kind(
+        .list_incomplete_or_failed_audio_segment_jobs_by_scope(
             &payload.guild_id,
             &payload.voice_channel_id,
-            JobKind::AudioSegment,
         )
         .await?;
     Ok(jobs
         .iter()
+        .filter(|job| audio_segment_blocks_request_transcription_wait(job))
         .filter_map(|job| job.audio_segment_payload())
         .any(|segment| {
             segment.speaker_user_id == payload.speaker_user_id
                 && segment.segment_end_time >= latest_wake_at
                 && segment.segment_start_time <= closed_at
         }))
+}
+
+fn audio_segment_blocks_request_transcription_wait(job: &Job) -> bool {
+    !job.state.is_terminal()
+        || job.state == JobState::FailedTimeout
+        || segments::is_retryable_audio_segment_error_text(&job.metadata.error)
 }
 
 fn activation_agent_task_command(

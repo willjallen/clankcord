@@ -158,6 +158,8 @@ pub struct SttConfig {
     pub include_logprobs: bool,
     pub max_token_logprobs: usize,
     pub timeout_seconds: u64,
+    pub retry_backoff_initial_seconds: i64,
+    pub retry_backoff_max_seconds: i64,
     pub drop_no_speech_probability: f64,
     pub drop_avg_token_logprob: f64,
     pub api_key_secret: String,
@@ -185,7 +187,6 @@ pub struct WakeActivationConfig {
     pub max_window_seconds: i64,
     pub additive_preempt_seconds: i64,
     pub independent_after_seconds: i64,
-    pub stt_settle_seconds: i64,
     pub active_capture_poll_ms: i64,
 }
 
@@ -229,6 +230,7 @@ pub struct JobsConfig {
     pub runtime_maintenance_interval_seconds: f64,
     pub intake_queue_depth: usize,
     pub ephemeral_gc_batch_limit: usize,
+    pub failed_audio_segment_retry_batch_limit: usize,
     pub dispatch_drain_max_passes: usize,
     pub concurrency: JobLaneConfig,
     pub batch: JobLaneConfig,
@@ -366,6 +368,14 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     if config.postgres.password_secret.trim().is_empty() {
         anyhow::bail!("config.toml postgres.password_secret is required");
     }
+    if config.stt.retry_backoff_initial_seconds <= 0 {
+        anyhow::bail!("config.toml stt.retry_backoff_initial_seconds must be positive");
+    }
+    if config.stt.retry_backoff_max_seconds < config.stt.retry_backoff_initial_seconds {
+        anyhow::bail!(
+            "config.toml stt.retry_backoff_max_seconds must be at least retry_backoff_initial_seconds"
+        );
+    }
     if config.prompts.dir.as_os_str().is_empty() {
         anyhow::bail!("config.toml prompts.dir is required");
     }
@@ -490,6 +500,14 @@ pub fn stt_max_token_logprobs() -> usize {
 
 pub fn stt_timeout_seconds() -> u64 {
     app_config().stt.timeout_seconds
+}
+
+pub fn stt_retry_backoff_initial_seconds() -> i64 {
+    app_config().stt.retry_backoff_initial_seconds
+}
+
+pub fn stt_retry_backoff_max_seconds() -> i64 {
+    app_config().stt.retry_backoff_max_seconds
 }
 
 pub fn stt_drop_no_speech_threshold() -> f64 {
@@ -649,6 +667,13 @@ pub fn runtime_maintenance_interval_ms() -> i64 {
 
 pub fn ephemeral_job_gc_batch_limit() -> usize {
     app_config().jobs.ephemeral_gc_batch_limit.clamp(1, 1000)
+}
+
+pub fn failed_audio_segment_retry_batch_limit() -> usize {
+    app_config()
+        .jobs
+        .failed_audio_segment_retry_batch_limit
+        .clamp(1, 1000)
 }
 
 pub fn dispatch_drain_max_passes() -> usize {

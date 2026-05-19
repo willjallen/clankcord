@@ -133,6 +133,10 @@ maintenance
 general_async
 ```
 
+The audio lane is the local STT backpressure boundary. Its concurrency is set to the provider's transcription capacity, while the wake lane is configured separately for wake probes. `audio_segment` jobs that overlap an active wake activation for the same room and speaker are claimed before ordinary room transcription inside the audio lane. That priority changes claim order only; it does not raise STT concurrency.
+
+STT timeouts, connection failures, rate limits, and server errors requeue `audio_segment` jobs with `next_run_at` using the configured STT retry backoff. Runtime maintenance also requeues retryable failed audio segment jobs so older transient failures return to the durable queue. The segment payload keeps the original speech timestamps, and completed transcript events are inserted at those timestamps even when the job finishes much later.
+
 Every scheduling pass reads active ordering keys from the durable job table before claiming work. Latency analysis starts with the concrete thing on the path: lane capacity, ordering key contention, ready time, provider latency, adapter locks, database contention, artifact encoding, API calls, or configured timers.
 
 Durable job latency fields have precise lifecycle meanings. `created_at_ms` is job insertion time. `ready_at_ms` is the current ready time derived from `next_run_at` or creation time. `started_at_ms` is the first successful claim. `completed_at_ms` is terminal completion. Jobs that resume after children or timers can have a current ready time later than their first start. Debug latency views mark those rows as phase-contaminated for ready-delay and queue metrics and report exclusion counts. Lifetime latency is `created_at_ms` to `completed_at_ms`; start-wall latency is `started_at_ms` to `completed_at_ms` and includes child waits, configured sleeps, provider calls, adapter calls, and scheduler resumes.
