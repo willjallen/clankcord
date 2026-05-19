@@ -62,6 +62,10 @@ impl<'a> AutomationContext<'a> {
         self.pool_config
     }
 
+    pub(crate) fn room_control(&self, channel_id: &str) -> Option<&'a RoomControl> {
+        self.room_controls.get(channel_id)
+    }
+
     pub(crate) fn has_active_job_in_guild(
         &self,
         kind: JobKind,
@@ -90,6 +94,8 @@ pub(crate) struct AutomationVoiceState {
     pub bots: Vec<VoiceBotStatus>,
     pub sessions: Vec<VoiceCaptureSessionStatus>,
     pub assignments: Vec<VoiceAssignment>,
+    pub room_occupants: BTreeMap<String, Vec<Value>>,
+    pub room_empty_since: BTreeMap<String, chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -159,6 +165,36 @@ impl AutomationRunner {
             .await
             .context("loading room config for automation evaluation")?;
         let room_controls = runtime.timeline_store.list_room_controls().await?;
+        let mut room_occupants = BTreeMap::new();
+        let mut room_empty_since = BTreeMap::new();
+        for room in &room_configs {
+            let occupants = runtime
+                .timeline_store
+                .room_occupants(&room.guild_id, &room.channel_id)
+                .await
+                .with_context(|| {
+                    format!(
+                        "loading room occupants for automation evaluation: {}:{}",
+                        room.guild_id, room.channel_id
+                    )
+                })?;
+            if occupants.is_empty() {
+                if let Some(empty_since) = runtime
+                    .timeline_store
+                    .room_empty_since(&room.guild_id, &room.channel_id)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "loading room empty timestamp for automation evaluation: {}:{}",
+                            room.guild_id, room.channel_id
+                        )
+                    })?
+                {
+                    room_empty_since.insert(room.channel_id.clone(), empty_since);
+                }
+            }
+            room_occupants.insert(room.channel_id.clone(), occupants);
+        }
         let voice_state = AutomationVoiceState {
             bots: runtime
                 .timeline_store
@@ -175,6 +211,8 @@ impl AutomationRunner {
                 .list_active_voice_assignments()
                 .await
                 .context("loading active voice assignments for automation evaluation")?,
+            room_occupants,
+            room_empty_since,
         };
 
         let mut active_jobs = runtime

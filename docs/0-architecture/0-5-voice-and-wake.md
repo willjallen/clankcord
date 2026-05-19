@@ -32,6 +32,14 @@ A room capture has `VoiceCaptureSessionStatus`, which records the live adapter's
 
 Voice bots are audio capture workers. Agent work begins later, when wake activation, commands, DMs, or managed thread messages resolve to an agent session and create `agent_task` work.
 
+## Auto Placement
+
+Runtime maintenance evaluates room placement policy through `automation_evaluation`. When pool auto-join is enabled, a configured room with `auto_join = true` receives an available voice bot once its live human participant count reaches `pool.auto_join_min_participants`.
+
+An assigned voice bot leaves an empty room after the room has had no human participants for longer than `pool.auto_leave_empty_seconds`. This empty-room rule applies to every assignment. Automatic placement also releases a room with one human participant when that participant has been deafened for at least `pool.auto_leave_single_deafened_seconds`. A room released by automatic policy receives an auto-join suppression marker for `pool.auto_rejoin_cooldown_seconds` before policy can place a bot there again.
+
+Manual joins and leaves from Discord commands, dashboard actions, CLI, and HTTP create ordinary `room_agent_placement` jobs and set a room override for `pool.manual_override_seconds`. A manual join keeps the bot assigned while the room has a human participant. A manual leave keeps automatic policy out of the room for the override window. After the override expires, placement policy evaluates the room from current voice state.
+
 ## Room Placement
 
 Room placement is the explicit job path that moves a voice bot into or out of a configured room. `/join`, `/leave`, CLI commands, HTTP commands, and agent-issued commands create `room_agent_placement` jobs. Active work for the same room suppresses duplicate placement jobs.

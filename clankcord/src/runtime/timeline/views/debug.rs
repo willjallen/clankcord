@@ -233,7 +233,14 @@ impl Runtime {
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "process": {
-                "autoJoin": {"enabled": pool.auto_join_enabled},
+                "autoJoin": {
+                    "enabled": pool.auto_join_enabled,
+                    "minParticipants": pool.auto_join_min_participants,
+                    "emptyReleaseSeconds": pool.auto_leave_empty_seconds,
+                    "singleDeafenedReleaseSeconds": pool.auto_leave_single_deafened_seconds,
+                    "rejoinCooldownSeconds": pool.auto_rejoin_cooldown_seconds,
+                    "manualOverrideSeconds": pool.manual_override_seconds,
+                },
                 "load": process_load_payload(),
             },
             "health": health,

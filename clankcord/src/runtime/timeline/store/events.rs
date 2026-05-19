@@ -597,6 +597,35 @@ impl TimelineStore {
             .collect()
     }
 
+    pub async fn room_empty_since(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let row = sqlx::query(
+            r#"
+            SELECT created_at_ms
+            FROM timeline_events
+            WHERE scope_kind = 'voice_channel'
+              AND guild_id = $1
+              AND scope_id = $2
+              AND event_kind = 'participant_left'
+              AND jsonb_array_length(payload_json #> '{event_room,after,liveOccupants}') = 0
+            ORDER BY created_at_ms DESC, sequence DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(guild_id)
+        .bind(voice_channel_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let created_at_ms: i64 = row.try_get("created_at_ms")?;
+        Ok(ms_to_datetime(created_at_ms))
+    }
+
     pub async fn voice_occupancy_snapshot(&self) -> Result<Value> {
         let rows = sqlx::query(
             r#"

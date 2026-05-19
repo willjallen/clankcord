@@ -254,13 +254,14 @@ mod room_agents {
                 let pool = runtime.timeline_store.runtime_pool_config().await?;
                 let cooldown_seconds = payload
                     .cooldown_seconds
-                    .unwrap_or(pool.manual_leave_cooldown_seconds);
+                    .unwrap_or(pool.manual_override_seconds);
                 runtime
                     .prepare_leave_room_jobs(
                         Some(target_room_identifier),
                         cooldown_seconds,
                         &job.requested_by_user_id,
                         &job.id,
+                        &payload.reason,
                     )
                     .await
             }

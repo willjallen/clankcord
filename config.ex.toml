@@ -50,9 +50,12 @@ dir = "/workspace/clankcord/res/prompts"
 
 [pool]
 idle_channel_name = "idle"
-auto_join_enabled = false
-manual_leave_cooldown_seconds = 1200
-manual_join_hold_seconds = 3600
+auto_join_enabled = true
+auto_join_min_participants = 2
+auto_leave_empty_seconds = 300
+auto_leave_single_deafened_seconds = 300
+auto_rejoin_cooldown_seconds = 300
+manual_override_seconds = 3600
 pause_release_seconds = 1200
 
 [transcription]
@@ -161,7 +164,7 @@ guild_slug = "subsolar"
 channel_id = "1191913556019531986"
 channel_slug = "art-lounge"
 channel_name = "art-lounge"
-auto_join = false
+auto_join = true
 
 [[rooms]]
 id = "code-lounge"
@@ -170,7 +173,7 @@ guild_slug = "subsolar"
 channel_id = "1204188344993447956"
 channel_slug = "code-lounge"
 channel_name = "code-lounge"
-auto_join = false
+auto_join = true
 
 [[rooms]]
 id = "env-lounge"
@@ -179,7 +182,7 @@ guild_slug = "subsolar"
 channel_id = "1214269652411224104"
 channel_slug = "env-lounge"
 channel_name = "env-lounge"
-auto_join = false
+auto_join = true
 
 [[rooms]]
 id = "meeting"
@@ -188,7 +191,7 @@ guild_slug = "subsolar"
 channel_id = "1197609025769062430"
 channel_slug = "meeting"
 channel_name = "meeting"
-auto_join = false
+auto_join = true
 
 [[rooms]]
 id = "meetings"
@@ -206,7 +209,7 @@ guild_slug = "subsolar"
 channel_id = "1205999821043802212"
 channel_slug = "music-lounge"
 channel_name = "music-lounge"
-auto_join = false
+auto_join = true
 
 [[rooms]]
 id = "quiet-lounge"
@@ -224,4 +227,4 @@ guild_slug = "subsolar"
 channel_id = "1047398274484682802"
 channel_slug = "community-lounge"
 channel_name = "lounge"
-auto_join = false
+auto_join = true

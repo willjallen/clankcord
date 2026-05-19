@@ -124,8 +124,11 @@ pub(crate) async fn test_store(root: &Path) -> TimelineStore {
             &PoolConfig {
                 idle_channel_name: String::new(),
                 auto_join_enabled: true,
-                manual_leave_cooldown_seconds: 20 * 60,
-                manual_join_hold_seconds: 60 * 60,
+                auto_join_min_participants: 2,
+                auto_leave_empty_seconds: 5 * 60,
+                auto_leave_single_deafened_seconds: 5 * 60,
+                auto_rejoin_cooldown_seconds: 5 * 60,
+                manual_override_seconds: 60 * 60,
                 pause_release_seconds: 20 * 60,
             },
             &ControlConfig {

@@ -32,7 +32,7 @@ impl Runtime {
         let reason = reason.unwrap_or("explicit_request");
         self.set_room_manual_hold(
             &room,
-            pool.manual_join_hold_seconds,
+            pool.manual_override_seconds,
             reason,
             user_id.unwrap_or(""),
         )
@@ -54,7 +54,7 @@ impl Runtime {
         requested_by_user_id: Option<&str>,
     ) -> Result<Value> {
         let pool = self.timeline_store.runtime_pool_config().await?;
-        let cooldown_seconds = cooldown_seconds.unwrap_or(pool.manual_leave_cooldown_seconds);
+        let cooldown_seconds = cooldown_seconds.unwrap_or(pool.manual_override_seconds);
         let mut results = Vec::new();
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
             let room = self.room_for_identifier(Some(identifier)).await?;
@@ -186,7 +186,7 @@ impl Runtime {
         if should_record_manual_hold_for_join(reason) {
             self.set_room_manual_hold(
                 &room,
-                pool.manual_join_hold_seconds,
+                pool.manual_override_seconds,
                 reason,
                 requested_by_user_id,
             )
@@ -296,7 +296,7 @@ impl Runtime {
         let pool = self.timeline_store.runtime_pool_config().await?;
         self.suppress_room_auto_join(
             &request.room,
-            pool.manual_leave_cooldown_seconds,
+            pool.auto_rejoin_cooldown_seconds,
             "join_failed",
             &request.requested_by_user_id,
             true,
@@ -324,13 +324,15 @@ impl Runtime {
         cooldown_seconds: i64,
         requested_by_user_id: &str,
         source_job_id: &str,
+        reason: &str,
     ) -> Result<JobDecision> {
+        let leave_reason = normalized_leave_reason(reason);
         if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
             let room = self.room_for_identifier(Some(identifier)).await?;
             self.suppress_room_auto_join(
                 &room,
                 cooldown_seconds,
-                "manual_leave",
+                leave_reason,
                 requested_by_user_id,
                 true,
             )
@@ -342,7 +344,7 @@ impl Runtime {
                 .next()
             {
                 self.timeline_store
-                    .mark_voice_assignment_leaving(&assignment.assignment_id, "manual_leave")
+                    .mark_voice_assignment_leaving(&assignment.assignment_id, leave_reason)
                     .await?;
                 if let Some(session) = self.session_for_assignment(&assignment).await? {
                     return Ok(JobDecision::WaitFor(vec![
@@ -350,7 +352,7 @@ impl Runtime {
                             &session,
                             requested_by_user_id,
                             DiscordVoicePlaybackCue::Leave,
-                            "manual_leave",
+                            leave_reason,
                             source_job_id,
                         ),
                     ]));
@@ -361,7 +363,7 @@ impl Runtime {
                     requested_by_user_id,
                     DiscordVoiceLeavePayload {
                         session_id: assignment.capture_run_id.clone(),
-                        reason: "manual_leave".to_string(),
+                        reason: leave_reason.to_string(),
                     },
                 )]));
             }
@@ -373,7 +375,7 @@ impl Runtime {
                     bot_id: String::new(),
                     capture_run_id: String::new(),
                     requested_by_user_id: requested_by_user_id.to_string(),
-                    reason: "manual_leave".to_string(),
+                    reason: leave_reason.to_string(),
                     session: None,
                     sessions: Vec::new(),
                     bots: Vec::new(),
@@ -725,4 +727,13 @@ fn session_directory(
 
 fn should_record_manual_hold_for_join(reason: &str) -> bool {
     !matches!(reason, "auto_join" | "manual_hold")
+}
+
+fn normalized_leave_reason(reason: &str) -> &'static str {
+    match reason {
+        "auto_policy_empty" => "auto_policy_empty",
+        "auto_policy_single_deafened" => "auto_policy_single_deafened",
+        "duplicate_voice_bot_in_channel" => "duplicate_voice_bot_in_channel",
+        _ => "manual_leave",
+    }
 }

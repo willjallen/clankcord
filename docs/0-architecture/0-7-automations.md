@@ -115,4 +115,8 @@ The authoring workflow is deliberately explicit: resolve durable ids, inspect th
 
 ## Room Placement
 
-The room placement automation is disabled at its evaluation entry point and emits no placement work. Room placement work is created by explicit command flows such as `/join`, `/leave`, CLI commands, HTTP commands, and agent-issued commands. Those flows create `room_agent_placement` jobs, and the join and leave mechanics then proceed through normal runtime jobs and the Discord voice adapter.
+The room placement automation reads configured rooms, live human voice-state rows, room controls, active assignments, active capture sessions, and voice bot status. It emits `room_agent_placement` jobs for automatic joins and releases. A room with `auto_join = true` receives an available voice bot when pool auto-join is enabled and its live human participant count reaches `pool.auto_join_min_participants`. A room with an assigned bot releases after it remains empty longer than `pool.auto_leave_empty_seconds`. A room with one human participant releases when that participant has been deafened for at least `pool.auto_leave_single_deafened_seconds`.
+
+Manual joins and leaves set room controls for `pool.manual_override_seconds`. A manual join holds the room assignment while a human participant remains present. A manual leave suppresses automatic placement for the override window. The empty-room release rule still applies after the room has no human participants. Automatic releases set a suppression marker for `pool.auto_rejoin_cooldown_seconds` before the room can auto-join again.
+
+The placement automation only creates placement jobs. Join and leave mechanics proceed through normal runtime jobs and the Discord voice adapter.

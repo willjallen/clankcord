@@ -130,11 +130,15 @@ pub struct PromptsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PoolConfig {
     pub idle_channel_name: String,
     pub auto_join_enabled: bool,
-    pub manual_leave_cooldown_seconds: i64,
-    pub manual_join_hold_seconds: i64,
+    pub auto_join_min_participants: usize,
+    pub auto_leave_empty_seconds: i64,
+    pub auto_leave_single_deafened_seconds: i64,
+    pub auto_rejoin_cooldown_seconds: i64,
+    pub manual_override_seconds: i64,
     pub pause_release_seconds: i64,
 }
 

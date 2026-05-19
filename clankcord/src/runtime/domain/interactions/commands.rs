@@ -148,7 +148,10 @@ impl Runtime {
                     .await?;
                 self.pause_room(
                     &room,
-                    command.arguments.duration_seconds.unwrap_or(20 * 60),
+                    command
+                        .arguments
+                        .duration_seconds
+                        .unwrap_or(pool.pause_release_seconds),
                     &command.requested_by_user_id,
                 )
                 .await?;
@@ -208,7 +211,7 @@ impl Runtime {
                     .await?;
                 self.pause_room(
                     &room,
-                    pool.manual_leave_cooldown_seconds,
+                    pool.pause_release_seconds,
                     &command.requested_by_user_id,
                 )
                 .await?;
@@ -278,7 +281,7 @@ impl Runtime {
                         RoomAgentPlacementAction::Leave.as_str(),
                         parent_job.scope_id
                     ),
-                    Some(pool.manual_leave_cooldown_seconds),
+                    Some(pool.manual_override_seconds),
                 );
                 Ok(JobDecision::WaitFor(vec![job]))
             }

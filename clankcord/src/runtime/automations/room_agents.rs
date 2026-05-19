@@ -2,10 +2,13 @@ use crate::Result;
 use crate::runtime::automations::{
     Automation, AutomationContext, AutomationOutput, AutomationVoiceState,
 };
+use crate::runtime::timeline::{parse_instant, utc_now};
+use crate::runtime::util::first_value_string;
 use crate::runtime::{
     DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig,
     VoiceCaptureSessionStatus,
 };
+use serde_json::Value;
 
 pub(crate) struct RoomAgentPlacementAutomation;
 
@@ -44,7 +47,7 @@ impl Automation for RoomAgentPlacementAutomation {
 }
 
 fn room_placement_automation_enabled() -> bool {
-    false
+    true
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,33 +60,85 @@ struct RoomAgentPlacementDecision {
 impl RoomAgentPlacementDecision {
     fn evaluate(context: &AutomationContext<'_>, room: &RoomConfig, available_bot: bool) -> Self {
         let voice_bot_present = room_has_voice_bot_presence(context.voice_state(), room);
-        let auto_suppressed =
-            context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
+        let occupants = room_occupants(context.voice_state(), room);
         let manual_hold =
             context.room_control_datetime_active(&room.channel_id, "manual_hold_until");
-        let listening_paused =
-            context.room_control_datetime_active(&room.channel_id, "listening_paused_until");
-        let auto_desired = context.pool_config().auto_join_enabled && room.auto_join;
-        let should_be_present =
-            !auto_suppressed && !listening_paused && (manual_hold || auto_desired);
+        let manual_leave = manual_leave_active(context, room);
+        let auto_suppressed =
+            context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
 
-        if should_be_present && !voice_bot_present && available_bot {
+        if voice_bot_present
+            && room_empty_past_grace(
+                context,
+                room,
+                context.pool_config().auto_leave_empty_seconds,
+            )
+        {
             return Self {
-                action: Some(RoomAgentPlacementAction::Join),
-                reason: if manual_hold {
-                    "manual_hold"
-                } else {
-                    "auto_join"
-                },
+                action: Some(RoomAgentPlacementAction::Leave),
+                reason: "auto_policy_empty",
+                cooldown_seconds: Some(context.pool_config().auto_rejoin_cooldown_seconds),
+            };
+        }
+
+        if manual_leave {
+            if voice_bot_present {
+                return Self {
+                    action: Some(RoomAgentPlacementAction::Leave),
+                    reason: "manual_leave",
+                    cooldown_seconds: Some(context.pool_config().manual_override_seconds),
+                };
+            }
+            return Self {
+                action: None,
+                reason: "manual_leave",
                 cooldown_seconds: None,
             };
         }
 
-        if voice_bot_present && !should_be_present {
+        if manual_hold {
+            if !voice_bot_present && available_bot && !occupants.is_empty() {
+                return Self {
+                    action: Some(RoomAgentPlacementAction::Join),
+                    reason: "manual_hold",
+                    cooldown_seconds: None,
+                };
+            }
             return Self {
-                action: Some(RoomAgentPlacementAction::Leave),
-                reason: leave_reason(auto_suppressed, listening_paused),
-                cooldown_seconds: Some(context.pool_config().manual_leave_cooldown_seconds),
+                action: None,
+                reason: "manual_hold",
+                cooldown_seconds: None,
+            };
+        }
+
+        if voice_bot_present {
+            if single_deafened_participant_past_grace(
+                occupants,
+                context.pool_config().auto_leave_single_deafened_seconds,
+            ) {
+                return Self {
+                    action: Some(RoomAgentPlacementAction::Leave),
+                    reason: "auto_policy_single_deafened",
+                    cooldown_seconds: Some(context.pool_config().auto_rejoin_cooldown_seconds),
+                };
+            }
+            return Self {
+                action: None,
+                reason: "present",
+                cooldown_seconds: None,
+            };
+        }
+
+        if context.pool_config().auto_join_enabled
+            && room.auto_join
+            && !auto_suppressed
+            && occupants.len() >= context.pool_config().auto_join_min_participants
+            && available_bot
+        {
+            return Self {
+                action: Some(RoomAgentPlacementAction::Join),
+                reason: "auto_join",
+                cooldown_seconds: None,
             };
         }
 
@@ -117,14 +172,60 @@ fn placement_job(
     )
 }
 
-fn leave_reason(auto_suppressed: bool, listening_paused: bool) -> &'static str {
-    if listening_paused {
-        "listening_paused"
-    } else if auto_suppressed {
-        "auto_join_suppressed"
-    } else {
-        "auto_join_not_desired"
+fn room_occupants<'a>(voice_state: &'a AutomationVoiceState, room: &RoomConfig) -> &'a [Value] {
+    voice_state
+        .room_occupants
+        .get(&room.channel_id)
+        .expect("automation voice state is missing room occupants")
+}
+
+fn manual_leave_active(context: &AutomationContext<'_>, room: &RoomConfig) -> bool {
+    if !context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until") {
+        return false;
     }
+    let Some(control) = context.room_control(&room.channel_id) else {
+        return false;
+    };
+    matches!(
+        control.auto_join_suppression_reason.as_deref(),
+        Some("manual_leave" | "manual_leave_all")
+    )
+}
+
+fn room_empty_past_grace(
+    context: &AutomationContext<'_>,
+    room: &RoomConfig,
+    grace_seconds: i64,
+) -> bool {
+    if !room_occupants(context.voice_state(), room).is_empty() {
+        return false;
+    }
+    let Some(empty_since) = context.voice_state().room_empty_since.get(&room.channel_id) else {
+        return false;
+    };
+    utc_now().signed_duration_since(*empty_since) > chrono::Duration::seconds(grace_seconds)
+}
+
+fn single_deafened_participant_past_grace(occupants: &[Value], grace_seconds: i64) -> bool {
+    let [occupant] = occupants else {
+        return false;
+    };
+    participant_deafened(occupant)
+        && voice_state_updated_at(occupant).is_some_and(|updated_at| {
+            utc_now().signed_duration_since(updated_at) >= chrono::Duration::seconds(grace_seconds)
+        })
+}
+
+fn participant_deafened(occupant: &Value) -> bool {
+    voice_state_bool(occupant, "deaf") || voice_state_bool(occupant, "self_deaf")
+}
+
+fn voice_state_bool(occupant: &Value, key: &str) -> bool {
+    occupant.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn voice_state_updated_at(occupant: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    parse_instant(&first_value_string(occupant, &["updated_at", "updatedAt"]))
 }
 
 fn has_available_voice_bot(voice_state: &AutomationVoiceState) -> bool {
