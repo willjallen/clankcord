@@ -1393,13 +1393,28 @@ async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
     let retryable_server_id = retryable_server.id.clone();
     store.create_job(retryable_server).await.unwrap();
 
+    let mut retryable_body = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        now - Duration::seconds(7),
+        now - Duration::seconds(6),
+        4,
+    ));
+    retryable_body.set_state(JobState::Failed);
+    retryable_body.metadata.error =
+        "request or response body error for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
+            .to_string();
+    let retryable_body_id = retryable_body.id.clone();
+    store.create_job(retryable_body).await.unwrap();
+
     let mut non_retryable_client = Job::audio_segment(audio_segment_payload(
         "guild",
         "code",
         "user-b",
-        now - Duration::seconds(7),
         now - Duration::seconds(6),
-        4,
+        now - Duration::seconds(5),
+        5,
     ));
     non_retryable_client.set_state(JobState::Failed);
     non_retryable_client.metadata.error =
@@ -1412,9 +1427,9 @@ async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
         "guild",
         "code",
         "user-b",
-        now - Duration::seconds(6),
         now - Duration::seconds(5),
-        5,
+        now - Duration::seconds(4),
+        6,
     ));
     permanent.set_state(JobState::Failed);
     permanent.metadata.error = "audio segment artifact is missing: /tmp/missing.wav".to_string();
@@ -1427,14 +1442,16 @@ async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
         .map(|job| job["job_id"].as_str().unwrap().to_string())
         .collect::<BTreeSet<_>>();
 
-    assert_eq!(requeued.len(), 3);
+    assert_eq!(requeued.len(), 4);
     assert!(requeued_ids.contains(&retryable_transport_id));
     assert!(requeued_ids.contains(&retryable_rate_limit_id));
     assert!(requeued_ids.contains(&retryable_server_id));
+    assert!(requeued_ids.contains(&retryable_body_id));
     for job_id in [
         retryable_transport_id,
         retryable_rate_limit_id,
         retryable_server_id,
+        retryable_body_id,
     ] {
         let retryable = store.get_job(&job_id).await.unwrap();
         assert_eq!(retryable.state, JobState::Queued);

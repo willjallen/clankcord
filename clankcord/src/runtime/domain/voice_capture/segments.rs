@@ -77,6 +77,7 @@ pub(crate) fn is_retryable_audio_segment_error_text(error: &str) -> bool {
         || error.starts_with("retryable stt server error:")
         || error.contains("operation timed out")
         || error.contains("timed out")
+        || error.contains("request or response body error")
         || error.contains("connection refused")
         || error.contains("connection reset")
         || error.contains("connection closed")
@@ -243,6 +244,9 @@ fn retryable_stt_error_class(error: &anyhow::Error) -> Option<RetryableSttErrorC
             return Some(RetryableSttErrorClass::Timeout);
         }
         if error.is_connect() {
+            return Some(RetryableSttErrorClass::Connection);
+        }
+        if error.is_body() {
             return Some(RetryableSttErrorClass::Connection);
         }
         match error.status() {
