@@ -32,7 +32,7 @@ impl Runtime {
         }
     }
 
-    pub(crate) async fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
+    pub async fn dispatch_claimed_blocking_job(&self, running: Job) -> Result<Value> {
         let job_id = running.id.clone();
         match running.kind {
             JobKind::WakeProbe => match routes::execute_wake_probe(self, &running).await {

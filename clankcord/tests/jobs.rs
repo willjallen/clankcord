@@ -197,6 +197,90 @@ struct PreV0_7_0Job {
     metadata: JobMetadata,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct EncodedCurrentAgentPreflightCheck {
+    command: String,
+    returncode: Option<i32>,
+    ok: bool,
+    stdout_preview: String,
+    stderr_preview: String,
+    error: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EncodedCurrentAgentPreflightMetadata {
+    ok: bool,
+    checked_at: String,
+    checks: Vec<EncodedCurrentAgentPreflightCheck>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+struct EncodedCurrentAgentInvocationMetadata {
+    session_id: String,
+    provider: String,
+    model: String,
+    reasoning_effort: String,
+    fast_mode: bool,
+    usage: BinaryPayload,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EncodedCurrentAgentTaskMetadata {
+    dispatch_attempts: i64,
+    dispatch_error: String,
+    dispatch_error_after_cancel: String,
+    workdir_path: String,
+    prompt_path: String,
+    result_path: String,
+    raw_result_path: String,
+    dispatch_stdout_preview: String,
+    dispatch_stderr: String,
+    agent: EncodedCurrentAgentInvocationMetadata,
+    preflight: Option<EncodedCurrentAgentPreflightMetadata>,
+    response_text: String,
+    command: String,
+    result_suppressed: bool,
+    discord_post: Option<DiscordPostMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+enum EncodedCurrentJobMetadataDetail {
+    AgentTask(EncodedCurrentAgentTaskMetadata),
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EncodedCurrentJobMetadata {
+    detail: Option<Box<EncodedCurrentJobMetadataDetail>>,
+    error: String,
+    timed_out_at: String,
+    cancel_requested: bool,
+    cancelled_by_user_id: String,
+    output: Option<JobOutput>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EncodedCurrentJob {
+    id: String,
+    kind: JobKind,
+    scope_kind: RuntimeScopeKind,
+    guild_id: String,
+    scope_id: String,
+    state: JobState,
+    requested_by_user_id: String,
+    payload: JobPayload,
+    attempts: i64,
+    created_at: String,
+    updated_at: String,
+    next_run_at: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    cancelled_at: Option<String>,
+    parent_job_id: Option<String>,
+    root_job_id: String,
+    lineage_depth: u8,
+    metadata: EncodedCurrentJobMetadata,
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn job_round_trips_as_binary_record() {
     let command = CommandRequest::from_json(&json!({
@@ -1537,6 +1621,84 @@ async fn timeline_allows_multiple_text_deliveries_for_one_agent_source() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn completed_agent_task_with_missing_response_delivery_completes_terminally() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(&raw.path().join("voice")).await;
+    let command = CommandRequest::from_json(&json!({
+        "command_kind": "agent_task",
+        "guild_id": "guild",
+        "scope_id": "code",
+        "requested_by_user_id": "user-a",
+        "arguments": {"request": "leave the room"}
+    }))
+    .unwrap();
+    let created = store
+        .create_job(Job::agent_task_for_session(
+            "ags_test",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            command,
+        ))
+        .await
+        .unwrap();
+    let stop = Job::discord_typing_indicator(
+        RuntimeScope::voice_channel("guild", "code"),
+        "user-a",
+        DiscordTypingIndicatorPayload {
+            action: DiscordTypingAction::Stop,
+            target: TextTarget {
+                kind: TextTargetKind::AgentSession,
+                channel_id: String::new(),
+                user_id: String::new(),
+            },
+            source_job_id: created.id.clone(),
+            requested_by_user_id: "user-a".to_string(),
+            agent_task_attempt: 0,
+        },
+    );
+    let stop = store.create_child_job(&created, stop).await.unwrap();
+    let waiting_parent = store.get_job(&created.id).await.unwrap();
+    let encoded = encode_current_agent_task_with_response(
+        &waiting_parent,
+        "RESPONSE_SUBMITTED",
+        "codex exec --output-last-message",
+    );
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(encoded)
+        .bind(&created.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let mut stop = store.get_job(&stop.id).await.unwrap();
+    stop.mark_complete();
+    store.update_job(&stop).await.unwrap();
+    store.resolve_waiting_jobs().await.unwrap();
+
+    let claimed = store
+        .claim_due_jobs(JobKind::AgentTask, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let result = runtime
+        .dispatch_claimed_blocking_job(claimed[0].clone())
+        .await
+        .unwrap();
+
+    assert_eq!(result["dispatched"], json!(true));
+    assert_eq!(result["response"], json!("submitted_without_delivery"));
+    let completed = store.get_job(&created.id).await.unwrap();
+    assert_eq!(completed.state, JobState::Complete);
+    assert!(completed.completed_at.is_some());
+    assert!(completed.metadata.error.is_empty());
+    assert_eq!(
+        completed.metadata.to_json()["agent_task"]["result_suppressed"],
+        json!(true)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn timeline_reports_earliest_queued_ready_time() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
@@ -2185,6 +2347,76 @@ fn encode_pre_v0_7_0_text_delivery_job(job: &Job, opaque: BinaryPayload) -> Vec<
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
     bytes.extend_from_slice(&4_u16.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn encode_current_agent_task_with_response(
+    job: &Job,
+    response_text: &str,
+    command: &str,
+) -> Vec<u8> {
+    let encoded = EncodedCurrentJob {
+        id: job.id.clone(),
+        kind: job.kind,
+        scope_kind: job.scope_kind,
+        guild_id: job.guild_id.clone(),
+        scope_id: job.scope_id.clone(),
+        state: job.state,
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        payload: job.payload.clone(),
+        attempts: job.attempts,
+        created_at: job.created_at.clone(),
+        updated_at: job.updated_at.clone(),
+        next_run_at: job.next_run_at.clone(),
+        started_at: job.started_at.clone(),
+        completed_at: job.completed_at.clone(),
+        cancelled_at: job.cancelled_at.clone(),
+        parent_job_id: job.parent_job_id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        lineage_depth: job.lineage_depth,
+        metadata: EncodedCurrentJobMetadata {
+            detail: Some(Box::new(EncodedCurrentJobMetadataDetail::AgentTask(
+                EncodedCurrentAgentTaskMetadata {
+                    dispatch_attempts: 0,
+                    dispatch_error: String::new(),
+                    dispatch_error_after_cancel: String::new(),
+                    workdir_path: "/tmp/clankcord-agent-workdir".to_string(),
+                    prompt_path: "/tmp/clankcord-agent-prompt.txt".to_string(),
+                    result_path: "/tmp/clankcord-agent-result.txt".to_string(),
+                    raw_result_path: "/tmp/clankcord-agent.codex.jsonl".to_string(),
+                    dispatch_stdout_preview: response_text.to_string(),
+                    dispatch_stderr: String::new(),
+                    agent: EncodedCurrentAgentInvocationMetadata {
+                        session_id: "codex-session".to_string(),
+                        provider: "codex".to_string(),
+                        model: "gpt-test".to_string(),
+                        reasoning_effort: "medium".to_string(),
+                        fast_mode: false,
+                        usage: BinaryPayload::empty(),
+                    },
+                    preflight: Some(EncodedCurrentAgentPreflightMetadata {
+                        ok: true,
+                        checked_at: "2026-05-20T00:00:00.000Z".to_string(),
+                        checks: Vec::new(),
+                    }),
+                    response_text: response_text.to_string(),
+                    command: command.to_string(),
+                    result_suppressed: false,
+                    discord_post: None,
+                },
+            ))),
+            error: String::new(),
+            timed_out_at: String::new(),
+            cancel_requested: false,
+            cancelled_by_user_id: String::new(),
+            output: None,
+        },
+    };
+    let body = bincode::serialize(&encoded).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&5_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }

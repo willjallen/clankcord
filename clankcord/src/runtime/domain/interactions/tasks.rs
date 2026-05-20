@@ -425,41 +425,65 @@ impl Runtime {
             .unwrap_or_default();
         let response_text = response_text.trim();
         if response_text == "RESPONSE_SUBMITTED" {
-            anyhow::bail!(
-                "agent task reported RESPONSE_SUBMITTED but no text delivery job exists for source job {job_id}"
-            );
+            return self
+                .complete_agent_task_with_suppressed_result(
+                    latest,
+                    "agent reported RESPONSE_SUBMITTED without creating a text delivery job",
+                    "submitted_without_delivery",
+                )
+                .await;
         }
         if let Some(reason) = agent_task_no_response_reason(response_text) {
-            latest.mark_complete();
-            latest.metadata.agent_task_mut().result_suppressed = true;
-            self.timeline_store.update_job(&latest).await?;
-            self.timeline_store
-                .append_event(
-                    &latest.guild_id,
-                    &latest.scope_id,
-                    json!({
-                        "event_kind": "agent_task_result_suppressed",
-                        "kind": "agent_task_result_suppressed",
-                        "job_id": job_id,
-                        "job_kind": latest.kind.as_str(),
-                        "reason": reason,
-                    }),
-                )
-                .await?;
-            return Ok(json!({"dispatched": true, "job": latest.to_value(), "response": "none"}));
+            return self
+                .complete_agent_task_with_suppressed_result(latest, reason, "none")
+                .await;
         }
         if response_text.is_empty() {
-            anyhow::bail!("agent task completed without submitting a text delivery job");
+            return self
+                .complete_agent_task_with_suppressed_result(
+                    latest,
+                    "agent completed without final response text",
+                    "empty",
+                )
+                .await;
         }
-        anyhow::bail!(
-            "agent task returned final text instead of submitting a text delivery job or NO_RESPONSE_NEEDED"
+        self.complete_agent_task_with_suppressed_result(
+            latest,
+            "agent returned final text instead of submitting through Clankcord response command",
+            "final_text_without_delivery",
         )
+        .await
     }
 
     async fn text_delivery_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
         self.timeline_store
             .list_text_delivery_jobs_for_source(source_job_id)
             .await
+    }
+
+    async fn complete_agent_task_with_suppressed_result(
+        &self,
+        mut job: Job,
+        reason: &'static str,
+        response: &'static str,
+    ) -> Result<Value> {
+        job.mark_complete();
+        job.metadata.agent_task_mut().result_suppressed = true;
+        self.timeline_store.update_job(&job).await?;
+        self.timeline_store
+            .append_event(
+                &job.guild_id,
+                &job.scope_id,
+                json!({
+                    "event_kind": "agent_task_result_suppressed",
+                    "kind": "agent_task_result_suppressed",
+                    "job_id": job.id.clone(),
+                    "job_kind": job.kind.as_str(),
+                    "reason": reason,
+                }),
+            )
+            .await?;
+        Ok(json!({"dispatched": true, "job": job.to_value(), "response": response}))
     }
 
     async fn fail_agent_task_job(

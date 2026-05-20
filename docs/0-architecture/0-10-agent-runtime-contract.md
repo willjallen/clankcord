@@ -89,7 +89,7 @@ The captured context is a bounded local window of user-visible speech and Discor
 
 The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broader scope context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
 
-The invocation response contract is repeated on every task because resumed Codex sessions receive invocation sections without the session bootstrap sections. It covers private delivery requests across all routes: a request to DM, direct-message, privately reply, or message a specific private recipient is satisfied by the private delivery itself. After successful private delivery, the agent finishes with `RESPONSE_SUBMITTED` and does not publish a session or channel confirmation unless the user explicitly asks for public acknowledgement.
+The invocation response contract is repeated on every task because resumed Codex sessions receive invocation sections without the session bootstrap sections. It covers private delivery requests across all routes: a request to DM, direct-message, privately reply, or message a specific private recipient is satisfied by the private delivery itself. After successful private delivery, the agent finishes with `RESPONSE_SUBMITTED` and does not publish a session or channel confirmation unless the user explicitly asks for public acknowledgement. For state-changing work that visibly completes through the command itself, the agent finishes with `NO_RESPONSE_NEEDED`.
 
 Typed requests are treated as intentional Discord text. DM route prompts describe the response as private to the DM participant and direct the agent to answer through the current DM session. Public text prompts keep the answer tied to the visible text surface. Voice-origin prompts describe speech-to-text uncertainty and require a short summary of the understood request before a visible answer.
 
@@ -138,7 +138,7 @@ The room occupant view reads current voice-state rows for human and bot users in
 
 ## Publication Outcome
 
-Codex final text is a control signal. Discord posts are created through Clankcord response commands. A successful task either submits visible output through Clankcord or declares the task complete without publication.
+Codex final text is a control signal. Discord posts are created through Clankcord response commands. A successful task either submits visible output through Clankcord or declares the task complete without publication. The agent task reaches terminal state when the Codex invocation returns successfully and the typing-stop child completes. Missing or mismatched final control text is recorded as a suppressed publication outcome on the terminal agent task.
 
 ```text
 RESPONSE_SUBMITTED
@@ -148,6 +148,6 @@ NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
-Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success. Session lifecycle commands, automations, room controls, feedback, publication, transcript creation, reminders, and sound playback are state-changing actions. A command that publishes the requested response, such as `clankcord responses send` or `clankcord responses dm`, satisfies the visible-response requirement.
+Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, no-op work where a visible message adds no useful information, and state-changing commands that already visibly complete the requested work. Other state-changing Clankcord commands require a concise visible response after the command reports success. Session lifecycle commands, automations, room controls, feedback, publication, transcript creation, reminders, and sound playback are state-changing actions. A command that publishes the requested response, such as `clankcord responses send` or `clankcord responses dm`, satisfies the visible-response requirement.
 
 DM requests use `clankcord responses dm --to ...`; the CLI resolves the recipient through the member resolver and creates a DM text-delivery target. Public responses use `clankcord responses send` for the current session surface or an explicit sink. Response bodies are read from stdin by default, or from `--file` when the body already exists as a UTF-8 artifact. `--attachment <ZIP>` carries one or more generated zip files through the same response command. The CLI sends canonical artifact paths to the runtime. `text_delivery` stores only attachment path metadata in Postgres, verifies the files, records filename, size, and checksum on the Discord send child, and the Discord adapter uploads the files with the message through multipart HTTP. The runtime verifies publication by looking for text-delivery jobs tied to the agent task.

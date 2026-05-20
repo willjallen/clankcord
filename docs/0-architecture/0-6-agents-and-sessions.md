@@ -155,7 +155,7 @@ The detailed process contract is documented in [Agent Runtime Contract](0-10-age
 
 ## Publication
 
-A successful agent task ends by submitting visible output through Clankcord or declaring the task complete without publication.
+A successful agent task ends by submitting visible output through Clankcord or declaring the task complete without publication. The runtime marks the task terminal after a successful Codex process return and completed typing-stop child. Mismatched final control text is stored as a suppressed publication outcome.
 
 ```text
 RESPONSE_SUBMITTED
@@ -165,7 +165,7 @@ NO_RESPONSE_NEEDED
     the agent intentionally completed the task without publication
 ```
 
-Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, and no-op work where a visible message adds no useful information. State-changing Clankcord commands require a concise visible response after the command reports success.
+Agents use `NO_RESPONSE_NEEDED` for false activations, accidental invocations, read-only checks, no-op work where a visible message adds no useful information, and state-changing commands that already visibly complete the requested work. Other state-changing Clankcord commands require a concise visible response after the command reports success.
 
 Codex final text is treated as a control signal. Visible Discord output is created through `clankcord responses ...`, `text_delivery`, and domain-executed Discord text jobs. An agent task may submit multiple visible responses; each submission creates its own `text_delivery` job tied to the same source task. Session-targeted text delivery resolves the destination at send time. When the source task's session has been retired by `agent_session_resume_route_takeover`, delivery uses the current active session for that route. This preserves runtime authority over Discord delivery, session routing, DMs, and managed threads.
 
