@@ -35,7 +35,7 @@ const CLI_AFTER_HELP: &str = r#"Common agent workflows:
                               feedback body
                               EOF
 
-Most agent commands infer job, guild, channel, and requester from CLANKCORD_AGENT_* environment variables. Use --file for large outputs so command results do not flood the agent context."#;
+Response commands infer job, guild, channel, and requester from CLANKCORD_AGENT_* environment variables. Room-mutating commands require ROOM or --channel. Use --file for large outputs so command results do not flood the agent context."#;
 
 const RESPONSE_BODY_AFTER_HELP: &str = r#"Response body input:
   Read Markdown/plain text from stdin by default. Use a single-quoted heredoc so shells do not expand backticks, dollars, quotes, or backslashes:
@@ -382,6 +382,7 @@ struct RoomOccupantsArgs {
 
 #[derive(Debug, ClapArgs, Default)]
 struct RoomArgs {
+    #[arg(required_unless_present = "channel")]
     room: Option<String>,
     #[arg(long)]
     guild: Option<String>,
@@ -393,6 +394,7 @@ struct RoomArgs {
 
 #[derive(Debug, ClapArgs, Default)]
 struct JoinArgs {
+    #[arg(required_unless_present = "channel")]
     room: Option<String>,
     #[arg(long)]
     guild: Option<String>,
@@ -417,6 +419,7 @@ struct MoveArgs {
 #[derive(Debug, ClapArgs, Default)]
 struct PlayCueArgs {
     cue: String,
+    #[arg(required_unless_present = "channel")]
     room: Option<String>,
     #[arg(long)]
     guild: Option<String>,
@@ -835,6 +838,7 @@ struct ConfirmationCancelArgs {
 
 #[derive(Debug, ClapArgs, Default)]
 struct PauseArgs {
+    #[arg(required_unless_present = "channel")]
     room: Option<String>,
     #[arg(long)]
     channel: Option<String>,
@@ -1019,22 +1023,22 @@ fn room_occupants(args: RoomOccupantsArgs) -> Result<i32> {
 }
 
 fn join(args: JoinArgs) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("rooms join", args.room, args.channel)?;
     submit_command(
         "join_room",
         args.guild,
-        room.clone(),
+        Some(room.clone()),
         args.user_id,
         json!({"room": room, "request": args.reason}),
     )
 }
 
 fn leave(args: RoomArgs) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("rooms leave", args.room, args.channel)?;
     submit_command(
         "leave_room",
         args.guild,
-        room.clone(),
+        Some(room.clone()),
         args.requested_by_user_id,
         json!({"room": room}),
     )
@@ -1051,22 +1055,22 @@ fn room_move(args: MoveArgs) -> Result<i32> {
 }
 
 fn room_set_mute(args: RoomArgs, muted: bool) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("rooms mute", args.room, args.channel)?;
     submit_command(
         "set_voice_mute",
         args.guild,
-        room.clone(),
+        Some(room.clone()),
         args.requested_by_user_id,
         json!({"room": room, "muted": muted}),
     )
 }
 
 fn room_play_cue(args: PlayCueArgs) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("rooms play-cue", args.room, args.channel)?;
     submit_command(
         "play_voice_cue",
         args.guild,
-        room.clone(),
+        Some(room.clone()),
         args.requested_by_user_id,
         json!({"room": room, "cue": args.cue}),
     )
@@ -1546,23 +1550,35 @@ fn confirmation_cancel(args: ConfirmationCancelArgs) -> Result<i32> {
     )
 }
 
+fn required_room_target(
+    command: &str,
+    room: Option<String>,
+    channel: Option<String>,
+) -> Result<String> {
+    channel
+        .or(room)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| discord_tool_error(format!("{command} requires ROOM or --channel")))
+}
+
 fn pause(args: PauseArgs) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("pause", args.room, args.channel)?;
     submit_command(
         "pause_listening",
         None,
-        room.clone(),
+        Some(room.clone()),
         args.requested_by_user_id,
         json!({"room": room, "duration_seconds": duration_to_seconds(&args.duration)}),
     )
 }
 
 fn resume(args: RoomArgs) -> Result<i32> {
-    let room = args.channel.or(args.room);
+    let room = required_room_target("resume", args.room, args.channel)?;
     submit_command(
         "resume_listening",
         args.guild,
-        room.clone(),
+        Some(room.clone()),
         args.requested_by_user_id,
         json!({"room": room}),
     )

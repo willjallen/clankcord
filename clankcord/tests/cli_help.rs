@@ -65,6 +65,27 @@ fn response_content_flag_is_rejected_before_runtime_submission() {
 }
 
 #[test]
+fn room_mutation_commands_require_room_target_before_submission() {
+    for args in [
+        &["rooms", "join"][..],
+        &["rooms", "leave"],
+        &["rooms", "mute"],
+        &["rooms", "unmute"],
+        &["rooms", "play-cue", "join"],
+        &["pause"],
+        &["resume"],
+    ] {
+        let output = clankcord(args);
+        assert!(!output.status.success(), "{args:?}");
+        let stderr = stderr(&output);
+        assert!(
+            stderr.contains("required") || stderr.contains("requires ROOM or --channel"),
+            "{args:?}: {stderr}"
+        );
+    }
+}
+
+#[test]
 fn automation_help_uses_stdin_or_file_json_transport() {
     let output = clankcord(&["automations", "create", "--help"]);
     assert!(output.status.success(), "{}", stderr(&output));

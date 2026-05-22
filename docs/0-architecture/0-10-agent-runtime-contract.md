@@ -40,7 +40,7 @@ CLANKCORD_AGENT_REQUESTED_BY_USER_ID
 CLANKCORD_API_BASE_URL
 ```
 
-The CLI uses these variables for agent-friendly defaults. `responses send`, `responses ask`, and `responses dm` can infer the current job, guild, scope, and requester from the environment while still accepting explicit flags for manual operation.
+The CLI uses these variables for agent-friendly defaults. `responses send`, `responses ask`, and `responses dm` can infer the current job, guild, scope, and requester from the environment while still accepting explicit flags for manual operation. Room-mutating commands require an explicit room target. Agents pass `--channel "$CLANKCORD_AGENT_SCOPE_ID"` for the current voice route and include `--requested-by-user-id "$CLANKCORD_AGENT_REQUESTED_BY_USER_ID"` on commands that accept a requester.
 
 ## Prompt
 

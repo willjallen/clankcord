@@ -198,6 +198,19 @@ impl CommandKind {
             Self::PlayVoiceCue => "play_voice_cue",
         }
     }
+
+    pub fn requires_explicit_room_target(self) -> bool {
+        matches!(
+            self,
+            Self::PauseListening
+                | Self::DeafenListening
+                | Self::ResumeListening
+                | Self::LeaveRoom
+                | Self::JoinRoom
+                | Self::SetVoiceMute
+                | Self::PlayVoiceCue
+        )
+    }
 }
 
 impl Default for CommandKind {
@@ -492,13 +505,19 @@ impl CommandRequest {
 
     pub fn target_room_identifier(&self, default_channel_id: &str) -> String {
         first_non_empty([
+            self.explicit_room_identifier(),
+            default_channel_id.to_string(),
+        ])
+    }
+
+    pub fn explicit_room_identifier(&self) -> String {
+        first_non_empty([
             self.target_room_id.clone(),
             self.target_channel_id.clone(),
             self.arguments.room.clone(),
             self.arguments.channel.clone(),
             self.arguments.target_room.clone(),
             self.arguments.target_channel.clone(),
-            default_channel_id.to_string(),
         ])
     }
 

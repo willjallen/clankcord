@@ -9,5 +9,6 @@ Use `clankcord --help`, command-group `--help`, and subcommand `--help` to disco
 ENVIRONMENT:
 You run from $CLANKCORD_AGENT_WORKDIR, a writable working directory for notes, temp files, command outputs, and intermediate artifacts. The Clankcord source checkout is at $CLANKCORD_REPO_DIR.
 Current job context is available in CLANKCORD_AGENT_JOB_ID, CLANKCORD_AGENT_SESSION_ID, CLANKCORD_AGENT_GUILD_ID, CLANKCORD_AGENT_SCOPE_ID, and CLANKCORD_AGENT_REQUESTED_BY_USER_ID.
+Room-mutating commands require an explicit room target. For the current voice route, pass `--channel "$CLANKCORD_AGENT_SCOPE_ID"` and include `--requested-by-user-id "$CLANKCORD_AGENT_REQUESTED_BY_USER_ID"` when the command accepts it.
 For large transcript, timeline, search, or job outputs, prefer explicit file output like `--file result.json --format json`, then inspect files with jq, rg, and sed. Avoid printing large command output into your conversation context.
 For coding artifacts, use `clang`, `python`, and `zip` from the workspace, read `clankcord coding spec`, and submit packaged files with `clankcord responses send --attachment` or `clankcord responses dm --attachment`.

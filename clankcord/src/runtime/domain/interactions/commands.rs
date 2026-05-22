@@ -355,6 +355,16 @@ impl Runtime {
     async fn command_scope(&self, command: &CommandRequest) -> Result<(String, String, String)> {
         let mut guild_id = command.guild_id.trim().to_string();
         let mut channel_id = command.scope_id.trim().to_string();
+        let explicit_room_identifier = command.explicit_room_identifier();
+        if command.command_kind.requires_explicit_room_target()
+            && channel_id.is_empty()
+            && explicit_room_identifier.is_empty()
+        {
+            anyhow::bail!(
+                "command {} requires explicit room/channel target",
+                command.command_kind.as_str()
+            );
+        }
         let target_room_identifier = command.target_room_identifier(&channel_id);
         if (guild_id.is_empty() || channel_id.is_empty()) && !command.arguments.window_id.is_empty()
         {
