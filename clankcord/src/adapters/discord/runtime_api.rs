@@ -99,6 +99,6 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
     fn discord_voice_status_snapshot<'a>(
         &'a self,
     ) -> ExternalApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
-        Box::pin(async move { Ok(self.live_voice.voice_status_snapshot().await) })
+        Box::pin(async move { self.live_voice.voice_status_snapshot().await })
     }
 }

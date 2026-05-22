@@ -7,6 +7,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use serenity::Error as SerenityError;
+use serenity::http::HttpError;
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Member;
 use serenity::model::id::{GuildId, UserId};
@@ -643,11 +645,12 @@ impl LiveVoiceAdapter {
         clients.values().map(DiscordVoiceClient::status).collect()
     }
 
-    pub(crate) async fn voice_status_snapshot(&self) -> DiscordVoiceStatusSnapshotOutput {
-        DiscordVoiceStatusSnapshotOutput {
+    pub(crate) async fn voice_status_snapshot(&self) -> Result<DiscordVoiceStatusSnapshotOutput> {
+        self.reconcile_voice_client_presence().await?;
+        Ok(DiscordVoiceStatusSnapshotOutput {
             bots: self.bot_statuses().await,
             sessions: self.session_statuses().await,
-        }
+        })
     }
 
     pub async fn session_statuses(&self) -> Vec<crate::runtime::VoiceCaptureSessionStatus> {
@@ -708,6 +711,192 @@ impl LiveVoiceAdapter {
         if let Err(error) = self.job_sink.submit(job).await {
             log(&format!("capture job submission failed {job_id}: {error}"));
         }
+    }
+
+    async fn reconcile_voice_client_presence(&self) -> Result<()> {
+        let configured_guild_ids = configured_voice_guild_ids();
+        let probes = {
+            let clients = self.voice_clients_lock.lock().await;
+            clients
+                .values()
+                .filter(|client| {
+                    client.ready
+                        && client.joining_live_session_id.is_none()
+                        && !client.user_id.trim().is_empty()
+                })
+                .map(|client| {
+                    let guild_ids = if client.current_guild_id.trim().is_empty() {
+                        configured_guild_ids.clone()
+                    } else {
+                        vec![client.current_guild_id.clone()]
+                    };
+                    (
+                        client.bot_id.clone(),
+                        client.user_id.clone(),
+                        client.http(),
+                        guild_ids,
+                    )
+                })
+                .filter(|(_, _, _, guild_ids)| !guild_ids.is_empty())
+                .collect::<Vec<_>>()
+        };
+
+        for (bot_id, user_id, http, guild_ids) in probes {
+            let discord_user_id = UserId::new(parse_discord_id("user_id", &user_id)?);
+            let mut found_voice_state = false;
+            let mut checked_guild = false;
+            for guild_id in guild_ids {
+                checked_guild = true;
+                let discord_guild_id = GuildId::new(parse_discord_id("guild_id", &guild_id)?);
+                match http
+                    .get_user_voice_state(discord_guild_id, discord_user_id)
+                    .await
+                {
+                    Ok(state) => {
+                        let actual_guild_id = state
+                            .guild_id
+                            .map(|value| value.get().to_string())
+                            .unwrap_or_else(|| guild_id.clone());
+                        let actual_channel_id = state
+                            .channel_id
+                            .map(|value| value.get().to_string())
+                            .unwrap_or_default();
+                        self.apply_authoritative_voice_presence(
+                            &bot_id,
+                            &actual_guild_id,
+                            &actual_channel_id,
+                            "discord_voice_state",
+                        )
+                        .await;
+                        found_voice_state = true;
+                        break;
+                    }
+                    Err(error) if unknown_voice_state(&error) => {}
+                    Err(error) => {
+                        anyhow::bail!(
+                            "Discord voice state lookup failed for {bot_id} in guild {guild_id}: {error}"
+                        );
+                    }
+                }
+            }
+            if checked_guild && !found_voice_state {
+                self.apply_authoritative_voice_presence(
+                    &bot_id,
+                    "",
+                    "",
+                    "discord_voice_state_absent",
+                )
+                .await;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn apply_authoritative_voice_presence(
+        &self,
+        bot_id: &str,
+        guild_id: &str,
+        channel_id: &str,
+        reason: &str,
+    ) {
+        let status = {
+            let mut clients = self.voice_clients_lock.lock().await;
+            let Some(client) = clients.get_mut(bot_id) else {
+                return;
+            };
+            client.current_guild_id = guild_id.to_string();
+            client.current_channel_id = channel_id.to_string();
+            Some(client.status())
+        };
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
+        }
+
+        let stale_session_ids = self
+            .live_session_ids_for_bot_outside(bot_id, guild_id, channel_id)
+            .await;
+        if stale_session_ids.is_empty() {
+            return;
+        }
+
+        let stale_session_ids_set = stale_session_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let status = {
+            let mut clients = self.voice_clients_lock.lock().await;
+            clients.get_mut(bot_id).map(|client| {
+                if client
+                    .active_live_session_id
+                    .as_ref()
+                    .is_some_and(|session_id| stale_session_ids_set.contains(session_id))
+                {
+                    client.active_live_session_id = None;
+                }
+                if client
+                    .joining_live_session_id
+                    .as_ref()
+                    .is_some_and(|session_id| stale_session_ids_set.contains(session_id))
+                {
+                    client.joining_live_session_id = None;
+                }
+                client.status()
+            })
+        };
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
+        }
+
+        for session_id in stale_session_ids {
+            self.finish_reconciled_session(&session_id, reason).await;
+        }
+    }
+
+    async fn live_session_ids_for_bot_outside(
+        &self,
+        bot_id: &str,
+        guild_id: &str,
+        channel_id: &str,
+    ) -> Vec<String> {
+        let sessions = {
+            let sessions = self.capture_sessions_lock.lock().await;
+            sessions
+                .iter()
+                .map(|(session_id, session)| (session_id.clone(), session.clone()))
+                .collect::<Vec<_>>()
+        };
+        let mut stale_session_ids = Vec::new();
+        for (session_id, session) in sessions {
+            let metadata = session.lock().await.metadata(local_tz());
+            if metadata.bot_id != bot_id {
+                continue;
+            }
+            if channel_id.trim().is_empty()
+                || metadata.guild_id != guild_id
+                || metadata.voice_channel_id != channel_id
+            {
+                stale_session_ids.push(session_id);
+            }
+        }
+        stale_session_ids
+    }
+
+    async fn finish_reconciled_session(&self, session_id: &str, reason: &str) {
+        let live_session = self.capture_sessions_lock.lock().await.remove(session_id);
+        let Some(live_session) = live_session else {
+            return;
+        };
+        let finished = {
+            let mut live_session = live_session.lock().await;
+            live_session.finish(reason.to_string(), local_tz())
+        };
+        for job in finished.audio_jobs {
+            self.submit_capture_job(job).await;
+        }
+        self.persist_capture_session_status(&finished.metadata)
+            .await;
+        log(&format!(
+            "finished voice session {} for {} after {reason}",
+            finished.session_id, finished.bot_id
+        ));
     }
 
     pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
@@ -1058,4 +1247,30 @@ fn playback_timeout() -> Duration {
 
 fn elapsed_ms(duration: Duration) -> i64 {
     duration.as_millis().min(i64::MAX as u128) as i64
+}
+
+fn unknown_voice_state(error: &SerenityError) -> bool {
+    matches!(
+        error,
+        SerenityError::Http(HttpError::UnsuccessfulRequest(response))
+            if response.status_code.as_u16() == 404 && response.error.code == 10065
+    )
+}
+
+fn configured_voice_guild_ids() -> Vec<String> {
+    let mut guild_ids = crate::config::app_config()
+        .guilds
+        .iter()
+        .map(|guild| guild.guild_id.trim().to_string())
+        .filter(|guild_id| !guild_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    let control_guild_id = crate::config::app_config()
+        .control
+        .guild_id
+        .trim()
+        .to_string();
+    if !control_guild_id.is_empty() {
+        guild_ids.insert(control_guild_id);
+    }
+    guild_ids.into_iter().collect()
 }

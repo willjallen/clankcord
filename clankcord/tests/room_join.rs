@@ -251,6 +251,157 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     assert_eq!(assignments[0].capture_run_id, assignment.capture_run_id);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn voice_status_sync_releases_capturing_assignment_when_bot_is_absent() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .mark_voice_assignment_capturing(&assignment.assignment_id)
+        .await
+        .unwrap();
+    store
+        .upsert_capture_session_status(&capture_session_for_assignment(&room, &assignment))
+        .await
+        .unwrap();
+    let mut stale_bot = ready_bot();
+    stale_bot.current_guild_id = room.guild_id.clone();
+    stale_bot.current_channel_id = room.channel_id.clone();
+    store.upsert_voice_bot_state(&stale_bot).await.unwrap();
+    let runtime = test_runtime(store.clone(), room.clone());
+
+    runtime
+        .sync_voice_adapter_status(vec![ready_bot()], Vec::new())
+        .await
+        .unwrap();
+
+    assert!(
+        store
+            .list_active_voice_assignments()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_active_capture_sessions()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let released = store
+        .get_voice_assignment(&assignment.assignment_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(released.state, "ended");
+    assert_eq!(released.release_reason, "adapter_sync_missing");
+    assert!(!released.released_at.trim().is_empty());
+    let session = store
+        .get_capture_session_status(&assignment.capture_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!session.active);
+    assert!(!session.ended_at.trim().is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_status_sync_keeps_joining_assignment_while_presence_is_pending() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .upsert_capture_session_status(&capture_session_for_assignment(&room, &assignment))
+        .await
+        .unwrap();
+    let runtime = test_runtime(store.clone(), room.clone());
+
+    runtime
+        .sync_voice_adapter_status(vec![ready_bot()], Vec::new())
+        .await
+        .unwrap();
+
+    let assignments = store.list_active_voice_assignments().await.unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].state, "joining");
+    let sessions = store.list_active_capture_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, assignment.capture_run_id);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_status_sync_keeps_capturing_assignment_with_matching_bot_and_session() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .mark_voice_assignment_capturing(&assignment.assignment_id)
+        .await
+        .unwrap();
+    let session = capture_session_for_assignment(&room, &assignment);
+    let mut bot = ready_bot();
+    bot.current_guild_id = room.guild_id.clone();
+    bot.current_channel_id = room.channel_id.clone();
+    let runtime = test_runtime(store.clone(), room.clone());
+
+    runtime
+        .sync_voice_adapter_status(vec![bot], vec![session])
+        .await
+        .unwrap();
+
+    let assignments = store.list_active_voice_assignments().await.unwrap();
+    assert_eq!(assignments.len(), 1);
+    assert_eq!(assignments[0].state, "capturing");
+    let sessions = store.list_active_capture_sessions().await.unwrap();
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].session_id, assignment.capture_run_id);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn voice_assignment_claim_requires_idle_bot() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    let mut bot = ready_bot();
+    bot.current_guild_id = room.guild_id.clone();
+    bot.current_channel_id = "other-room".to_string();
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap();
+
+    assert!(assignment.is_none());
+}
+
 fn test_runtime(
     timeline_store: clankcord::runtime::timeline::TimelineStore,
     _room: RoomConfig,
@@ -281,5 +432,27 @@ fn ready_bot_with(bot_id: &str, user_id: &str) -> VoiceBotStatus {
         user_id: user_id.to_string(),
         username: bot_id.to_string(),
         ..VoiceBotStatus::default()
+    }
+}
+
+fn capture_session_for_assignment(
+    room: &RoomConfig,
+    assignment: &clankcord::runtime::VoiceAssignment,
+) -> VoiceCaptureSessionStatus {
+    VoiceCaptureSessionStatus {
+        session_id: assignment.capture_run_id.clone(),
+        room_id: room.room_id.clone(),
+        guild_id: room.guild_id.clone(),
+        channel_id: room.channel_id.clone(),
+        voice_channel_id: room.channel_id.clone(),
+        channel_name: room.channel_name.clone(),
+        bot_id: assignment.voice_bot_id.clone(),
+        bot_user_id: assignment.voice_bot_discord_user_id.clone(),
+        capture_run_id: assignment.capture_run_id.clone(),
+        assignment_id: assignment.assignment_id.clone(),
+        mode: "local_buffering".to_string(),
+        started_at: assignment.assigned_at.clone(),
+        active: true,
+        ..VoiceCaptureSessionStatus::default()
     }
 }

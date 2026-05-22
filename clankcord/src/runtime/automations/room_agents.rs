@@ -231,6 +231,7 @@ fn voice_state_updated_at(occupant: &Value) -> Option<chrono::DateTime<chrono::U
 fn has_available_voice_bot(voice_state: &AutomationVoiceState) -> bool {
     voice_state.bots.iter().any(|bot| {
         bot.ready
+            && bot.current_channel_id.trim().is_empty()
             && !voice_state
                 .assignments
                 .iter()

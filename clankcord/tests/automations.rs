@@ -644,6 +644,29 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_requires_idle_bot_for_auto_join() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut bot = ready_bot();
+    bot.current_guild_id = "guild".to_string();
+    bot.current_channel_id = "env".to_string();
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    assert_eq!(result["createdJobs"], json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn room_placement_builtin_automation_uses_configured_join_threshold() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;

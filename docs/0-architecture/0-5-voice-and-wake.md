@@ -30,11 +30,13 @@ Dedicated Discord voice bot tokens form the capture pool. Each bot reports `Voic
 
 A room capture has `VoiceCaptureSessionStatus`, which records the live adapter's capture observation: guild, channel, bot identity, capture run, assignment id, participants, capture stats, artifact status, and lifecycle timestamps. Capture sessions describe packet capture. Assignments describe room ownership.
 
+Voice status sync reconciles adapter memory with Discord voice state before writing durable bot and session status. A ready bot that is not joining is checked against Discord for its current guild voice state, using the bot's observed guild or the configured guilds when adapter memory has no guild. When Discord reports that the bot has no voice state, the adapter clears the bot location, finishes the live capture session, and submits final audio segment jobs. The runtime sync then closes capture sessions, capture runs, and assignments that no longer have a matching bot location and capture session.
+
 Voice bots are audio capture workers. Agent work begins later, when wake activation, commands, DMs, or managed thread messages resolve to an agent session and create `agent_task` work.
 
 ## Auto Placement
 
-Runtime maintenance evaluates room placement policy through `automation_evaluation`. When pool auto-join is enabled, a configured room with `auto_join = true` receives an available voice bot once its live human participant count reaches `pool.auto_join_min_participants`.
+Runtime maintenance evaluates room placement policy through `automation_evaluation`. When pool auto-join is enabled, a configured room with `auto_join = true` receives an available voice bot once its live human participant count reaches `pool.auto_join_min_participants`. An available bot is ready, has no active assignment, and has no current Discord voice channel.
 
 An assigned voice bot leaves an empty room after the room has had no human participants for longer than `pool.auto_leave_empty_seconds`. This empty-room rule applies to every assignment. Automatic placement also releases a room with one human participant when that participant has been deafened for at least `pool.auto_leave_single_deafened_seconds`. A room released by automatic policy receives an auto-join suppression marker for `pool.auto_rejoin_cooldown_seconds` before policy can place a bot there again.
 

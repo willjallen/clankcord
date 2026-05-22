@@ -289,6 +289,7 @@ impl TimelineStore {
             SELECT bot_id, payload_json
             FROM bot_states bot
             WHERE (bot.payload_json->>'ready')::boolean = TRUE
+              AND COALESCE(bot.payload_json->>'currentChannelId', '') = ''
               AND NOT EXISTS (
                 SELECT 1
                 FROM assignments assignment
