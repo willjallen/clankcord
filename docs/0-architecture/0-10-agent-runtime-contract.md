@@ -27,6 +27,12 @@ Codex process behavior comes from the `[codex]` configuration. `model` controls 
 
 Codex sandbox behavior also comes from `[codex]`. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
 
+## Codex Authentication
+
+Deployments give Codex a persistent home directory through `[codex].home`. In the Docker Compose deployment, `./clankcord/runtime-data/codex-home` is mounted at `/codex`, and `CODEX_HOME=/codex` is passed to every agent invocation. `/codex/auth.json` is the live Codex credential store. Codex reads access credentials from that file and writes refreshed credentials back into the same file as tokens rotate.
+
+Operators initialize the mounted Codex home with `scripts/codex-login.sh`. The script stops the runtime, runs `codex login --device-auth` from a one-off container against the mounted `/codex` home, verifies login status, and recreates the runtime container. The runtime container then starts with the existing `/codex/auth.json` and leaves it intact across restarts. Moving a deployment to a new host is a state migration of the Codex home directory, including `auth.json`, `sessions/`, and Codex local state.
+
 Every invocation receives job and session context through environment variables.
 
 ```text

@@ -62,9 +62,8 @@ services:
     command:
       - |
         set -euo pipefail
-        if [ -f /run/secrets/clankcord_codex_auth_profiles ]; then
-          jq '.profiles | to_entries | map(select(.key | startswith("openai-codex:"))) | .[0].value | {OPENAI_API_KEY:null,tokens:{id_token:.access,access_token:.access,refresh_token:.refresh,account_id:(.accountId // "")},last_refresh:"1970-01-01T00:00:00.000Z"}' /run/secrets/clankcord_codex_auth_profiles > /codex/auth.json
-          chmod 600 /codex/auth.json || true
+        if [ ! -s /codex/auth.json ]; then
+          echo "Codex auth is missing at /codex/auth.json. Run codex login against the mounted /codex home before using agent jobs." >&2
         fi
         exec clankcord start
     volumes:
@@ -76,7 +75,6 @@ services:
       - clankcord_postgres_password
       - clankcord_discord_bot_token
       - clankcord_discord_voice_bot_tokens
-      - clankcord_codex_auth_profiles
       - clankcord_elevenlabs_api_key
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/healthz >/dev/null || exit 1"]
@@ -92,8 +90,6 @@ secrets:
     file: ${CLANKCORD_DISCORD_BOT_TOKEN_SECRET_FILE:-./tokens/openclaw_discord_bot_token.txt}
   clankcord_discord_voice_bot_tokens:
     file: ./tokens/openclaw_discord_voice_bot_tokens.txt
-  clankcord_codex_auth_profiles:
-    file: ${CLANKCORD_CODEX_AUTH_PROFILES_SECRET_FILE:-./tokens/new-codex-token.txt}
   clankcord_elevenlabs_api_key:
     file: ${CLANKCORD_ELEVENLABS_API_KEY_SECRET_FILE:-./tokens/openclaw_elevenlabs_api_key.txt}
 
