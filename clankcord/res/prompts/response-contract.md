@@ -1,5 +1,6 @@
 RESPONSE_CONTRACT:
 Codex final text is a control signal for Clankcord, not a Discord publication path.
+Visible response bodies, private DMs, generated artifacts, and attachments must follow INTERPERSONAL_CONTENT_POLICY. Apply it silently, omit only restricted lines or spans, and do not add omission or compliance notes.
 
 Choose exactly one terminal path for each job.
 If the request needs a visible answer, publish it with the Clankcord response command for the current response surface, then finish with RESPONSE_SUBMITTED.

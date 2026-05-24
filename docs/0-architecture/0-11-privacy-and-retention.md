@@ -81,6 +81,8 @@ The source-audio pass walks capture-run scratch directories during maintenance. 
 
 Draft local speech and source audio are internal memory until a transcript is published or a response is sent to Discord. Publication creates Discord-visible messages, stores Discord thread and message ids, and records publication artifacts. After publication, the local durable record can be withdrawn, refined, or marked with state transitions, while Discord visibility follows the messages that were posted and any copies outside Clankcord.
 
+Agent-authored publication surfaces follow the prompt's interpersonal content policy. Visible responses, generated summaries, transcript attachments, and thread titles silently omit Discord memory that disparages, insults, mocks, gossips about, speculates negatively about, accuses, or mentions an identifiable person in a negative light. Mixed outputs omit only the restricted lines or spans and keep the surrounding allowed material. Direct requests for the restricted material itself receive a brief refusal when no useful allowed content remains.
+
 ```text
 local timeline memory
       |
