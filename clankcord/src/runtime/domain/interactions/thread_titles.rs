@@ -22,7 +22,7 @@ use crate::runtime::{
     RuntimeScope, TextTargetKind,
 };
 
-const THREAD_TITLE_RESPONSE_INTERVAL: usize = 2;
+const THREAD_TITLE_RESPONSE_INTERVAL: usize = 1;
 const THREAD_TITLE_MAX_CANDIDATES_PER_RUN: usize = 1;
 const THREAD_TITLE_MAX_CHARS: usize = 80;
 const THREAD_TITLE_RESPONSE_PREVIEW_CHARS: usize = 420;
@@ -488,7 +488,7 @@ fn validate_thread_title_refresh_payload(
         anyhow::bail!("agent thread title refresh job is missing required identity");
     }
     if payload.response_count < THREAD_TITLE_RESPONSE_INTERVAL {
-        anyhow::bail!("agent thread title refresh requires at least two visible responses");
+        anyhow::bail!("agent thread title refresh requires at least one visible response");
     }
     Ok(())
 }

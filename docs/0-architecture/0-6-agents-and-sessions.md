@@ -124,11 +124,11 @@ Empty messages, top-level `agent-chat` messages, and unmanaged guild channels co
 
 ## Thread Titles
 
-Runtime maintenance keeps managed thread names readable. The maintenance handler scans active voice sessions with managed Discord threads and counts completed agent tasks that delivered a visible response into the session thread. When a session has at least two delivered responses beyond the last title-refresh attempt, maintenance creates one `agent_thread_title_refresh` job for that pass.
+Runtime maintenance keeps managed thread names readable. The maintenance handler scans active voice sessions with managed Discord threads and counts completed agent tasks that delivered a visible response into the session thread. When a session has at least one delivered response beyond the last title-refresh attempt, maintenance creates one `agent_thread_title_refresh` job for that pass.
 
 `agent_thread_title_refresh` runs on the agent lane with the same `agent:session:<agent_session_id>` ordering key as agent work. It writes an `agent_thread_title_refresh_attempted` event before launching Codex, builds a compact title prompt from the session id, current thread name, voice room name, response count, and visible request/response summaries, then creates a `discord_forum_thread_rename` child with the generated title. When the rename child completes, the parent appends `agent_thread_titled` with the title, response count, refresh job id, and rename job id.
 
-The title-refresh selector is bounded by three durable facts: one candidate per maintenance pass, a single active title-refresh job per session, and a response-count gate recorded by the attempted event. A failed Codex or Discord rename attempt advances the attempted response count, so the next maintenance pass waits for two more delivered agent responses before creating another title-refresh job.
+The title-refresh selector is bounded by three durable facts: one candidate per maintenance pass, a single active title-refresh job per session, and a response-count gate recorded by the attempted event. A failed Codex or Discord rename attempt advances the attempted response count, so the next maintenance pass waits for another delivered agent response before creating another title-refresh job.
 
 ## Retirement And Resume
 

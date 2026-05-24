@@ -81,7 +81,7 @@ runtime_maintenance
       +--> ephemeral_job_gc
 ```
 
-Agent thread title refresh is selected directly by the maintenance handler. Each pass creates at most one queued `agent_thread_title_refresh` job for an active voice session with a managed thread, at least two newly delivered agent responses since the last title-refresh attempt, and an available title-refresh slot for that session.
+Agent thread title refresh is selected directly by the maintenance handler. Each pass creates at most one queued `agent_thread_title_refresh` job for an active voice session with a managed thread, at least one newly delivered agent response since the last title-refresh attempt, and an available title-refresh slot for that session.
 
 Voice status sync is the maintenance path that reconciles adapter state with durable runtime state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state. The live capture loop also commits per-session capture stats while audio is flowing so wake activation can read current speaker activity, buffered audio bytes, and last PCM timestamps.
 

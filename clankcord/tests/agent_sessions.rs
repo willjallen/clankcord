@@ -912,7 +912,7 @@ async fn session_response_reroutes_after_resume_takeover() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn maintenance_queues_one_thread_title_refresh_after_two_visible_agent_responses() {
+async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_response() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());
     let store = common::test_store(&raw.path().join("voice")).await;
@@ -923,14 +923,6 @@ async fn maintenance_queues_one_thread_title_refresh_after_two_visible_agent_res
         "explain gRPC",
         "gRPC uses HTTP/2 streams for service calls.",
         "user-a",
-    )
-    .await;
-    insert_completed_agent_response(
-        &store,
-        "ags_title",
-        "compare with REST",
-        "REST exposes resources with request methods.",
-        "user-b",
     )
     .await;
     let mut runtime = Runtime::from_store(store.clone()).unwrap();
@@ -951,7 +943,7 @@ async fn maintenance_queues_one_thread_title_refresh_after_two_visible_agent_res
     };
     assert_eq!(payload.agent_session_id, "ags_title");
     assert_eq!(payload.discord_thread_id, "thread-1");
-    assert_eq!(payload.response_count, 2);
+    assert_eq!(payload.response_count, 1);
     assert_eq!(payload.current_thread_name, "Code Lounge 2026-05-17 03:28");
 
     let completed = store.get_job(&maintenance.id).await.unwrap();
@@ -976,8 +968,6 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
     insert_active_thread_session(&store, "ags_title").await;
     insert_completed_agent_response(&store, "ags_title", "question one", "answer one", "user-a")
         .await;
-    insert_completed_agent_response(&store, "ags_title", "question two", "answer two", "user-b")
-        .await;
     store
         .append_event(
             "guild",
@@ -987,7 +977,7 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
                 "kind": "agent_thread_title_refresh_attempted",
                 "agent_session_id": "ags_title",
                 "discord_thread_id": "thread-1",
-                "response_count": 2,
+                "response_count": 1,
                 "refresh_job_id": "job_previous",
             }),
         )
