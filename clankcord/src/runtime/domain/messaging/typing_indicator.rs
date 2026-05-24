@@ -1,19 +1,22 @@
 use serde_json::json;
 
 use crate::Result;
-use crate::config;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::external::RuntimeExternalApi;
-use crate::runtime::util::first_non_empty;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind,
-    DiscordForumThreadCreatePayload, DiscordTypingAction, DiscordTypingIndicatorPayload, Job,
-    JobKind, JobOutput, JobState, Runtime, RuntimeScope, TextTarget, TextTargetKind,
+    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, JobState, Runtime,
+    TextTarget, TextTargetKind,
 };
+
+const NO_SESSION_THREAD_TYPING_STATUS: &str = "skipped_no_session_thread";
 
 enum TypingTarget {
     Ready(TextTarget),
-    WaitFor(Job),
+    Skipped {
+        target: TextTarget,
+        status: &'static str,
+    },
 }
 
 impl Runtime {
@@ -40,19 +43,25 @@ impl Runtime {
             )));
         }
 
-        let target = match self.resolve_typing_target(job, payload, &children).await? {
-            TypingTarget::Ready(target) => target,
-            TypingTarget::WaitFor(child) => return Ok(JobDecision::WaitFor(vec![child])),
-        };
-        let output = external_api
-            .discord_typing_indicator(DiscordTypingIndicatorPayload {
+        let output = match self.resolve_typing_target(job, payload).await? {
+            TypingTarget::Ready(target) => {
+                external_api
+                    .discord_typing_indicator(DiscordTypingIndicatorPayload {
+                        action: payload.action,
+                        target,
+                        source_job_id: payload.source_job_id.clone(),
+                        requested_by_user_id: payload.requested_by_user_id.clone(),
+                        agent_task_attempt: payload.agent_task_attempt,
+                    })
+                    .await?
+            }
+            TypingTarget::Skipped { target, status } => DiscordTypingIndicatorOutput {
                 action: payload.action,
                 target,
                 source_job_id: payload.source_job_id.clone(),
-                requested_by_user_id: payload.requested_by_user_id.clone(),
-                agent_task_attempt: payload.agent_task_attempt,
-            })
-            .await?;
+                status: status.to_string(),
+            },
+        };
         self.timeline_store
             .append_event(
                 &job.guild_id,
@@ -77,7 +86,6 @@ impl Runtime {
         &self,
         job: &Job,
         payload: &DiscordTypingIndicatorPayload,
-        children: &[Job],
     ) -> Result<TypingTarget> {
         match payload.target.kind {
             TextTargetKind::Channel => {
@@ -102,7 +110,7 @@ impl Runtime {
             }
             TextTargetKind::AgentSession => {
                 let session = self.session_for_typing_indicator(job, payload).await?;
-                self.resolve_agent_session_typing_target(job, payload, children, session)
+                self.resolve_agent_session_typing_target(job, payload, session)
                     .await
             }
         }
@@ -154,8 +162,7 @@ impl Runtime {
         &self,
         job: &Job,
         payload: &DiscordTypingIndicatorPayload,
-        children: &[Job],
-        mut session: AgentSessionRecord,
+        session: AgentSessionRecord,
     ) -> Result<TypingTarget> {
         match session.text_target.kind {
             TextTargetKind::Dm => {
@@ -165,78 +172,11 @@ impl Runtime {
             TextTargetKind::Channel if !session.text_target.channel_id.trim().is_empty() => {
                 Ok(TypingTarget::Ready(session.text_target))
             }
-            TextTargetKind::Channel
-                if session.route_kind == AgentSessionRouteKind::Voice
-                    && payload.action == DiscordTypingAction::Start =>
-            {
-                if let Some(thread_job) = children
-                    .iter()
-                    .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
-                {
-                    let Some(JobOutput::DiscordForumThreadCreate(output)) =
-                        thread_job.metadata.output.clone()
-                    else {
-                        anyhow::bail!(
-                            "discord typing thread job {} completed without thread output",
-                            thread_job.id
-                        );
-                    };
-                    session.discord_thread_id = output.thread_id.clone();
-                    session.discord_parent_channel_id = output.parent_channel_id;
-                    session.text_target = TextTarget {
-                        kind: TextTargetKind::Channel,
-                        channel_id: output.thread_id,
-                        user_id: String::new(),
-                    };
-                    self.timeline_store
-                        .update_agent_session_record(&session)
-                        .await?;
-                    self.timeline_store
-                        .append_event(
-                            &session.guild_id,
-                            &session.scope_id,
-                            json!({
-                                "event_kind": "agent_session_thread_created",
-                                "kind": "agent_session_thread_created",
-                                "agent_session": session.to_json(),
-                                "source_job_id": job.id,
-                                "requested_by_user_id": payload.requested_by_user_id,
-                            }),
-                        )
-                        .await?;
-                    Ok(TypingTarget::Ready(session.text_target))
-                } else {
-                    if session.discord_parent_channel_id.trim().is_empty() {
-                        anyhow::bail!(
-                            "agent session {} has no Discord parent channel for thread allocation",
-                            session.agent_session_id
-                        );
-                    }
-                    Ok(TypingTarget::WaitFor(Job::discord_forum_thread_create(
-                        RuntimeScope::voice_channel(
-                            session.guild_id.clone(),
-                            session.scope_id.clone(),
-                        ),
-                        payload.requested_by_user_id.clone(),
-                        DiscordForumThreadCreatePayload {
-                            parent_channel_id: session.discord_parent_channel_id.clone(),
-                            name: self.default_agent_thread_name(&session).await?,
-                            content: self
-                                .agent_thread_content(
-                                    &session.guild_id,
-                                    &session.scope_id,
-                                    &first_non_empty([
-                                        payload.requested_by_user_id.clone(),
-                                        job.requested_by_user_id.clone(),
-                                    ]),
-                                    &session.agent_session_id,
-                                )
-                                .await?,
-                            auto_archive_minutes: config::agent_thread_auto_archive_minutes(),
-                            source_job_id: job.id.clone(),
-                        },
-                    )))
-                }
+            TextTargetKind::Channel if session.route_kind == AgentSessionRouteKind::Voice => {
+                Ok(TypingTarget::Skipped {
+                    target: session.text_target,
+                    status: NO_SESSION_THREAD_TYPING_STATUS,
+                })
             }
             kind => anyhow::bail!(
                 "agent session {} has unsupported typing target {} for {}",

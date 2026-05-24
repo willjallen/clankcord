@@ -15,7 +15,7 @@ agent_task job
       +--> verify response contract
 ```
 
-The typing indicator is a durable Discord job with `start` and `stop` actions. A start job resolves the same agent-session text target used by response delivery. For a voice session awaiting its first forum thread, the start job creates the managed Discord thread and records it on the agent session before the Codex process begins. The Discord adapter sends the initial typing request and maintains the indicator with a heartbeat while the agent task is running. The stop job cancels that heartbeat after the Codex process returns and before the agent task reaches a terminal state.
+The typing indicator is a durable Discord job with `start` and `stop` actions. A start job resolves the same agent-session text target used by response delivery. For a voice session with a stored managed thread, the Discord adapter sends the initial typing request and maintains the indicator with a heartbeat while the agent task is running. For a voice session awaiting its first forum thread, typing start completes with `skipped_no_session_thread`; the first session-targeted `text_delivery` allocates the managed thread through `discord_forum_thread_create` when the agent publishes a visible response. The stop job cancels any heartbeat after the Codex process returns and before the agent task reaches a terminal state.
 
 ## Workspace
 
