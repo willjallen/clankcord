@@ -15,9 +15,13 @@ use crate::config;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
+use crate::runtime::domain::messaging::session_threads::{
+    UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_targets_unavailable_session_thread,
+    discord_error_text_unavailable_channel_id,
+};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
-    BinaryPayload,
+    BinaryPayload, DiscordTypingIndicatorOutput,
 };
 use crate::runtime::timeline::{
     JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
@@ -25,8 +29,8 @@ use crate::runtime::timeline::{
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
     AgentSessionRouteKind, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
-    JobState, Runtime, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget,
-    TextTargetKind,
+    JobOutput, JobPayload, JobState, Runtime, RuntimeScopeKind, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 const AGENT_UNAVAILABLE_MESSAGE: &str =
@@ -113,18 +117,23 @@ impl Runtime {
                 return self.wait_dispatched_job(&job_id, latest, Vec::new()).await;
             }
             Some(start) if start.state != JobState::Complete => {
-                return self
-                    .fail_dispatched_job(
-                        &job_id,
-                        latest,
-                        anyhow::anyhow!(
-                            "agent task typing start dependency {} ended as {}: {}",
-                            start.id,
-                            start.state,
-                            start.metadata.error
-                        ),
-                    )
-                    .await;
+                if !self
+                    .complete_unavailable_typing_start_child(&latest, start)
+                    .await?
+                {
+                    return self
+                        .fail_dispatched_job(
+                            &job_id,
+                            latest,
+                            anyhow::anyhow!(
+                                "agent task typing start dependency {} ended as {}: {}",
+                                start.id,
+                                start.state,
+                                start.metadata.error
+                            ),
+                        )
+                        .await;
+                }
             }
             Some(_) => {}
             None => {
@@ -233,6 +242,76 @@ impl Runtime {
             )],
         )
         .await
+    }
+
+    async fn complete_unavailable_typing_start_child(
+        &self,
+        job: &Job,
+        start: &Job,
+    ) -> Result<bool> {
+        let Some(payload) = start.discord_typing_indicator_payload() else {
+            return Ok(false);
+        };
+        if payload.action != DiscordTypingAction::Start
+            || payload.target.kind != TextTargetKind::AgentSession
+        {
+            return Ok(false);
+        }
+        let JobPayload::AgentTask(agent_task) = &job.payload else {
+            return Ok(false);
+        };
+        let session = self
+            .timeline_store
+            .get_agent_session_record(&agent_task.agent_session_id)
+            .await?;
+        let thread_id = first_non_empty([
+            discord_error_text_unavailable_channel_id(&start.metadata.error),
+            session.text_target.channel_id.clone(),
+            session.discord_thread_id.clone(),
+        ]);
+        let target = TextTarget {
+            kind: TextTargetKind::Channel,
+            channel_id: thread_id.clone(),
+            user_id: String::new(),
+        };
+        if !discord_error_text_targets_unavailable_session_thread(&start.metadata.error, &target) {
+            return Ok(false);
+        }
+        self.mark_agent_session_thread_unavailable(
+            &agent_task.agent_session_id,
+            &thread_id,
+            &start.id,
+            &start.metadata.error,
+        )
+        .await?;
+        let mut completed = start.clone();
+        completed.metadata.error.clear();
+        completed.metadata.output = Some(JobOutput::DiscordTypingIndicator(
+            DiscordTypingIndicatorOutput {
+                action: DiscordTypingAction::Start,
+                target: target.clone(),
+                source_job_id: payload.source_job_id.clone(),
+                status: UNAVAILABLE_SESSION_THREAD_STATUS.to_string(),
+            },
+        ));
+        completed.mark_complete();
+        self.timeline_store.update_job(&completed).await?;
+        self.timeline_store
+            .append_event(
+                &job.guild_id,
+                &job.scope_id,
+                json!({
+                    "event_kind": "discord_typing_indicator",
+                    "kind": "discord_typing_indicator",
+                    "job_id": start.id,
+                    "source_job_id": payload.source_job_id,
+                    "action": payload.action.as_str(),
+                    "target": target.to_json(),
+                    "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+                }),
+            )
+            .await?;
+        Ok(true)
     }
 
     async fn dispatch_agent_task(&self, job: &Job) -> Result<AgentTaskMetadata> {

@@ -6,10 +6,10 @@ mod common;
 use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
-    CommandRequest, DiscordForumThreadCreateOutput, DiscordTextMessagePayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryKind,
-    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
-    voice_route_key,
+    BinaryPayload, CommandRequest, DiscordForumThreadCreateOutput, DiscordForumThreadRenamePayload,
+    DiscordTextMessagePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobPayload,
+    JobState, Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryKind, TextDeliveryOutput,
+    TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key, voice_route_key,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -830,6 +830,144 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn session_text_delivery_reopens_deleted_stored_thread() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    store
+        .create_agent_session_record(AgentSessionRecord::new_voice(
+            "ags_deleted_thread",
+            "guild",
+            "code",
+            "agent-threads",
+            "150000000000000001",
+            created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+            max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+        ))
+        .await
+        .unwrap();
+    let agent_task = store
+        .create_job(Job::agent_task_for_session(
+            "ags_deleted_thread",
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            CommandRequest::agent_task("guild", "code", "user-a", "answer this"),
+        ))
+        .await
+        .unwrap();
+    let delivery = store
+        .create_job(Job::text_delivery(
+            RuntimeScope::voice_channel("guild", "code"),
+            "user-a",
+            TextDeliveryPayload::new(
+                TextDeliveryKind::Message,
+                TextTarget {
+                    kind: TextTargetKind::AgentSession,
+                    channel_id: String::new(),
+                    user_id: String::new(),
+                },
+                "ready",
+                agent_task.id.clone(),
+                "user-a",
+                false,
+            ),
+        ))
+        .await
+        .unwrap();
+    let failed_send = store
+        .create_child_job(
+            &delivery,
+            Job::discord_text_send(
+                RuntimeScope::voice_channel("guild", "code"),
+                "user-a",
+                DiscordTextSendPayload {
+                    intent: TextDeliveryKind::Message,
+                    target: TextTarget {
+                        kind: TextTargetKind::Channel,
+                        channel_id: "150000000000000001".to_string(),
+                        user_id: String::new(),
+                    },
+                    content: "ready".to_string(),
+                    source_job_id: agent_task.id.clone(),
+                    requested_by_user_id: "user-a".to_string(),
+                    allowed_mentions: BinaryPayload::empty(),
+                    components: BinaryPayload::empty(),
+                    attachments: Vec::new(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    let mut failed_send = failed_send;
+    failed_send.set_state(JobState::Failed);
+    failed_send.metadata.error = deleted_thread_error("150000000000000001", "messages");
+    store.update_job(&failed_send).await.unwrap();
+    store.resolve_waiting_jobs().await.unwrap();
+
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let mut running = store.get_job(&delivery.id).await.unwrap();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let cleared = store
+        .get_agent_session_record("ags_deleted_thread")
+        .await
+        .unwrap();
+    assert_eq!(cleared.discord_thread_id, "");
+    assert_eq!(cleared.text_target.channel_id, "");
+    let children = store.list_child_jobs(&delivery.id).await.unwrap();
+    let thread_create = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordForumThreadCreate)
+        .expect("thread creation child");
+
+    let mut completed_thread = thread_create.clone();
+    completed_thread.mark_complete();
+    completed_thread.metadata.output = Some(JobOutput::DiscordForumThreadCreate(
+        DiscordForumThreadCreateOutput {
+            parent_channel_id: "agent-threads".to_string(),
+            thread_id: "150000000000000002".to_string(),
+            name: "replacement".to_string(),
+            source_job_id: delivery.id.clone(),
+        },
+    ));
+    store.update_job(&completed_thread).await.unwrap();
+    store.resolve_waiting_jobs().await.unwrap();
+
+    let mut running = store.get_job(&delivery.id).await.unwrap();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+
+    let updated = store
+        .get_agent_session_record("ags_deleted_thread")
+        .await
+        .unwrap();
+    assert_eq!(updated.discord_thread_id, "150000000000000002");
+    assert_eq!(updated.text_target.channel_id, "150000000000000002");
+    let children = store.list_child_jobs(&delivery.id).await.unwrap();
+    let replacement_send = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordTextSend && child.id != failed_send.id)
+        .expect("replacement send child");
+    assert_eq!(
+        replacement_send.payload.to_json()["target"]["channel_id"],
+        "150000000000000002"
+    );
+    let events = store
+        .load_events("guild", "code", None, None, None, None, false)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event["event_kind"] == json!("agent_session_thread_unavailable")
+            && event["discord_thread_id"] == json!("150000000000000001")
+    }));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn session_response_reroutes_after_resume_takeover() {
     let raw = tempfile::tempdir().unwrap();
     common::initialize_test_config(raw.path());
@@ -997,6 +1135,76 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
     assert!(agent_thread_title_refresh_jobs(&store).await.is_empty());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn thread_title_refresh_marks_deleted_thread_unavailable() {
+    let raw = tempfile::tempdir().unwrap();
+    common::initialize_test_config(raw.path());
+    let store = common::test_store(&raw.path().join("voice")).await;
+    insert_active_thread_session(&store, "ags_title_deleted").await;
+    let refresh = store
+        .create_job(Job::agent_thread_title_refresh(
+            "job_maintenance",
+            "ags_title_deleted",
+            "guild",
+            "code",
+            "thread-1",
+            "Code Lounge",
+            1,
+        ))
+        .await
+        .unwrap();
+    let rename = store
+        .create_child_job(
+            &refresh,
+            Job::discord_forum_thread_rename(
+                RuntimeScope::voice_channel("guild", "code"),
+                "runtime",
+                DiscordForumThreadRenamePayload {
+                    thread_id: "thread-1".to_string(),
+                    name: "New title".to_string(),
+                    source_job_id: refresh.id.clone(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    let mut failed_rename = rename;
+    failed_rename.set_state(JobState::Failed);
+    failed_rename.metadata.error = deleted_thread_error("thread-1", "");
+    store.update_job(&failed_rename).await.unwrap();
+    store.resolve_waiting_jobs().await.unwrap();
+
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let mut running = store.get_job(&refresh.id).await.unwrap();
+    running.mark_running();
+    store.update_job(&running).await.unwrap();
+    runtime
+        .dispatch_claimed_blocking_job(running)
+        .await
+        .unwrap();
+
+    let session = store
+        .get_agent_session_record("ags_title_deleted")
+        .await
+        .unwrap();
+    assert_eq!(session.discord_thread_id, "");
+    assert_eq!(session.text_target.channel_id, "");
+    let completed = store.get_job(&refresh.id).await.unwrap();
+    assert_eq!(completed.state, JobState::Complete);
+    assert_eq!(
+        completed.metadata.output.unwrap().to_json()["status"],
+        "skipped_unavailable_session_thread"
+    );
+    let events = store
+        .load_events("guild", "code", None, None, None, None, false)
+        .await
+        .unwrap();
+    assert!(events.iter().any(|event| {
+        event["event_kind"] == json!("agent_thread_title_skipped")
+            && event["status"] == json!("skipped_unavailable_session_thread")
+    }));
+}
+
 #[test]
 fn discord_text_message_job_round_trips() {
     let job = Job::discord_text_message(DiscordTextMessagePayload {
@@ -1094,4 +1302,15 @@ async fn agent_thread_title_refresh_jobs(store: &TimelineStore) -> Vec<Job> {
         .into_iter()
         .filter(|job| job.kind == JobKind::AgentThreadTitleRefresh)
         .collect()
+}
+
+fn deleted_thread_error(thread_id: &str, suffix: &str) -> String {
+    let suffix = if suffix.is_empty() {
+        String::new()
+    } else {
+        format!("/{suffix}")
+    };
+    format!(
+        "discord api POST /channels/{thread_id}{suffix} failed (404): {{\"message\":\"Unknown Channel\",\"code\":10003}}"
+    )
 }

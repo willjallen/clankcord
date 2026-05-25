@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::config::{discord_api_base, load_discord_bot_token};
-use crate::errors::discord_tool_error;
+use crate::errors::discord_api_error;
 use crate::runtime::util::string_field;
 
 pub const GUILD_TEXT_CHANNEL_TYPES: &[i64] = &[0, 5];
@@ -49,11 +49,7 @@ pub fn discord_request(
     let text = response.text().unwrap_or_default();
     if !status.is_success() {
         let detail = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        return Err(discord_tool_error(format!(
-            "discord api {method} {path} failed ({}): {}",
-            status.as_u16(),
-            detail.chars().take(500).collect::<String>()
-        )));
+        return Err(discord_api_error(method, path, status.as_u16(), detail));
     }
     if text.trim().is_empty() {
         Ok(Value::Null)
@@ -95,11 +91,7 @@ pub fn discord_multipart_request(
     let text = response.text().unwrap_or_default();
     if !status.is_success() {
         let detail = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        return Err(discord_tool_error(format!(
-            "discord api {method} {path} failed ({}): {}",
-            status.as_u16(),
-            detail.chars().take(500).collect::<String>()
-        )));
+        return Err(discord_api_error(method, path, status.as_u16(), detail));
     }
     if text.trim().is_empty() {
         Ok(Value::Null)

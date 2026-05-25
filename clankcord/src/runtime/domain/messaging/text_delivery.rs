@@ -1,11 +1,16 @@
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use crate::Result;
 use crate::config;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::messaging::session_threads::{
+    discord_error_text_targets_unavailable_session_thread,
+    discord_error_text_unavailable_channel_id,
+};
 use crate::runtime::timeline::sha256_file;
-use crate::runtime::util::{single_child_of_kind, string_field};
+use crate::runtime::util::{first_non_empty, string_field};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, BinaryPayload,
     DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState,
@@ -55,19 +60,18 @@ impl Runtime {
         if children.iter().any(|child| !child.state.is_terminal()) {
             return Ok(JobDecision::Wait);
         }
-        if let Some(failed) = children
-            .iter()
-            .find(|child| child.state != JobState::Complete)
-        {
+        let ignored_failures = self
+            .repair_text_delivery_unavailable_thread_failures(job, payload, &children)
+            .await?;
+        if let Some(failed) = children.iter().find(|child| {
+            child.state != JobState::Complete && !ignored_failures.contains(&child.id)
+        }) {
             return Ok(JobDecision::fail(format!(
                 "text delivery dependency {} ended as {}: {}",
                 failed.id, failed.state, failed.metadata.error
             )));
         }
-        if children
-            .iter()
-            .any(|child| child.kind == JobKind::DiscordTextSend)
-        {
+        if completed_child_of_kind(&children, JobKind::DiscordTextSend)?.is_some() {
             return self
                 .complete_text_delivery_from_child(job, payload, &children)
                 .await;
@@ -104,7 +108,12 @@ impl Runtime {
         payload: &TextDeliveryPayload,
         children: &[Job],
     ) -> Result<JobDecision> {
-        let send_child = single_child_of_kind(children, JobKind::DiscordTextSend)?;
+        let Some(send_child) = completed_child_of_kind(children, JobKind::DiscordTextSend)? else {
+            return Ok(JobDecision::fail(format!(
+                "text delivery job {} has no completed discord text send child",
+                job.id
+            )));
+        };
         let Some(JobOutput::DiscordTextSend(output)) = send_child.metadata.output.clone() else {
             return Ok(JobDecision::fail(format!(
                 "text delivery child {} completed without discord text output",
@@ -170,6 +179,44 @@ impl Runtime {
                     .await
             }
         }
+    }
+
+    async fn repair_text_delivery_unavailable_thread_failures(
+        &self,
+        job: &Job,
+        payload: &TextDeliveryPayload,
+        children: &[Job],
+    ) -> Result<BTreeSet<String>> {
+        let mut ignored = BTreeSet::new();
+        if payload.target.kind != TextTargetKind::AgentSession {
+            return Ok(ignored);
+        }
+        let session = self.session_for_text_delivery(job, payload).await?;
+        for child in children {
+            if child.kind != JobKind::DiscordTextSend || child.state == JobState::Complete {
+                continue;
+            }
+            let Some(target) = discord_text_send_child_target(child) else {
+                continue;
+            };
+            if !discord_error_text_targets_unavailable_session_thread(&child.metadata.error, target)
+            {
+                continue;
+            }
+            let thread_id = first_non_empty([
+                discord_error_text_unavailable_channel_id(&child.metadata.error),
+                target.channel_id.clone(),
+            ]);
+            self.mark_agent_session_thread_unavailable(
+                &session.agent_session_id,
+                &thread_id,
+                &child.id,
+                &child.metadata.error,
+            )
+            .await?;
+            ignored.insert(child.id.clone());
+        }
+        Ok(ignored)
     }
 
     async fn session_for_text_delivery(
@@ -304,6 +351,27 @@ impl Runtime {
                 kind.as_str()
             ),
         }
+    }
+}
+
+fn completed_child_of_kind(children: &[Job], kind: JobKind) -> Result<Option<&Job>> {
+    let matches = children
+        .iter()
+        .filter(|child| child.kind == kind && child.state == JobState::Complete)
+        .collect::<Vec<_>>();
+    if matches.len() > 1 {
+        anyhow::bail!(
+            "expected at most one completed {kind} child, found {}",
+            matches.len()
+        );
+    }
+    Ok(matches.first().copied())
+}
+
+fn discord_text_send_child_target(child: &Job) -> Option<&TextTarget> {
+    match &child.payload {
+        crate::runtime::JobPayload::DiscordTextSend(payload) => Some(&payload.target),
+        _ => None,
     }
 }
 

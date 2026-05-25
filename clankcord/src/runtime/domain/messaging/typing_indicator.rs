@@ -3,6 +3,11 @@ use serde_json::json;
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::runtime::domain::messaging::session_threads::{
+    UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_targets_unavailable_session_thread,
+    discord_error_unavailable_channel_id,
+};
+use crate::runtime::util::first_non_empty;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind,
     DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, JobState, Runtime,
@@ -12,11 +17,17 @@ use crate::runtime::{
 const NO_SESSION_THREAD_TYPING_STATUS: &str = "skipped_no_session_thread";
 
 enum TypingTarget {
-    Ready(TextTarget),
+    Ready(ResolvedTypingTarget),
     Skipped {
         target: TextTarget,
         status: &'static str,
     },
+}
+
+struct ResolvedTypingTarget {
+    target: TextTarget,
+    agent_session_id: String,
+    thread_id: String,
 }
 
 impl Runtime {
@@ -44,17 +55,45 @@ impl Runtime {
         }
 
         let output = match self.resolve_typing_target(job, payload).await? {
-            TypingTarget::Ready(target) => {
-                external_api
-                    .discord_typing_indicator(DiscordTypingIndicatorPayload {
+            TypingTarget::Ready(resolved) => match external_api
+                .discord_typing_indicator(DiscordTypingIndicatorPayload {
+                    action: payload.action,
+                    target: resolved.target.clone(),
+                    source_job_id: payload.source_job_id.clone(),
+                    requested_by_user_id: payload.requested_by_user_id.clone(),
+                    agent_task_attempt: payload.agent_task_attempt,
+                })
+                .await
+            {
+                Ok(output) => output,
+                Err(error)
+                    if !resolved.agent_session_id.trim().is_empty()
+                        && discord_error_targets_unavailable_session_thread(
+                            &error,
+                            &resolved.target,
+                        ) =>
+                {
+                    let thread_id = first_non_empty([
+                        discord_error_unavailable_channel_id(&error),
+                        resolved.thread_id.clone(),
+                        resolved.target.channel_id.clone(),
+                    ]);
+                    self.mark_agent_session_thread_unavailable(
+                        &resolved.agent_session_id,
+                        &thread_id,
+                        &job.id,
+                        &error.to_string(),
+                    )
+                    .await?;
+                    DiscordTypingIndicatorOutput {
                         action: payload.action,
-                        target,
+                        target: resolved.target,
                         source_job_id: payload.source_job_id.clone(),
-                        requested_by_user_id: payload.requested_by_user_id.clone(),
-                        agent_task_attempt: payload.agent_task_attempt,
-                    })
-                    .await?
-            }
+                        status: UNAVAILABLE_SESSION_THREAD_STATUS.to_string(),
+                    }
+                }
+                Err(error) => return Err(error),
+            },
             TypingTarget::Skipped { target, status } => DiscordTypingIndicatorOutput {
                 action: payload.action,
                 target,
@@ -90,11 +129,19 @@ impl Runtime {
         match payload.target.kind {
             TextTargetKind::Channel => {
                 require_typing_target_id(&payload.target.channel_id, "channel", job)?;
-                Ok(TypingTarget::Ready(payload.target.clone()))
+                Ok(TypingTarget::Ready(ResolvedTypingTarget {
+                    target: payload.target.clone(),
+                    agent_session_id: String::new(),
+                    thread_id: String::new(),
+                }))
             }
             TextTargetKind::Dm => {
                 require_typing_target_id(&payload.target.user_id, "dm", job)?;
-                Ok(TypingTarget::Ready(payload.target.clone()))
+                Ok(TypingTarget::Ready(ResolvedTypingTarget {
+                    target: payload.target.clone(),
+                    agent_session_id: String::new(),
+                    thread_id: String::new(),
+                }))
             }
             TextTargetKind::AgentChat => {
                 let control = self.timeline_store.control_config().await?;
@@ -102,10 +149,14 @@ impl Runtime {
                 if channel_id.is_empty() {
                     anyhow::bail!("botsChannelId is not configured");
                 }
-                Ok(TypingTarget::Ready(TextTarget {
-                    kind: TextTargetKind::Channel,
-                    channel_id: channel_id.to_string(),
-                    user_id: String::new(),
+                Ok(TypingTarget::Ready(ResolvedTypingTarget {
+                    target: TextTarget {
+                        kind: TextTargetKind::Channel,
+                        channel_id: channel_id.to_string(),
+                        user_id: String::new(),
+                    },
+                    agent_session_id: String::new(),
+                    thread_id: String::new(),
                 }))
             }
             TextTargetKind::AgentSession => {
@@ -167,10 +218,19 @@ impl Runtime {
         match session.text_target.kind {
             TextTargetKind::Dm => {
                 require_typing_target_id(&session.text_target.user_id, "dm", job)?;
-                Ok(TypingTarget::Ready(session.text_target))
+                Ok(TypingTarget::Ready(ResolvedTypingTarget {
+                    target: session.text_target,
+                    agent_session_id: String::new(),
+                    thread_id: String::new(),
+                }))
             }
             TextTargetKind::Channel if !session.text_target.channel_id.trim().is_empty() => {
-                Ok(TypingTarget::Ready(session.text_target))
+                let thread_id = session.text_target.channel_id.clone();
+                Ok(TypingTarget::Ready(ResolvedTypingTarget {
+                    target: session.text_target,
+                    agent_session_id: session.agent_session_id,
+                    thread_id,
+                }))
             }
             TextTargetKind::Channel if session.route_kind == AgentSessionRouteKind::Voice => {
                 Ok(TypingTarget::Skipped {

@@ -10,12 +10,16 @@ use super::prompts::{
 use crate::Result;
 use crate::adapters::codex::codex_response_text;
 use crate::config;
+use crate::errors::discord_error_text_is_unavailable_channel;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::messaging::session_threads::{
+    UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_unavailable_channel_id,
+};
 use crate::runtime::timeline::JobVisibility;
-use crate::runtime::util::{first_non_empty, first_value_string};
+use crate::runtime::util::{first_non_empty, first_value_string, preview};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload,
     DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, Runtime,
@@ -99,6 +103,12 @@ impl Runtime {
         let children = self.timeline_store.list_child_jobs(&job.id).await?;
         if children.iter().any(|child| !child.state.is_terminal()) {
             return Ok(JobDecision::Wait);
+        }
+        if let Some(decision) = self
+            .complete_thread_title_refresh_for_unavailable_thread(job, payload, &children)
+            .await?
+        {
+            return Ok(decision);
         }
         if let Some(failed) = children
             .iter()
@@ -326,6 +336,70 @@ impl Runtime {
         )?))
     }
 
+    async fn complete_thread_title_refresh_for_unavailable_thread(
+        &self,
+        job: &Job,
+        payload: &AgentThreadTitleRefreshPayload,
+        children: &[Job],
+    ) -> Result<Option<JobDecision>> {
+        let Some(rename_child) = children
+            .iter()
+            .find(|child| child.kind == JobKind::DiscordForumThreadRename)
+        else {
+            return Ok(None);
+        };
+        if rename_child.state == JobState::Complete
+            || !discord_error_text_is_unavailable_channel(&rename_child.metadata.error)
+        {
+            return Ok(None);
+        }
+        let Some(rename_thread_id) = discord_forum_thread_rename_child_thread_id(rename_child)
+        else {
+            return Ok(None);
+        };
+        if rename_thread_id != payload.discord_thread_id {
+            return Ok(None);
+        }
+        let thread_id = first_non_empty([
+            discord_error_text_unavailable_channel_id(&rename_child.metadata.error),
+            payload.discord_thread_id.clone(),
+        ]);
+        self.mark_agent_session_thread_unavailable(
+            &payload.agent_session_id,
+            &thread_id,
+            &rename_child.id,
+            &rename_child.metadata.error,
+        )
+        .await?;
+        self.timeline_store
+            .append_event(
+                &payload.guild_id,
+                &payload.voice_channel_id,
+                json!({
+                    "event_kind": "agent_thread_title_skipped",
+                    "kind": "agent_thread_title_skipped",
+                    "agent_session_id": payload.agent_session_id,
+                    "discord_thread_id": payload.discord_thread_id,
+                    "response_count": payload.response_count,
+                    "refresh_job_id": job.id,
+                    "rename_job_id": rename_child.id,
+                    "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+                    "reason": preview(&rename_child.metadata.error, 500),
+                }),
+            )
+            .await?;
+        Ok(Some(JobDecision::Complete(JobOutput::from_boundary_json(
+            &json!({
+                "kind": "agent_thread_title_refresh",
+                "agent_session_id": payload.agent_session_id,
+                "discord_thread_id": payload.discord_thread_id,
+                "response_count": payload.response_count,
+                "rename_job_id": rename_child.id,
+                "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+            }),
+        )?)))
+    }
+
     async fn record_agent_thread_title_refresh_attempt(
         &self,
         job: &Job,
@@ -509,6 +583,13 @@ fn text_delivery_content(job: &Job) -> String {
     match &job.payload {
         JobPayload::TextDelivery(payload) => payload.content.clone(),
         _ => String::new(),
+    }
+}
+
+fn discord_forum_thread_rename_child_thread_id(child: &Job) -> Option<&str> {
+    match &child.payload {
+        JobPayload::DiscordForumThreadRename(payload) => Some(payload.thread_id.as_str()),
+        _ => None,
     }
 }
 
