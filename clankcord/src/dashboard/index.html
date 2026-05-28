@@ -857,12 +857,12 @@
             </select>
           </label>
           <label>Channel
-            <select x-model="filters.transcriptChannel">
+            <select x-model="filters.transcriptChannel" @change="filterChanged()">
               <option value="">All</option>
               <template x-for="channel in channelOptions()" :key="channel.id"><option :value="channel.id" x-text="channel.label"></option></template>
             </select>
           </label>
-          <label>Search <input type="search" x-model.debounce.150ms="filters.transcriptSearch" autocomplete="off"></label>
+          <label>Search <input type="search" x-model.debounce.150ms="filters.transcriptSearch" @input.debounce.150ms="filterChanged()" autocomplete="off"></label>
         </div>
         <div class="transcript-view scroll-region">
           <template x-for="group in transcriptGroups()" :key="group.channelId">

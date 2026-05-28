@@ -1,8 +1,9 @@
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use serde_json::json;
 
 mod common;
 
+use clankcord::runtime::timeline::SpeechEventInput;
 use clankcord::runtime::{
     CommandRequest, DebugOverviewRequest, Job, JobState, Runtime, RuntimeScope,
 };
@@ -78,6 +79,54 @@ async fn dashboard_health_includes_http_request_snapshot() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn dashboard_transcript_channel_filter_applies_before_limit() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(raw.path()).await;
+    let base = Utc::now() - Duration::minutes(30);
+    append_dashboard_speech(
+        &store,
+        raw.path(),
+        "code",
+        "Code Lounge",
+        "code-lounge",
+        base,
+        "needle code transcript",
+        1,
+    )
+    .await;
+    for index in 0..15 {
+        append_dashboard_speech(
+            &store,
+            raw.path(),
+            "art",
+            "Art Lounge",
+            "art-lounge",
+            base + Duration::minutes(index + 1),
+            "newer art transcript",
+            index + 2,
+        )
+        .await;
+    }
+    let runtime = Runtime::from_store(store).unwrap();
+
+    let overview = runtime
+        .debug_overview(DebugOverviewRequest {
+            transcript_limit: 10,
+            transcript_channel: "code".to_string(),
+            transcript_query: "needle".to_string(),
+            ..DebugOverviewRequest::default()
+        })
+        .await
+        .unwrap();
+    let events = overview["transcript"]["events"].as_array().unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["voice_channel_id"], json!("code"));
+    assert_eq!(events[0]["text"], json!("needle code transcript"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dashboard_job_summary_groups_by_runtime_scope() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
@@ -130,6 +179,42 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
             && event["scope_id"] == "user"
             && event.get("voice_channel_id").is_none()
     }));
+}
+
+async fn append_dashboard_speech(
+    store: &clankcord::runtime::timeline::TimelineStore,
+    raw_root: &std::path::Path,
+    voice_channel_id: &str,
+    voice_channel_name: &str,
+    voice_channel_slug: &str,
+    start: chrono::DateTime<Utc>,
+    text: &str,
+    segment_index: i64,
+) {
+    store
+        .append_speech_event(SpeechEventInput {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: voice_channel_id.to_string(),
+            voice_channel_name: voice_channel_name.to_string(),
+            voice_channel_slug: voice_channel_slug.to_string(),
+            capture_run_id: format!("cap_{voice_channel_id}"),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-a".to_string(),
+            speaker_label: "Will".to_string(),
+            speaker_username: "will".to_string(),
+            segment_start_time: start,
+            segment_end_time: start + Duration::seconds(1),
+            text_draft: text.to_string(),
+            source_audio_path: raw_root.join(format!("dashboard-{segment_index}.wav")),
+            audio_checksum: "sha256:test".to_string(),
+            segment_index,
+            duration_ms: 1000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
 }
 
 #[tokio::test(flavor = "current_thread")]

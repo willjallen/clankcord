@@ -972,6 +972,8 @@ async fn debug_overview(
                 timeline_query_field: query_str(&query, &["timelineSearchField"]),
                 transcript_since: query_str(&query, &["transcriptSince"]),
                 transcript_limit: query_usize(&query, &["transcriptLimit"], 250),
+                transcript_channel: query_str(&query, &["transcriptChannel"]),
+                transcript_query: query_str(&query, &["transcriptSearch"]),
                 publication_limit: query_usize(&query, &["publicationLimit"], 120),
                 http_requests: http_request_metrics_snapshot(),
             })

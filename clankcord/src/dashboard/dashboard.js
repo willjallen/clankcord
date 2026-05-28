@@ -199,6 +199,8 @@ window.dashboard = function dashboard() {
         timelineSearchField: this.filters.timelineSearchField,
         transcriptSince: this.filters.transcriptSince,
         transcriptLimit: String(this.filters.transcriptLimit),
+        transcriptChannel: textValue(this.filters.transcriptChannel).trim(),
+        transcriptSearch: textValue(this.filters.transcriptSearch).trim(),
         publicationLimit: String(this.filters.publicationLimit),
       });
     },

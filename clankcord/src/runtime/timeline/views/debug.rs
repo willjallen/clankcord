@@ -62,6 +62,8 @@ pub struct DebugOverviewRequest {
     pub timeline_query_field: String,
     pub transcript_since: String,
     pub transcript_limit: usize,
+    pub transcript_channel: String,
+    pub transcript_query: String,
     pub publication_limit: usize,
     pub http_requests: Value,
 }
@@ -79,6 +81,8 @@ impl Default for DebugOverviewRequest {
             timeline_query_field: "all".to_string(),
             transcript_since: "-24h".to_string(),
             transcript_limit: 250,
+            transcript_channel: String::new(),
+            transcript_query: String::new(),
             publication_limit: 120,
             http_requests: json!({}),
         }
@@ -190,7 +194,12 @@ impl Runtime {
             .map(debug_job_value)
             .collect::<Vec<_>>();
         let transcript_events = self
-            .recent_transcript_events(transcript_since, transcript_limit)
+            .recent_transcript_events(
+                transcript_since,
+                transcript_limit,
+                &request.transcript_channel,
+                &request.transcript_query,
+            )
             .await
             .context("loading recent transcript events for debug overview")?;
         let event_kind_counts = event_kind_counts(&recent_events);
@@ -293,10 +302,21 @@ impl Runtime {
         &self,
         since: Option<DateTime<Utc>>,
         limit: usize,
+        channel: &str,
+        query: &str,
     ) -> Result<Vec<Value>> {
         let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-        self.recent_events_by_kind(since, None, limit, Some(&kinds), "", DebugSearchField::All)
-            .await
+        let channel = channel.trim();
+        self.recent_events_by_kind_filtered(
+            since,
+            None,
+            limit,
+            Some(&kinds),
+            query,
+            DebugSearchField::All,
+            (!channel.is_empty()).then_some(channel),
+        )
+        .await
     }
 
     async fn recent_events_by_kind(
@@ -308,8 +328,25 @@ impl Runtime {
         query: &str,
         query_field: DebugSearchField,
     ) -> Result<Vec<Value>> {
+        self.recent_events_by_kind_filtered(start, end, limit, kinds, query, query_field, None)
+            .await
+    }
+
+    async fn recent_events_by_kind_filtered(
+        &self,
+        start: Option<DateTime<Utc>>,
+        end: Option<DateTime<Utc>>,
+        limit: usize,
+        kinds: Option<&BTreeSet<String>>,
+        query: &str,
+        query_field: DebugSearchField,
+        channel: Option<&str>,
+    ) -> Result<Vec<Value>> {
         let mut events = Vec::new();
         for scope in self.debug_timeline_event_scopes(start, end).await? {
+            if channel.is_some_and(|channel| scope.scope_id != channel) {
+                continue;
+            }
             let mut scope_events = self
                 .timeline_store
                 .load_scope_events(
