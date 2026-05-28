@@ -367,6 +367,21 @@ impl Runtime {
                     },
                 )]));
             }
+            if self
+                .voice_bot_currently_in_room_from_store(&room)
+                .await?
+                .is_some()
+            {
+                return Ok(JobDecision::WaitFor(vec![Job::discord_voice_leave(
+                    room.guild_id.clone(),
+                    room.channel_id.clone(),
+                    requested_by_user_id,
+                    DiscordVoiceLeavePayload {
+                        session_id: String::new(),
+                        reason: leave_reason.to_string(),
+                    },
+                )]));
+            }
             return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
                 RoomAgentPlacementOutput {
                     action: RoomAgentPlacementAction::Leave,
@@ -734,6 +749,7 @@ fn normalized_leave_reason(reason: &str) -> &'static str {
         "auto_policy_empty" => "auto_policy_empty",
         "auto_policy_single_deafened" => "auto_policy_single_deafened",
         "duplicate_voice_bot_in_channel" => "duplicate_voice_bot_in_channel",
+        "orphan_voice_bot_presence" => "orphan_voice_bot_presence",
         _ => "manual_leave",
     }
 }

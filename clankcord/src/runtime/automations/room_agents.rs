@@ -67,6 +67,14 @@ impl RoomAgentPlacementDecision {
         let auto_suppressed =
             context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
 
+        if room_has_orphan_voice_bot_presence(context.voice_state(), room) {
+            return Self {
+                action: Some(RoomAgentPlacementAction::Leave),
+                reason: "orphan_voice_bot_presence",
+                cooldown_seconds: Some(0),
+            };
+        }
+
         if voice_bot_present
             && room_empty_past_grace(
                 context,
@@ -260,6 +268,21 @@ fn room_has_voice_bot_presence(voice_state: &AutomationVoiceState, room: &RoomCo
                 && status.current_guild_id == room.guild_id
                 && status.current_channel_id == room.channel_id
         })
+}
+
+fn room_has_orphan_voice_bot_presence(
+    voice_state: &AutomationVoiceState,
+    room: &RoomConfig,
+) -> bool {
+    voice_state.bots.iter().any(|status| {
+        status.ready
+            && status.current_guild_id == room.guild_id
+            && status.current_channel_id == room.channel_id
+    }) && !voice_state.assignments.iter().any(|assignment| {
+        assignment.is_active()
+            && assignment.guild_id == room.guild_id
+            && assignment.voice_channel_id == room.channel_id
+    }) && active_sessions_for_room(voice_state, room).is_empty()
 }
 
 fn active_sessions_for_room(

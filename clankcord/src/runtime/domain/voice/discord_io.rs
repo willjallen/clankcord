@@ -21,13 +21,16 @@ impl Runtime {
 
     pub(crate) async fn execute_discord_voice_leave_job<A>(
         &self,
+        job: &crate::runtime::Job,
         payload: &DiscordVoiceLeavePayload,
         external_api: &A,
     ) -> Result<JobDecision>
     where
         A: RuntimeExternalApi,
     {
-        let output = external_api.discord_voice_leave(payload.clone()).await?;
+        let output = external_api
+            .discord_voice_leave(job.guild_id.clone(), job.scope_id.clone(), payload.clone())
+            .await?;
         Ok(JobDecision::Complete(JobOutput::DiscordVoiceLeave(output)))
     }
 

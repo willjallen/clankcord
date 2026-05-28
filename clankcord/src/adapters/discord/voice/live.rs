@@ -413,18 +413,57 @@ impl LiveVoiceAdapter {
 
     pub(crate) async fn finish_session(
         self: &Arc<Self>,
+        guild_id: String,
+        voice_channel_id: String,
         request: DiscordVoiceLeavePayload,
     ) -> Result<DiscordVoiceLeaveOutput> {
         let session_id = request.session_id;
         let live_session = self.capture_sessions_lock.lock().await.remove(&session_id);
         let Some(live_session) = live_session else {
+            let orphan = {
+                let mut clients = self.voice_clients_lock.lock().await;
+                clients
+                    .iter_mut()
+                    .find(|(_, client)| {
+                        client.current_guild_id == guild_id
+                            && client.current_channel_id == voice_channel_id
+                    })
+                    .map(|(bot_id, client)| {
+                        client.active_live_session_id = None;
+                        client.joining_live_session_id = None;
+                        client.current_guild_id.clear();
+                        client.current_channel_id.clear();
+                        (bot_id.clone(), client.voice())
+                    })
+            };
+            let Some((bot_id, voice)) = orphan else {
+                return Ok(DiscordVoiceLeaveOutput {
+                    session_id,
+                    status: "missing_session".to_string(),
+                    session: None,
+                    bot_status: None,
+                    guild_id: String::new(),
+                    voice_channel_id: String::new(),
+                    capture_run_id: String::new(),
+                    audio_jobs: Vec::new(),
+                });
+            };
+            let parsed_guild_id = parse_discord_id("guild_id", &guild_id)?;
+            leave_voice_channel(voice, parsed_guild_id).await;
+            let bot_status = {
+                let clients = self.voice_clients_lock.lock().await;
+                clients.get(&bot_id).map(DiscordVoiceClient::status)
+            };
+            if let Some(status) = &bot_status {
+                self.persist_bot_status(status).await;
+            }
             return Ok(DiscordVoiceLeaveOutput {
                 session_id,
-                status: "missing_session".to_string(),
+                status: "orphan_left".to_string(),
                 session: None,
-                bot_status: None,
-                guild_id: String::new(),
-                voice_channel_id: String::new(),
+                bot_status,
+                guild_id,
+                voice_channel_id,
                 capture_run_id: String::new(),
                 audio_jobs: Vec::new(),
             });

@@ -42,6 +42,8 @@ pub(crate) trait RuntimeExternalApi: Send + Sync {
 
     fn discord_voice_leave<'a>(
         &'a self,
+        guild_id: String,
+        voice_channel_id: String,
         payload: DiscordVoiceLeavePayload,
     ) -> ExternalApiFuture<'a, DiscordVoiceLeaveOutput>;
 

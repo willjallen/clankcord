@@ -667,6 +667,36 @@ async fn room_placement_builtin_automation_requires_idle_bot_for_auto_join() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_releases_orphan_voice_bot_presence() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut bot = ready_bot();
+    bot.current_guild_id = "guild".to_string();
+    bot.current_channel_id = "code".to_string();
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = store.get_job(job_id).await.unwrap();
+    let payload = job.room_agent_placement_payload().unwrap();
+    assert_eq!(payload.action, RoomAgentPlacementAction::Leave);
+    assert_eq!(payload.reason, "orphan_voice_bot_presence");
+    assert_eq!(payload.cooldown_seconds, Some(0));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn room_placement_builtin_automation_uses_configured_join_threshold() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;

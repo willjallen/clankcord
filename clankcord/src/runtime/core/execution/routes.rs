@@ -115,7 +115,7 @@ where
         }
         JobPayload::DiscordVoiceLeave(payload) => {
             runtime
-                .execute_discord_voice_leave_job(payload, external_api)
+                .execute_discord_voice_leave_job(job, payload, external_api)
                 .await
         }
         JobPayload::DiscordVoiceMute(payload) => {

@@ -105,6 +105,44 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn leave_room_placement_disconnects_orphan_voice_bot_presence() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    let mut bot = ready_bot();
+    bot.current_guild_id = room.guild_id.clone();
+    bot.current_channel_id = room.channel_id.clone();
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+    let mut runtime = test_runtime(store.clone(), room.clone());
+    let parent = store
+        .create_job(Job::room_agent_placement(
+            &room.guild_id,
+            &room.channel_id,
+            &room.room_id,
+            RoomAgentPlacementAction::Leave,
+            "orphan_voice_bot_presence",
+            "test-placement",
+            Some(0),
+        ))
+        .await
+        .unwrap();
+
+    let result = runtime.dispatch_claimed_runtime_job(parent).await.unwrap();
+
+    let child_ids = result["child_job_ids"].as_array().unwrap();
+    assert_eq!(child_ids.len(), 1);
+    let child = store.get_job(child_ids[0].as_str().unwrap()).await.unwrap();
+    assert_eq!(child.kind, JobKind::DiscordVoiceLeave);
+    assert_eq!(child.guild_id, room.guild_id);
+    assert_eq!(child.scope_id, room.channel_id);
+    let payload = child.discord_voice_leave_payload().unwrap();
+    assert_eq!(payload.session_id, "");
+    assert_eq!(payload.reason, "orphan_voice_bot_presence");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn duplicate_voice_bot_sessions_for_room_returns_all_but_oldest_session() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());

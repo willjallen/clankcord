@@ -40,6 +40,8 @@ Runtime maintenance evaluates room placement policy through `automation_evaluati
 
 An assigned voice bot leaves an empty room after the room has had no human participants for longer than `pool.auto_leave_empty_seconds`. This empty-room rule applies to every assignment. Automatic placement also releases a room with one human participant when that participant has been deafened for at least `pool.auto_leave_single_deafened_seconds`. A room released by automatic policy receives an auto-join suppression marker for `pool.auto_rejoin_cooldown_seconds` before policy can place a bot there again.
 
+Placement also clears a Discord voice bot presence that has no active assignment or capture session. That orphan cleanup issues a scoped Discord leave for the bot currently reported in the room, records reason `orphan_voice_bot_presence`, and uses zero rejoin cooldown so normal placement can evaluate the room again on the next automation pass.
+
 Manual joins and leaves from Discord commands, dashboard actions, CLI, and HTTP create ordinary `room_agent_placement` jobs and set a room override for `pool.manual_override_seconds`. A manual join keeps the bot assigned while the room has a human participant. A manual leave keeps automatic policy out of the room for the override window. After the override expires, placement policy evaluates the room from current voice state.
 
 ## Room Placement

@@ -68,9 +68,14 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
 
     fn discord_voice_leave<'a>(
         &'a self,
+        guild_id: String,
+        voice_channel_id: String,
         payload: DiscordVoiceLeavePayload,
     ) -> ExternalApiFuture<'a, DiscordVoiceLeaveOutput> {
-        Box::pin(async move { LiveVoiceAdapter::finish_session(&self.live_voice, payload).await })
+        Box::pin(async move {
+            LiveVoiceAdapter::finish_session(&self.live_voice, guild_id, voice_channel_id, payload)
+                .await
+        })
     }
 
     fn discord_voice_mute<'a>(
