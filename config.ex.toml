@@ -126,7 +126,7 @@ dispatch_drain_max_passes = 64
 
 [jobs.concurrency]
 wake = 32
-audio = 2
+audio = 4
 voice_control = 32
 discord_text = 12
 refinement = 4
@@ -136,7 +136,7 @@ general_async = 16
 
 [jobs.batch]
 wake = 32
-audio = 2
+audio = 4
 voice_control = 32
 discord_text = 12
 refinement = 4
