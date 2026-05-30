@@ -21,7 +21,7 @@ use crate::adapters::discord::voice::client_connection::{
     DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
     load_client_token_specs, parse_discord_id, play_voice_file, set_voice_deafen, set_voice_mute,
 };
-use crate::adapters::discord::voice::session::WakeProbeConfig;
+use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig};
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::errors::discord_tool_error;
@@ -46,6 +46,7 @@ pub struct LiveVoiceAdapter {
     silence_ms: i64,
     max_segment_ms: i64,
     minimum_utterance_ms: i64,
+    speech_gate: SpeechGateConfig,
     wake_probe: WakeProbeConfig,
     no_token_warning_logged: AtomicBool,
 }
@@ -58,6 +59,7 @@ impl fmt::Debug for LiveVoiceAdapter {
             .field("silence_ms", &self.silence_ms)
             .field("max_segment_ms", &self.max_segment_ms)
             .field("minimum_utterance_ms", &self.minimum_utterance_ms)
+            .field("speech_gate", &self.speech_gate)
             .field("wake_probe", &self.wake_probe)
             .finish_non_exhaustive()
     }
@@ -84,6 +86,14 @@ impl LiveVoiceAdapter {
             silence_ms: transcription.silence_ms.max(0),
             max_segment_ms: transcription.max_segment_ms.max(250),
             minimum_utterance_ms: transcription.minimum_utterance_ms.max(0),
+            speech_gate: SpeechGateConfig {
+                rms_start_threshold: transcription.speech_rms_start_threshold,
+                rms_continue_threshold: transcription.speech_rms_continue_threshold,
+                start_ms: transcription.speech_start_ms,
+                soft_break_ms: transcription.speech_soft_break_ms,
+                end_silence_ms: transcription.speech_end_silence_ms,
+                preroll_ms: transcription.speech_preroll_ms,
+            },
             wake_probe,
             no_token_warning_logged: AtomicBool::new(false),
         }
@@ -325,6 +335,7 @@ impl LiveVoiceAdapter {
                 session,
                 self.minimum_utterance_ms,
                 self.wake_probe,
+                self.speech_gate,
             ))),
         );
 

@@ -59,9 +59,15 @@ manual_override_seconds = 7200
 pause_release_seconds = 1200
 
 [transcription]
-silence_ms = 1000
-max_segment_ms = 8000
+silence_ms = 2500
+max_segment_ms = 15000
 minimum_utterance_ms = 350
+speech_rms_start_threshold = 0.006
+speech_rms_continue_threshold = 0.002
+speech_start_ms = 80
+speech_soft_break_ms = 400
+speech_end_silence_ms = 1400
+speech_preroll_ms = 200
 active_source = "local-granite"
 mux_provider_streams = 2
 mux_batch_delay_ms = 500

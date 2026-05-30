@@ -25,6 +25,24 @@ pub struct SpeakerBuffer {
     pub last_packet_monotonic: f64,
     pub last_pcm_at: Option<DateTime<Utc>>,
     #[serde(default)]
+    pub last_input_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub wake_pcm: Vec<u8>,
+    #[serde(default)]
+    pub wake_started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub stt_preroll_pcm: Vec<u8>,
+    #[serde(default)]
+    pub stt_preroll_started_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub stt_voiced_ms: i64,
+    #[serde(default)]
+    pub stt_trailing_silence_ms: i64,
+    #[serde(default)]
+    pub stt_input_ms: i64,
+    #[serde(default)]
+    pub stt_soft_break_ms: i64,
+    #[serde(default)]
     pub active: bool,
     #[serde(default)]
     pub flush_in_flight: bool,
@@ -50,6 +68,15 @@ impl SpeakerBuffer {
             started_at: None,
             last_packet_monotonic: 0.0,
             last_pcm_at: None,
+            last_input_at: None,
+            wake_pcm: Vec::new(),
+            wake_started_at: None,
+            stt_preroll_pcm: Vec::new(),
+            stt_preroll_started_at: None,
+            stt_voiced_ms: 0,
+            stt_trailing_silence_ms: 0,
+            stt_input_ms: 0,
+            stt_soft_break_ms: 0,
             active: false,
             flush_in_flight: false,
             wake_probe_counter: 0,

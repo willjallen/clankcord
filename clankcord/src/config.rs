@@ -146,6 +146,12 @@ pub struct TranscriptionConfig {
     pub silence_ms: i64,
     pub max_segment_ms: i64,
     pub minimum_utterance_ms: i64,
+    pub speech_rms_start_threshold: f64,
+    pub speech_rms_continue_threshold: f64,
+    pub speech_start_ms: i64,
+    pub speech_soft_break_ms: i64,
+    pub speech_end_silence_ms: i64,
+    pub speech_preroll_ms: i64,
     pub active_source: String,
     pub mux_provider_streams: usize,
     pub mux_batch_delay_ms: i64,
@@ -433,6 +439,31 @@ fn validate_transcription_config(config: &TranscriptionConfig) -> Result<()> {
     }
     if config.mux_overflow_backlog_ms < 0 {
         anyhow::bail!("config.toml transcription.mux_overflow_backlog_ms must be zero or positive");
+    }
+    if config.speech_rms_start_threshold <= 0.0 || config.speech_rms_continue_threshold <= 0.0 {
+        anyhow::bail!("config.toml transcription speech RMS thresholds must be positive");
+    }
+    if config.speech_rms_start_threshold < config.speech_rms_continue_threshold {
+        anyhow::bail!(
+            "config.toml transcription.speech_rms_start_threshold must be at least speech_rms_continue_threshold"
+        );
+    }
+    if config.speech_start_ms <= 0 {
+        anyhow::bail!("config.toml transcription.speech_start_ms must be positive");
+    }
+    if config.speech_soft_break_ms <= 0 {
+        anyhow::bail!("config.toml transcription.speech_soft_break_ms must be positive");
+    }
+    if config.speech_end_silence_ms <= 0 {
+        anyhow::bail!("config.toml transcription.speech_end_silence_ms must be positive");
+    }
+    if config.speech_soft_break_ms > config.speech_end_silence_ms {
+        anyhow::bail!(
+            "config.toml transcription.speech_soft_break_ms must be at most speech_end_silence_ms"
+        );
+    }
+    if config.speech_preroll_ms < 0 {
+        anyhow::bail!("config.toml transcription.speech_preroll_ms must be zero or positive");
     }
     for (source_id, source) in &config.sources {
         if source_id.trim().is_empty() {

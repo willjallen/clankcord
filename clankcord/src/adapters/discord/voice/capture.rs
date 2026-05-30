@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use crate::adapters::discord::voice::session::{
-    AudioPipelineOutcome, SessionAudioPipeline, WakeProbeConfig, monotonic_seconds,
+    AudioPipelineOutcome, SegmentCloseReason, SessionAudioPipeline, SpeechGateConfig,
+    WakeProbeConfig, monotonic_seconds,
 };
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::runtime::{Job, VoiceCaptureSessionStatus, log};
@@ -240,11 +241,14 @@ impl LiveCaptureSession {
         session: LiveVoiceSession,
         minimum_utterance_ms: i64,
         wake_probe: WakeProbeConfig,
+        speech_gate: SpeechGateConfig,
     ) -> Self {
         let session_id = session.session_id.clone();
         Self {
             session,
-            pipeline: SessionAudioPipeline::new().with_minimum_utterance_ms(minimum_utterance_ms),
+            pipeline: SessionAudioPipeline::new()
+                .with_minimum_utterance_ms(minimum_utterance_ms)
+                .with_speech_gate(speech_gate),
             wake_probe,
             sink: VoiceCaptureSink::new(session_id),
             ssrc_users: BTreeMap::new(),
@@ -311,7 +315,11 @@ impl LiveCaptureSession {
             handler.handle_speaking_state(&session_id, user_id, "", "", false);
         }
         let mut jobs = self.capture_wake_probes(vec![user_id.to_string()], true);
-        match pipeline.flush_speaker(&mut self.session, user_id) {
+        match pipeline.close_speaker_segment_with_reason(
+            &mut self.session,
+            user_id,
+            SegmentCloseReason::Disconnect,
+        ) {
             Ok(outcome) => collect_audio_job(outcome, &mut jobs),
             Err(error) => {
                 log(&format!("voice disconnect flush failed: {error}"));
@@ -379,7 +387,7 @@ impl LiveCaptureSession {
             return Vec::new();
         }
         let now = monotonic_seconds();
-        let user_ids = self
+        let flushes = self
             .session
             .buffers
             .iter()
@@ -387,19 +395,17 @@ impl LiveCaptureSession {
                 if speaker.pcm.is_empty() || speaker.flush_in_flight {
                     return None;
                 }
-                let buffered_duration_ms =
-                    crate::adapters::discord::voice::artifacts::duration_ms_for_pcm(&speaker.pcm);
-                let should_flush = buffered_duration_ms >= max_segment_ms
-                    || now - speaker.last_packet_monotonic >= silence_ms as f64 / 1000.0;
-                if should_flush {
-                    Some(user_id.clone())
-                } else {
-                    None
-                }
+                self.pipeline
+                    .should_flush_speaker(speaker, max_segment_ms, silence_ms, now)
+                    .map(|reason| (user_id.clone(), reason))
             })
             .collect::<Vec<_>>();
+        let user_ids = flushes
+            .iter()
+            .map(|(user_id, _reason)| user_id.clone())
+            .collect::<Vec<_>>();
         let mut jobs = self.capture_wake_probes(user_ids.clone(), true);
-        jobs.extend(self.flush_speakers(user_ids));
+        jobs.extend(self.flush_speakers_with_reasons(flushes));
         jobs
     }
 
@@ -407,7 +413,14 @@ impl LiveCaptureSession {
         self.session.finalizing = true;
         let user_ids = self.session.buffers.keys().cloned().collect::<Vec<_>>();
         let mut audio_jobs = self.capture_wake_probes(user_ids.clone(), true);
-        audio_jobs.extend(self.flush_speakers(user_ids));
+        audio_jobs.extend(
+            self.flush_speakers_with_reasons(
+                user_ids
+                    .into_iter()
+                    .map(|user_id| (user_id, SegmentCloseReason::Finalize))
+                    .collect(),
+            ),
+        );
         self.session.ended_at = Some(Utc::now());
         self.session.finalizing = false;
         self.session
@@ -424,11 +437,14 @@ impl LiveCaptureSession {
         }
     }
 
-    fn flush_speakers(&mut self, user_ids: Vec<String>) -> Vec<Job> {
+    fn flush_speakers_with_reasons(
+        &mut self,
+        flushes: Vec<(String, SegmentCloseReason)>,
+    ) -> Vec<Job> {
         let pipeline = self.pipeline.clone();
         let mut jobs = Vec::new();
-        for user_id in user_ids {
-            match pipeline.flush_speaker(&mut self.session, &user_id) {
+        for (user_id, reason) in flushes {
+            match pipeline.close_speaker_segment_with_reason(&mut self.session, &user_id, reason) {
                 Ok(outcome) => collect_audio_job(outcome, &mut jobs),
                 Err(error) => log(&format!("voice buffer flush failed: {error}")),
             }

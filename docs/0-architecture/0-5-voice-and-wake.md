@@ -104,9 +104,15 @@ The default capture settings come from config.
 
 ```text
 voice.capture.flush_interval_seconds 0.2 seconds
-transcription.silence_ms             1000 ms
-transcription.max_segment_ms         8000 ms
+transcription.silence_ms             2500 ms
+transcription.max_segment_ms        15000 ms
 transcription.minimum_utterance_ms    350 ms
+transcription.speech_rms_start_threshold    0.006
+transcription.speech_rms_continue_threshold 0.002
+transcription.speech_start_ms          80 ms
+transcription.speech_soft_break_ms    400 ms
+transcription.speech_end_silence_ms  1400 ms
+transcription.speech_preroll_ms       200 ms
 wake.probe_minimum_ms                 250 ms
 wake.probe_window_ms                 2000 ms
 wake.probe_interval_ms                500 ms
@@ -122,7 +128,9 @@ transcription.mux_overflow_backlog_ms       2000 ms
 
 ## Speech And Wake Jobs
 
-An `audio_segment` job validates the WAV artifact and checksum, creates a durable transcription slot, and queues `transcription_mux_plan` work for the active named transcription source. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
+Discord PCM is split into two adapter-side streams. The wake stream keeps raw rolling PCM chunks for wake detection. The STT stream applies a conservative RMS gate before a WAV artifact is created: several voiced frames open the speech window, a short pre-roll is retained, and 400 ms of below-threshold audio is recorded as a soft phrase break while the speaker window remains open. A 1400 ms below-threshold run closes the window, and the trailing quiet audio is trimmed before transcription. The hard segment cap is a 15 second safety bound. The generated `audio_segment` payload carries the doctored WAV path and timing as the runtime contract; `post_processing` records the RMS gate, close reason, soft-break, and trim metadata.
+
+An `audio_segment` job validates the WAV artifact and checksum, creates a durable transcription slot, and queues `transcription_mux_plan` work for the active named transcription source. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, sample width, and post-processing metadata. Audio bytes remain in the referenced WAV file.
 
 A `transcription_mux_plan` job reads queued slots for one transcription source and creates explicit mux batches in Postgres. It packs one stream by default and allocates the second configured stream when the one-stream schedule misses normal or wake latency budgets by the configured backlog threshold. Batches are selected by priority and then by fair room-speaker turns. A `transcription_mux` job consumes its planned slots, writes a mono mux WAV with small guard padding between speaker windows, calls the configured provider, maps provider word or segment timestamps back through the mux offsets, and appends `speech_segment` events at the original Discord speaker timestamps. Empty or low-confidence provider results complete the slot without writing speech. Provider timeouts, connection failures, rate limits, and server errors requeue the mux job with capped exponential backoff from the source config. Local artifact integrity failures are terminal because the job does not have valid audio to submit.
 
