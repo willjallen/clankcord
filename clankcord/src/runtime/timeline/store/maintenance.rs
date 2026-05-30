@@ -143,7 +143,6 @@ impl TimelineStore {
         voice_channel_id: Option<&str>,
         query: &str,
         since: Option<DateTime<Utc>>,
-        prefer_refined: bool,
         limit: usize,
     ) -> Result<Vec<Value>> {
         let needle = query.trim().to_lowercase();
@@ -153,42 +152,14 @@ impl TimelineStore {
         let mut hits = Vec::new();
         for channel_dir in self.channel_dirs(guild_id, voice_channel_id).await? {
             let channel_id = Self::channel_id_from_dir(&channel_dir);
-            let spans = if prefer_refined {
-                self.list_spans(guild_id, &channel_id, since, None).await?
-            } else {
-                Vec::new()
-            };
-            for span in &spans {
-                let artifact = PathBuf::from(string_field(span, "text_artifact_path"));
-                if !artifact.is_file() {
-                    continue;
-                }
-                let content = fs::read_to_string(&artifact).unwrap_or_default();
-                if !content.to_lowercase().contains(&needle) {
-                    continue;
-                }
-                hits.push(serde_json::json!({
-                    "kind": "refined_span",
-                    "guild_id": guild_id,
-                    "voice_channel_id": channel_id,
-                    "span_id": string_field(span, "span_id"),
-                    "window_id": string_field(span, "window_id"),
-                    "start_time": string_field(span, "start_time"),
-                    "end_time": string_field(span, "end_time"),
-                    "excerpt": excerpt(&content, &needle, 160)
-                }));
-            }
             let events = self
                 .search_draft_events(guild_id, &channel_id, query, since, limit * 2)
                 .await?;
             for event in events {
-                if prefer_refined && self.event_covered_by_span(&event, &spans) {
-                    continue;
-                }
                 let text = event_text(&event);
                 let started = event_start(&event).unwrap_or_else(utc_now);
                 hits.push(serde_json::json!({
-                    "kind": "draft_event",
+                    "kind": "speech_segment",
                     "guild_id": guild_id,
                     "voice_channel_id": channel_id,
                     "event_id": first_value_string(&event, &["event_id", "eventId"]),

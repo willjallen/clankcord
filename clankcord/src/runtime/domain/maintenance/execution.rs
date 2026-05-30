@@ -35,6 +35,16 @@ impl Runtime {
             .timeline_store
             .requeue_failed_audio_segment_jobs(config::failed_audio_segment_retry_batch_limit())
             .await?;
+        let recovered_transcription_slots = self
+            .timeline_store
+            .recover_abandoned_transcription_slots()
+            .await?;
+        let transcription_mux_plan_jobs = self
+            .timeline_store
+            .ensure_transcription_mux_plan_jobs_for_queued_slots(
+                config::transcription_mux_batch_delay_ms(),
+            )
+            .await?;
         Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "runtime_maintenance",
@@ -42,6 +52,11 @@ impl Runtime {
                 "next_run_at": next.next_run_at,
                 "submitted_jobs": submitted,
                 "requeued_audio_segments": requeued_audio_segments,
+                "recovered_transcription_slots": recovered_transcription_slots,
+                "transcription_mux_plan_jobs": transcription_mux_plan_jobs
+                    .iter()
+                    .map(|job| job.to_value())
+                    .collect::<Vec<_>>(),
             }),
         )?))
     }

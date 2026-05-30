@@ -75,11 +75,11 @@ job_metadata              forever
 
 The source-audio pass walks capture-run scratch directories during maintenance. Wake probe and audio segment enqueue paths write the WAV artifact and create their jobs. This keeps live capture latency tied to audio file creation and job insertion. `source_audio = forever` leaves the files in place.
 
-`transcript_events = forever` keeps speech and transcript timeline rows visible. A finite `transcript_events` value uses the same forgotten-state mechanism as explicit forget and appends `retention_retired` for the affected channel. `job_metadata = forever` keeps terminal non-ephemeral job rows. A finite `job_metadata` value deletes eligible terminal non-ephemeral jobs through the retention sweep. Publication artifacts under `durable/publications/` remain publication state and are handled through transcript publication and refinement policy.
+`transcript_events = forever` keeps speech and transcript timeline rows visible. A finite `transcript_events` value uses the same forgotten-state mechanism as explicit forget and appends `retention_retired` for the affected channel. `job_metadata = forever` keeps terminal non-ephemeral job rows. A finite `job_metadata` value deletes eligible terminal non-ephemeral jobs through the retention sweep. Publication artifacts under `durable/publications/` remain publication state and are handled through transcript publication policy.
 
 ## Publication Boundary
 
-Draft local speech and source audio are internal memory until a transcript is published or a response is sent to Discord. Publication creates Discord-visible messages, stores Discord thread and message ids, and records publication artifacts. After publication, the local durable record can be withdrawn, refined, or marked with state transitions, while Discord visibility follows the messages that were posted and any copies outside Clankcord.
+Local speech and source audio are internal memory until a transcript is published or a response is sent to Discord. Publication creates Discord-visible messages, stores Discord thread and message ids, and records publication artifacts. After publication, the local durable record can be withdrawn or marked with state transitions, while Discord visibility follows the messages that were posted and any copies outside Clankcord.
 
 Agent-authored publication surfaces follow the prompt's interpersonal content policy. Visible responses, generated summaries, transcript attachments, and thread titles silently omit Discord memory that disparages, insults, mocks, gossips about, speculates negatively about, accuses, or mentions an identifiable person in a negative light. Mixed outputs omit only the restricted lines or spans and keep the surrounding allowed material. Direct requests for the restricted material itself receive a brief refusal when no useful allowed content remains.
 
@@ -92,7 +92,6 @@ local timeline memory
               |
               +--> draft artifact
               +--> optional Discord publication
-              +--> optional refinement
 ```
 
 Confirmations, room controls, retention events, and publication records make privacy-relevant actions inspectable through the same timeline and job surfaces used for normal runtime behavior.

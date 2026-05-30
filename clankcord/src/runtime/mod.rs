@@ -4,7 +4,6 @@ pub mod coding;
 pub(crate) mod core;
 pub mod domain;
 pub mod jobs;
-pub mod refinement;
 pub mod rooms;
 pub mod scope;
 pub mod service;
@@ -36,12 +35,12 @@ pub use jobs::{
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotOutput, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
     Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState,
-    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementOutput,
-    RoomAgentPlacementPayload, RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload,
-    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
-    TextAttachmentPayload, TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget,
-    TextTargetKind, TranscriptPublicationOutput, TranscriptPublicationPayload,
-    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextAttachmentPayload,
+    TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationOutput, TranscriptPublicationPayload, TranscriptionMuxPayload,
+    TranscriptionMuxPlanPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};

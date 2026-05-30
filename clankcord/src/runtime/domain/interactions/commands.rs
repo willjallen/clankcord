@@ -112,7 +112,6 @@ impl Runtime {
                             command.arguments.publish.clone()
                         },
                         live: command_kind == CommandKind::StartLiveTranscript,
-                        refine: command.arguments.refine.unwrap_or(false),
                         created_by_user_id: command.requested_by_user_id.clone(),
                         parent_job_id: parent_job.id.clone(),
                         ..MaterializeTranscriptRequest::default()
@@ -132,7 +131,6 @@ impl Runtime {
                         from: isoformat_z(Some(start)),
                         to: isoformat_z(Some(end)),
                         publish: "discord".to_string(),
-                        refine: true,
                         created_by_user_id: command.requested_by_user_id.clone(),
                         parent_job_id: parent_job.id.clone(),
                         ..MaterializeTranscriptRequest::default()

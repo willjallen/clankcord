@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
@@ -8,7 +8,7 @@ mod common;
 use clankcord::runtime::domain::voice_capture::wake_activations::{
     execute, schedule_from_wake_event,
 };
-use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore};
+use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, sha256_file};
 use clankcord::runtime::{
     AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobPayload,
     JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
@@ -733,7 +733,7 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
         .unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -799,7 +799,7 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
         .unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -865,7 +865,73 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
         .unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(10);
+    let close_at = wake_started_at + chrono::Duration::seconds(5);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    runtime
+        .timeline_store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: "user-b".to_string(),
+            speaker_label: "Kevin".to_string(),
+            speaker_username: "kevin".to_string(),
+            segment_start_time: close_at - chrono::Duration::seconds(2),
+            segment_end_time: close_at,
+            segment_index: 2,
+            duration_ms: 2000,
+            source_audio_path: raw.path().join("pending-other-speaker.wav"),
+            audio_checksum: "sha256:pending-other-speaker".to_string(),
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -930,8 +996,157 @@ async fn wake_activation_waits_for_pending_request_audio_after_old_settlement_wi
         .unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_request_transcription"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
     assert!(string_field(&result, "request_audio_closed_at").len() > 0);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_failed_room_transcription_slot_before_dispatch() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store.clone());
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(20);
+    let close_at = wake_started_at + chrono::Duration::seconds(5);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    append_event(
+        &runtime.timeline_store,
+        wake_started_at + chrono::Duration::seconds(2),
+        wake_started_at + chrono::Duration::seconds(4),
+        "Will",
+        "user-a",
+        "leave the room",
+        json!({}),
+        2,
+    )
+    .await;
+    let failed_slot_job_id = create_transcription_slot_for_wake_test(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-b",
+        close_at - chrono::Duration::seconds(2),
+        chrono::Duration::seconds(2),
+        51,
+    )
+    .await;
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'failed',
+            payload_json = payload_json || jsonb_build_object(
+              'state', 'failed',
+              'error', 'provider returned malformed timestamp payload'
+            )
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(failed_slot_job_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
+    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dispatch() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store);
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(20);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    append_event(
+        &runtime.timeline_store,
+        wake_started_at + chrono::Duration::seconds(2),
+        wake_started_at + chrono::Duration::seconds(4),
+        "Will",
+        "user-a",
+        "leave the room",
+        json!({}),
+        2,
+    )
+    .await;
+    runtime
+        .timeline_store
+        .upsert_capture_session_status(&VoiceCaptureSessionStatus {
+            session_id: "cap_test".to_string(),
+            guild_id: "guild".to_string(),
+            channel_id: "code".to_string(),
+            voice_channel_id: "code".to_string(),
+            active: true,
+            capture_stats: SessionCaptureStats {
+                speakers: BTreeMap::from([(
+                    "user-b".to_string(),
+                    SessionSpeakerCaptureStats {
+                        user_id: "user-b".to_string(),
+                        label: "Kevin".to_string(),
+                        username: "kevin".to_string(),
+                        active: true,
+                        buffered_audio_bytes: 4096,
+                        flush_in_flight: false,
+                        segment_started_at: (wake_started_at + chrono::Duration::seconds(3))
+                            .to_rfc3339_opts(SecondsFormat::Millis, true),
+                        last_pcm_at: (now - chrono::Duration::milliseconds(250))
+                            .to_rfc3339_opts(SecondsFormat::Millis, true),
+                    },
+                )]),
+                ..SessionCaptureStats::default()
+            },
+            ..VoiceCaptureSessionStatus::default()
+        })
+        .await
+        .unwrap();
+
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("deferred"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1020,10 +1235,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
         .await
         .unwrap();
     assert_eq!(deferred["status"], json!("deferred"));
-    assert_eq!(
-        deferred["reason"],
-        json!("waiting_for_request_transcription")
-    );
+    assert_eq!(deferred["reason"], json!("waiting_for_room_transcription"));
     let jobs = runtime
         .timeline_store
         .list_jobs(Some("guild"), None)
@@ -1204,7 +1416,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     assert_eq!(still_deferred["status"], json!("deferred"));
     assert_eq!(
         still_deferred["reason"],
-        json!("waiting_for_request_transcription")
+        json!("waiting_for_room_transcription")
     );
 
     append_event(
@@ -1434,4 +1646,71 @@ async fn append_event(
         })
         .await
         .unwrap()
+}
+
+async fn create_transcription_slot_for_wake_test(
+    store: &TimelineStore,
+    runtime: &Runtime,
+    root: &std::path::Path,
+    speaker_user_id: &str,
+    start: chrono::DateTime<chrono::Utc>,
+    duration: chrono::Duration,
+    segment_index: i64,
+) -> String {
+    let wav_path = root.join(format!("wake-slot-{segment_index}.wav"));
+    write_test_wav(&wav_path, 48_000, 2, 960);
+    let checksum = sha256_file(&wav_path).unwrap();
+    let end = start + duration;
+    let job = store
+        .create_job(Job::audio_segment(AudioSegmentPayload {
+            guild_id: "guild".to_string(),
+            guild_slug: "guild".to_string(),
+            voice_channel_id: "code".to_string(),
+            voice_channel_name: "Code Lounge".to_string(),
+            voice_channel_slug: "code-lounge".to_string(),
+            capture_run_id: "cap_test".to_string(),
+            voice_bot_id: "clanky-vc1".to_string(),
+            voice_bot_discord_user_id: "bot-user".to_string(),
+            speaker_user_id: speaker_user_id.to_string(),
+            speaker_label: speaker_user_id.to_string(),
+            speaker_username: speaker_user_id.to_string(),
+            segment_start_time: start,
+            segment_end_time: end,
+            segment_index,
+            duration_ms: duration.num_milliseconds(),
+            source_audio_path: wav_path,
+            audio_checksum: checksum,
+            audio_bytes: 123,
+            audio_format: "wav".to_string(),
+            sample_rate_hz: 48_000,
+            channels: 2,
+            sample_width_bits: 16,
+            post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
+        }))
+        .await
+        .unwrap();
+    let mut claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+    runtime
+        .dispatch_claimed_blocking_job(claimed.pop().unwrap())
+        .await
+        .unwrap();
+    job.id
+}
+
+fn write_test_wav(path: &std::path::Path, sample_rate: u32, channels: u16, frames: usize) {
+    let spec = hound::WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for index in 0..frames * channels as usize {
+        writer.write_sample((index as i16).wrapping_mul(3)).unwrap();
+    }
+    writer.finalize().unwrap();
 }

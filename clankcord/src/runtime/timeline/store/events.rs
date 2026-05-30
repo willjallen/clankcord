@@ -849,6 +849,11 @@ impl TimelineStore {
         } else {
             input.stt_model.clone()
         };
+        let transcription_source_id = if input.transcription_source_id.is_empty() {
+            string_field(&input.stt_metadata, "transcription_source_id")
+        } else {
+            input.transcription_source_id.clone()
+        };
         let payload = serde_json::json!({
             "event_id": event_id,
             "eventId": event_id,
@@ -883,6 +888,7 @@ impl TimelineStore {
             "text_draft": input.text_draft,
             "text": input.text_draft,
             "quality": "draft",
+            "transcription_source_id": transcription_source_id,
             "stt_provider": input.stt_provider,
             "stt_model": stt_model,
             "stt": input.stt_metadata,

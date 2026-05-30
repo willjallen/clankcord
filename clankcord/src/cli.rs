@@ -523,8 +523,6 @@ struct TranscriptMaterializeArgs {
     draft_only: bool,
     #[arg(long)]
     live: bool,
-    #[arg(long)]
-    refine: bool,
 }
 
 #[derive(Debug, ClapArgs, Default)]
@@ -541,8 +539,6 @@ struct TranscriptRenderArgs {
     from: Option<String>,
     #[arg(long)]
     to: Option<String>,
-    #[arg(long)]
-    no_prefer_refined: bool,
     #[arg(long)]
     verbose: bool,
     #[command(flatten)]
@@ -561,8 +557,6 @@ struct TranscriptSearchArgs {
     query: String,
     #[arg(long, default_value = "-7d")]
     since: String,
-    #[arg(long)]
-    no_prefer_refined: bool,
     #[arg(long, default_value_t = 50)]
     limit: u64,
     #[command(flatten)]
@@ -1167,7 +1161,6 @@ fn transcript_materialize(args: TranscriptMaterializeArgs) -> Result<i32> {
             "from": args.from.unwrap_or_default(),
             "to": args.to.unwrap_or_default(),
             "publish": if args.draft_only { "local".to_string() } else { args.publish },
-            "refine": args.refine,
         }),
     )
 }
@@ -1184,7 +1177,6 @@ fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
             "since": if args.from.is_some() { String::new() } else { args.since },
             "from": args.from.unwrap_or_default(),
             "to": args.to.unwrap_or_default(),
-            "preferRefined": !args.no_prefer_refined,
             "format": args.output.format.clone(),
             "verbose": args.verbose,
         })),
@@ -1203,7 +1195,6 @@ fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
             "allChannels": args.all_channels,
             "query": args.query,
             "since": args.since,
-            "preferRefined": !args.no_prefer_refined,
             "limit": args.limit,
         })),
         &args.output,

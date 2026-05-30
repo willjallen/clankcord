@@ -22,7 +22,6 @@ impl Runtime {
         &self,
         result: &mut Value,
         live: bool,
-        refined_queued: bool,
     ) -> Result<()> {
         let mut publication = result
             .get("publication")
@@ -41,7 +40,6 @@ impl Runtime {
             TranscriptPublicationPayload {
                 publication_id: string_field(&publication, "publication_id"),
                 live,
-                refined_queued,
             },
         );
         let job = if let Some(parent_job_id) = string_field(&publication, "parent_job_id")
@@ -272,22 +270,16 @@ impl Runtime {
         );
         let mut header_lines = vec![
             if payload.live {
-                "# Draft Live Transcript".to_string()
+                "# Live Transcript".to_string()
             } else {
-                "# Draft Transcript".to_string()
+                "# Transcript".to_string()
             },
             String::new(),
             format!("- Source: {}", room.channel_name),
             format!("- Window: {start} to {end}"),
-            "- Status: draft local STT".to_string(),
+            "- Status: speech events".to_string(),
         ];
-        if payload.refined_queued {
-            header_lines.push("- High-quality refinement queued.".to_string());
-        }
         header_lines.push(String::new());
-        header_lines.push(
-            "This transcript may contain local STT errors until refinement completes.".to_string(),
-        );
         let auto_archive = {
             let configured = self
                 .timeline_store

@@ -71,6 +71,13 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
                 speaker_label,
             )
             .await?;
+            let promotion = promote_wake_transcription_slots(
+                runtime,
+                existing
+                    .wake_activation_payload()
+                    .expect("wake activation job payload"),
+            )
+            .await?;
             let _ = runtime
                 .create_voice_playback_job_for_channel(
                     &guild_id,
@@ -84,6 +91,7 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
             return Ok(json!({
                 "status": "amended",
                 "job": existing.to_value(),
+                "transcription_slot_promotion": promotion,
             }));
         }
         let cancelled = cancel_job_tree(runtime, &existing).await?;
@@ -95,6 +103,13 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
             wake_ended_at,
             speaker_user_id,
             speaker_label,
+        )
+        .await?;
+        let promotion = promote_wake_transcription_slots(
+            runtime,
+            replacement
+                .wake_activation_payload()
+                .expect("wake activation job payload"),
         )
         .await?;
         let _ = runtime
@@ -126,6 +141,7 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
             "job": replacement.to_value(),
             "replaced_job_id": existing.id.clone(),
             "cancelled_job_ids": cancelled,
+            "transcription_slot_promotion": promotion,
         }));
     }
 
@@ -161,6 +177,7 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
         payload.stt_flush_grace_seconds,
     ));
     let job = runtime.timeline_store.create_job(job).await?;
+    let promotion = promote_wake_transcription_slots(runtime, &payload).await?;
     let _ = runtime
         .create_voice_playback_job_for_channel(
             &guild_id,
@@ -174,6 +191,31 @@ pub async fn schedule_from_wake_event(runtime: &Runtime, event: &Value) -> Resul
     Ok(json!({
         "status": "scheduled",
         "job": job.to_value(),
+        "transcription_slot_promotion": promotion,
+    }))
+}
+
+async fn promote_wake_transcription_slots(
+    runtime: &Runtime,
+    payload: &WakeActivationPayload,
+) -> Result<Value> {
+    let source_ids = runtime
+        .timeline_store
+        .promote_transcription_slots_for_wake_activation(payload)
+        .await?;
+    let mut planner_jobs = Vec::new();
+    for source_id in &source_ids {
+        if let Some(job) = runtime
+            .timeline_store
+            .ensure_transcription_mux_plan_job(source_id, 0)
+            .await?
+        {
+            planner_jobs.push(job.to_value());
+        }
+    }
+    Ok(json!({
+        "promoted_source_ids": source_ids,
+        "planner_jobs": planner_jobs,
     }))
 }
 
@@ -202,16 +244,8 @@ pub async fn execute(
         .await?;
 
     if let Some(closed_at) = activation_window_closed_at(payload, &events) {
-        return dispatch_after_request_audio(
-            runtime,
-            job,
-            payload,
-            window_start,
-            latest_wake_at,
-            closed_at,
-            now,
-        )
-        .await;
+        return dispatch_after_request_audio(runtime, job, payload, window_start, closed_at, now)
+            .await;
     }
 
     let due_at = std::cmp::min(
@@ -249,16 +283,7 @@ pub async fn execute(
     let closed_at = if now >= hard_cap { hard_cap } else { due_at };
     record_activation_window_closed(runtime, job, payload, closed_at).await?;
 
-    dispatch_after_request_audio(
-        runtime,
-        job,
-        payload,
-        window_start,
-        latest_wake_at,
-        closed_at,
-        now,
-    )
-    .await
+    dispatch_after_request_audio(runtime, job, payload, window_start, closed_at, now).await
 }
 
 async fn dispatch_after_request_audio(
@@ -266,11 +291,14 @@ async fn dispatch_after_request_audio(
     job: &Job,
     payload: &WakeActivationPayload,
     window_start: DateTime<Utc>,
-    latest_wake_at: DateTime<Utc>,
     closed_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Value> {
-    if has_pending_speaker_audio_segment(runtime, payload, latest_wake_at, closed_at).await? {
+    runtime
+        .timeline_store
+        .recover_abandoned_transcription_slots()
+        .await?;
+    if has_pending_room_transcription(runtime, payload, closed_at).await? {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(
@@ -280,7 +308,7 @@ async fn dispatch_after_request_audio(
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
-            "reason": "waiting_for_request_transcription",
+            "reason": "waiting_for_room_transcription",
             "request_audio_closed_at": isoformat_z(Some(closed_at)),
             "next_run_at": deferred.next_run_at,
         }));
@@ -712,12 +740,25 @@ async fn live_speaker_capture_hold(
     }))
 }
 
-async fn has_pending_speaker_audio_segment(
+async fn has_pending_room_transcription(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
-    latest_wake_at: DateTime<Utc>,
     closed_at: DateTime<Utc>,
 ) -> Result<bool> {
+    if has_live_room_audio_until(runtime, payload, closed_at).await? {
+        return Ok(true);
+    }
+    if runtime
+        .timeline_store
+        .has_pending_transcription_slot_for_room_until(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            closed_at,
+        )
+        .await?
+    {
+        return Ok(true);
+    }
     let jobs = runtime
         .timeline_store
         .list_incomplete_or_failed_audio_segment_jobs_by_scope(
@@ -729,11 +770,40 @@ async fn has_pending_speaker_audio_segment(
         .iter()
         .filter(|job| audio_segment_blocks_request_transcription_wait(job))
         .filter_map(|job| job.audio_segment_payload())
-        .any(|segment| {
-            segment.speaker_user_id == payload.speaker_user_id
-                && segment.segment_end_time >= latest_wake_at
-                && segment.segment_start_time <= closed_at
-        }))
+        .any(|segment| segment.segment_start_time <= closed_at))
+}
+
+async fn has_live_room_audio_until(
+    runtime: &Runtime,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+) -> Result<bool> {
+    let session = runtime
+        .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
+        .await?;
+    let Some(session) = session else {
+        return Ok(false);
+    };
+    Ok(session
+        .capture_stats
+        .speakers
+        .values()
+        .any(|speaker| speaker_capture_blocks_transcription_wait(speaker, closed_at)))
+}
+
+fn speaker_capture_blocks_transcription_wait(
+    speaker: &crate::runtime::SessionSpeakerCaptureStats,
+    closed_at: DateTime<Utc>,
+) -> bool {
+    let has_live_audio =
+        speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
+    if !has_live_audio {
+        return false;
+    }
+    let segment_started_at = parse_instant(&speaker.segment_started_at);
+    let last_pcm_at = parse_instant(&speaker.last_pcm_at);
+    segment_started_at.is_some_and(|started_at| started_at <= closed_at)
+        || last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at <= closed_at)
 }
 
 fn audio_segment_blocks_request_transcription_wait(job: &Job) -> bool {

@@ -202,6 +202,47 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "transcription_slots",
+        &[
+            column("slot_id", "text", false),
+            column("source_job_id", "text", false),
+            column("mux_job_id", "text", false),
+            column("state", "text", false),
+            column("guild_id", "text", false),
+            column("voice_channel_id", "text", false),
+            column("capture_run_id", "text", false),
+            column("voice_bot_id", "text", false),
+            column("voice_bot_discord_user_id", "text", false),
+            column("speaker_user_id", "text", false),
+            column("speaker_label", "text", false),
+            column("speaker_username", "text", false),
+            column("segment_index", "bigint", false),
+            column("segment_start_ms", "bigint", false),
+            column("segment_end_ms", "bigint", false),
+            column("duration_ms", "bigint", false),
+            column("source_audio_path", "text", false),
+            column("audio_checksum", "text", false),
+            column("audio_bytes", "bigint", false),
+            column("audio_format", "text", false),
+            column("sample_rate_hz", "bigint", false),
+            column("channels", "bigint", false),
+            column("sample_width_bits", "bigint", false),
+            column("post_processing", "text", false),
+            column("transcription_source_id", "text", false),
+            column("provider", "text", false),
+            column("model", "text", false),
+            column("priority", "bigint", false),
+            column("mux_stream_id", "text", false),
+            column("mux_start_ms", "bigint", true),
+            column("mux_end_ms", "bigint", true),
+            column("guard_before_ms", "bigint", false),
+            column("guard_after_ms", "bigint", false),
+            column("created_at_ms", "bigint", false),
+            column("updated_at_ms", "bigint", false),
+            column("payload_json", "jsonb", false),
+        ],
+    ),
+    table(
         "windows",
         &[
             column("window_id", "text", false),
@@ -224,21 +265,6 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("state", "text", false),
             column("created_at_ms", "bigint", true),
             column("updated_at_ms", "bigint", false),
-            column("payload_json", "jsonb", false),
-        ],
-    ),
-    table(
-        "authoritative_spans",
-        &[
-            column("span_id", "text", false),
-            column("scope_kind", "text", false),
-            column("guild_id", "text", false),
-            column("scope_id", "text", false),
-            column("window_id", "text", false),
-            column("publication_id", "text", false),
-            column("start_ms", "bigint", true),
-            column("end_ms", "bigint", true),
-            column("created_at_ms", "bigint", false),
             column("payload_json", "jsonb", false),
         ],
     ),
@@ -375,10 +401,6 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
     ),
     ("assignments", &["assignments_pkey"]),
     (
-        "authoritative_spans",
-        &["authoritative_spans_pkey", "idx_spans_room_time"],
-    ),
-    (
         "automations",
         &[
             "automations_pkey",
@@ -465,6 +487,18 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
             "idx_timeline_speaker_time",
             "timeline_events_event_id_key",
             "timeline_events_pkey",
+        ],
+    ),
+    (
+        "transcription_slots",
+        &[
+            "idx_transcription_slots_mux_job",
+            "idx_transcription_slots_scope_speaker_time",
+            "idx_transcription_slots_source_mux_state",
+            "idx_transcription_slots_source_state_created",
+            "idx_transcription_slots_state_priority",
+            "transcription_slots_pkey",
+            "transcription_slots_source_job_id_key",
         ],
     ),
     ("voice_rooms", &["voice_rooms_pkey"]),
@@ -615,6 +649,45 @@ impl TimelineStore {
               payload_json JSONB NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS transcription_slots (
+              slot_id TEXT PRIMARY KEY,
+              source_job_id TEXT NOT NULL UNIQUE,
+              mux_job_id TEXT NOT NULL DEFAULT '',
+              state TEXT NOT NULL DEFAULT 'queued',
+              guild_id TEXT NOT NULL DEFAULT '',
+              voice_channel_id TEXT NOT NULL DEFAULT '',
+              capture_run_id TEXT NOT NULL DEFAULT '',
+              voice_bot_id TEXT NOT NULL DEFAULT '',
+              voice_bot_discord_user_id TEXT NOT NULL DEFAULT '',
+              speaker_user_id TEXT NOT NULL DEFAULT '',
+              speaker_label TEXT NOT NULL DEFAULT '',
+              speaker_username TEXT NOT NULL DEFAULT '',
+              segment_index BIGINT NOT NULL DEFAULT 0,
+              segment_start_ms BIGINT NOT NULL DEFAULT 0,
+              segment_end_ms BIGINT NOT NULL DEFAULT 0,
+              duration_ms BIGINT NOT NULL DEFAULT 0,
+              source_audio_path TEXT NOT NULL DEFAULT '',
+              audio_checksum TEXT NOT NULL DEFAULT '',
+              audio_bytes BIGINT NOT NULL DEFAULT 0,
+              audio_format TEXT NOT NULL DEFAULT '',
+              sample_rate_hz BIGINT NOT NULL DEFAULT 0,
+              channels BIGINT NOT NULL DEFAULT 0,
+              sample_width_bits BIGINT NOT NULL DEFAULT 0,
+              post_processing TEXT NOT NULL DEFAULT '',
+              transcription_source_id TEXT NOT NULL DEFAULT '',
+              provider TEXT NOT NULL DEFAULT '',
+              model TEXT NOT NULL DEFAULT '',
+              priority BIGINT NOT NULL DEFAULT 0,
+              mux_stream_id TEXT NOT NULL DEFAULT '',
+              mux_start_ms BIGINT,
+              mux_end_ms BIGINT,
+              guard_before_ms BIGINT NOT NULL DEFAULT 0,
+              guard_after_ms BIGINT NOT NULL DEFAULT 0,
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL,
+              payload_json JSONB NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS windows (
               window_id TEXT PRIMARY KEY,
               scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
@@ -634,19 +707,6 @@ impl TimelineStore {
               state TEXT NOT NULL DEFAULT '',
               created_at_ms BIGINT,
               updated_at_ms BIGINT NOT NULL,
-              payload_json JSONB NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS authoritative_spans (
-              span_id TEXT PRIMARY KEY,
-              scope_kind TEXT NOT NULL DEFAULT 'voice_channel',
-              guild_id TEXT NOT NULL,
-              scope_id TEXT NOT NULL,
-              window_id TEXT NOT NULL DEFAULT '',
-              publication_id TEXT NOT NULL DEFAULT '',
-              start_ms BIGINT,
-              end_ms BIGINT,
-              created_at_ms BIGINT NOT NULL,
               payload_json JSONB NOT NULL
             );
 
@@ -901,12 +961,22 @@ impl TimelineStore {
               ON discord_members(guild_id, normalized_search);
             CREATE INDEX IF NOT EXISTS idx_timeline_kind_time
               ON timeline_events(event_kind, started_at_ms, sequence);
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_state_priority
+              ON transcription_slots(state, priority DESC, created_at_ms, slot_id);
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_scope_speaker_time
+              ON transcription_slots(guild_id, voice_channel_id, speaker_user_id, segment_start_ms, segment_end_ms);
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_mux_job
+              ON transcription_slots(mux_job_id, slot_id)
+              WHERE mux_job_id <> '';
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_source_state_created
+              ON transcription_slots(transcription_source_id, state, priority DESC, created_at_ms, slot_id);
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_source_mux_state
+              ON transcription_slots(transcription_source_id, mux_job_id, state)
+              WHERE mux_job_id <> '';
             CREATE INDEX IF NOT EXISTS idx_capture_runs_room_time
               ON capture_runs(guild_id, voice_channel_id, started_at_ms, ended_at_ms);
             CREATE INDEX IF NOT EXISTS idx_conversations_room_time
               ON conversations(scope_kind, scope_id, start_ms, end_ms);
-            CREATE INDEX IF NOT EXISTS idx_spans_room_time
-              ON authoritative_spans(scope_kind, scope_id, start_ms, end_ms);
             CREATE INDEX IF NOT EXISTS idx_publications_room_state
               ON publications(scope_kind, scope_id, state, created_at_ms);
             CREATE INDEX IF NOT EXISTS idx_capture_sessions_active_room

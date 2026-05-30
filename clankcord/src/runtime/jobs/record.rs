@@ -17,15 +17,16 @@ use super::{
     DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind, JobOutput, JobPayload,
-    JobState, RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
-    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    JobState, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
+    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    TranscriptionMuxPayload, TranscriptionMuxPlanPayload, VoiceStatusSyncPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
-const JOB_PAYLOAD_BLOB_VERSION: u16 = 5;
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 7;
 const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
     JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
 
@@ -35,7 +36,11 @@ const _: () = assert!(
 );
 
 const fn job_payload_blob_version_for_clankcord(version: &str) -> u16 {
-    if const_str_eq(version, "0.7.0") {
+    if const_str_eq(version, "0.9.0") {
+        7
+    } else if const_str_eq(version, "0.8.0") {
+        6
+    } else if const_str_eq(version, "0.7.0") {
         5
     } else if const_str_eq(version, "0.6.0") {
         4
@@ -604,6 +609,38 @@ impl Job {
         )
     }
 
+    pub fn transcription_mux(transcription_source_id: impl Into<String>) -> Self {
+        Self::new(
+            RuntimeScope::runtime(),
+            "runtime",
+            JobState::Queued,
+            JobPayload::TranscriptionMux(TranscriptionMuxPayload {
+                transcription_source_id: transcription_source_id.into(),
+            }),
+        )
+    }
+
+    pub fn transcription_mux_plan(
+        transcription_source_id: impl Into<String>,
+        delay_ms: i64,
+    ) -> Self {
+        let mut job = Self::new(
+            RuntimeScope::runtime(),
+            "runtime",
+            JobState::Queued,
+            JobPayload::TranscriptionMuxPlan(TranscriptionMuxPlanPayload {
+                transcription_source_id: transcription_source_id.into(),
+            }),
+        );
+        if delay_ms > 0 {
+            job.next_run_at = Some(
+                (Utc::now() + chrono::Duration::milliseconds(delay_ms))
+                    .to_rfc3339_opts(SecondsFormat::Millis, true),
+            );
+        }
+        job
+    }
+
     pub fn wake_probe(payload: WakeProbePayload) -> Self {
         Self::new(
             RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
@@ -640,24 +677,6 @@ impl Job {
             requested_by_user_id,
             JobState::Queued,
             JobPayload::Command(CommandPayload { command }),
-        )
-    }
-
-    pub fn refine_transcript(
-        guild_id: impl Into<String>,
-        voice_channel_id: impl Into<String>,
-        requested_by_user_id: impl Into<String>,
-        window_id: impl Into<String>,
-        publication_id: impl Into<String>,
-    ) -> Self {
-        Self::new(
-            RuntimeScope::voice_channel(guild_id, voice_channel_id),
-            requested_by_user_id,
-            JobState::Queued,
-            JobPayload::RefineTranscript(RefineTranscriptPayload {
-                window_id: window_id.into(),
-                publication_id: publication_id.into(),
-            }),
         )
     }
 
@@ -1079,16 +1098,23 @@ impl Job {
         }
     }
 
-    pub fn refinement_payload(&self) -> Option<&RefineTranscriptPayload> {
+    pub fn audio_segment_payload(&self) -> Option<&AudioSegmentPayload> {
         match &self.payload {
-            JobPayload::RefineTranscript(payload) => Some(payload),
+            JobPayload::AudioSegment(payload) => Some(payload),
             _ => None,
         }
     }
 
-    pub fn audio_segment_payload(&self) -> Option<&AudioSegmentPayload> {
+    pub fn transcription_mux_payload(&self) -> Option<&TranscriptionMuxPayload> {
         match &self.payload {
-            JobPayload::AudioSegment(payload) => Some(payload),
+            JobPayload::TranscriptionMux(payload) => Some(payload),
+            _ => None,
+        }
+    }
+
+    pub fn transcription_mux_plan_payload(&self) -> Option<&TranscriptionMuxPlanPayload> {
+        match &self.payload {
+            JobPayload::TranscriptionMuxPlan(payload) => Some(payload),
             _ => None,
         }
     }

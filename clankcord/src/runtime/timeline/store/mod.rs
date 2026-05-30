@@ -5,6 +5,7 @@ mod maintenance;
 mod members;
 mod room_controls;
 mod runtime_config;
+mod transcription;
 mod transcripts;
 mod voice_state;
 
@@ -15,6 +16,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
+pub(crate) use transcription::TranscriptionSlotRecord;
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::fs;
@@ -46,7 +48,6 @@ pub use super::util::{
 pub struct RenderedTranscript {
     pub window: Value,
     pub events: Vec<Value>,
-    pub spans: Vec<Value>,
     pub content: String,
 }
 
@@ -70,6 +71,7 @@ pub struct SpeechEventInput {
     pub audio_checksum: String,
     pub segment_index: i64,
     pub duration_ms: i64,
+    pub transcription_source_id: String,
     pub stt_provider: String,
     pub stt_model: String,
     pub stt_metadata: Value,
@@ -97,6 +99,7 @@ impl Default for SpeechEventInput {
             audio_checksum: String::new(),
             segment_index: 0,
             duration_ms: 0,
+            transcription_source_id: String::new(),
             stt_provider: "local".to_string(),
             stt_model: String::new(),
             stt_metadata: Value::Object(Map::new()),

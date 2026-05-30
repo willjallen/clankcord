@@ -258,7 +258,7 @@ pub struct CommandArguments {
     pub target_channel: String,
     pub publish: String,
     pub cue: String,
-    pub refine: Option<bool>,
+    removed_boolean_slot: Option<bool>,
     pub duration_seconds: Option<i64>,
     pub muted: Option<bool>,
     pub unpublished_only: Option<bool>,
@@ -288,7 +288,7 @@ impl CommandArguments {
             target_channel: string_field(object, "target_channel"),
             publish: string_field(object, "publish"),
             cue: string_field(object, "cue"),
-            refine: object.get("refine").and_then(Value::as_bool),
+            removed_boolean_slot: None,
             duration_seconds: i64_field(object, &["duration_seconds", "durationSeconds"]),
             muted: bool_field(object, &["muted"]),
             unpublished_only: bool_field(object, &["unpublished_only", "unpublishedOnly"]),
@@ -312,9 +312,6 @@ impl CommandArguments {
         insert_non_empty(&mut map, "target_channel", &self.target_channel);
         insert_non_empty(&mut map, "publish", &self.publish);
         insert_non_empty(&mut map, "cue", &self.cue);
-        if let Some(refine) = self.refine {
-            map.insert("refine".to_string(), Value::Bool(refine));
-        }
         if let Some(duration_seconds) = self.duration_seconds {
             map.insert(
                 "duration_seconds".to_string(),
@@ -586,6 +583,16 @@ pub struct AudioSegmentPayload {
     pub channels: u16,
     pub sample_width_bits: u16,
     pub post_processing: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptionMuxPayload {
+    pub transcription_source_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TranscriptionMuxPlanPayload {
+    pub transcription_source_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1069,16 +1076,9 @@ impl DiscordSlashCommandPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RefineTranscriptPayload {
-    pub window_id: String,
-    pub publication_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TranscriptPublicationPayload {
     pub publication_id: String,
     pub live: bool,
-    pub refined_queued: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1298,7 +1298,6 @@ pub enum JobPayload {
     AgentSessionRetirement(AgentSessionRetirementPayload),
     AgentThreadTitleRefresh(AgentThreadTitleRefreshPayload),
     TranscriptPublication(TranscriptPublicationPayload),
-    RefineTranscript(RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
     Command(CommandPayload),
     RoomAgentPlacement(RoomAgentPlacementPayload),
@@ -1318,6 +1317,8 @@ pub enum JobPayload {
     EphemeralJobGc(EphemeralJobGcPayload),
     DiscordVoiceDeafen(DiscordVoiceDeafenPayload),
     DiscordTypingIndicator(DiscordTypingIndicatorPayload),
+    TranscriptionMux(TranscriptionMuxPayload),
+    TranscriptionMuxPlan(TranscriptionMuxPlanPayload),
 }
 
 impl JobPayload {
@@ -1338,7 +1339,6 @@ impl JobPayload {
             Self::AgentSessionRetirement(_) => JobKind::AgentSessionRetirement,
             Self::AgentThreadTitleRefresh(_) => JobKind::AgentThreadTitleRefresh,
             Self::TranscriptPublication(_) => JobKind::TranscriptPublication,
-            Self::RefineTranscript(_) => JobKind::RefineTranscript,
             Self::ConfirmationRequired(_) => JobKind::ConfirmationRequired,
             Self::Command(_) => JobKind::Command,
             Self::RoomAgentPlacement(_) => JobKind::RoomAgentPlacement,
@@ -1358,6 +1358,8 @@ impl JobPayload {
             Self::EphemeralJobGc(_) => JobKind::EphemeralJobGc,
             Self::DiscordVoiceDeafen(_) => JobKind::DiscordVoiceDeafen,
             Self::DiscordTypingIndicator(_) => JobKind::DiscordTypingIndicator,
+            Self::TranscriptionMux(_) => JobKind::TranscriptionMux,
+            Self::TranscriptionMuxPlan(_) => JobKind::TranscriptionMuxPlan,
         }
     }
 
@@ -1376,6 +1378,8 @@ impl JobPayload {
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
             Self::DiscordTypingIndicator(_) => None,
+            Self::TranscriptionMux(_) => None,
+            Self::TranscriptionMuxPlan(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1397,7 +1401,6 @@ impl JobPayload {
             Self::DiscordVoiceMute(_) => None,
             Self::DiscordVoicePlayAudio(_) => None,
             Self::RuntimeControl(_) => None,
-            Self::RefineTranscript(_) => None,
         }
     }
 
@@ -1416,6 +1419,8 @@ impl JobPayload {
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
             Self::DiscordTypingIndicator(_) => None,
+            Self::TranscriptionMux(_) => None,
+            Self::TranscriptionMuxPlan(_) => None,
             Self::WakeActivation(_) => None,
             Self::AgentTask(payload) => Some(&mut payload.command),
             Self::DiscordTextMessage(_) => None,
@@ -1437,7 +1442,6 @@ impl JobPayload {
             Self::DiscordVoiceMute(_) => None,
             Self::DiscordVoicePlayAudio(_) => None,
             Self::RuntimeControl(_) => None,
-            Self::RefineTranscript(_) => None,
         }
     }
 
@@ -1473,6 +1477,12 @@ impl JobPayload {
                 "channels": payload.channels,
                 "sample_width_bits": payload.sample_width_bits,
                 "post_processing": payload.post_processing,
+            }),
+            Self::TranscriptionMux(payload) => json!({
+                "transcription_source_id": payload.transcription_source_id,
+            }),
+            Self::TranscriptionMuxPlan(payload) => json!({
+                "transcription_source_id": payload.transcription_source_id,
             }),
             Self::WakeActivation(payload) => json!({
                 "activation_id": payload.activation_id,
@@ -1605,11 +1615,6 @@ impl JobPayload {
             Self::TranscriptPublication(payload) => json!({
                 "publication_id": payload.publication_id,
                 "live": payload.live,
-                "refined_queued": payload.refined_queued,
-            }),
-            Self::RefineTranscript(payload) => json!({
-                "window_id": payload.window_id,
-                "publication_id": payload.publication_id,
             }),
             Self::ConfirmationRequired(payload) => json!({
                 "command": payload.command.to_json(),

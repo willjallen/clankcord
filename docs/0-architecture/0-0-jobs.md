@@ -86,9 +86,9 @@ Some parents need their handler invoked again after child completion. The resolv
 
 The scheduler drains durable work in passes. A pass first resolves waiting parents whose children have reached terminal states. It then finds queued jobs whose ready time has arrived, claims them according to execution policy, and spawns workers. When a pass resolves or schedules anything, the dispatcher immediately runs another pass. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is due. If due queued work remains after a drain pass, the dispatcher uses a short bounded retry interval and drains again.
 
-Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapshot jobs execute domain code. Runtime-snapshot domain handlers call typed adapter APIs when a job requires Discord IO. Blocking snapshot jobs run provider, process, file, STT, wake, refinement, and Codex work outside async workers. Runtime maintenance is runtime-domain work: `runtime_maintenance` schedules the next tick and submits ordinary background jobs; those jobs then run through the same lanes, ordering keys, dependencies, outputs, and failures as any other work.
+Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapshot jobs execute domain code. Runtime-snapshot domain handlers call typed adapter APIs when a job requires Discord IO. Blocking snapshot jobs run provider, process, file, transcription, wake, and Codex work outside async workers. Runtime maintenance is runtime-domain work: `runtime_maintenance` schedules the next tick and submits ordinary background jobs; those jobs then run through the same lanes, ordering keys, dependencies, outputs, and failures as any other work.
 
-Lanes bound concurrency by class of work. Wake probes have separate capacity from audio transcription. Agent tasks have separate capacity from Discord text sends. Voice control has its own lane. Ordering keys serialize work that would race while allowing unrelated work to proceed.
+Lanes bound concurrency by class of work. Wake probes have separate capacity from audio segment preparation and muxed transcription. Agent tasks have separate capacity from Discord text sends. Voice control has its own lane. Ordering keys serialize work that would race while allowing unrelated work to proceed.
 
 An `agent_task` keeps its `agent:session:<agent_session_id>` ordering key active while it is waiting on typing start or stop children. This keeps one Codex turn at a time bound to a session even though Discord typing is handled by separate Discord text jobs.
 
@@ -114,28 +114,28 @@ Lane capacity and scheduler batch size come from `config.toml`.
 ```text
 [jobs.concurrency]
 wake
-audio
+audio_segment
 voice_control
 discord_text
-refinement
 agent
 maintenance
 general_async
 
 [jobs.batch]
 wake
-audio
+audio_segment
 voice_control
 discord_text
-refinement
 agent
 maintenance
 general_async
 ```
 
-The audio lane is the local STT backpressure boundary. Its concurrency is set to the provider's transcription capacity, while the wake lane is configured separately for wake probes. `audio_segment` jobs that overlap an active wake activation for the same room and speaker are claimed before ordinary room transcription inside the audio lane. That priority changes claim order only; it does not raise STT concurrency.
+The `audio_segment` lane is local intake for Discord capture artifacts that already exist on disk. It validates WAV files, verifies checksums, creates durable transcription slots, and queues `transcription_mux_plan` work. The planner reads queued slots from Postgres, reserves concrete batches by marking slots `planned`, and inserts `transcription_mux` jobs. The transcription mux lane is the provider backpressure boundary, and its concurrency is capped by `transcription.mux_provider_streams`.
 
-STT timeouts, connection failures, rate limits, and server errors requeue `audio_segment` jobs with `next_run_at` using the configured STT retry backoff. Runtime maintenance also requeues retryable failed audio segment jobs so older transient failures return to the durable queue. The segment payload keeps the original speech timestamps, and completed transcript events are inserted at those timestamps even when the job finishes much later.
+The mux planner normally fills one provider stream. It opens a second stream when the projected one-stream schedule misses slot deadlines by more than `transcription.mux_overflow_backlog_ms`. Slot deadlines use `transcription.mux_normal_latency_budget_ms` for ordinary speech and `transcription.mux_wake_latency_budget_ms` for wake-priority speech. Within a priority class, the planner packs batches by room and speaker flow so a long speaker backlog does not monopolize a batch. `audio_segment` jobs that overlap an active wake activation for the same room are claimed before ordinary room transcription inside the audio-segment lane, and their transcription slots carry that priority into mux planning. That priority changes durable planning order only; provider call concurrency stays bounded by the mux lane.
+
+Provider timeouts, connection failures, rate limits, and server errors requeue `transcription_mux` jobs with `next_run_at` using the active transcription source retry backoff. The slot payload keeps the original speech timestamps, and completed transcript events are inserted at those timestamps even when the provider call finishes much later. Maintenance recovers planned and muxing slots from terminal mux jobs: timed-out mux slots return to the queued slot pool, and terminal failed mux slots are marked failed. Wake activation treats failed in-window room transcription slots as incomplete context and keeps the agent task gated.
 
 Every scheduling pass reads active ordering keys from the durable job table before claiming work. Latency analysis starts with the concrete thing on the path: lane capacity, ordering key contention, ready time, provider latency, adapter locks, database contention, artifact encoding, API calls, or configured timers.
 

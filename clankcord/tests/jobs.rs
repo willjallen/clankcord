@@ -5,10 +5,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use clankcord::config;
+use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use clankcord::runtime::jobs::DiscordPostMetadata;
 use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::views::JobsRequest;
-use clankcord::runtime::timeline::{JobVisibility, isoformat_z};
+use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
@@ -17,9 +18,9 @@ use clankcord::runtime::{
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RefineTranscriptPayload, RoomConfig, Runtime, RuntimeScope,
-    RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload, TextTarget,
-    TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
+    JobOutput, JobPayload, JobState, RoomConfig, Runtime, RuntimeScope, RuntimeScopeKind,
+    TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -311,15 +312,16 @@ async fn job_round_trips_as_binary_record() {
 }
 
 #[test]
-fn example_config_throttles_stt_audio_without_throttling_wake() {
+fn example_config_separates_audio_segment_intake_from_mux_streams() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
 
     let concurrency = config::job_concurrency();
     let batch = config::job_batch_limits();
 
-    assert_eq!(concurrency.audio, 2);
-    assert_eq!(batch.audio, 2);
+    assert_eq!(concurrency.audio_segment, 32);
+    assert_eq!(batch.audio_segment, 32);
+    assert_eq!(config::transcription_mux_provider_streams(), 2);
     assert_eq!(concurrency.wake, 32);
     assert_eq!(batch.wake, 32);
 }
@@ -330,7 +332,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 5);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 7);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -384,32 +386,42 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
             ),
             (
                 "0.4.0".to_string(),
                 "database hard-cut performance contracts".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
             ),
             (
                 "0.5.0".to_string(),
                 "policy-driven durable retention".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
             ),
             (
                 "0.6.0".to_string(),
                 "job payload blob agent invocation metadata".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
             ),
             (
                 "0.7.0".to_string(),
                 "job payload blob text response attachments".to_string(),
-                "0.7.0".to_string()
+                "0.9.0".to_string()
+            ),
+            (
+                "0.8.0".to_string(),
+                "transcription source mux slots".to_string(),
+                "0.9.0".to_string()
+            ),
+            (
+                "0.9.0".to_string(),
+                "durable transcription mux planner".to_string(),
+                "0.9.0".to_string()
             ),
         ]
     );
@@ -449,7 +461,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
     )
     .execute(&store.pool)
     .await
@@ -457,12 +469,14 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 5);
+    assert_eq!(applied.len(), 7);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
     assert_eq!(applied[3].version, "0.6.0");
     assert_eq!(applied[4].version, "0.7.0");
+    assert_eq!(applied[5].version, "0.8.0");
+    assert_eq!(applied[6].version, "0.9.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -509,7 +523,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
     )
     .execute(&store.pool)
     .await
@@ -517,11 +531,13 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 4);
+    assert_eq!(applied.len(), 6);
     assert_eq!(applied[0].version, "0.4.0");
     assert_eq!(applied[1].version, "0.5.0");
     assert_eq!(applied[2].version, "0.6.0");
     assert_eq!(applied[3].version, "0.7.0");
+    assert_eq!(applied[4].version, "0.8.0");
+    assert_eq!(applied[5].version, "0.9.0");
     assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
@@ -545,7 +561,7 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     assert!(index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
     )
     .execute(&store.pool)
     .await
@@ -553,10 +569,12 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 5);
     assert_eq!(applied[0].version, "0.5.0");
     assert_eq!(applied[1].version, "0.6.0");
     assert_eq!(applied[2].version, "0.7.0");
+    assert_eq!(applied[3].version, "0.8.0");
+    assert_eq!(applied[4].version, "0.9.0");
     assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 }
 
@@ -582,16 +600,20 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0')")
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0', '0.8.0', '0.9.0')",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].version, "0.6.0");
     assert_eq!(applied[1].version, "0.7.0");
+    assert_eq!(applied[2].version, "0.8.0");
+    assert_eq!(applied[3].version, "0.9.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let metadata = migrated.metadata.to_json();
     let agent = &metadata["agent_task"]["agent"];
@@ -644,15 +666,19 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
         .execute(&store.pool)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.7.0'")
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    sqlx::query(
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.7.0', '0.8.0', '0.9.0')",
+    )
+    .execute(&store.pool)
+    .await
+    .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 3);
     assert_eq!(applied[0].version, "0.7.0");
+    assert_eq!(applied[1].version, "0.8.0");
+    assert_eq!(applied[2].version, "0.9.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let payload = migrated.text_delivery_payload().unwrap();
     assert!(payload.attachments.is_empty());
@@ -752,6 +778,400 @@ async fn audio_segment_payload_references_ready_audio_artifact() {
     );
     assert_eq!(payload["audio_bytes"], json!(44));
     assert!(payload.get("pcm").is_none());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let wav_path = raw.path().join("segment.wav");
+    write_test_wav(&wav_path, 48_000, 2, 960);
+    let checksum = sha256_file(&wav_path).unwrap();
+    let start = Utc.with_ymd_and_hms(2026, 5, 13, 12, 0, 0).unwrap();
+    let mut payload = audio_segment_payload(
+        "guild",
+        "code",
+        "user-a",
+        start,
+        start + Duration::milliseconds(20),
+        42,
+    );
+    payload.source_audio_path = wav_path;
+    payload.audio_checksum = checksum;
+    let job = store.create_job(Job::audio_segment(payload)).await.unwrap();
+    let mut claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    assert_eq!(claimed.len(), 1);
+
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let result = runtime
+        .dispatch_claimed_blocking_job(claimed.pop().unwrap())
+        .await
+        .unwrap();
+
+    assert_eq!(result["result"]["kind"], json!("audio_segment"));
+    assert_eq!(
+        result["result"]["status"],
+        json!("queued_for_transcription")
+    );
+    assert_eq!(
+        result["result"]["transcription_slot"]["transcription_source_id"],
+        json!("local-granite")
+    );
+    assert_eq!(
+        result["result"]["transcription_mux_plan_job"]["kind"],
+        json!("transcription_mux_plan")
+    );
+    assert_eq!(
+        store.get_job(&job.id).await.unwrap().state,
+        JobState::Complete
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn audio_segment_slot_inherits_room_wake_priority() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let now = Utc::now();
+    let mut wake_payload = wake_activation_payload("guild", "code");
+    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.max_window_seconds = 3600;
+    store
+        .create_job(Job::wake_activation(wake_payload))
+        .await
+        .unwrap();
+
+    let wav_path = raw.path().join("segment-priority.wav");
+    write_test_wav(&wav_path, 48_000, 2, 960);
+    let checksum = sha256_file(&wav_path).unwrap();
+    let mut payload = audio_segment_payload(
+        "guild",
+        "code",
+        "user-b",
+        now - Duration::seconds(10),
+        now - Duration::seconds(9),
+        7,
+    );
+    payload.source_audio_path = wav_path;
+    payload.audio_checksum = checksum;
+    let job = store.create_job(Job::audio_segment(payload)).await.unwrap();
+    let claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    runtime
+        .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
+        .await
+        .unwrap();
+
+    let row = sqlx::query("SELECT priority FROM transcription_slots WHERE source_job_id = $1")
+        .bind(&job.id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<i64, _>(&row, "priority").unwrap(),
+        1000
+    );
+    let claimed_planner = store
+        .claim_due_jobs(JobKind::TranscriptionMuxPlan, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    assert_eq!(claimed_planner.len(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_promotes_existing_overlapping_transcription_slots() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let now = Utc::now();
+    let source_job_id = create_audio_segment_slot(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-a",
+        now - Duration::seconds(10),
+        Duration::seconds(4),
+        44,
+    )
+    .await;
+    let before = transcription_slot_priority(&store, &source_job_id).await;
+    assert_eq!(before, 0);
+    let wake_started_at = now - Duration::seconds(9);
+    let wake = store
+        .append_event(
+            "guild",
+            "code",
+            json!({
+                "event_kind": "wake_detected",
+                "kind": "wake_detected",
+                "capture_run_id": "cap_test",
+                "speaker_user_id": "user-a",
+                "speakerId": "user-a",
+                "speaker_label": "Will",
+                "speakerLabel": "Will",
+                "startedAt": wake_started_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+                "endedAt": (wake_started_at + Duration::milliseconds(500)).to_rfc3339_opts(SecondsFormat::Millis, true),
+                "wake": {"wake": true, "score": 0.91},
+                "wake_detected": true,
+            }),
+        )
+        .await
+        .unwrap();
+
+    schedule_from_wake_event(&runtime, &wake).await.unwrap();
+
+    assert_eq!(
+        transcription_slot_priority(&store, &source_job_id).await,
+        1000
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let now = Utc::now();
+    let mut source_job_ids = Vec::new();
+    for index in 0..2 {
+        let wav_path = raw.path().join(format!("segment-recovery-{index}.wav"));
+        write_test_wav(&wav_path, 48_000, 2, 960);
+        let checksum = sha256_file(&wav_path).unwrap();
+        let mut payload = audio_segment_payload(
+            "guild",
+            "code",
+            "user-a",
+            now + Duration::seconds(index),
+            now + Duration::seconds(index + 1),
+            20 + index,
+        );
+        payload.source_audio_path = wav_path;
+        payload.audio_checksum = checksum;
+        let job = store.create_job(Job::audio_segment(payload)).await.unwrap();
+        let claimed = store
+            .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+            .await
+            .unwrap();
+        runtime
+            .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
+            .await
+            .unwrap();
+        source_job_ids.push(job.id);
+    }
+
+    let mut timed_out_mux = Job::transcription_mux("local-granite");
+    timed_out_mux.set_state(JobState::FailedTimeout);
+    timed_out_mux.metadata.error = "job exceeded stale running-job timeout".to_string();
+    let timed_out_mux = store.create_job(timed_out_mux).await.unwrap();
+    let mut failed_mux = Job::transcription_mux("local-granite");
+    failed_mux.set_state(JobState::Failed);
+    failed_mux.metadata.error = "mux audio could not be built".to_string();
+    let failed_mux = store.create_job(failed_mux).await.unwrap();
+
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'muxing',
+            mux_job_id = $1,
+            mux_stream_id = 'mux:test',
+            mux_start_ms = 0,
+            mux_end_ms = 20
+        WHERE source_job_id = $2
+        "#,
+    )
+    .bind(&timed_out_mux.id)
+    .bind(&source_job_ids[0])
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'muxing',
+            mux_job_id = $1,
+            mux_stream_id = 'mux:test',
+            mux_start_ms = 20,
+            mux_end_ms = 40
+        WHERE source_job_id = $2
+        "#,
+    )
+    .bind(&failed_mux.id)
+    .bind(&source_job_ids[1])
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let recovered = store.recover_abandoned_transcription_slots().await.unwrap();
+    assert_eq!(recovered["requeued"].as_array().unwrap().len(), 1);
+    assert_eq!(recovered["failed"].as_array().unwrap().len(), 1);
+
+    let requeued =
+        sqlx::query("SELECT state, mux_job_id FROM transcription_slots WHERE source_job_id = $1")
+            .bind(&source_job_ids[0])
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&requeued, "state").unwrap(),
+        "queued"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&requeued, "mux_job_id").unwrap(),
+        ""
+    );
+
+    let failed = sqlx::query("SELECT state FROM transcription_slots WHERE source_job_id = $1")
+        .bind(&source_job_ids[1])
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&failed, "state").unwrap(),
+        "failed"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transcription_mux_planner_uses_one_stream_without_predicted_backlog() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let now = Utc::now();
+    for index in 0..2 {
+        create_audio_segment_slot(
+            &store,
+            &runtime,
+            raw.path(),
+            "user-a",
+            now + Duration::milliseconds(index * 2500),
+            Duration::seconds(2),
+            100 + index,
+        )
+        .await;
+    }
+
+    let result = run_transcription_mux_planner(&store).await;
+
+    assert_eq!(result["result"]["status"], json!("planned"));
+    assert_eq!(
+        result["result"]["created_mux_jobs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let row = sqlx::query(
+        "SELECT COUNT(DISTINCT mux_job_id) AS mux_jobs FROM transcription_slots WHERE state = 'planned'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "mux_jobs").unwrap(), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transcription_mux_planner_overflows_when_one_stream_misses_deadlines() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let base = Utc::now() - Duration::seconds(90);
+    for index in 0..8 {
+        create_audio_segment_slot(
+            &store,
+            &runtime,
+            raw.path(),
+            &format!("user-{}", index % 4),
+            base + Duration::seconds(index * 8),
+            Duration::seconds(8),
+            200 + index,
+        )
+        .await;
+    }
+
+    let result = run_transcription_mux_planner(&store).await;
+
+    assert_eq!(result["result"]["status"], json!("planned"));
+    assert_eq!(
+        result["result"]["created_mux_jobs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let row = sqlx::query(
+        "SELECT COUNT(DISTINCT mux_job_id) AS mux_jobs FROM transcription_slots WHERE state = 'planned'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "mux_jobs").unwrap(), 2);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn transcription_mux_planner_fairly_packs_short_room_speaker_work() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let base = Utc::now() - Duration::seconds(90);
+    for index in 0..8 {
+        create_audio_segment_slot(
+            &store,
+            &runtime,
+            raw.path(),
+            "user-a",
+            base + Duration::seconds(index * 8),
+            Duration::seconds(8),
+            300 + index,
+        )
+        .await;
+    }
+    create_audio_segment_slot(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-b",
+        base + Duration::seconds(80),
+        Duration::seconds(2),
+        400,
+    )
+    .await;
+
+    let result = run_transcription_mux_planner(&store).await;
+    let first_mux_job_id = result["result"]["created_mux_jobs"][0]["job_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let rows = sqlx::query(
+        r#"
+        SELECT speaker_user_id
+        FROM transcription_slots
+        WHERE mux_job_id = $1
+        ORDER BY created_at_ms, slot_id
+        "#,
+    )
+    .bind(first_mux_job_id)
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    let speakers = rows
+        .iter()
+        .map(|row| sqlx::Row::try_get::<String, _>(row, "speaker_user_id").unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(speakers.contains(&"user-b".to_string()));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -936,21 +1356,19 @@ async fn opaque_json_lowers_to_binary_payload() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn job_lineage_allows_arbitrary_dag_depth_metadata() {
-    let root = Job::new(
-        RuntimeScope::voice_channel("guild", "channel"),
-        "requester",
-        JobState::Queued,
-        JobPayload::RefineTranscript(RefineTranscriptPayload {
-            window_id: "root".to_string(),
-            publication_id: "pub".to_string(),
-        }),
-    );
-    let mut child = Job::refine_transcript("guild", "channel", "requester", "child", "pub");
+    let root = Job::audio_segment(audio_segment_payload(
+        "guild",
+        "channel",
+        "speaker",
+        Utc::now() - Duration::seconds(4),
+        Utc::now() - Duration::seconds(3),
+        1,
+    ));
+    let mut child = Job::transcription_mux("local-granite");
     child.attach_to_parent(&root).unwrap();
-    let mut grandchild =
-        Job::refine_transcript("guild", "channel", "requester", "grandchild", "pub");
+    let mut grandchild = Job::transcription_mux("local-granite");
     grandchild.attach_to_parent(&child).unwrap();
-    let mut too_deep = Job::refine_transcript("guild", "channel", "requester", "deep", "pub");
+    let mut too_deep = Job::transcription_mux("local-granite");
     too_deep.attach_to_parent(&grandchild).unwrap();
 
     assert_eq!(child.parent_job_id.as_deref(), Some(root.id.as_str()));
@@ -1214,12 +1632,11 @@ fn agent_session_start_and_publication_jobs_round_trip() {
         TranscriptPublicationPayload {
             publication_id: "pub_1".to_string(),
             live: false,
-            refined_queued: true,
         },
     );
     let decoded = Job::decode(&publication.encode().unwrap()).unwrap();
     assert_eq!(decoded.kind, JobKind::TranscriptPublication);
-    assert_eq!(decoded.payload.to_json()["refined_queued"], true);
+    assert_eq!(decoded.payload.to_json()["publication_id"], "pub_1");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1320,10 +1737,10 @@ async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
 
     let mut normal = Job::audio_segment(audio_segment_payload(
         "guild",
-        "code",
+        "art",
         "user-b",
-        now - Duration::seconds(40),
-        now - Duration::seconds(39),
+        now - Duration::seconds(70),
+        now - Duration::seconds(69),
         1,
     ));
     normal.created_at = isoformat_z(Some(now - Duration::seconds(40)));
@@ -1334,7 +1751,7 @@ async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
     let mut priority = Job::audio_segment(audio_segment_payload(
         "guild",
         "code",
-        "user-a",
+        "user-b",
         now - Duration::seconds(10),
         now - Duration::seconds(9),
         2,
@@ -2416,7 +2833,7 @@ fn encode_current_agent_task_with_response(
     let body = bincode::serialize(&encoded).unwrap();
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
-    bytes.extend_from_slice(&5_u16.to_le_bytes());
+    bytes.extend_from_slice(&7_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }
@@ -2538,6 +2955,70 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
     }
 }
 
+async fn create_audio_segment_slot(
+    store: &clankcord::runtime::timeline::TimelineStore,
+    runtime: &Runtime,
+    root: &std::path::Path,
+    speaker_user_id: &str,
+    start: chrono::DateTime<Utc>,
+    duration: Duration,
+    segment_index: i64,
+) -> String {
+    let wav_path = root.join(format!("planner-segment-{segment_index}.wav"));
+    write_test_wav(&wav_path, 48_000, 2, 960);
+    let checksum = sha256_file(&wav_path).unwrap();
+    let mut payload = audio_segment_payload(
+        "guild",
+        "code",
+        speaker_user_id,
+        start,
+        start + duration,
+        segment_index,
+    );
+    payload.source_audio_path = wav_path;
+    payload.audio_checksum = checksum;
+    let job = store.create_job(Job::audio_segment(payload)).await.unwrap();
+    let claimed = store
+        .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    runtime
+        .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
+        .await
+        .unwrap();
+    job.id
+}
+
+async fn run_transcription_mux_planner(
+    store: &clankcord::runtime::timeline::TimelineStore,
+) -> serde_json::Value {
+    store
+        .create_job(Job::transcription_mux_plan("local-granite", 0))
+        .await
+        .unwrap();
+    let claimed = store
+        .claim_due_jobs(JobKind::TranscriptionMuxPlan, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    runtime
+        .dispatch_claimed_runtime_job(claimed.into_iter().next().unwrap())
+        .await
+        .unwrap()
+}
+
+async fn transcription_slot_priority(
+    store: &clankcord::runtime::timeline::TimelineStore,
+    source_job_id: &str,
+) -> i64 {
+    let row = sqlx::query("SELECT priority FROM transcription_slots WHERE source_job_id = $1")
+        .bind(source_job_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    sqlx::Row::try_get::<i64, _>(&row, "priority").unwrap()
+}
+
 fn audio_segment_payload(
     guild_id: &str,
     voice_channel_id: &str,
@@ -2571,6 +3052,20 @@ fn audio_segment_payload(
         sample_width_bits: 16,
         post_processing: "pcm_s16le_48khz_stereo_to_wav".to_string(),
     }
+}
+
+fn write_test_wav(path: &std::path::Path, sample_rate: u32, channels: u16, frames: usize) {
+    let spec = hound::WavSpec {
+        channels,
+        sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(path, spec).unwrap();
+    for index in 0..frames * channels as usize {
+        writer.write_sample((index as i16).wrapping_mul(3)).unwrap();
+    }
+    writer.finalize().unwrap();
 }
 
 fn discord_dm_text_message(

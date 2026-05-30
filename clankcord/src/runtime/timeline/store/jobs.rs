@@ -495,6 +495,25 @@ impl TimelineStore {
         Ok(claimed)
     }
 
+    pub(crate) async fn audio_segment_transcription_priority(
+        &self,
+        segment: &crate::runtime::AudioSegmentPayload,
+    ) -> Result<i64> {
+        let mut transaction = self.pool.begin().await?;
+        let wake_activations = active_wake_activation_payloads(&mut transaction).await?;
+        transaction.commit().await?;
+        Ok(
+            if wake_activations
+                .iter()
+                .any(|wake| audio_segment_payload_overlaps_wake_window(segment, wake))
+            {
+                1000
+            } else {
+                0
+            },
+        )
+    }
+
     pub async fn replace_runtime_maintenance_job(&self, job: Job) -> Result<Job> {
         sqlx::query(
             r#"
@@ -1551,6 +1570,10 @@ fn ephemeral_gc_after_ms(
         (crate::runtime::JobKind::WakeProbe, true) => 300,
         (crate::runtime::JobKind::AudioSegment, false) => 300,
         (crate::runtime::JobKind::AudioSegment, true) => 1800,
+        (crate::runtime::JobKind::TranscriptionMux, false) => 300,
+        (crate::runtime::JobKind::TranscriptionMux, true) => 1800,
+        (crate::runtime::JobKind::TranscriptionMuxPlan, false) => 300,
+        (crate::runtime::JobKind::TranscriptionMuxPlan, true) => 1800,
         _ => 300,
     };
     Some(updated_at_ms.saturating_add(seconds * 1000))
@@ -1559,7 +1582,9 @@ fn ephemeral_gc_after_ms(
 fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
     match kind {
         crate::runtime::JobKind::WakeProbe => "wake",
-        crate::runtime::JobKind::AudioSegment => "audio",
+        crate::runtime::JobKind::AudioSegment => "audio_segment",
+        crate::runtime::JobKind::TranscriptionMux => "transcription_mux",
+        crate::runtime::JobKind::TranscriptionMuxPlan => "general_async",
         crate::runtime::JobKind::DiscordVoiceJoin
         | crate::runtime::JobKind::DiscordVoiceLeave
         | crate::runtime::JobKind::DiscordVoicePlayback
@@ -1576,7 +1601,6 @@ fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
         | crate::runtime::JobKind::DiscordForumThreadCreate
         | crate::runtime::JobKind::DiscordForumThreadRename
         | crate::runtime::JobKind::DiscordTypingIndicator => "discord_text",
-        crate::runtime::JobKind::RefineTranscript => "refinement",
         crate::runtime::JobKind::AgentTask | crate::runtime::JobKind::AgentThreadTitleRefresh => {
             "agent"
         }
@@ -1598,6 +1622,12 @@ fn job_ordering_key(job: &Job) -> String {
     match &job.payload {
         crate::runtime::JobPayload::WakeProbe(payload) => {
             format!("wake:stream:{}", payload.stream_id)
+        }
+        crate::runtime::JobPayload::TranscriptionMuxPlan(payload) => {
+            format!(
+                "transcription:mux_plan:{}",
+                normalize_key_part(&payload.transcription_source_id)
+            )
         }
         crate::runtime::JobPayload::AgentTask(payload) => {
             format!(
@@ -1940,29 +1970,26 @@ fn audio_segment_has_active_wake_priority(
     };
     wake_activations
         .iter()
-        .any(|wake| audio_segment_overlaps_wake_window(segment, wake))
+        .any(|wake| audio_segment_payload_overlaps_wake_window(segment, wake))
 }
 
-fn audio_segment_overlaps_wake_window(
+fn audio_segment_payload_overlaps_wake_window(
     segment: &crate::runtime::AudioSegmentPayload,
     wake: &ActiveWakeActivation,
 ) -> bool {
     let payload = &wake.payload;
-    if segment.guild_id != payload.guild_id
-        || segment.voice_channel_id != payload.voice_channel_id
-        || segment.speaker_user_id != payload.speaker_user_id
+    if segment.guild_id != payload.guild_id || segment.voice_channel_id != payload.voice_channel_id
     {
         return false;
     }
-    let Some(latest_wake_at) = parse_instant(&payload.latest_wake_at) else {
+    let Some(original_wake_at) = parse_instant(&payload.wake_started_at) else {
         return false;
     };
     let window_end = wake.request_audio_closed_at.unwrap_or_else(|| {
-        let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or(latest_wake_at);
         let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
         std::cmp::min(utc_now(), hard_cap)
     });
-    segment.segment_end_time >= latest_wake_at && segment.segment_start_time <= window_end
+    segment.segment_start_time <= window_end
 }
 
 fn normalize_key_part(value: &str) -> String {

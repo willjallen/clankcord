@@ -19,7 +19,7 @@ fn string_field(value: &serde_json::Value, key: &str) -> String {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn refined_span_overlays_draft_render_and_search() {
+async fn transcript_render_and_search_use_speech_events() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
@@ -48,7 +48,7 @@ async fn refined_span_overlays_draft_render_and_search() {
         None,
     )
     .await;
-    let materialized = store
+    let _materialized = store
         .materialize(
             "guild",
             "code",
@@ -59,55 +59,24 @@ async fn refined_span_overlays_draft_render_and_search() {
             "",
             "local",
             false,
-            false,
-            true,
             None,
         )
         .await
         .unwrap();
-    let pub_id = string_field(&materialized["publication"], "publication_id");
-    let refined_path = store
-        .durable_publications_dir()
-        .join(&pub_id)
-        .join("transcript.refined.txt");
-    std::fs::write(&refined_path, "Will: refined fixed point words\n").unwrap();
-    let alignment_path = store
-        .durable_publications_dir()
-        .join(&pub_id)
-        .join("speaker_alignment.json");
-    std::fs::write(&alignment_path, "{}\n").unwrap();
-    store
-        .create_authoritative_span(
-            "guild",
-            "code",
-            &string_field(&materialized["window"], "window_id"),
-            &pub_id,
-            "elevenlabs",
-            start,
-            end,
-            &refined_path,
-            &alignment_path,
-            vec!["cap_test".to_string()],
-            vec!["clanky-vc1".to_string()],
-        )
-        .await
-        .unwrap();
-
     let rendered = store
-        .render_transcript("guild", "code", start, end, "", true, "markdown")
+        .render_transcript("guild", "code", start, end, "", "markdown")
         .await
         .unwrap();
-    assert!(rendered.content.contains("refined fixed point"));
-    assert!(!rendered.content.contains("draft fixed piont"));
+    assert!(rendered.content.contains("draft fixed piont"));
     assert_eq!(
         string_field(
             &store
-                .search("guild", Some("code"), "fixed point", None, true, 10)
+                .search("guild", Some("code"), "fixed piont", None, 10)
                 .await
                 .unwrap()[0],
             "kind"
         ),
-        "refined_span"
+        "speech_segment"
     );
 }
 
@@ -251,12 +220,12 @@ async fn timeline_primary_store_keeps_payload_compact() {
     assert_eq!(
         string_field(
             &store
-                .search("guild", Some("code"), "indexed", None, true, 10)
+                .search("guild", Some("code"), "indexed", None, 10)
                 .await
                 .unwrap()[0],
             "kind"
         ),
-        "draft_event"
+        "speech_segment"
     );
 
     let payload_json: serde_json::Value = sqlx::query_scalar(
@@ -321,7 +290,7 @@ async fn window_end_boundary_excludes_next_segment() {
         .await
         .unwrap();
     let rendered = store
-        .render_transcript("guild", "code", start, window_end, "", false, "markdown")
+        .render_transcript("guild", "code", start, window_end, "", "markdown")
         .await
         .unwrap();
     assert_eq!(window["event_id_end"], inside["event_id"]);

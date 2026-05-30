@@ -11,10 +11,9 @@ use crate::runtime::jobs::{
     DiscordTypingIndicatorPayload, DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload,
     DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
-    RefineTranscriptPayload, RoomAgentPlacementPayload, RuntimeControlPayload,
-    RuntimeMaintenancePayload, StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload,
-    TextDeliveryPayload, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    RoomAgentPlacementPayload, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
+    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::runtime::{JobPayload, TextDeliveryKind, TextTarget};
 
@@ -41,6 +40,21 @@ pub(super) struct PreV0_7_0DiscordTextSendPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub(super) struct PreV0_7_0TranscriptPublicationPayload {
+    publication_id: String,
+    live: bool,
+    removed_boolean_slot: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(dead_code)]
+pub(super) struct PreV0_7_0RefineTranscriptPayload {
+    window_id: String,
+    publication_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum PreV0_7_0JobPayload {
     AudioSegment(AudioSegmentPayload),
     WakeActivation(WakeActivationPayload),
@@ -56,8 +70,8 @@ pub(super) enum PreV0_7_0JobPayload {
     AgentSessionResume(AgentSessionResumePayload),
     AgentSessionRetirement(AgentSessionRetirementPayload),
     AgentThreadTitleRefresh(AgentThreadTitleRefreshPayload),
-    TranscriptPublication(TranscriptPublicationPayload),
-    RefineTranscript(RefineTranscriptPayload),
+    TranscriptPublication(PreV0_7_0TranscriptPublicationPayload),
+    RefineTranscript(PreV0_7_0RefineTranscriptPayload),
     ConfirmationRequired(ConfirmationRequiredPayload),
     Command(CommandPayload),
     RoomAgentPlacement(RoomAgentPlacementPayload),
@@ -100,8 +114,15 @@ impl PreV0_7_0JobPayload {
             Self::AgentSessionResume(payload) => JobPayload::AgentSessionResume(payload),
             Self::AgentSessionRetirement(payload) => JobPayload::AgentSessionRetirement(payload),
             Self::AgentThreadTitleRefresh(payload) => JobPayload::AgentThreadTitleRefresh(payload),
-            Self::TranscriptPublication(payload) => JobPayload::TranscriptPublication(payload),
-            Self::RefineTranscript(payload) => JobPayload::RefineTranscript(payload),
+            Self::TranscriptPublication(payload) => {
+                JobPayload::TranscriptPublication(TranscriptPublicationPayload {
+                    publication_id: payload.publication_id,
+                    live: payload.live,
+                })
+            }
+            Self::RefineTranscript(_) => {
+                anyhow::bail!("pre-v0.7.0 refine_transcript payload survived deletion")
+            }
             Self::ConfirmationRequired(payload) => JobPayload::ConfirmationRequired(payload),
             Self::Command(payload) => JobPayload::Command(payload),
             Self::RoomAgentPlacement(payload) => JobPayload::RoomAgentPlacement(payload),

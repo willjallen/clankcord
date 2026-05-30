@@ -55,19 +55,30 @@ auto_join_min_participants = 2
 auto_leave_empty_seconds = 300
 auto_leave_single_deafened_seconds = 300
 auto_rejoin_cooldown_seconds = 300
-manual_override_seconds = 3600
+manual_override_seconds = 7200
 pause_release_seconds = 1200
 
 [transcription]
 silence_ms = 1000
 max_segment_ms = 8000
 minimum_utterance_ms = 350
+active_source = "local-granite"
+mux_provider_streams = 2
+mux_batch_delay_ms = 500
+mux_max_slots = 16
+mux_max_audio_ms = 30000
+mux_guard_ms = 150
+mux_normal_latency_budget_ms = 15000
+mux_wake_latency_budget_ms = 5000
+mux_overflow_backlog_ms = 2000
 
-[stt]
+[transcription.sources.local-granite]
+provider = "openai_compatible"
 base_url = "http://127.0.0.1:8080/v1"
-model = "large-v3"
+model = "local-granite"
 language = "en"
-response_format = "json"
+response_format = "verbose_json"
+timestamp_granularity = "segment"
 include_logprobs = true
 max_token_logprobs = 64
 timeout_seconds = 120
@@ -76,6 +87,24 @@ retry_backoff_max_seconds = 300
 drop_no_speech_probability = 0.7
 drop_avg_token_logprob = -0.8
 api_key_secret = ""
+diarize = false
+
+[transcription.sources.elevenlabs-scribe-v2]
+provider = "elevenlabs"
+base_url = "https://api.elevenlabs.io/v1/speech-to-text"
+model = "scribe_v2"
+language = "en"
+response_format = "json"
+timestamp_granularity = "word"
+include_logprobs = false
+max_token_logprobs = 0
+timeout_seconds = 600
+retry_backoff_initial_seconds = 5
+retry_backoff_max_seconds = 300
+drop_no_speech_probability = 1.0
+drop_avg_token_logprob = -99.0
+api_key_secret = "clankcord_elevenlabs_api_key"
+diarize = false
 
 [wake]
 base_url = "http://127.0.0.1:8080/v1"
@@ -96,13 +125,6 @@ max_window_seconds = 86400
 additive_preempt_seconds = 10
 independent_after_seconds = 45
 active_capture_poll_ms = 200
-
-[elevenlabs]
-api_key_secret = "clankcord_elevenlabs_api_key"
-stt_url = "https://api.elevenlabs.io/v1/speech-to-text"
-webhook_url = ""
-timeout_seconds = 600
-model_id = "scribe_v2"
 
 [voice.sound]
 dir = "/workspace/clankcord/res/audio"
@@ -126,20 +148,18 @@ dispatch_drain_max_passes = 64
 
 [jobs.concurrency]
 wake = 32
-audio = 4
+audio_segment = 32
 voice_control = 32
 discord_text = 12
-refinement = 4
 agent = 4
 maintenance = 1
 general_async = 16
 
 [jobs.batch]
 wake = 32
-audio = 4
+audio_segment = 32
 voice_control = 32
 discord_text = 12
-refinement = 4
 agent = 4
 maintenance = 1
 general_async = 16

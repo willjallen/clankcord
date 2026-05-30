@@ -30,9 +30,7 @@ pub struct AppConfig {
     pub prompts: PromptsConfig,
     pub pool: PoolConfig,
     pub transcription: TranscriptionConfig,
-    pub stt: SttConfig,
     pub wake: WakeConfig,
-    pub elevenlabs: ElevenLabsConfig,
     pub voice: VoiceConfig,
     pub jobs: JobsConfig,
     pub control: ControlConfig,
@@ -143,18 +141,32 @@ pub struct PoolConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TranscriptionConfig {
     pub silence_ms: i64,
     pub max_segment_ms: i64,
     pub minimum_utterance_ms: i64,
+    pub active_source: String,
+    pub mux_provider_streams: usize,
+    pub mux_batch_delay_ms: i64,
+    pub mux_max_slots: usize,
+    pub mux_max_audio_ms: i64,
+    pub mux_guard_ms: i64,
+    pub mux_normal_latency_budget_ms: i64,
+    pub mux_wake_latency_budget_ms: i64,
+    pub mux_overflow_backlog_ms: i64,
+    pub sources: BTreeMap<String, TranscriptionSourceConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SttConfig {
+#[serde(deny_unknown_fields)]
+pub struct TranscriptionSourceConfig {
+    pub provider: TranscriptionProvider,
     pub base_url: String,
     pub model: String,
     pub language: String,
     pub response_format: String,
+    pub timestamp_granularity: String,
     pub include_logprobs: bool,
     pub max_token_logprobs: usize,
     pub timeout_seconds: u64,
@@ -163,6 +175,23 @@ pub struct SttConfig {
     pub drop_no_speech_probability: f64,
     pub drop_avg_token_logprob: f64,
     pub api_key_secret: String,
+    pub diarize: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TranscriptionProvider {
+    OpenaiCompatible,
+    Elevenlabs,
+}
+
+impl TranscriptionProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OpenaiCompatible => "openai_compatible",
+            Self::Elevenlabs => "elevenlabs",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -188,15 +217,6 @@ pub struct WakeActivationConfig {
     pub additive_preempt_seconds: i64,
     pub independent_after_seconds: i64,
     pub active_capture_poll_ms: i64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ElevenLabsConfig {
-    pub api_key_secret: String,
-    pub stt_url: String,
-    pub webhook_url: String,
-    pub timeout_seconds: u64,
-    pub model_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -237,12 +257,12 @@ pub struct JobsConfig {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct JobLaneConfig {
     pub wake: usize,
-    pub audio: usize,
+    pub audio_segment: usize,
     pub voice_control: usize,
     pub discord_text: usize,
-    pub refinement: usize,
     pub agent: usize,
     pub maintenance: usize,
     pub general_async: usize,
@@ -368,14 +388,7 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     if config.postgres.password_secret.trim().is_empty() {
         anyhow::bail!("config.toml postgres.password_secret is required");
     }
-    if config.stt.retry_backoff_initial_seconds <= 0 {
-        anyhow::bail!("config.toml stt.retry_backoff_initial_seconds must be positive");
-    }
-    if config.stt.retry_backoff_max_seconds < config.stt.retry_backoff_initial_seconds {
-        anyhow::bail!(
-            "config.toml stt.retry_backoff_max_seconds must be at least retry_backoff_initial_seconds"
-        );
-    }
+    validate_transcription_config(&config.transcription)?;
     if config.prompts.dir.as_os_str().is_empty() {
         anyhow::bail!("config.toml prompts.dir is required");
     }
@@ -384,6 +397,70 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         .timezone
         .parse::<Tz>()
         .with_context(|| format!("invalid time.timezone `{}`", config.time.timezone))?;
+    Ok(())
+}
+
+fn validate_transcription_config(config: &TranscriptionConfig) -> Result<()> {
+    let active_source = config.active_source.trim();
+    if active_source.is_empty() {
+        anyhow::bail!("config.toml transcription.active_source is required");
+    }
+    if !config.sources.contains_key(active_source) {
+        anyhow::bail!(
+            "config.toml transcription.active_source `{active_source}` is not defined under transcription.sources"
+        );
+    }
+    if config.mux_provider_streams == 0 || config.mux_provider_streams > 2 {
+        anyhow::bail!("config.toml transcription.mux_provider_streams must be 1 or 2");
+    }
+    if config.mux_batch_delay_ms < 0 {
+        anyhow::bail!("config.toml transcription.mux_batch_delay_ms must be zero or positive");
+    }
+    if config.mux_max_slots == 0 {
+        anyhow::bail!("config.toml transcription.mux_max_slots must be positive");
+    }
+    if config.mux_max_audio_ms <= 0 {
+        anyhow::bail!("config.toml transcription.mux_max_audio_ms must be positive");
+    }
+    if config.mux_guard_ms < 0 {
+        anyhow::bail!("config.toml transcription.mux_guard_ms must be zero or positive");
+    }
+    if config.mux_normal_latency_budget_ms <= 0 {
+        anyhow::bail!("config.toml transcription.mux_normal_latency_budget_ms must be positive");
+    }
+    if config.mux_wake_latency_budget_ms <= 0 {
+        anyhow::bail!("config.toml transcription.mux_wake_latency_budget_ms must be positive");
+    }
+    if config.mux_overflow_backlog_ms < 0 {
+        anyhow::bail!("config.toml transcription.mux_overflow_backlog_ms must be zero or positive");
+    }
+    for (source_id, source) in &config.sources {
+        if source_id.trim().is_empty() {
+            anyhow::bail!("config.toml transcription source ids cannot be empty");
+        }
+        if source.base_url.trim().is_empty() {
+            anyhow::bail!("config.toml transcription source `{source_id}` base_url is required");
+        }
+        if source.model.trim().is_empty() {
+            anyhow::bail!("config.toml transcription source `{source_id}` model is required");
+        }
+        if source.retry_backoff_initial_seconds <= 0 {
+            anyhow::bail!(
+                "config.toml transcription source `{source_id}` retry_backoff_initial_seconds must be positive"
+            );
+        }
+        if source.retry_backoff_max_seconds < source.retry_backoff_initial_seconds {
+            anyhow::bail!(
+                "config.toml transcription source `{source_id}` retry_backoff_max_seconds must be at least retry_backoff_initial_seconds"
+            );
+        }
+        match source.timestamp_granularity.trim() {
+            "word" | "segment" => {}
+            value => anyhow::bail!(
+                "config.toml transcription source `{source_id}` timestamp_granularity must be word or segment, got `{value}`"
+            ),
+        }
+    }
     Ok(())
 }
 
@@ -469,59 +546,6 @@ pub fn raw_voice_bot_token_lines() -> Result<Vec<String>> {
         .collect())
 }
 
-pub fn stt_transcriptions_base_url() -> Result<String> {
-    let base_url = app_config().stt.base_url.trim().trim_end_matches('/');
-    if base_url.is_empty() {
-        Err(discord_tool_error("config.toml stt.base_url is not set"))
-    } else {
-        Ok(base_url.to_string())
-    }
-}
-
-pub fn stt_model() -> String {
-    app_config().stt.model.trim().to_string()
-}
-
-pub fn stt_language() -> String {
-    app_config().stt.language.trim().to_string()
-}
-
-pub fn stt_response_format() -> String {
-    app_config().stt.response_format.trim().to_string()
-}
-
-pub fn stt_include_logprobs() -> bool {
-    app_config().stt.include_logprobs
-}
-
-pub fn stt_max_token_logprobs() -> usize {
-    app_config().stt.max_token_logprobs
-}
-
-pub fn stt_timeout_seconds() -> u64 {
-    app_config().stt.timeout_seconds
-}
-
-pub fn stt_retry_backoff_initial_seconds() -> i64 {
-    app_config().stt.retry_backoff_initial_seconds
-}
-
-pub fn stt_retry_backoff_max_seconds() -> i64 {
-    app_config().stt.retry_backoff_max_seconds
-}
-
-pub fn stt_drop_no_speech_threshold() -> f64 {
-    app_config().stt.drop_no_speech_probability
-}
-
-pub fn stt_drop_avg_token_logprob_threshold() -> f64 {
-    app_config().stt.drop_avg_token_logprob
-}
-
-pub fn stt_api_key() -> Result<String> {
-    optional_secret(&app_config().stt.api_key_secret)
-}
-
 pub fn wake_url() -> Result<String> {
     let base_url = app_config().wake.base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
@@ -552,26 +576,6 @@ pub fn wake_duplicate_overlap_grace_ms() -> i64 {
 
 pub fn wake_activation_config() -> WakeActivationConfig {
     app_config().wake.activation.clone()
-}
-
-pub fn elevenlabs_api_key() -> Result<String> {
-    optional_secret(&app_config().elevenlabs.api_key_secret)
-}
-
-pub fn elevenlabs_stt_url() -> String {
-    app_config().elevenlabs.stt_url.clone()
-}
-
-pub fn elevenlabs_webhook_url() -> String {
-    app_config().elevenlabs.webhook_url.trim().to_string()
-}
-
-pub fn elevenlabs_timeout_seconds() -> u64 {
-    app_config().elevenlabs.timeout_seconds
-}
-
-pub fn elevenlabs_model_id() -> String {
-    app_config().elevenlabs.model_id.clone()
 }
 
 pub fn codex_bin() -> String {
@@ -631,6 +635,84 @@ pub fn runtime_pool_config() -> PoolConfig {
 
 pub fn transcription_config() -> TranscriptionConfig {
     app_config().transcription.clone()
+}
+
+pub fn active_transcription_source_id() -> String {
+    app_config().transcription.active_source.trim().to_string()
+}
+
+pub fn active_transcription_source() -> Result<NamedTranscriptionSourceConfig> {
+    transcription_source(&active_transcription_source_id())
+}
+
+pub fn transcription_source(source_id: &str) -> Result<NamedTranscriptionSourceConfig> {
+    let source_id = source_id.trim();
+    let Some(source) = app_config().transcription.sources.get(source_id) else {
+        return Err(discord_tool_error(format!(
+            "config.toml transcription source `{source_id}` is not defined"
+        )));
+    };
+    Ok(NamedTranscriptionSourceConfig {
+        id: source_id.to_string(),
+        config: source.clone(),
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct NamedTranscriptionSourceConfig {
+    pub id: String,
+    pub config: TranscriptionSourceConfig,
+}
+
+pub fn transcription_source_api_key(source: &TranscriptionSourceConfig) -> Result<String> {
+    optional_secret(&source.api_key_secret)
+}
+
+pub fn transcription_mux_provider_streams() -> usize {
+    app_config().transcription.mux_provider_streams.clamp(1, 2)
+}
+
+pub fn transcription_mux_batch_delay_ms() -> i64 {
+    app_config()
+        .transcription
+        .mux_batch_delay_ms
+        .clamp(0, 10_000)
+}
+
+pub fn transcription_mux_max_slots() -> usize {
+    app_config().transcription.mux_max_slots.clamp(1, 128)
+}
+
+pub fn transcription_mux_max_audio_ms() -> i64 {
+    app_config()
+        .transcription
+        .mux_max_audio_ms
+        .clamp(1_000, 300_000)
+}
+
+pub fn transcription_mux_guard_ms() -> i64 {
+    app_config().transcription.mux_guard_ms.clamp(0, 5_000)
+}
+
+pub fn transcription_mux_normal_latency_budget_ms() -> i64 {
+    app_config()
+        .transcription
+        .mux_normal_latency_budget_ms
+        .clamp(1_000, 300_000)
+}
+
+pub fn transcription_mux_wake_latency_budget_ms() -> i64 {
+    app_config()
+        .transcription
+        .mux_wake_latency_budget_ms
+        .clamp(500, 120_000)
+}
+
+pub fn transcription_mux_overflow_backlog_ms() -> i64 {
+    app_config()
+        .transcription
+        .mux_overflow_backlog_ms
+        .clamp(0, 120_000)
 }
 
 pub fn voice_sound_dir() -> PathBuf {

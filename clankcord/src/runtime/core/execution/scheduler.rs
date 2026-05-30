@@ -11,7 +11,7 @@ use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
 
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 35] = [
+const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 36] = [
     JobExecutionPolicy::runtime_exclusive(
         JobKind::RuntimeControl,
         JobLane::GeneralAsync,
@@ -82,7 +82,21 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 35] = [
         JobLane::Wake,
         JobOrdering::WakeStream,
     ),
-    JobExecutionPolicy::blocking_snapshot(JobKind::AudioSegment, JobLane::Audio, JobOrdering::None),
+    JobExecutionPolicy::blocking_snapshot(
+        JobKind::AudioSegment,
+        JobLane::AudioSegment,
+        JobOrdering::None,
+    ),
+    JobExecutionPolicy::runtime_snapshot(
+        JobKind::TranscriptionMuxPlan,
+        JobLane::GeneralAsync,
+        JobOrdering::RuntimeMaintenance,
+    ),
+    JobExecutionPolicy::blocking_snapshot(
+        JobKind::TranscriptionMux,
+        JobLane::TranscriptionMux,
+        JobOrdering::None,
+    ),
     JobExecutionPolicy::runtime_snapshot(
         JobKind::WakeActivation,
         JobLane::GeneralAsync,
@@ -169,11 +183,6 @@ const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 35] = [
         JobOrdering::TextTarget,
     ),
     JobExecutionPolicy::blocking_snapshot(
-        JobKind::RefineTranscript,
-        JobLane::Refinement,
-        JobOrdering::None,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
         JobKind::AgentTask,
         JobLane::Agent,
         JobOrdering::AgentSession,
@@ -235,8 +244,8 @@ enum JobLane {
     VoiceControl,
     DiscordText,
     Wake,
-    Audio,
-    Refinement,
+    AudioSegment,
+    TranscriptionMux,
     Agent,
     Maintenance,
 }
@@ -265,10 +274,10 @@ where
 
 struct JobLanes {
     wake: Arc<Semaphore>,
-    audio: Arc<Semaphore>,
+    audio_segment: Arc<Semaphore>,
+    transcription_mux: Arc<Semaphore>,
     voice_control: Arc<Semaphore>,
     discord_text: Arc<Semaphore>,
-    refinement: Arc<Semaphore>,
     agent: Arc<Semaphore>,
     maintenance: Arc<Semaphore>,
     async_jobs: Arc<Semaphore>,
@@ -368,8 +377,8 @@ where
                 JobLane::DiscordText,
                 JobLane::Maintenance,
                 JobLane::Wake,
-                JobLane::Audio,
-                JobLane::Refinement,
+                JobLane::AudioSegment,
+                JobLane::TranscriptionMux,
                 JobLane::Agent,
             ],
         )
@@ -558,10 +567,12 @@ impl JobLanes {
         let concurrency = config::job_concurrency();
         Self {
             wake: Arc::new(Semaphore::new(concurrency.wake.clamp(1, 32))),
-            audio: Arc::new(Semaphore::new(concurrency.audio.clamp(1, 128))),
+            audio_segment: Arc::new(Semaphore::new(concurrency.audio_segment.clamp(1, 128))),
+            transcription_mux: Arc::new(Semaphore::new(
+                config::transcription_mux_provider_streams(),
+            )),
             voice_control: Arc::new(Semaphore::new(concurrency.voice_control.clamp(1, 128))),
             discord_text: Arc::new(Semaphore::new(concurrency.discord_text.clamp(1, 64))),
-            refinement: Arc::new(Semaphore::new(concurrency.refinement.clamp(1, 32))),
             agent: Arc::new(Semaphore::new(concurrency.agent.clamp(1, 32))),
             maintenance: Arc::new(Semaphore::new(concurrency.maintenance.clamp(1, 1))),
             async_jobs: Arc::new(Semaphore::new(concurrency.general_async.clamp(1, 128))),
@@ -574,8 +585,8 @@ impl JobLanes {
             JobLane::VoiceControl => self.voice_control.clone(),
             JobLane::DiscordText => self.discord_text.clone(),
             JobLane::Wake => self.wake.clone(),
-            JobLane::Audio => self.audio.clone(),
-            JobLane::Refinement => self.refinement.clone(),
+            JobLane::AudioSegment => self.audio_segment.clone(),
+            JobLane::TranscriptionMux => self.transcription_mux.clone(),
             JobLane::Agent => self.agent.clone(),
             JobLane::Maintenance => self.maintenance.clone(),
         }
@@ -600,11 +611,15 @@ impl JobLanes {
                 concurrency.discord_text.clamp(1, 64),
             ),
             JobLane::Wake => ("wake", self.wake.clone(), concurrency.wake.clamp(1, 32)),
-            JobLane::Audio => ("audio", self.audio.clone(), concurrency.audio.clamp(1, 128)),
-            JobLane::Refinement => (
-                "refinement",
-                self.refinement.clone(),
-                concurrency.refinement.clamp(1, 32),
+            JobLane::AudioSegment => (
+                "audio_segment",
+                self.audio_segment.clone(),
+                concurrency.audio_segment.clamp(1, 128),
+            ),
+            JobLane::TranscriptionMux => (
+                "transcription_mux",
+                self.transcription_mux.clone(),
+                config::transcription_mux_provider_streams(),
             ),
             JobLane::Agent => ("agent", self.agent.clone(), concurrency.agent.clamp(1, 32)),
             JobLane::Maintenance => (
@@ -631,10 +646,10 @@ fn dispatch_batch_limit(policy: JobExecutionPolicy) -> usize {
     let batch = config::job_batch_limits();
     match policy.lane {
         JobLane::Wake => batch.wake.clamp(1, 64),
-        JobLane::Audio => batch.audio.clamp(1, 128),
+        JobLane::AudioSegment => batch.audio_segment.clamp(1, 128),
+        JobLane::TranscriptionMux => config::transcription_mux_provider_streams(),
         JobLane::VoiceControl => batch.voice_control.clamp(1, 128),
         JobLane::DiscordText => batch.discord_text.clamp(1, 64),
-        JobLane::Refinement => batch.refinement.clamp(1, 32),
         JobLane::Agent => batch.agent.clamp(1, 32),
         JobLane::Maintenance => batch.maintenance.clamp(1, 1),
         JobLane::GeneralAsync => batch.general_async.clamp(1, 128),

@@ -5,6 +5,8 @@ mod v0_4_0;
 mod v0_5_0;
 mod v0_6_0;
 mod v0_7_0;
+mod v0_8_0;
+mod v0_9_0;
 
 use std::cmp::Ordering;
 
@@ -64,6 +66,16 @@ const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
         version: SchemaVersion::new(0, 7, 0),
         version_text: "0.7.0",
         name: "job payload blob text response attachments",
+    },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 8, 0),
+        version_text: "0.8.0",
+        name: "transcription source mux slots",
+    },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 9, 0),
+        version_text: "0.9.0",
+        name: "durable transcription mux planner",
     },
 ];
 
@@ -133,6 +145,8 @@ impl TimelineStore {
             "0.5.0" => v0_5_0::run(&mut transaction).await?,
             "0.6.0" => v0_6_0::run(&mut transaction).await?,
             "0.7.0" => v0_7_0::run(&mut transaction).await?,
+            "0.8.0" => v0_8_0::run(&mut transaction).await?,
+            "0.9.0" => v0_9_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

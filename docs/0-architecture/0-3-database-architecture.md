@@ -140,7 +140,7 @@ timeline_events
   payload_json
 ```
 
-The primary timeline access pattern is a room-scoped time range. Room-time indexes are defined over `(scope_kind, scope_id, started_at_ms, sequence)` with optional kind, capture-run, conversation, and speaker indexes for narrower views. `started_at_ms` and `ended_at_ms` are required columns. Instant events store the same value in both columns. The range loader uses `ended_at_ms > range_start` and `started_at_ms < range_end`, then orders by `started_at_ms`, `sequence`, and `event_id`. Draft transcript search loads speech and transcript event ranges, then matches event text in Rust. Refined transcript search reads authoritative span metadata from Postgres and text artifacts from durable publication storage.
+The primary timeline access pattern is a room-scoped time range. Room-time indexes are defined over `(scope_kind, scope_id, started_at_ms, sequence)` with optional kind, capture-run, conversation, and speaker indexes for narrower views. `started_at_ms` and `ended_at_ms` are required columns. Instant events store the same value in both columns. The range loader uses `ended_at_ms > range_start` and `started_at_ms < range_end`, then orders by `started_at_ms`, `sequence`, and `event_id`. Transcript search loads speech and transcript event ranges, then matches event text in Rust.
 
 Forgotten events remain rows with `forgotten = TRUE`. That keeps sequence, audit, and transcript retention behavior explicit while ordinary timeline readers filter them with a projected boolean. Forget and finite `transcript_events` retention update the projection first, then append privacy-relevant events that describe the operation.
 
@@ -161,7 +161,7 @@ Payload blobs are loaded by identity or after a projection query over the corres
 
 ## JSONB Boundaries
 
-JSONB stores timeline event payloads, runtime snapshots, room controls, voice state snapshots, occupancy snapshots, publications, windows, authoritative spans, and member payloads. JSONB is used when the caller renders or preserves an external-facing record. Queryable facts inside those records are also projected as columns when they participate in hot filters, ordering, locking, or joins.
+JSONB stores timeline event payloads, runtime snapshots, room controls, voice state snapshots, occupancy snapshots, publications, windows, transcription slots, and member payloads. JSONB is used when the caller renders or preserves an external-facing record. Queryable facts inside those records are also projected as columns when they participate in hot filters, ordering, locking, or joins.
 
 Hot scheduling paths use projected columns. JSON operators appear in narrow places where the relation is naturally small or the query is operationally bounded, such as selecting ready voice bots from `bot_states`. Larger relations expose their hot facts as columns.
 

@@ -6,7 +6,6 @@ use crate::runtime::domain::external::RuntimeExternalApi;
 use crate::runtime::domain::ingress::discord_slash;
 use crate::runtime::domain::ingress::discord_text;
 use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
-use crate::runtime::refinement::run_refinement_job;
 use crate::runtime::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload, Runtime,
     RuntimeControlAction, RuntimeControlPayload,
@@ -41,6 +40,11 @@ pub(crate) async fn execute_runtime_async(runtime: &mut Runtime, job: &Job) -> R
         JobPayload::WakeActivation(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                 &wake_activations::execute(runtime, job, payload).await?,
+            )?))
+        }
+        JobPayload::TranscriptionMuxPlan(payload) => {
+            Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                &segments::execute_transcription_mux_plan_job(runtime, job, payload).await?,
             )?))
         }
         JobPayload::Command(_) => commands::prepare(runtime, job).await,
@@ -142,16 +146,6 @@ where
     }
 }
 
-pub(crate) async fn execute_refine_transcript(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
-    match &job.payload {
-        JobPayload::RefineTranscript(_) => refinement::execute(runtime, job).await,
-        payload => anyhow::bail!(
-            "job payload {} is not handled by refinement executor",
-            payload.kind()
-        ),
-    }
-}
-
 pub(crate) async fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
     match &job.payload {
         JobPayload::AudioSegment(payload) => Ok(JobOutput::from_boundary_json(
@@ -159,6 +153,18 @@ pub(crate) async fn execute_audio_segment(runtime: &Runtime, job: &Job) -> Resul
         )?),
         payload => anyhow::bail!(
             "job payload {} is not handled by audio executor",
+            payload.kind()
+        ),
+    }
+}
+
+pub(crate) async fn execute_transcription_mux(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
+    match &job.payload {
+        JobPayload::TranscriptionMux(payload) => Ok(JobOutput::from_boundary_json(
+            &segments::execute_transcription_mux_job(runtime, job, payload).await?,
+        )?),
+        payload => anyhow::bail!(
+            "job payload {} is not handled by transcription mux executor",
             payload.kind()
         ),
     }
@@ -264,24 +270,6 @@ mod room_agents {
                         &payload.reason,
                     )
                     .await
-            }
-        }
-    }
-}
-
-mod refinement {
-    use super::*;
-
-    pub(super) async fn execute(runtime: &Runtime, job: &Job) -> Result<JobOutput> {
-        match run_refinement_job(&runtime.timeline_store, &job.id).await {
-            Ok(job) => Ok(JobOutput::from_boundary_json(
-                &json!({"dispatched": true, "job": job}),
-            )?),
-            Err(error) => {
-                crate::runtime::log(&format!("refinement job failed {}: {error}", job.id));
-                Ok(JobOutput::from_boundary_json(
-                    &json!({"dispatched": false, "jobId": job.id, "error": error.to_string()}),
-                )?)
             }
         }
     }

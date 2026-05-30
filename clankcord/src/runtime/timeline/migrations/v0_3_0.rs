@@ -76,7 +76,6 @@ pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>)
     migrate_voice_scoped_projection_table(transaction, "conversations").await?;
     migrate_voice_scoped_projection_table(transaction, "windows").await?;
     migrate_voice_scoped_projection_table(transaction, "publications").await?;
-    migrate_voice_scoped_projection_table(transaction, "authoritative_spans").await?;
     migrate_automations(transaction).await?;
     Ok(())
 }
@@ -110,6 +109,7 @@ async fn migrate_jobs(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -
         SELECT j.job_id, j.voice_channel_id, p.payload_blob
         FROM jobs j
         JOIN job_payloads p ON p.job_id = j.job_id
+        WHERE j.kind <> 'refine_transcript'
         ORDER BY j.job_id
         "#,
     )

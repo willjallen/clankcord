@@ -54,9 +54,20 @@ impl Runtime {
                 }
                 Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
             },
-            JobKind::RefineTranscript => {
-                match routes::execute_refine_transcript(self, &running).await {
+            JobKind::TranscriptionMux => {
+                match routes::execute_transcription_mux(self, &running).await {
                     Ok(result) => self.complete_dispatched_job(&job_id, running, result).await,
+                    Err(error) if segments::is_retryable_audio_segment_error(&error) => {
+                        let retry = segments::retry_plan(error);
+                        self.requeue_dispatched_job(
+                            &job_id,
+                            running,
+                            retry.delay_for_attempt,
+                            retry.error,
+                            retry.log_prefix,
+                        )
+                        .await
+                    }
                     Err(error) => self.fail_dispatched_job(&job_id, running, error).await,
                 }
             }

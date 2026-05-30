@@ -662,7 +662,6 @@ async fn transcript_render(
                 since: query_str(&query, &["since"]),
                 from: query_str(&query, &["from", "from_time"]),
                 to: query_str(&query, &["to"]),
-                prefer_refined: query_bool(&query, &["preferRefined", "prefer_refined"], true),
                 format: query_str(&query, &["format"]),
                 verbose: query_bool(&query, &["verbose"], false),
             })
@@ -683,7 +682,6 @@ async fn transcript_search(
                 all_channels: query_bool(&query, &["allChannels", "all_channels"], false),
                 query: query_str(&query, &["query"]),
                 since: query_str(&query, &["since"]),
-                prefer_refined: query_bool(&query, &["preferRefined", "prefer_refined"], true),
                 limit: query_usize(&query, &["limit"], 50),
             })
             .await,

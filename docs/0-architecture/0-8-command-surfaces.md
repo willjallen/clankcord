@@ -75,7 +75,7 @@ set_voice_mute
 play_voice_cue
 ```
 
-Command jobs either handle the control directly or emit child jobs. Transcript commands materialize windows and can create publication and refinement work. Pause, resume, deafen, leave, join, voice mute, and voice cue playback require an explicit room target in the command payload. Pause, resume, and deafen update room controls and can create cue playback. Deafen and resume create concrete Discord deafen IO jobs for active voice sessions. Join and leave create `room_agent_placement`. Voice mute and cue commands create concrete Discord voice IO jobs. Agent task commands resolve or create an agent session and emit `agent_session_start` or `agent_task`. Agent-session lifecycle mutations create `agent_session_sunset` and `agent_session_resume` jobs. `forget_window` enters confirmation before executing.
+Command jobs either handle the control directly or emit child jobs. Transcript commands materialize windows and can create publication work. Pause, resume, deafen, leave, join, voice mute, and voice cue playback require an explicit room target in the command payload. Pause, resume, and deafen update room controls and can create cue playback. Deafen and resume create concrete Discord deafen IO jobs for active voice sessions. Join and leave create `room_agent_placement`. Voice mute and cue commands create concrete Discord voice IO jobs. Agent task commands resolve or create an agent session and emit `agent_session_start` or `agent_task`. Agent-session lifecycle mutations create `agent_session_sunset` and `agent_session_resume` jobs. `forget_window` enters confirmation before executing.
 
 ## Confirmations
 

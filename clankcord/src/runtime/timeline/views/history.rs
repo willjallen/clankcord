@@ -42,7 +42,6 @@ pub struct MaterializeTranscriptRequest {
     pub to: String,
     pub publish: String,
     pub live: bool,
-    pub refine: bool,
     pub created_by_user_id: String,
     pub parent_job_id: String,
 }
@@ -55,7 +54,6 @@ pub struct RenderTranscriptRequest {
     pub since: String,
     pub from: String,
     pub to: String,
-    pub prefer_refined: bool,
     pub format: String,
     pub verbose: bool,
 }
@@ -67,7 +65,6 @@ pub struct SearchTranscriptsRequest {
     pub all_channels: bool,
     pub query: String,
     pub since: String,
-    pub prefer_refined: bool,
     pub limit: usize,
 }
 
@@ -79,7 +76,6 @@ impl Default for SearchTranscriptsRequest {
             all_channels: false,
             query: String::new(),
             since: "-7d".to_string(),
-            prefer_refined: true,
             limit: 50,
         }
     }
@@ -281,8 +277,6 @@ impl Runtime {
                 &request.created_by_user_id,
                 &publish,
                 request.live,
-                request.refine,
-                true,
                 if request.parent_job_id.trim().is_empty() {
                     None
                 } else {
@@ -291,7 +285,7 @@ impl Runtime {
             )
             .await?;
         if publish == "discord" {
-            self.publish_materialized_transcript(&mut result, request.live, request.refine)
+            self.publish_materialized_transcript(&mut result, request.live)
                 .await?;
         }
         Ok(result)
@@ -331,15 +325,7 @@ impl Runtime {
         let format = non_empty(request.format, "json".to_string());
         let rendered = self
             .timeline_store
-            .render_transcript(
-                &guild_id,
-                &channel_id,
-                start,
-                end,
-                &window_id,
-                request.prefer_refined,
-                &format,
-            )
+            .render_transcript(&guild_id, &channel_id, start, end, &window_id, &format)
             .await?;
         let events = if request.verbose {
             rendered.events
@@ -359,7 +345,6 @@ impl Runtime {
             "window": if window.is_object() && window.as_object().is_some_and(|map| map.is_empty()) { rendered.window } else { window },
             "content": content,
             "events": events,
-            "authoritativeSpans": rendered.spans,
         }))
     }
 
@@ -396,7 +381,6 @@ impl Runtime {
                 },
                 &query,
                 since,
-                request.prefer_refined,
                 limit,
             )
             .await?;

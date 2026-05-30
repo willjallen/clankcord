@@ -91,9 +91,11 @@ struct PreV0_6_0Job {
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     let rows = sqlx::query(
         r#"
-        SELECT job_id, payload_blob
-        FROM job_payloads
-        ORDER BY job_id
+        SELECT p.job_id, p.payload_blob
+        FROM job_payloads p
+        JOIN jobs j ON j.job_id = p.job_id
+        WHERE j.kind <> 'refine_transcript'
+        ORDER BY p.job_id
         "#,
     )
     .fetch_all(transaction.as_mut())

@@ -24,11 +24,11 @@ pub use payload::{
     DiscordVoiceJoinPayload, DiscordVoiceLeavePayload, DiscordVoiceMutePayload,
     DiscordVoicePlayAudioPayload, DiscordVoicePlaybackCue, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobPayload, OpaqueValue,
-    RefineTranscriptPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextAttachmentPayload,
-    TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
+    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
+    StaleWakeProbeSweepPayload, TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind, TranscriptPublicationPayload, TranscriptionMuxPayload,
+    TranscriptionMuxPlanPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use record::{Job, JobMetadata};
 

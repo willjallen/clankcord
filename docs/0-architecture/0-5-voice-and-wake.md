@@ -16,7 +16,7 @@ LiveCaptureSession
       v
 runtime handlers
       |
-      +--> STT and speech_segment events
+      +--> transcription slots and speech_segment events
       +--> wake_detected events
       +--> wake_activation jobs
       +--> agent sessions and responses
@@ -111,13 +111,20 @@ wake.probe_minimum_ms                 250 ms
 wake.probe_window_ms                 2000 ms
 wake.probe_interval_ms                500 ms
 wake.activation.active_capture_poll_ms 200 ms
-stt.retry_backoff_initial_seconds       5 seconds
-stt.retry_backoff_max_seconds         300 seconds
+transcription.active_source       elevenlabs-scribe-v2
+transcription.mux_provider_streams           2
+transcription.mux_batch_delay_ms        500 ms
+transcription.mux_guard_ms              150 ms
+transcription.mux_normal_latency_budget_ms 15000 ms
+transcription.mux_wake_latency_budget_ms    5000 ms
+transcription.mux_overflow_backlog_ms       2000 ms
 ```
 
 ## Speech And Wake Jobs
 
-An `audio_segment` job validates the WAV artifact and checksum, calls the STT adapter, handles empty or low-confidence provider results, appends `speech_segment` events for accepted speech, and updates room occupancy with the latest speech time. STT timeouts, connection failures, rate limits, and server errors requeue the same job with capped exponential backoff and no attempt limit. Local artifact integrity failures are terminal because the job does not have a valid audio artifact to submit. Speech segment `startedAt` and `endedAt` come from the original segment payload, so late STT completion inserts transcript events at the time the speech occurred while `created_at` records the later insertion time. Wake activation idle timing follows the speaker PCM timestamp, while the later silence-triggered flush controls WAV and STT job creation. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
+An `audio_segment` job validates the WAV artifact and checksum, creates a durable transcription slot, and queues `transcription_mux_plan` work for the active named transcription source. The payload contains path, checksum, duration, speaker identity, capture run, audio format, sample rate, channel count, and sample width. Audio bytes remain in the referenced WAV file.
+
+A `transcription_mux_plan` job reads queued slots for one transcription source and creates explicit mux batches in Postgres. It packs one stream by default and allocates the second configured stream when the one-stream schedule misses normal or wake latency budgets by the configured backlog threshold. Batches are selected by priority and then by fair room-speaker turns. A `transcription_mux` job consumes its planned slots, writes a mono mux WAV with small guard padding between speaker windows, calls the configured provider, maps provider word or segment timestamps back through the mux offsets, and appends `speech_segment` events at the original Discord speaker timestamps. Empty or low-confidence provider results complete the slot without writing speech. Provider timeouts, connection failures, rate limits, and server errors requeue the mux job with capped exponential backoff from the source config. Local artifact integrity failures are terminal because the job does not have valid audio to submit.
 
 A `wake_probe` job validates its wake artifact and checksum, calls the wake adapter, and completes with `no_wake`, `duplicate_wake`, or `wake_detected` data. A positive detection appends a `wake_detected` timeline event and schedules wake activation. Overlapping speaker and probe time suppress duplicate wake events.
 
@@ -135,9 +142,9 @@ audio_checksum
 
 ## Wake Activation
 
-`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the speaker's post-wake speech window, reads committed live capture stats to wait for buffered speaker audio, closes the request window, plays an acknowledgement cue, waits for every same-speaker `audio_segment` overlapping that closed window to finish STT, and creates `agent_session_start` or `agent_task` when usable request text exists.
+`wake_activation` collects the user's request after the wake phrase. The first activation is scheduled from a `wake_detected` event. Activation plays a wake cue through `discord_voice_playback(wake)`, watches the activating speaker's post-wake speech window, promotes queued room transcription slots that overlap the active wake window, reads committed live capture stats to wait for buffered speaker audio, closes the request window, plays an acknowledgement cue, waits for room transcription through the closed request window, and creates `agent_session_start` or `agent_task` when usable request text exists.
 
-The normal close path is voice-driven. After the minimum post-wake window has elapsed, wake activation follows the speaker's committed capture stats and speech segments. The window closes once the latest activating-speaker PCM timestamp has been idle for `speaker_idle_seconds`. The closed request time is persisted in the `wake_activation_window_closed` event. The agent request waits on the closed window's overlapping audio jobs for as long as STT needs, including retryable failed audio that maintenance returns to the queue. Audio segments for a speaker with an active wake activation receive priority inside the audio lane when they overlap the active or closed wake window; wake probes keep their own lane and priority model. The maximum activation window remains a long emergency bound around malformed capture state or a permanently active speaker stream.
+The normal close path is voice-driven. After the minimum post-wake window has elapsed, wake activation follows the speaker's committed capture stats and speech segments. The window closes once the latest activating-speaker PCM timestamp has been idle for `speaker_idle_seconds`. The closed request time is persisted in the `wake_activation_window_closed` event and acknowledgement playback is queued at closure time. The agent request waits on every overlapping audio-segment job, transcription slot, and committed live room capture buffer until provider work is complete through the closed request window. Audio segments in a room with an active wake activation receive priority inside the audio-segment lane when they overlap the active or closed wake window; queued transcription slots that already exist when activation is scheduled are promoted in Postgres and wake-priority mux planning is queued immediately. Wake-priority mux planning runs before ordinary queued speech and opens the second provider stream when the backlog exceeds the configured budget. Failed in-window transcription slots keep the agent request gated because the room transcript is incomplete. Wake probes keep their own lane and priority model. The maximum activation window remains a long emergency bound around malformed capture state or a permanently active speaker stream.
 
 `/wake` uses the same activation path. The slash-command ingress appends a manual `wake_detected` event for the invoking user's current voice room, then schedules `wake_activation` from that event. Follow-up, replacement, cue playback, window closing, and agent dispatch follow the normal wake activation rules.
 

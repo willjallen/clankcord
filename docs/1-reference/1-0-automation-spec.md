@@ -135,7 +135,7 @@ Job triggers evaluate scoped jobs of selected kinds and states.
 ```json
 {
   "kind": "job",
-  "job_kinds": ["refine_transcript"],
+  "job_kinds": ["transcription_mux"],
   "states": ["complete"]
 }
 ```
@@ -438,7 +438,7 @@ Reminder when two users overlap:
 }
 ```
 
-Agent work after a refinement job completes:
+Agent work after a transcription mux job completes:
 
 ```json
 {
@@ -456,7 +456,7 @@ Agent work after a refinement job completes:
   },
   "trigger": {
     "kind": "job",
-    "job_kinds": ["refine_transcript"],
+    "job_kinds": ["transcription_mux"],
     "states": ["complete"]
   },
   "condition": {"kind": "true"},
@@ -464,7 +464,7 @@ Agent work after a refinement job completes:
   "actions": [
     {
       "kind": "agent_task.start",
-      "prompt": "Fact-check the completed transcript job and publish the most useful corrections."
+      "prompt": "Review the completed transcription job and publish the most useful corrections."
     }
   ]
 }
