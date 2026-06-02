@@ -5,10 +5,9 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
 use crate::runtime::timeline::isoformat_z;
-use crate::runtime::util::{
-    MESSAGE_CHUNK_LIMIT, first_non_empty, preview, split_message_chunks, string_field,
-};
+use crate::runtime::util::{first_non_empty, preview, string_field};
 use crate::runtime::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, RoomConfig, Runtime, RuntimeScope, TextDeliveryKind, TextTarget,

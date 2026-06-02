@@ -3,8 +3,6 @@ use serde_json::Value;
 use crate::Result;
 use crate::runtime::{Job, JobKind};
 
-pub(crate) const MESSAGE_CHUNK_LIMIT: usize = 1800;
-
 pub fn log(message: &str) {
     eprintln!("[clankcord-voice] {message}");
 }
@@ -84,40 +82,6 @@ pub(crate) fn slugify(value: &str) -> String {
     multi_dash
         .replace_all(slug.trim_matches('-'), "-")
         .to_string()
-}
-
-pub(crate) fn split_message_chunks(content: &str, limit: usize) -> Vec<String> {
-    let normalized = content.trim();
-    if normalized.is_empty() {
-        return Vec::new();
-    }
-    let mut chunks = Vec::new();
-    let mut current = String::new();
-    for line in normalized.lines() {
-        let line_text = format!("{line}\n");
-        if line_text.len() > limit {
-            if !current.is_empty() {
-                chunks.push(current.trim_end().to_string());
-                current.clear();
-            }
-            let mut start = 0;
-            while start < line_text.len() {
-                let end = (start + limit).min(line_text.len());
-                chunks.push(line_text[start..end].trim_end().to_string());
-                start = end;
-            }
-            continue;
-        }
-        if !current.is_empty() && current.len() + line_text.len() > limit {
-            chunks.push(current.trim_end().to_string());
-            current.clear();
-        }
-        current.push_str(&line_text);
-    }
-    if !current.is_empty() {
-        chunks.push(current.trim_end().to_string());
-    }
-    chunks
 }
 
 pub(crate) fn preview(value: &str, limit: usize) -> String {

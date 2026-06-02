@@ -4,6 +4,7 @@ pub mod coding;
 pub(crate) mod core;
 pub mod domain;
 pub mod jobs;
+pub(crate) mod message_chunks;
 pub mod rooms;
 pub mod scope;
 pub mod service;
@@ -42,6 +43,7 @@ pub use jobs::{
     TranscriptPublicationOutput, TranscriptPublicationPayload, TranscriptionMuxPayload,
     TranscriptionMuxPlanPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
+pub use message_chunks::split_message_chunks;
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};
 pub use service::{
