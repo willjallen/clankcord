@@ -10,7 +10,9 @@ use super::prompts::{
     render_master_prompt_from_dir,
 };
 use crate::Result;
-use crate::adapters::codex::{codex_response_text, extract_codex_usage};
+use crate::adapters::codex::{
+    codex_linear_mcp_config_args, codex_response_text, extract_codex_usage,
+};
 use crate::config;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
@@ -32,6 +34,8 @@ use crate::runtime::{
     JobOutput, JobPayload, JobState, Runtime, RuntimeScopeKind, TextDeliveryKind,
     TextDeliveryPayload, TextTarget, TextTargetKind,
 };
+
+use super::linear_mcp::insert_linear_mcp_env;
 
 const AGENT_UNAVAILABLE_MESSAGE: &str =
     "It looks like ChatGPT is unavailable right now. Try again later.";
@@ -324,7 +328,7 @@ impl Runtime {
         let workdir = agent_task_workdir(&latest);
         fs::create_dir_all(&workdir)?;
         let repo_dir = agent_repo_dir();
-        let agent_env = agent_task_env(&latest, &workdir, repo_dir.as_ref());
+        let agent_env = agent_task_env(&latest, &workdir, repo_dir.as_ref())?;
         let preflight = run_agent_task_preflight(Some(&agent_env));
         if !preflight.ok {
             let detail = preflight.failed_check_summary();
@@ -1013,7 +1017,7 @@ fn agent_task_env(
     job: &Job,
     workdir: &std::path::Path,
     repo_dir: Option<&PathBuf>,
-) -> BTreeMap<String, String> {
+) -> Result<BTreeMap<String, String>> {
     let mut vars = BTreeMap::new();
     vars.insert("CLANKCORD_API_BASE_URL".to_string(), config::api_base_url());
     vars.insert(
@@ -1044,7 +1048,8 @@ fn agent_task_env(
             repo_dir.display().to_string(),
         );
     }
-    vars
+    insert_linear_mcp_env(&mut vars)?;
+    Ok(vars)
 }
 
 fn agent_repo_dir() -> Option<PathBuf> {
@@ -1058,7 +1063,7 @@ fn agent_task_model() -> Option<String> {
 fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPreflightMetadata {
     let agent_env = envs.cloned().unwrap_or_default();
     let codex_bin = config::codex_bin();
-    let checks: Vec<Vec<String>> = vec![
+    let mut checks: Vec<Vec<String>> = vec![
         vec![codex_bin, "--version".to_string()],
         vec!["rg".to_string(), "--version".to_string()],
         vec!["jq".to_string(), "--version".to_string()],
@@ -1166,6 +1171,12 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
             "--help".to_string(),
         ],
     ];
+    if config::codex_linear_mcp_enabled() {
+        let mut command = vec![config::codex_bin()];
+        command.extend(codex_linear_mcp_config_args());
+        command.extend(["mcp".to_string(), "list".to_string(), "--json".to_string()]);
+        checks.push(command);
+    }
     let mut results = Vec::new();
     for command in checks {
         let display = command.join(" ");

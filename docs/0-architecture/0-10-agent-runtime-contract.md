@@ -23,13 +23,15 @@ Each persisted agent session has a writable directory under `paths.agent_workspa
 
 The runtime image provides the agent process with `clang`, `python`, and `zip` alongside the Clankcord CLI, `rg`, and `jq`. Coding work happens inside the session workspace. Generated source files, benchmark outputs, and notes can be packaged there as zip artifacts and submitted through the response command surface.
 
-Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime also enables Codex's `remote_compaction_v2` feature explicitly because agent invocations use `--ignore-user-config`. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
+Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime also enables Codex's `remote_compaction_v2` feature explicitly because agent invocations use `--ignore-user-config`. When `codex.linear_mcp.enabled` is true, the runtime passes Codex config overrides for the Linear streamable HTTP MCP server and the bearer-token environment variable. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
 
 Codex sandbox behavior also comes from `[codex]`. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
 
 ## Codex Authentication
 
 Deployments give Codex a persistent home directory through `[codex].home`. In the Docker Compose deployment, `./clankcord/runtime-data/codex-home` is mounted at `/codex`, and `CODEX_HOME=/codex` is passed to every agent invocation. `/codex/auth.json` is the live Codex credential store. Codex reads access credentials from that file and writes refreshed credentials back into the same file as tokens rotate.
+
+Linear MCP authentication uses Clankcord secrets. When `codex.linear_mcp.enabled` is true, `codex.linear_mcp.api_key_secret` names the secret file under `[secrets].root`; the runtime reads it and passes it to Codex as `LINEAR_API_KEY`. The Codex invocation passes `mcp_servers.linear.url` and `mcp_servers.linear.bearer_token_env_var` as explicit config overrides, so Linear access stays available while user config remains ignored.
 
 Operators initialize the mounted Codex home with `scripts/codex-login.sh`. The script stops the runtime, runs `codex login --device-auth` from a one-off container against the mounted `/codex` home, verifies login status, and recreates the runtime container. The runtime container then starts with the existing `/codex/auth.json` and leaves it intact across restarts. Moving a deployment to a new host is a state migration of the Codex home directory, including `auth.json`, `sessions/`, and Codex local state.
 
@@ -106,6 +108,8 @@ Agent thread title refresh uses its own prompt template, `agent-thread-title.md`
 Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, `clang`, `python`, `zip`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, agent-session search, agent-session sunset, agent-session resume, response sending, feedback submission, member resolution, room occupants, automation creation/spec commands, and the coding spec command.
 
 Preflight results are stored with the agent-task metadata. They make tool-surface failures visible in job inspection and the debug dashboard.
+
+When Linear MCP is enabled, preflight also runs `codex mcp list --json` with the same explicit Linear MCP config overrides used by agent invocations. This verifies that Codex accepts the configured Linear MCP server and token environment binding before the model is launched.
 
 ## CLI Output
 

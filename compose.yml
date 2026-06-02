@@ -76,6 +76,7 @@ services:
       - clankcord_discord_bot_token
       - clankcord_discord_voice_bot_tokens
       - clankcord_elevenlabs_api_key
+      - clankcord_linear_api_key
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8091/healthz >/dev/null || exit 1"]
       interval: 30s
@@ -92,6 +93,8 @@ secrets:
     file: ./tokens/openclaw_discord_voice_bot_tokens.txt
   clankcord_elevenlabs_api_key:
     file: ${CLANKCORD_ELEVENLABS_API_KEY_SECRET_FILE:-./tokens/openclaw_elevenlabs_api_key.txt}
+  clankcord_linear_api_key:
+    file: ${CLANKCORD_LINEAR_API_KEY_SECRET_FILE:-./tokens/openclaw_linear_token.txt}
 
 volumes:
   clankcord-postgres-data:

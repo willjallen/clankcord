@@ -26,6 +26,8 @@ use crate::runtime::{
     RuntimeScope, TextTargetKind,
 };
 
+use super::linear_mcp::insert_linear_mcp_env;
+
 const THREAD_TITLE_RESPONSE_INTERVAL: usize = 1;
 const THREAD_TITLE_MAX_CANDIDATES_PER_RUN: usize = 1;
 const THREAD_TITLE_MAX_CHARS: usize = 80;
@@ -260,7 +262,7 @@ impl Runtime {
             model: config::codex_model(),
             reasoning_effort: config::codex_reasoning_effort(),
             fast_mode: config::codex_fast_mode(),
-            env: agent_thread_title_env(job),
+            env: agent_thread_title_env(job)?,
             result_path: result_path.clone(),
             raw_result_path: raw_result_path.clone(),
         })?;
@@ -630,7 +632,7 @@ fn agent_thread_title_workdir(agent_session_id: &str) -> PathBuf {
         .join(agent_session_id)
 }
 
-fn agent_thread_title_env(job: &Job) -> BTreeMap<String, String> {
+fn agent_thread_title_env(job: &Job) -> Result<BTreeMap<String, String>> {
     let mut vars = BTreeMap::new();
     vars.insert(
         "CODEX_HOME".to_string(),
@@ -643,5 +645,6 @@ fn agent_thread_title_env(job: &Job) -> BTreeMap<String, String> {
     vars.insert("CLANKCORD_AGENT_JOB_ID".to_string(), job.id.clone());
     vars.insert("CLANKCORD_AGENT_GUILD_ID".to_string(), job.guild_id.clone());
     vars.insert("CLANKCORD_AGENT_SCOPE_ID".to_string(), job.scope_id.clone());
-    vars
+    insert_linear_mcp_env(&mut vars)?;
+    Ok(vars)
 }

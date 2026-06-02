@@ -94,6 +94,15 @@ pub struct CodexConfig {
     pub sandbox: String,
     pub bypass_sandbox: bool,
     pub approval_policy: String,
+    pub linear_mcp: CodexLinearMcpConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CodexLinearMcpConfig {
+    pub enabled: bool,
+    pub url: String,
+    pub api_key_secret: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -394,6 +403,7 @@ fn validate_config(config: &AppConfig) -> Result<()> {
     if config.postgres.password_secret.trim().is_empty() {
         anyhow::bail!("config.toml postgres.password_secret is required");
     }
+    validate_codex_config(&config.codex)?;
     validate_transcription_config(&config.transcription)?;
     if config.prompts.dir.as_os_str().is_empty() {
         anyhow::bail!("config.toml prompts.dir is required");
@@ -403,6 +413,18 @@ fn validate_config(config: &AppConfig) -> Result<()> {
         .timezone
         .parse::<Tz>()
         .with_context(|| format!("invalid time.timezone `{}`", config.time.timezone))?;
+    Ok(())
+}
+
+fn validate_codex_config(config: &CodexConfig) -> Result<()> {
+    if config.linear_mcp.enabled {
+        if config.linear_mcp.url.trim().is_empty() {
+            anyhow::bail!("config.toml codex.linear_mcp.url is required when enabled");
+        }
+        if config.linear_mcp.api_key_secret.trim().is_empty() {
+            anyhow::bail!("config.toml codex.linear_mcp.api_key_secret is required when enabled");
+        }
+    }
     Ok(())
 }
 
@@ -643,6 +665,24 @@ pub fn codex_bypass_sandbox() -> bool {
 
 pub fn codex_approval_policy() -> String {
     app_config().codex.approval_policy.clone()
+}
+
+pub const CODEX_LINEAR_MCP_TOKEN_ENV: &str = "LINEAR_API_KEY";
+
+pub fn codex_linear_mcp_config() -> CodexLinearMcpConfig {
+    app_config().codex.linear_mcp.clone()
+}
+
+pub fn codex_linear_mcp_enabled() -> bool {
+    app_config().codex.linear_mcp.enabled
+}
+
+pub fn codex_linear_mcp_api_key() -> Result<String> {
+    let config = &app_config().codex.linear_mcp;
+    if !config.enabled {
+        return Ok(String::new());
+    }
+    required_secret(&config.api_key_secret, "Linear MCP API key")
 }
 
 pub fn agent_session_max_active_seconds() -> i64 {

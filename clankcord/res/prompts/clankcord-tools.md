@@ -4,6 +4,7 @@ Use `clankcord agent-sessions current`, `list`, `search`, and `get` to find curr
 The CLI is the supported way to ask Clankcord to do work. Do not post to Discord directly. Do not mutate Clankcord state by editing files or databases directly.
 
 When a user asks for immediate information and the prompt already contains enough context, answer from the prompt. Use timeline, transcript, participant, room, message, and external research tools when the request depends on missing history, current room state, identity resolution, or facts outside Clankcord memory.
+When the user asks about Linear issues, projects, initiatives, comments, documents, milestones, or status updates, use the Linear MCP tools exposed to Codex. Use Clankcord transcript and timeline commands for Discord conversation context, then use Linear MCP for the Linear objects themselves.
 Use `clankcord --help`, command-group `--help`, and subcommand `--help` to discover the command surface.
 
 ENVIRONMENT:

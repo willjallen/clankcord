@@ -165,6 +165,11 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
     }
     args.push(OsString::from("--enable"));
     args.push(OsString::from("remote_compaction_v2"));
+    args.extend(
+        codex_linear_mcp_config_args()
+            .into_iter()
+            .map(OsString::from),
+    );
     if let Some(sandbox) = config::codex_sandbox() {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
@@ -198,6 +203,31 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
         args.push(OsString::from("-"));
     }
     args
+}
+
+pub(crate) fn codex_linear_mcp_config_args() -> Vec<String> {
+    let linear = config::codex_linear_mcp_config();
+    if !linear.enabled {
+        return Vec::new();
+    }
+    vec![
+        "-c".to_string(),
+        "features.experimental_use_rmcp_client=true".to_string(),
+        "-c".to_string(),
+        format!(
+            "mcp_servers.linear.url={}",
+            toml_string_literal(&linear.url)
+        ),
+        "-c".to_string(),
+        format!(
+            "mcp_servers.linear.bearer_token_env_var={}",
+            toml_string_literal(config::CODEX_LINEAR_MCP_TOKEN_ENV)
+        ),
+    ]
+}
+
+fn toml_string_literal(value: &str) -> String {
+    toml::Value::String(value.to_string()).to_string()
 }
 
 fn display_command(executable: &str, args: &[OsString]) -> String {

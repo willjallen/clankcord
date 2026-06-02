@@ -1,6 +1,7 @@
 mod agent_sessions;
 mod commands;
 mod confirmations;
+mod linear_mcp;
 mod policy;
 mod prompts;
 mod tasks;
