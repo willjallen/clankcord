@@ -34,8 +34,8 @@ fn agent_task_message_uses_compact_invocation_context() {
     );
     assert!(message.contains("===== RECENT SCOPE EVENTS ====="));
     assert!(message.contains("===== CURRENT REQUEST EVENTS ====="));
-    assert!(message.contains("vince (user-2): prior context"));
-    assert!(message.contains("will (user-1): summarize this"));
+    assert!(message.contains("vince: prior context"));
+    assert!(message.contains("will: summarize this"));
     assert!(!message.contains("JOB_PACKET_JSON"));
     assert!(!message.contains("\"schema\""));
     assert!(!message.contains("\"tools\""));
@@ -72,12 +72,8 @@ fn prompt_context() -> AgentTaskPromptContext {
         requested_by: "will".to_string(),
         request: "summarize this".to_string(),
         workdir: "/clankcord/state/agent-workspaces/task/guild/code".to_string(),
-        recent_scope_events: vec![
-            "[2026-05-15T00:00:00Z] vince (user-2): prior context".to_string(),
-        ],
-        source_request_events: vec![
-            "[2026-05-15T00:01:00Z] will (user-1): summarize this".to_string(),
-        ],
+        recent_scope_events: vec!["[2026-05-15T00:00:00Z] vince: prior context".to_string()],
+        source_request_events: vec!["[2026-05-15T00:01:00Z] will: summarize this".to_string()],
     }
 }
 

@@ -67,7 +67,24 @@ async fn transcript_render_and_search_use_speech_events() {
         .render_transcript("guild", "code", start, end, "", "markdown")
         .await
         .unwrap();
+    assert!(rendered.content.contains("# Transcript"));
+    assert!(rendered.content.contains("guild_id: guild"));
+    assert!(rendered.content.contains("voice_channel_id: code"));
+    assert!(rendered.content.contains("event_count: 1"));
+    assert!(rendered.content.contains("first_event_id: evt_"));
+    assert!(rendered.content.contains("last_event_id: evt_"));
+    assert!(rendered.content.contains("participants:\n- user-a: Will"));
+    assert!(rendered.content.contains("## Conversation"));
     assert!(rendered.content.contains("draft fixed piont"));
+    let error = store
+        .render_transcript("guild", "code", start, end, "", "yaml")
+        .await
+        .expect_err("unsupported transcript format is rejected");
+    assert!(
+        error
+            .to_string()
+            .contains("transcript render format must be json or markdown")
+    );
     assert_eq!(
         string_field(
             &store

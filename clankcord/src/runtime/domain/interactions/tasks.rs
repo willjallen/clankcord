@@ -868,10 +868,9 @@ impl Runtime {
         }
         if source_request_events.is_empty() && !request.trim().is_empty() {
             source_request_events.push(format!(
-                "[{}] {} ({}): {}",
+                "[{}] {}: {}",
                 job.created_at,
                 non_empty(requested_by.clone(), "requester".to_string()),
-                job.requested_by_user_id,
                 request
             ));
         }
@@ -1278,8 +1277,7 @@ fn agent_prompt_event_line(event: &Value) -> String {
         first_value_string(event, &["speaker_username", "speakerUsername"]),
         "unknown".to_string(),
     ]);
-    let speaker_user_id = first_value_string(event, &["speaker_user_id", "speakerId"]);
-    format!("[{timestamp}] {speaker} ({speaker_user_id}): {text}")
+    format!("[{timestamp}] {speaker}: {text}")
 }
 
 fn string_array_field(value: &Value, key: &str) -> Vec<String> {

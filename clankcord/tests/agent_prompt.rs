@@ -25,10 +25,10 @@ fn agent_task_prompt_is_compact_and_packet_free() {
             request: "summarize the floating point discussion".to_string(),
             workdir: "/clankcord/state/agent-workspaces/task/guild/voice".to_string(),
             recent_scope_events: vec![
-                "[2026-05-15T00:00:00Z] Will (user): we were talking about floats".to_string(),
+                "[2026-05-15T00:00:00Z] Will: we were talking about floats".to_string(),
             ],
             source_request_events: vec![
-                "[2026-05-15T00:01:00Z] Will (user): hey clanky summarize this".to_string(),
+                "[2026-05-15T00:01:00Z] Will: hey clanky summarize this".to_string(),
             ],
         },
         true,
@@ -84,8 +84,7 @@ fn voice_dm_request_prompt_forbids_public_confirmation_after_private_delivery() 
             workdir: "/clankcord/state/agent-workspaces/task/ags_1".to_string(),
             recent_scope_events: vec![],
             source_request_events: vec![
-                "[2026-05-18T01:31:55.234Z] Will (user): send me a DM with the message test"
-                    .to_string(),
+                "[2026-05-18T01:31:55.234Z] Will: send me a DM with the message test".to_string(),
             ],
         },
         false,
@@ -124,8 +123,7 @@ fn dm_text_agent_task_prompt_uses_private_text_sections() {
             workdir: "/clankcord/state/agent-workspaces/task/ags_1".to_string(),
             recent_scope_events: vec![],
             source_request_events: vec![
-                "[2026-05-15T00:01:00Z] Will (user): can you remind me what we decided?"
-                    .to_string(),
+                "[2026-05-15T00:01:00Z] Will: can you remind me what we decided?".to_string(),
             ],
         },
         true,
@@ -195,7 +193,7 @@ fn voice_thread_text_prompt_is_text_origin_without_voice_summary_rule() {
             workdir: "/clankcord/state/agent-workspaces/task/ags_1".to_string(),
             recent_scope_events: vec![],
             source_request_events: vec![
-                "[2026-05-15T00:01:00Z] Will (user): follow up on the room discussion".to_string(),
+                "[2026-05-15T00:01:00Z] Will: follow up on the room discussion".to_string(),
             ],
         },
         true,
@@ -257,7 +255,7 @@ fn agent_task_prompt_can_render_from_custom_template_dir() {
             workdir: "/clankcord/state/agent-workspaces/task/guild/voice".to_string(),
             recent_scope_events: vec![],
             source_request_events: vec![
-                "[2026-05-15T00:01:00Z] Will (user): hey clanky summarize this".to_string(),
+                "[2026-05-15T00:01:00Z] Will: hey clanky summarize this".to_string(),
             ],
         },
         true,

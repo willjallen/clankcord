@@ -23,7 +23,7 @@ Each persisted agent session has a writable directory under `paths.agent_workspa
 
 The runtime image provides the agent process with `clang`, `python`, and `zip` alongside the Clankcord CLI, `rg`, and `jq`. Coding work happens inside the session workspace. Generated source files, benchmark outputs, and notes can be packaged there as zip artifacts and submitted through the response command surface.
 
-Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
+Codex process behavior comes from the `[codex]` configuration. `model` controls the Codex model passed with `-m` when it is set. `reasoning_effort` is a typed `low`, `medium`, `high`, or `xhigh` value passed as Codex's `model_reasoning_effort` config override. `fast_mode` maps to Codex's `fast_mode` feature flag and is passed explicitly on every invocation. The runtime also enables Codex's `remote_compaction_v2` feature explicitly because agent invocations use `--ignore-user-config`. The runtime records the resolved command, model, reasoning effort, and fast-mode value in agent-task metadata.
 
 Codex sandbox behavior also comes from `[codex]`. `bypass_sandbox = true` makes the runtime pass Codex's explicit sandbox-bypass flag for agent invocations. Docker Compose deployments can set `CLANKCORD_CODEX_BYPASS_SANDBOX=true` in the Compose environment, which overrides the TOML value at runtime. When that environment value is unset or empty, the runtime uses `config.toml`. Installations that rely on Codex's own sandbox leave the value false and use `sandbox` plus `approval_policy` from `config.toml`.
 
@@ -93,7 +93,7 @@ CONTEXT NOTE:
 
 The captured context is a bounded local window of user-visible speech and Discord text messages from the task scope. It includes all speakers in that window, split into recent scope events and source request events. The prompt excludes raw job packets, wake internals, audio paths, checksums, provider metadata, token details, and duplicated field aliases.
 
-The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broader scope context, or ambiguous references. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
+The context note tells the agent to fetch more history when the request depends on earlier discussion, missing participants, broader scope context, or ambiguous references. Human recency-window phrases such as "last 10 minutes" and "last 30 minutes" are advisory lower bounds; agents start with a broader transcript window, expand farther when the rendered transcript begins mid-topic or needs earlier setup, and go as far back as reasonable to answer the request well. The prompt-local context remains an orientation slice and can overlap the rendered window. Large timeline, transcript, search, and job outputs are written with explicit file output and inspected from the workdir.
 
 The invocation response contract is repeated on every task because resumed Codex sessions receive invocation sections without the session bootstrap sections. It carries the interpersonal content publication policy on every invocation and covers private delivery requests across all routes: a request to DM, direct-message, privately reply, or message a specific private recipient is satisfied by the private delivery itself. After successful private delivery, the agent finishes with `RESPONSE_SUBMITTED` and does not publish a session or channel confirmation unless the user explicitly asks for public acknowledgement. For state-changing work that visibly completes through the command itself, the agent finishes with `NO_RESPONSE_NEEDED`.
 
@@ -109,14 +109,14 @@ Preflight results are stored with the agent-task metadata. They make tool-surfac
 
 ## CLI Output
 
-Agent-facing CLI output is JSON. Large read commands support explicit file output.
+Agent-facing structured CLI output is JSON. Transcript rendering also supports markdown file output for conversational context. Large read commands support explicit file output.
 
 ```text
---file <path>
---format json
+clankcord transcripts render --since=-1h --file transcript.md --format markdown
+--file <path> --format json
 ```
 
-When `--file` is used, stdout stays small. The CLI writes the JSON file, prints the path, and prints useful counts or window bounds when it can derive them. This lets Codex inspect large results with `jq`, `rg`, and `sed` from the session workdir.
+When `--file` is used, stdout stays small. The CLI writes the file, prints the path, and prints useful counts or window bounds when it can derive them. Transcript markdown files give agents readable conversational context for recency-window requests plus window metadata, event bounds, and participant speaker-user-id mappings. JSON files preserve raw per-event structured fields for timeline, search, jobs, and transcript cases that need full event records. This lets Codex inspect large results with `rg`, `sed`, and `jq` from the session workdir.
 
 `--ephemeral` and `--verbose` control selection and shape independently. `--ephemeral` includes wake, audio, transient capture, and other ephemeral runtime events. `--verbose` expands the selected records without changing which event classes were selected.
 

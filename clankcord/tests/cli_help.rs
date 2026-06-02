@@ -24,6 +24,9 @@ fn top_level_help_describes_command_groups_and_agent_workflows() {
     assert!(help.contains("Materialize, render, and search voice transcripts"));
     assert!(help.contains("Publish public replies, questions, and DMs"));
     assert!(help.contains("Common agent workflows"));
+    assert!(help.contains(
+        "clankcord transcripts render --since=-1h --file transcript.md --format markdown"
+    ));
     assert!(help.contains("clankcord responses send <<'EOF'"));
     assert!(help.contains("clankcord automations validate < automation.json"));
     assert!(help.contains("clankcord coding spec"));

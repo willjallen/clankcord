@@ -6,8 +6,8 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
         toml::from_str::<AppConfig>(include_str!("../../config.ex.toml")).expect("config parses");
 
     assert_eq!(config.codex.model, "gpt-5.5");
-    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::Medium);
-    assert_eq!(config.codex.reasoning_effort.as_str(), "medium");
+    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::High);
+    assert_eq!(config.codex.reasoning_effort.as_str(), "high");
     assert!(!config.codex.fast_mode);
 }
 
@@ -15,7 +15,7 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
 fn codex_reasoning_effort_and_fast_mode_are_typed_config_values() {
     let config_text = include_str!("../../config.ex.toml")
         .replace(
-            "reasoning_effort = \"medium\"",
+            "reasoning_effort = \"high\"",
             "reasoning_effort = \"xhigh\"",
         )
         .replace("fast_mode = false", "fast_mode = true");
@@ -41,7 +41,7 @@ fn stale_codex_task_model_key_is_rejected() {
 #[test]
 fn invalid_codex_reasoning_effort_is_rejected() {
     let config_text = include_str!("../../config.ex.toml").replace(
-        "reasoning_effort = \"medium\"",
+        "reasoning_effort = \"high\"",
         "reasoning_effort = \"minimal\"",
     );
 

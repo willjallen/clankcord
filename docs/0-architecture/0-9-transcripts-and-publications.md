@@ -60,7 +60,7 @@ materialize_transcript
 
 ## Rendering
 
-Rendering reads selected speech events and formats them by timestamp and speaker label. JSON rendering includes the window and selected events. The command surface controls output size: compact JSON is the default view, `--verbose` expands selected records, and `--file ... --format json` writes large windows to disk for agent inspection.
+Rendering reads selected speech events and formats them by timestamp and speaker label. Markdown rendering writes a metadata header with window bounds, event bounds, participant speaker-user-id mappings, and then line-oriented transcript text with timestamps, speaker labels, and exact transcript text. JSON rendering includes the window and selected events. Agents use markdown file output for conversational context and JSON when they need raw per-event structured fields. The command surface controls output size: compact JSON is the default structured view, `--verbose` expands selected records, and `--file ...` writes large windows to disk for agent inspection.
 
 ## Search And Context
 

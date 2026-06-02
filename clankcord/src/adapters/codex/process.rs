@@ -163,6 +163,8 @@ fn codex_args(request: &CodexRunRequest) -> Vec<OsString> {
         args.push(OsString::from("--disable"));
         args.push(OsString::from("fast_mode"));
     }
+    args.push(OsString::from("--enable"));
+    args.push(OsString::from("remote_compaction_v2"));
     if let Some(sandbox) = config::codex_sandbox() {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));

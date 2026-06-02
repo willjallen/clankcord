@@ -100,27 +100,6 @@ impl TimelineStore {
             }
         }
         items.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
-        let content = if format == "json" {
-            serde_json::to_string_pretty(&serde_json::json!({"events": events}))?
-        } else {
-            let mut lines = Vec::new();
-            for (_, _kind, payload) in &items {
-                let text = event_text(payload);
-                if text.is_empty() {
-                    continue;
-                }
-                let stamp = event_start(payload)
-                    .map(|value| value.to_rfc3339_opts(SecondsFormat::Secs, true))
-                    .unwrap_or_default();
-                let prefix = if stamp.is_empty() {
-                    String::new()
-                } else {
-                    format!("[{stamp}] ")
-                };
-                lines.push(format!("{prefix}{}: {text}", event_speaker(payload)));
-            }
-            lines.join("\n").trim().to_string()
-        };
         let window = serde_json::json!({
             "window_id": window_id,
             "guild_id": guild_id,
@@ -130,6 +109,11 @@ impl TimelineStore {
             "end_time": isoformat_z(Some(end)),
             "quality": "draft"
         });
+        let content = match format {
+            "json" => serde_json::to_string_pretty(&serde_json::json!({"events": events}))?,
+            "markdown" => render_markdown_transcript(&window, &items, events.len()),
+            _ => anyhow::bail!("transcript render format must be json or markdown"),
+        };
         Ok(RenderedTranscript {
             window,
             events,
@@ -220,6 +204,86 @@ impl TimelineStore {
         let job = Value::Null;
         Ok(serde_json::json!({"window": window, "publication": publication, "job": job}))
     }
+}
+
+fn render_markdown_transcript(
+    window: &Value,
+    items: &[(DateTime<Utc>, &'static str, Value)],
+    event_count: usize,
+) -> String {
+    let mut lines = vec![
+        "# Transcript".to_string(),
+        String::new(),
+        format!("window_id: {}", string_field(window, "window_id")),
+        format!("guild_id: {}", string_field(window, "guild_id")),
+        format!(
+            "voice_channel_id: {}",
+            string_field(window, "voice_channel_id")
+        ),
+        format!("start_time: {}", string_field(window, "start_time")),
+        format!("end_time: {}", string_field(window, "end_time")),
+        format!("event_count: {event_count}"),
+        format!(
+            "first_event_id: {}",
+            items
+                .first()
+                .map(|(_, _, event)| first_value_string(event, &["event_id", "eventId"]))
+                .unwrap_or_default()
+        ),
+        format!(
+            "last_event_id: {}",
+            items
+                .last()
+                .map(|(_, _, event)| first_value_string(event, &["event_id", "eventId"]))
+                .unwrap_or_default()
+        ),
+        String::new(),
+        "participants:".to_string(),
+    ];
+    for (speaker_user_id, labels) in transcript_participants(items) {
+        lines.push(format!(
+            "- {}: {}",
+            speaker_user_id,
+            labels.into_iter().collect::<Vec<_>>().join(", ")
+        ));
+    }
+    lines.push(String::new());
+    lines.push("## Conversation".to_string());
+    lines.push(String::new());
+    for (_, _kind, payload) in items {
+        let text = event_text(payload);
+        if text.is_empty() {
+            continue;
+        }
+        let stamp = event_start(payload)
+            .map(|value| value.to_rfc3339_opts(SecondsFormat::Secs, true))
+            .unwrap_or_default();
+        let prefix = if stamp.is_empty() {
+            String::new()
+        } else {
+            format!("[{stamp}] ")
+        };
+        lines.push(format!("{prefix}{}: {text}", event_speaker(payload)));
+    }
+    lines.join("\n").trim().to_string()
+}
+
+fn transcript_participants(
+    items: &[(DateTime<Utc>, &'static str, Value)],
+) -> BTreeMap<String, BTreeSet<String>> {
+    let mut participants = BTreeMap::new();
+    for (_, _, event) in items {
+        let speaker = event_speaker(event);
+        let speaker_user_id = non_empty(
+            first_value_string(event, &["speaker_user_id", "speakerId"]),
+            "unknown".to_string(),
+        );
+        participants
+            .entry(speaker_user_id)
+            .or_insert_with(BTreeSet::new)
+            .insert(speaker);
+    }
+    participants
 }
 
 impl TimelineStore {

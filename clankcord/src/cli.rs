@@ -11,8 +11,8 @@ use crate::adapters::discord::messages::{read as read_messages, search as search
 use crate::errors::discord_tool_error;
 
 const CLI_AFTER_HELP: &str = r#"Common agent workflows:
-  Inspect recent memory:      clankcord timeline tail --since -10m --file timeline.json
-  Render transcript context:  clankcord transcripts render --since -30m --file transcript.md --format markdown
+  Inspect recent memory:      clankcord timeline tail --since=-10m --file timeline.json --format json
+  Render transcript context:  clankcord transcripts render --since=-1h --file transcript.md --format markdown
   Search agent sessions:      clankcord agent-sessions search --query "floating point" --file sessions.json
   Resolve a person:           clankcord members resolve "display name"
   Publish a visible reply:    clankcord responses send <<'EOF'
@@ -1166,6 +1166,7 @@ fn transcript_materialize(args: TranscriptMaterializeArgs) -> Result<i32> {
 }
 
 fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
+    ensure_transcript_render_format(&args.output.format)?;
     let result = api_request(
         "GET",
         "/v1/transcript/render",
@@ -1181,7 +1182,7 @@ fn transcript_render(args: TranscriptRenderArgs) -> Result<i32> {
             "verbose": args.verbose,
         })),
     )?;
-    emit_output(result, &args.output)
+    emit_transcript_render_output(result, &args.output)
 }
 
 fn transcript_search(args: TranscriptSearchArgs) -> Result<i32> {
@@ -1709,6 +1710,58 @@ fn emit_output(payload: Value, output: &OutputArgs) -> Result<i32> {
     }
     println!("{rendered}");
     Ok(0)
+}
+
+fn emit_transcript_render_output(payload: Value, output: &OutputArgs) -> Result<i32> {
+    match output.format.trim() {
+        "" | "json" => emit_output(payload, output),
+        "markdown" => emit_markdown_transcript(payload, output),
+        _ => Err(discord_tool_error(
+            "--format must be json or markdown for transcript render",
+        )),
+    }
+}
+
+fn ensure_transcript_render_format(format: &str) -> Result<()> {
+    match format.trim() {
+        "" | "json" | "markdown" => Ok(()),
+        _ => Err(discord_tool_error(
+            "--format must be json or markdown for transcript render",
+        )),
+    }
+}
+
+fn emit_markdown_transcript(payload: Value, output: &OutputArgs) -> Result<i32> {
+    let content = payload
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if let Some(path) = output
+        .file
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        fs::write(path, trailing_newline(content))?;
+        println!("Wrote markdown to {path}");
+        if let Some(count) = payload_record_count(&payload) {
+            println!("Records: {count}");
+        }
+        if let Some((from, to)) = payload_window(&payload) {
+            println!("Window: {from} to {to}");
+        }
+        return Ok(0);
+    }
+    print!("{}", trailing_newline(content));
+    Ok(0)
+}
+
+fn trailing_newline(content: &str) -> String {
+    if content.is_empty() || content.ends_with('\n') {
+        content.to_string()
+    } else {
+        format!("{content}\n")
+    }
 }
 
 fn ensure_json_format(format: &str) -> Result<()> {
