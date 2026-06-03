@@ -17,10 +17,11 @@ use clankcord::runtime::{
     DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceMuteOutput,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RoomConfig, Runtime, RuntimeScope, RuntimeScopeKind,
-    TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
+    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
+    DiscordVoiceStatusSnapshotOutput, Job, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
+    RoomConfig, Runtime, RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 
 mod common;
@@ -1435,7 +1436,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
             .as_array()
             .map(|values| values.len())
             .unwrap(),
-        6
+        5
     );
 
     let jobs = store
@@ -1448,8 +1449,46 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     assert!(kinds.contains(&JobKind::AutomationEvaluation));
     assert!(kinds.contains(&JobKind::AgentSessionRetirement));
     assert!(kinds.contains(&JobKind::StaleWakeProbeSweep));
-    assert!(kinds.contains(&JobKind::StaleRunningJobSweep));
     assert!(kinds.contains(&JobKind::EphemeralJobGc));
+    assert!(!kinds.contains(&JobKind::StaleRunningJobSweep));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn runtime_maintenance_times_out_stale_running_jobs() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let old_timestamp = isoformat_z(Some(Utc::now() - Duration::minutes(31)));
+    let mut running_stale = Job::discord_voice_status_snapshot("job_source");
+    running_stale.mark_running();
+    running_stale.created_at = old_timestamp.clone();
+    running_stale.updated_at = old_timestamp;
+    let stale = store.create_job(running_stale).await.unwrap();
+    let mut running_maintenance = Job::runtime_maintenance(500);
+    running_maintenance.mark_running();
+    let maintenance = store.create_job(running_maintenance.clone()).await.unwrap();
+    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+
+    runtime
+        .dispatch_claimed_runtime_job(running_maintenance)
+        .await
+        .unwrap();
+
+    let completed = store.get_job(&maintenance.id).await.unwrap();
+    let output = completed.metadata.output.unwrap().to_json();
+    assert_eq!(
+        output["timed_out_running_jobs"]
+            .as_array()
+            .map(|values| values.len())
+            .unwrap(),
+        1
+    );
+    let timed_out = store.get_job(&stale.id).await.unwrap();
+    assert_eq!(timed_out.state, JobState::FailedTimeout);
+    assert_eq!(
+        timed_out.metadata.error,
+        "job exceeded stale running-job timeout"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2778,6 +2817,26 @@ async fn discord_voice_jobs_are_first_class_binary_jobs() {
         completed.metadata.output,
         Some(JobOutput::DiscordVoicePlayAudio(_))
     ));
+
+    let mut snapshot = Job::discord_voice_status_snapshot("job_parent");
+    snapshot.metadata.output = Some(JobOutput::DiscordVoiceStatusSnapshot(
+        DiscordVoiceStatusSnapshotOutput {
+            bots: Vec::new(),
+            sessions: Vec::new(),
+            voice_state_guild_ids: vec!["guild".to_string()],
+            voice_states: vec![OpaqueValue::from_json(&json!({
+                "guild_id": "guild",
+                "voice_channel_id": "code",
+                "user_id": "user-a"
+            }))],
+        },
+    ));
+    let snapshot = Job::decode(&snapshot.encode().unwrap()).unwrap();
+    let Some(JobOutput::DiscordVoiceStatusSnapshot(output)) = snapshot.metadata.output else {
+        panic!("decoded snapshot output");
+    };
+    assert_eq!(output.voice_states.len(), 1);
+    assert_eq!(output.voice_states[0].to_json()["voice_channel_id"], "code");
 }
 
 fn text_delivery_payload(content: &str) -> TextDeliveryPayload {

@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, anyhow};
 use serenity::async_trait;
+use serenity::cache::Cache;
 use serenity::client::{Client, Context, EventHandler};
 use serenity::gateway::ShardManager;
 use serenity::http::Http;
@@ -39,6 +40,7 @@ pub(super) struct DiscordVoiceClient {
     pub(super) user_id: String,
     pub(super) username: String,
     http: Arc<Http>,
+    cache: Arc<Cache>,
     voice: Arc<Songbird>,
     shard_manager: Arc<ShardManager>,
     client_task: Option<JoinHandle<()>>,
@@ -67,6 +69,7 @@ impl DiscordVoiceClient {
             .await
             .with_context(|| format!("failed to build Discord voice client for {bot_id}"))?;
         let http = client.http.clone();
+        let cache = client.cache.clone();
         let shard_manager = client.shard_manager.clone();
         let client_task = spawn_gateway_task(Arc::downgrade(adapter), bot_id.clone(), client);
 
@@ -81,6 +84,7 @@ impl DiscordVoiceClient {
             user_id: String::new(),
             username: String::new(),
             http,
+            cache,
             voice,
             shard_manager,
             client_task: Some(client_task),
@@ -100,6 +104,10 @@ impl DiscordVoiceClient {
 
     pub(super) fn http(&self) -> Arc<Http> {
         self.http.clone()
+    }
+
+    pub(super) fn cache(&self) -> Arc<Cache> {
+        self.cache.clone()
     }
 
     pub(super) fn shard_manager(&self) -> Arc<ShardManager> {

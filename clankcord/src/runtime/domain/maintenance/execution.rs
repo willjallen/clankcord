@@ -3,9 +3,12 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config;
 use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::maintenance::STALE_RUNNING_JOB_TIMEOUT_MINUTES;
 use crate::runtime::domain::maintenance::definitions::evaluate_maintenance_job_definitions;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
-use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime, RuntimeMaintenancePayload};
+use crate::runtime::{
+    Job, JobKind, JobOutput, JobState, OpaqueValue, Runtime, RuntimeMaintenancePayload,
+};
 
 impl Runtime {
     pub(crate) async fn prepare_runtime_maintenance_job(
@@ -14,6 +17,9 @@ impl Runtime {
         payload: &RuntimeMaintenancePayload,
     ) -> Result<JobDecision> {
         let next = self.schedule_next_runtime_maintenance(payload).await?;
+        let timed_out_running_jobs = self
+            .recover_stale_running_jobs_for_maintenance_pass()
+            .await?;
         let mut submitted = Vec::new();
         for (definition_name, definition_job) in evaluate_maintenance_job_definitions(job) {
             let created = self.timeline_store.create_job(definition_job).await?;
@@ -56,6 +62,7 @@ impl Runtime {
                 "kind": "runtime_maintenance",
                 "next_job_id": next.id,
                 "next_run_at": next.next_run_at,
+                "timed_out_running_jobs": timed_out_running_jobs,
                 "submitted_jobs": submitted,
                 "requeued_audio_segments": requeued_audio_segments,
                 "recovered_transcription_slots": recovered_transcription_slots,
@@ -96,14 +103,28 @@ impl Runtime {
             };
             let bot_count = output.bots.len();
             let session_count = output.sessions.len();
-            self.sync_voice_adapter_status(output.bots, output.sessions)
-                .await?;
+            let voice_states = output
+                .voice_states
+                .iter()
+                .map(OpaqueValue::to_json)
+                .collect::<Vec<_>>();
+            let voice_state_count = voice_states.len();
+            let voice_state_guild_count = output.voice_state_guild_ids.len();
+            self.sync_voice_adapter_status(
+                output.bots,
+                output.sessions,
+                output.voice_state_guild_ids,
+                voice_states,
+            )
+            .await?;
             return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
                 &json!({
                     "kind": "voice_status_sync",
                     "snapshot_job_id": snapshot_job.id,
                     "bot_count": bot_count,
                     "session_count": session_count,
+                    "voice_state_guild_count": voice_state_guild_count,
+                    "voice_state_count": voice_state_count,
                 }),
             )?));
         }
@@ -170,6 +191,13 @@ impl Runtime {
                 "result": result,
             }),
         )?))
+    }
+
+    pub(crate) async fn recover_stale_running_jobs_for_maintenance_pass(
+        &self,
+    ) -> Result<Vec<Value>> {
+        self.fail_stale_running_jobs(STALE_RUNNING_JOB_TIMEOUT_MINUTES)
+            .await
     }
 
     async fn schedule_next_runtime_maintenance(

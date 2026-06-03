@@ -573,6 +573,59 @@ impl TimelineStore {
         Ok(appended)
     }
 
+    pub async fn sync_authoritative_voice_states(
+        &self,
+        guild_ids: &[String],
+        voice_states: &[Value],
+    ) -> Result<()> {
+        if guild_ids.is_empty() {
+            return Ok(());
+        }
+        let guilds = guild_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let mut present = BTreeSet::new();
+        for state in voice_states {
+            let guild_id = first_value_string(state, &["guild_id", "guildId"]);
+            let user_id = first_value_string(state, &["user_id", "userId", "speaker_user_id"]);
+            if guilds.contains(&guild_id) && !user_id.is_empty() {
+                present.insert((guild_id, user_id));
+                self.record_voice_state_update(None, state.clone()).await?;
+            }
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT guild_id, user_id, payload_json
+            FROM voice_states
+            WHERE guild_id = ANY($1) AND voice_channel_id <> ''
+            ORDER BY guild_id, user_id
+            "#,
+        )
+        .bind(guild_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        for row in rows {
+            let guild_id: String = row.try_get("guild_id")?;
+            let user_id: String = row.try_get("user_id")?;
+            if present.contains(&(guild_id, user_id)) {
+                continue;
+            }
+            let previous = json_value(&row, "payload_json")?;
+            let mut current = previous.clone();
+            update_value_object(
+                &mut current,
+                [
+                    ("voice_channel_id", Value::String(String::new())),
+                    ("voiceChannelId", Value::String(String::new())),
+                    ("channelId", Value::String(String::new())),
+                    ("updated_at", Value::String(isoformat_z(None))),
+                ],
+            );
+            self.record_voice_state_update(Some(previous), current)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn room_occupants(
         &self,
         guild_id: &str,

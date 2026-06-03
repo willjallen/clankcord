@@ -25,6 +25,9 @@ pub enum OpaqueValue {
     Object(BTreeMap<String, OpaqueValue>),
 }
 
+// OpaqueValue is constructed from JSON, whose numbers cannot represent NaN.
+impl Eq for OpaqueValue {}
+
 impl OpaqueValue {
     pub fn from_json(value: &Value) -> Self {
         match value {

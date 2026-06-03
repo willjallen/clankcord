@@ -317,7 +317,7 @@ async fn voice_status_sync_releases_capturing_assignment_when_bot_is_absent() {
     let runtime = test_runtime(store.clone(), room.clone());
 
     runtime
-        .sync_voice_adapter_status(vec![ready_bot()], Vec::new())
+        .sync_voice_adapter_status(vec![ready_bot()], Vec::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -372,7 +372,7 @@ async fn voice_status_sync_keeps_joining_assignment_while_presence_is_pending() 
     let runtime = test_runtime(store.clone(), room.clone());
 
     runtime
-        .sync_voice_adapter_status(vec![ready_bot()], Vec::new())
+        .sync_voice_adapter_status(vec![ready_bot()], Vec::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -408,7 +408,7 @@ async fn voice_status_sync_keeps_capturing_assignment_with_matching_bot_and_sess
     let runtime = test_runtime(store.clone(), room.clone());
 
     runtime
-        .sync_voice_adapter_status(vec![bot], vec![session])
+        .sync_voice_adapter_status(vec![bot], vec![session], Vec::new(), Vec::new())
         .await
         .unwrap();
 

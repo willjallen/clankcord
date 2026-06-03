@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Result;
 use crate::runtime::timeline::utc_now;
+use serde_json::Value;
+
 use crate::runtime::{Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
 
 impl Runtime {
@@ -9,10 +11,15 @@ impl Runtime {
         &self,
         bots: Vec<VoiceBotStatus>,
         sessions: Vec<VoiceCaptureSessionStatus>,
+        voice_state_guild_ids: Vec<String>,
+        voice_states: Vec<Value>,
     ) -> Result<()> {
         self.timeline_store.upsert_voice_bot_states(&bots).await?;
         self.timeline_store
             .upsert_capture_session_statuses(&sessions)
+            .await?;
+        self.timeline_store
+            .sync_authoritative_voice_states(&voice_state_guild_ids, &voice_states)
             .await?;
 
         let active_assignments = self.timeline_store.list_active_voice_assignments().await?;

@@ -1,8 +1,6 @@
 use crate::config;
 use crate::runtime::Job;
 
-const STALE_RUNNING_JOB_TIMEOUT_MINUTES: i64 = 30;
-
 pub(super) trait MaintenanceJobDefinition {
     fn name(&self) -> &'static str;
     fn evaluate(&self, source_job: &Job) -> Vec<Job>;
@@ -12,7 +10,6 @@ struct VoiceStatusDefinition;
 struct AutomationEvaluationDefinition;
 struct AgentSessionRetirementDefinition;
 struct StaleWakeProbeSweepDefinition;
-struct StaleRunningJobSweepDefinition;
 struct EphemeralJobGcDefinition;
 
 impl MaintenanceJobDefinition for VoiceStatusDefinition {
@@ -58,19 +55,6 @@ impl MaintenanceJobDefinition for StaleWakeProbeSweepDefinition {
     }
 }
 
-impl MaintenanceJobDefinition for StaleRunningJobSweepDefinition {
-    fn name(&self) -> &'static str {
-        "stale_running_job_sweep"
-    }
-
-    fn evaluate(&self, source_job: &Job) -> Vec<Job> {
-        vec![Job::stale_running_job_sweep(
-            source_job.id.clone(),
-            STALE_RUNNING_JOB_TIMEOUT_MINUTES,
-        )]
-    }
-}
-
 impl MaintenanceJobDefinition for EphemeralJobGcDefinition {
     fn name(&self) -> &'static str {
         "ephemeral_job_gc"
@@ -103,7 +87,6 @@ fn maintenance_job_definitions() -> Vec<Box<dyn MaintenanceJobDefinition>> {
         Box::new(AutomationEvaluationDefinition),
         Box::new(AgentSessionRetirementDefinition),
         Box::new(StaleWakeProbeSweepDefinition),
-        Box::new(StaleRunningJobSweepDefinition),
         Box::new(EphemeralJobGcDefinition),
     ]
 }

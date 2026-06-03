@@ -35,7 +35,7 @@ pub use jobs::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotOutput, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
-    Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState,
+    Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
     RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload,
     StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextAttachmentPayload,

@@ -778,6 +778,110 @@ async fn room_placement_builtin_automation_respects_active_auto_join_suppression
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn room_placement_restart_sync_prevents_stale_voice_rows_from_triggering_auto_join() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut stale_parent = Job::room_agent_placement(
+        "guild",
+        "code",
+        "code-lounge",
+        RoomAgentPlacementAction::Join,
+        "auto_join",
+        "stuck-join-cue",
+        None,
+    );
+    stale_parent.mark_waiting();
+    let mut stale_parent = store.create_job(stale_parent).await.unwrap();
+    stale_parent.set_state(JobState::FailedTimeout);
+    store.update_job(&stale_parent).await.unwrap();
+    let mut restarted = test_runtime(store.clone());
+    restarted
+        .sync_voice_adapter_status(
+            vec![ready_bot()],
+            Vec::new(),
+            vec!["guild".to_string()],
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+
+    let result = restarted.run_automations().await.unwrap().to_json();
+
+    assert!(
+        store
+            .room_occupants("guild", "code")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_active_voice_assignments()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(result["createdJobs"], json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_restart_with_recorded_empty_room_does_not_rejoin_after_parent_clear() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut stale_parent = Job::room_agent_placement(
+        "guild",
+        "code",
+        "code-lounge",
+        RoomAgentPlacementAction::Join,
+        "auto_join",
+        "stuck-join-cue",
+        None,
+    );
+    stale_parent.mark_waiting();
+    let mut stale_parent = store.create_job(stale_parent).await.unwrap();
+    stale_parent.set_state(JobState::FailedTimeout);
+    store.update_job(&stale_parent).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut restarted = test_runtime(store.clone());
+
+    let result = restarted.run_automations().await.unwrap().to_json();
+
+    assert!(
+        store
+            .room_occupants("guild", "code")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(result["createdJobs"], json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn room_placement_builtin_automation_manual_leave_suppresses_auto_join() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;

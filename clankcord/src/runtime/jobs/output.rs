@@ -6,8 +6,8 @@ use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::runtime::rooms::RoomConfig;
 
 use super::payload::{
-    BinaryPayload, DiscordTypingAction, DiscordVoicePlaybackCue, RoomAgentPlacementAction,
-    RuntimeControlAction, TextTarget,
+    BinaryPayload, DiscordTypingAction, DiscordVoicePlaybackCue, OpaqueValue,
+    RoomAgentPlacementAction, RuntimeControlAction, TextTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +173,8 @@ pub struct DiscordVoicePlayAudioOutput {
 pub struct DiscordVoiceStatusSnapshotOutput {
     pub bots: Vec<VoiceBotStatus>,
     pub sessions: Vec<VoiceCaptureSessionStatus>,
+    pub voice_state_guild_ids: Vec<String>,
+    pub voice_states: Vec<OpaqueValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -410,6 +412,8 @@ impl JobOutput {
                     "kind": "discord_voice_status_snapshot",
                     "bots": output.bots.iter().map(VoiceBotStatus::to_json).collect::<Vec<_>>(),
                     "sessions": output.sessions.iter().map(VoiceCaptureSessionStatus::to_json).collect::<Vec<_>>(),
+                    "voice_state_guild_ids": output.voice_state_guild_ids,
+                    "voice_states": output.voice_states.iter().map(OpaqueValue::to_json).collect::<Vec<_>>(),
                 })
             }
             Self::Record(payload) => payload.to_json(),

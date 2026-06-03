@@ -7,8 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use serenity::Error as SerenityError;
-use serenity::http::HttpError;
 use serenity::model::gateway::Ready;
 use serenity::model::guild::Member;
 use serenity::model::id::{GuildId, UserId};
@@ -30,11 +28,16 @@ use crate::runtime::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, RuntimeJobSink, VoiceBotStatus,
-    log,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue, RuntimeJobSink,
+    VoiceBotStatus, log,
 };
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
+
+struct VoiceStateSnapshot {
+    guild_ids: Vec<String>,
+    states: Vec<Value>,
+}
 
 pub struct LiveVoiceAdapter {
     job_sink: RuntimeJobSink,
@@ -697,9 +700,16 @@ impl LiveVoiceAdapter {
 
     pub(crate) async fn voice_status_snapshot(&self) -> Result<DiscordVoiceStatusSnapshotOutput> {
         self.reconcile_voice_client_presence().await?;
+        let voice_state_snapshot = self.current_voice_state_snapshot().await?;
         Ok(DiscordVoiceStatusSnapshotOutput {
             bots: self.bot_statuses().await,
             sessions: self.session_statuses().await,
+            voice_state_guild_ids: voice_state_snapshot.guild_ids,
+            voice_states: voice_state_snapshot
+                .states
+                .iter()
+                .map(OpaqueValue::from_json)
+                .collect(),
         })
     }
 
@@ -713,6 +723,50 @@ impl LiveVoiceAdapter {
             statuses.push(session.lock().await.metadata(local_tz()));
         }
         statuses
+    }
+
+    async fn current_voice_state_snapshot(&self) -> Result<VoiceStateSnapshot> {
+        let configured_guild_ids = configured_voice_guild_ids();
+        let (bot_user_ids, caches) = {
+            let clients = self.voice_clients_lock.lock().await;
+            let bot_user_ids = clients
+                .values()
+                .map(|client| client.user_id.clone())
+                .filter(|value| !value.trim().is_empty())
+                .collect::<BTreeSet<_>>();
+            let caches = clients
+                .values()
+                .filter(|client| client.ready)
+                .map(DiscordVoiceClient::cache)
+                .collect::<Vec<_>>();
+            (bot_user_ids, caches)
+        };
+        let mut guild_ids = BTreeSet::new();
+        let mut states = BTreeMap::new();
+        for cache in caches {
+            for guild_id in &configured_guild_ids {
+                let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
+                let Some(guild) = cache.guild(discord_guild_id) else {
+                    continue;
+                };
+                guild_ids.insert(guild_id.clone());
+                for (user_id, state) in &guild.voice_states {
+                    let user_id = user_id.get().to_string();
+                    if bot_user_ids.contains(&user_id) || state.channel_id.is_none() {
+                        continue;
+                    }
+                    let mut payload = voice_state_payload(state);
+                    set_voice_state_payload_guild(&mut payload, guild_id);
+                    states
+                        .entry((guild_id.clone(), user_id))
+                        .or_insert_with(|| payload);
+                }
+            }
+        }
+        Ok(VoiceStateSnapshot {
+            guild_ids: guild_ids.into_iter().collect(),
+            states: states.into_values().collect(),
+        })
     }
 
     async fn persist_bot_status(&self, status: &VoiceBotStatus) {
@@ -783,7 +837,7 @@ impl LiveVoiceAdapter {
                     (
                         client.bot_id.clone(),
                         client.user_id.clone(),
-                        client.http(),
+                        client.cache(),
                         guild_ids,
                     )
                 })
@@ -791,41 +845,50 @@ impl LiveVoiceAdapter {
                 .collect::<Vec<_>>()
         };
 
-        for (bot_id, user_id, http, guild_ids) in probes {
+        for (bot_id, user_id, cache, guild_ids) in probes {
             let discord_user_id = UserId::new(parse_discord_id("user_id", &user_id)?);
             let mut found_voice_state = false;
             let mut checked_guild = false;
-            for guild_id in guild_ids {
-                checked_guild = true;
-                let discord_guild_id = GuildId::new(parse_discord_id("guild_id", &guild_id)?);
-                match http
-                    .get_user_voice_state(discord_guild_id, discord_user_id)
-                    .await
-                {
-                    Ok(state) => {
-                        let actual_guild_id = state
-                            .guild_id
-                            .map(|value| value.get().to_string())
-                            .unwrap_or_else(|| guild_id.clone());
-                        let actual_channel_id = state
-                            .channel_id
-                            .map(|value| value.get().to_string())
-                            .unwrap_or_default();
-                        self.apply_authoritative_voice_presence(
-                            &bot_id,
-                            &actual_guild_id,
-                            &actual_channel_id,
-                            "discord_voice_state",
-                        )
-                        .await;
-                        found_voice_state = true;
+            let mut guilds_to_check = guild_ids;
+            if guilds_to_check.iter().all(|guild_id| {
+                let Ok(parsed) = parse_discord_id("guild_id", guild_id) else {
+                    return false;
+                };
+                cache.guild(GuildId::new(parsed)).is_none()
+            }) {
+                guilds_to_check = configured_guild_ids.clone();
+            }
+            for guild_id in guilds_to_check {
+                let actual_channel_id = {
+                    let discord_guild_id = GuildId::new(parse_discord_id("guild_id", &guild_id)?);
+                    let Some(guild) = cache.guild(discord_guild_id) else {
+                        continue;
+                    };
+                    checked_guild = true;
+                    let Some(state) = guild.voice_states.get(&discord_user_id) else {
+                        continue;
+                    };
+                    state
+                        .channel_id
+                        .map(|value| value.get().to_string())
+                        .unwrap_or_default()
+                };
+                self.apply_authoritative_voice_presence(
+                    &bot_id,
+                    &guild_id,
+                    &actual_channel_id,
+                    "discord_voice_state_cache",
+                )
+                .await;
+                found_voice_state = true;
+                break;
+            }
+            if !checked_guild {
+                for guild_id in &configured_guild_ids {
+                    let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
+                    if cache.guild(discord_guild_id).is_some() {
+                        checked_guild = true;
                         break;
-                    }
-                    Err(error) if unknown_voice_state(&error) => {}
-                    Err(error) => {
-                        anyhow::bail!(
-                            "Discord voice state lookup failed for {bot_id} in guild {guild_id}: {error}"
-                        );
                     }
                 }
             }
@@ -834,7 +897,7 @@ impl LiveVoiceAdapter {
                     &bot_id,
                     "",
                     "",
-                    "discord_voice_state_absent",
+                    "discord_voice_state_cache_absent",
                 )
                 .await;
             }
@@ -1287,6 +1350,13 @@ fn voice_state_payload(state: &VoiceState) -> Value {
     })
 }
 
+fn set_voice_state_payload_guild(payload: &mut Value, guild_id: &str) {
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("guild_id".to_string(), json!(guild_id));
+        object.insert("guildId".to_string(), json!(guild_id));
+    }
+}
+
 fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {
     crate::config::voice_sound_dir().join(cue.asset_file_name())
 }
@@ -1297,14 +1367,6 @@ fn playback_timeout() -> Duration {
 
 fn elapsed_ms(duration: Duration) -> i64 {
     duration.as_millis().min(i64::MAX as u128) as i64
-}
-
-fn unknown_voice_state(error: &SerenityError) -> bool {
-    matches!(
-        error,
-        SerenityError::Http(HttpError::UnsuccessfulRequest(response))
-            if response.status_code.as_u16() == 404 && response.error.code == 10065
-    )
 }
 
 fn configured_voice_guild_ids() -> Vec<String> {

@@ -332,23 +332,30 @@ where
     pub(crate) async fn drain_ready_jobs(&self) -> Result<Value> {
         let max_passes = dispatch_drain_max_passes();
         let mut passes = Vec::new();
+        let mut total_timed_out_running = 0usize;
         let mut total_resolved = 0usize;
         let mut total_scheduled = 0usize;
         let mut exhausted = false;
 
         for pass in 0..max_passes {
+            let timed_out_running_jobs = Runtime::from_store(self.timeline_store.clone())?
+                .recover_stale_running_jobs_for_maintenance_pass()
+                .await?;
             let resolved_waiting = self.timeline_store.resolve_waiting_jobs().await?;
             let scheduled = self.schedule_due_jobs().await?;
             let scheduled_count = scheduled_job_count(&scheduled);
+            let timed_out_count = timed_out_running_jobs.len();
             let resolved_count = resolved_waiting.len();
+            total_timed_out_running += timed_out_count;
             total_resolved += resolved_count;
             total_scheduled += scheduled_count;
             passes.push(json!({
                 "pass": pass + 1,
+                "timedOutRunningJobs": timed_out_running_jobs,
                 "resolvedWaiting": resolved_waiting,
                 "scheduled": scheduled,
             }));
-            if resolved_count == 0 && scheduled_count == 0 {
+            if timed_out_count == 0 && resolved_count == 0 && scheduled_count == 0 {
                 exhausted = true;
                 break;
             }
@@ -358,6 +365,7 @@ where
         Ok(json!({
             "ok": true,
             "passes": passes,
+            "totalTimedOutRunningJobs": total_timed_out_running,
             "totalResolvedWaiting": total_resolved,
             "totalScheduled": total_scheduled,
             "exhausted": exhausted,

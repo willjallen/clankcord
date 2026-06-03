@@ -68,6 +68,8 @@ The live voice loop ticks every 500 ms by default. It starts missing configured 
 
 Runtime maintenance is represented as `runtime_maintenance`. A maintenance run schedules the next maintenance job and submits ordinary background jobs for the concrete work that is due. Sweeps, automations, agent session retirement, agent thread title refresh, and adapter synchronization run as background jobs.
 
+The maintenance domain also marks non-agent running jobs that exceed the stale-running timeout as `failed_timeout` before waiting parents are resolved and queued work is claimed. This keeps interrupted runtime-maintenance work from holding ordering keys indefinitely after a restart or external adapter stall.
+
 ```text
 runtime_maintenance
       |
@@ -77,7 +79,6 @@ runtime_maintenance
       +--> agent_session_retirement
       +--> agent_thread_title_refresh
       +--> stale_wake_probe_sweep
-      +--> stale_running_job_sweep
       +--> ephemeral_job_gc
 ```
 
