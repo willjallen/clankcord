@@ -1042,6 +1042,143 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn retryable_failed_transcription_slots_requeue_for_mux_planning() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let now = Utc::now();
+    let retryable_source_job_id = create_audio_segment_slot(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-a",
+        now - Duration::seconds(10),
+        Duration::seconds(2),
+        70,
+    )
+    .await;
+    let non_retryable_source_job_id = create_audio_segment_slot(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-b",
+        now - Duration::seconds(8),
+        Duration::seconds(2),
+        71,
+    )
+    .await;
+    let retryable_error = r#"elevenlabs speech-to-text HTTP 500 Internal Server Error: {"detail":{"type":"internal_error","code":"internal_error","message":"An unexpected error occurred."}}"#;
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'failed',
+            mux_job_id = 'job_retryable_mux',
+            mux_stream_id = 'mux:retryable',
+            mux_start_ms = 0,
+            mux_end_ms = 1000,
+            guard_before_ms = 0,
+            guard_after_ms = 150,
+            payload_json = payload_json || jsonb_build_object(
+              'state', 'failed',
+              'mux_job_id', 'job_retryable_mux',
+              'mux_stream_id', 'mux:retryable',
+              'mux_start_ms', 0,
+              'mux_end_ms', 1000,
+              'guard_after_ms', 150,
+              'error', $2
+            )
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(&retryable_source_job_id)
+    .bind(retryable_error)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'failed',
+            payload_json = payload_json || jsonb_build_object(
+              'state', 'failed',
+              'error', 'provider returned malformed timestamp payload'
+            )
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(&non_retryable_source_job_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+
+    let requeued = store
+        .requeue_retryable_failed_transcription_slots(10)
+        .await
+        .unwrap();
+
+    assert_eq!(requeued.len(), 1);
+    assert_eq!(
+        requeued[0]["source_job_id"].as_str().unwrap(),
+        retryable_source_job_id
+    );
+    let retryable = sqlx::query(
+        r#"
+        SELECT state,
+               mux_job_id,
+               mux_stream_id,
+               mux_start_ms,
+               payload_json ? 'error' AS has_error
+        FROM transcription_slots
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(&retryable_source_job_id)
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&retryable, "state").unwrap(),
+        "queued"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&retryable, "mux_job_id").unwrap(),
+        ""
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&retryable, "mux_stream_id").unwrap(),
+        ""
+    );
+    assert!(
+        sqlx::Row::try_get::<Option<i64>, _>(&retryable, "mux_start_ms")
+            .unwrap()
+            .is_none()
+    );
+    assert!(!sqlx::Row::try_get::<bool, _>(&retryable, "has_error").unwrap());
+    let non_retryable =
+        sqlx::query("SELECT state FROM transcription_slots WHERE source_job_id = $1")
+            .bind(&non_retryable_source_job_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&non_retryable, "state").unwrap(),
+        "failed"
+    );
+    let result = run_transcription_mux_planner(&store).await;
+    assert_eq!(result["result"]["status"], json!("planned"));
+    let planned = sqlx::query("SELECT state FROM transcription_slots WHERE source_job_id = $1")
+        .bind(&retryable_source_job_id)
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&planned, "state").unwrap(),
+        "planned"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn transcription_mux_planner_uses_one_stream_without_predicted_backlog() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());

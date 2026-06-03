@@ -298,6 +298,12 @@ async fn dispatch_after_request_audio(
         .timeline_store
         .recover_abandoned_transcription_slots()
         .await?;
+    runtime
+        .timeline_store
+        .requeue_retryable_failed_transcription_slots(
+            config::failed_audio_segment_retry_batch_limit(),
+        )
+        .await?;
     if has_pending_room_transcription(runtime, payload, closed_at).await? {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;

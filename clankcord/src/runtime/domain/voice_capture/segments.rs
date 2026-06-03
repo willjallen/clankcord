@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::stt::{
-    TranscriptionResult, TranscriptionSpan, TranscriptionWord,
+    SttHttpStatusError, TranscriptionResult, TranscriptionSpan, TranscriptionWord,
     should_drop_low_confidence_transcription, stt_drop_decision,
     transcribe_file_with_source_result_sync,
 };
@@ -75,27 +75,7 @@ pub(crate) fn is_retryable_audio_segment_error(error: &anyhow::Error) -> bool {
 }
 
 pub(crate) fn is_retryable_audio_segment_error_text(error: &str) -> bool {
-    let error = error.trim().to_ascii_lowercase();
-    if error.is_empty() {
-        return false;
-    }
-    error.starts_with("retryable stt timeout error:")
-        || error.starts_with("retryable stt connection error:")
-        || error.starts_with("retryable stt rate_limit error:")
-        || error.starts_with("retryable stt server error:")
-        || error.contains("operation timed out")
-        || error.contains("timed out")
-        || error.contains("request or response body error")
-        || error.contains("connection refused")
-        || error.contains("connection reset")
-        || error.contains("connection closed")
-        || error.contains("connect error")
-        || error.contains("too many requests")
-        || error.contains("quota_exceeded")
-        || error.contains("client error (429")
-        || error.contains("429 too many requests")
-        || error.contains("408 request timeout")
-        || error.contains("http status server error")
+    retryable_stt_error_class_from_text(error).is_some()
 }
 
 pub(crate) fn retry_delay_seconds(attempts: i64) -> i64 {
@@ -662,30 +642,110 @@ fn seconds_to_ms(seconds: f64) -> i64 {
 }
 
 fn retryable_stt_error_class(error: &anyhow::Error) -> Option<RetryableSttErrorClass> {
-    let error_text = error.to_string().to_ascii_lowercase();
-    if error_text.contains("quota_exceeded") || error_text.contains("too many requests") {
+    error
+        .chain()
+        .find_map(|cause| {
+            if let Some(error) = cause.downcast_ref::<SttHttpStatusError>() {
+                return retryable_stt_status_class(error.status());
+            }
+            let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
+                return None;
+            };
+            if error.is_timeout() {
+                return Some(RetryableSttErrorClass::Timeout);
+            }
+            if error.is_connect() {
+                return Some(RetryableSttErrorClass::Connection);
+            }
+            if error.is_body() {
+                return Some(RetryableSttErrorClass::Connection);
+            }
+            match error.status() {
+                Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => {
+                    Some(RetryableSttErrorClass::RateLimit)
+                }
+                Some(reqwest::StatusCode::REQUEST_TIMEOUT) => Some(RetryableSttErrorClass::Timeout),
+                Some(status) if status.is_server_error() => Some(RetryableSttErrorClass::Server),
+                _ => None,
+            }
+        })
+        .or_else(|| retryable_stt_error_class_from_text(&error.to_string()))
+}
+
+fn retryable_stt_error_class_from_text(error: &str) -> Option<RetryableSttErrorClass> {
+    let error = error.trim().to_ascii_lowercase();
+    if error.is_empty() {
+        return None;
+    }
+    if error.starts_with("retryable stt timeout error:")
+        || error.contains("operation timed out")
+        || error.contains("timed out")
+    {
+        return Some(RetryableSttErrorClass::Timeout);
+    }
+    if error.starts_with("retryable stt connection error:")
+        || error.contains("request or response body error")
+        || error.contains("connection refused")
+        || error.contains("connection reset")
+        || error.contains("connection closed")
+        || error.contains("connect error")
+    {
+        return Some(RetryableSttErrorClass::Connection);
+    }
+    if error.starts_with("retryable stt rate_limit error:")
+        || error.contains("too many requests")
+        || error.contains("quota_exceeded")
+    {
         return Some(RetryableSttErrorClass::RateLimit);
     }
-    error.chain().find_map(|cause| {
-        let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
-            return None;
-        };
-        if error.is_timeout() {
-            return Some(RetryableSttErrorClass::Timeout);
-        }
-        if error.is_connect() {
-            return Some(RetryableSttErrorClass::Connection);
-        }
-        if error.is_body() {
-            return Some(RetryableSttErrorClass::Connection);
-        }
-        match error.status() {
-            Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Some(RetryableSttErrorClass::RateLimit),
-            Some(reqwest::StatusCode::REQUEST_TIMEOUT) => Some(RetryableSttErrorClass::Timeout),
-            Some(status) if status.is_server_error() => Some(RetryableSttErrorClass::Server),
-            _ => None,
-        }
+    if error.starts_with("retryable stt server error:")
+        || error.contains("http status server error")
+    {
+        return Some(RetryableSttErrorClass::Server);
+    }
+    retryable_stt_status_code_from_text(&error).and_then(|code| {
+        reqwest::StatusCode::from_u16(code)
+            .ok()
+            .and_then(retryable_stt_status_class)
     })
+}
+
+fn retryable_stt_status_class(status: reqwest::StatusCode) -> Option<RetryableSttErrorClass> {
+    match status {
+        reqwest::StatusCode::TOO_MANY_REQUESTS => Some(RetryableSttErrorClass::RateLimit),
+        reqwest::StatusCode::REQUEST_TIMEOUT => Some(RetryableSttErrorClass::Timeout),
+        status if status.is_server_error() => Some(RetryableSttErrorClass::Server),
+        _ => None,
+    }
+}
+
+fn retryable_stt_status_code_from_text(error: &str) -> Option<u16> {
+    let bytes = error.as_bytes();
+    if bytes.len() < 3 {
+        return None;
+    }
+    for index in 0..=bytes.len() - 3 {
+        if !bytes[index].is_ascii_digit()
+            || !bytes[index + 1].is_ascii_digit()
+            || !bytes[index + 2].is_ascii_digit()
+        {
+            continue;
+        }
+        let previous = index.checked_sub(1).and_then(|idx| bytes.get(idx).copied());
+        let next = bytes.get(index + 3).copied();
+        if previous.is_some_and(|byte| byte.is_ascii_digit())
+            || next.is_some_and(|byte| byte.is_ascii_digit())
+        {
+            continue;
+        }
+        let code = ((bytes[index] - b'0') as u16 * 100)
+            + ((bytes[index + 1] - b'0') as u16 * 10)
+            + (bytes[index + 2] - b'0') as u16;
+        if code == 408 || code == 429 || (500..=599).contains(&code) {
+            return Some(code);
+        }
+    }
+    None
 }
 
 fn merge_object(target: &mut Value, source: Value) {

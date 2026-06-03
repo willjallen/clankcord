@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::Context;
+use reqwest::StatusCode;
 use reqwest::blocking::multipart;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
@@ -33,6 +34,39 @@ pub struct TranscriptionSpan {
     pub end_seconds: Option<f64>,
     pub speaker_id: String,
 }
+
+#[derive(Debug, Clone)]
+pub struct SttHttpStatusError {
+    provider: &'static str,
+    status: StatusCode,
+    body: String,
+}
+
+impl SttHttpStatusError {
+    fn new(provider: &'static str, status: StatusCode, body: String) -> Self {
+        Self {
+            provider,
+            status,
+            body,
+        }
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+}
+
+impl std::fmt::Display for SttHttpStatusError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} speech-to-text HTTP {}: {}",
+            self.provider, self.status, self.body
+        )
+    }
+}
+
+impl std::error::Error for SttHttpStatusError {}
 
 pub fn content_type_for_path(path: &Path) -> String {
     match path
@@ -281,7 +315,7 @@ fn transcribe_openai_compatible(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        anyhow::bail!("openai-compatible speech-to-text HTTP {status}: {body}");
+        return Err(SttHttpStatusError::new("openai-compatible", status, body).into());
     }
     let payload: Value = response.json()?;
     if !payload.is_object() {
@@ -336,7 +370,7 @@ fn transcribe_elevenlabs(
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().unwrap_or_default();
-        anyhow::bail!("elevenlabs speech-to-text HTTP {status}: {body}");
+        return Err(SttHttpStatusError::new("elevenlabs", status, body).into());
     }
     let payload: Value = response.json()?;
     if !payload.is_object() {

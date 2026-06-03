@@ -619,6 +619,88 @@ impl TimelineStore {
         }))
     }
 
+    pub async fn requeue_retryable_failed_transcription_slots(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let limit = limit.clamp(1, 1000) as i64;
+        let rows = sqlx::query(
+            r#"
+            SELECT slot_id,
+                   source_job_id,
+                   transcription_source_id,
+                   payload_json
+            FROM transcription_slots
+            WHERE state = 'failed'
+            ORDER BY updated_at_ms, slot_id
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut requeued = Vec::new();
+        for row in rows {
+            let payload = json_value(&row, "payload_json")?;
+            let error = first_value_string(&payload, &["error"]);
+            if !crate::runtime::domain::voice_capture::segments::is_retryable_audio_segment_error_text(
+                &error,
+            ) {
+                continue;
+            }
+            let slot_id: String = row.try_get("slot_id")?;
+            let source_job_id: String = row.try_get("source_job_id")?;
+            let transcription_source_id: String = row.try_get("transcription_source_id")?;
+            let now_ms = instant_ms_dt(utc_now());
+            let updated = sqlx::query(
+                r#"
+                UPDATE transcription_slots
+                SET state = 'queued',
+                    mux_job_id = '',
+                    mux_stream_id = '',
+                    mux_start_ms = NULL,
+                    mux_end_ms = NULL,
+                    guard_before_ms = 0,
+                    guard_after_ms = 0,
+                    updated_at_ms = $2,
+                    payload_json =
+                      payload_json
+                        - 'mux_job_id'
+                        - 'mux_stream_id'
+                        - 'mux_start_ms'
+                        - 'mux_end_ms'
+                        - 'guard_before_ms'
+                        - 'guard_after_ms'
+                        - 'error'
+                        - 'failed_mux_job_id'
+                        - 'failed_at_ms'
+                        || jsonb_build_object(
+                          'state', 'queued',
+                          'requeued_from_failed_at_ms', $2,
+                          'requeued_from_failed_error', $3
+                        )
+                WHERE slot_id = $1
+                  AND state = 'failed'
+                RETURNING payload_json
+                "#,
+            )
+            .bind(&slot_id)
+            .bind(now_ms)
+            .bind(&error)
+            .fetch_optional(&self.pool)
+            .await?;
+            if updated.is_some() {
+                requeued.push(serde_json::json!({
+                    "slot_id": slot_id,
+                    "source_job_id": source_job_id,
+                    "transcription_source_id": transcription_source_id,
+                    "error": error,
+                }));
+            }
+        }
+        Ok(requeued)
+    }
+
     async fn has_queued_transcription_slots(&self, source_id: &str) -> Result<bool> {
         let row = sqlx::query(
             r#"
