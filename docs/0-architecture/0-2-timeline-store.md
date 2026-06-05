@@ -53,7 +53,7 @@ Timeline migrations are Rust modules under `timeline/migrations/` named for the 
 
 At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
 
-The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 7 for Clankcord `0.9.0`; changing either value without updating the mapping fails compilation.
+The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.10.0`; changing either value without updating the mapping fails compilation.
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
@@ -61,13 +61,17 @@ The `0.4.0` migration enforces the database hard-cut performance contracts. It s
 
 The `0.5.0` migration removes the obsolete terminal-job retention index. Retention is policy-driven: transcript events, source audio artifacts, and non-ephemeral job metadata each use the configured capture-run policy, while ephemeral jobs keep their `gc_after_ms` lifecycle.
 
-The `0.6.0` migration rewrites version-3 `CLANKJOB` payload blobs into the current job payload envelope. It records Codex agent invocation reasoning effort and fast-mode metadata on agent-task jobs. Existing version-3 agent-task metadata is decoded through the previous Rust shape, converted into the current `Job` value, and re-encoded under the current envelope version.
+The job payload rewrite migrations decode their source blob version through the previous Rust shape, convert it into the current `Job` value, and re-encode it under the running binary's current envelope version.
 
-The `0.7.0` migration rewrites version-4 `CLANKJOB` payload blobs into version 5. Version 5 adds first-class response attachment metadata to text-delivery and Discord-text-send payloads. Existing version-4 text response payloads are decoded through the previous Rust shape, receive empty attachment vectors, and are re-encoded under the new envelope version.
+The `0.6.0` migration rewrites version-3 `CLANKJOB` payload blobs. It records Codex agent invocation reasoning effort and fast-mode metadata on agent-task jobs.
 
-The `0.8.0` migration rewrites version-5 `CLANKJOB` payload blobs into version 6. Version 6 adds named transcription sources and transcription mux jobs, creates durable transcription slots, removes refinement jobs, and records provider identity on speech events.
+The `0.7.0` migration rewrites version-4 `CLANKJOB` payload blobs. Version 5 adds first-class response attachment metadata to text-delivery and Discord-text-send payloads. Existing version-4 text response payloads receive empty attachment vectors.
 
-The `0.9.0` migration rewrites version-6 `CLANKJOB` payload blobs into version 7. Version 7 adds the durable transcription mux planner job and the slot indexes used to schedule queued, planned, and muxing transcription work from Postgres.
+The `0.8.0` migration rewrites version-5 `CLANKJOB` payload blobs. Version 6 adds named transcription sources and transcription mux jobs, creates durable transcription slots, removes refinement jobs, and records provider identity on speech events.
+
+The `0.9.0` migration rewrites version-6 `CLANKJOB` payload blobs. Version 7 adds the durable transcription mux planner job and the slot indexes used to schedule queued, planned, and muxing transcription work from Postgres.
+
+The `0.10.0` migration rewrites version-7 `CLANKJOB` payload blobs. Version 8 records observed voice-state guild IDs and voice-state payloads on Discord voice status snapshot outputs. The migration accepts the released version-7 snapshot shape and the short-lived version-7 shape written by the voice-state restart fix.
 
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 

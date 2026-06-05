@@ -333,7 +333,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 7);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 8);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -364,7 +364,10 @@ async fn timeline_initialize_records_registered_schema_migrations() {
         r#"
         SELECT version, name, clankcord_version
         FROM clankcord_schema_migrations
-        ORDER BY version
+        ORDER BY
+          split_part(version, '.', 1)::int,
+          split_part(version, '.', 2)::int,
+          split_part(version, '.', 3)::int
         "#,
     )
     .fetch_all(&store.pool)
@@ -387,42 +390,47 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.4.0".to_string(),
                 "database hard-cut performance contracts".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.5.0".to_string(),
                 "policy-driven durable retention".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.6.0".to_string(),
                 "job payload blob agent invocation metadata".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.7.0".to_string(),
                 "job payload blob text response attachments".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.8.0".to_string(),
                 "transcription source mux slots".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
             ),
             (
                 "0.9.0".to_string(),
                 "durable transcription mux planner".to_string(),
-                "0.9.0".to_string()
+                "0.10.0".to_string()
+            ),
+            (
+                "0.10.0".to_string(),
+                "voice status snapshot payload state".to_string(),
+                "0.10.0".to_string()
             ),
         ]
     );
@@ -462,7 +470,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0')",
     )
     .execute(&store.pool)
     .await
@@ -470,7 +478,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 7);
+    assert_eq!(applied.len(), 8);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
@@ -478,6 +486,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
     assert_eq!(applied[4].version, "0.7.0");
     assert_eq!(applied[5].version, "0.8.0");
     assert_eq!(applied[6].version, "0.9.0");
+    assert_eq!(applied[7].version, "0.10.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -524,7 +533,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0')",
     )
     .execute(&store.pool)
     .await
@@ -532,13 +541,14 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 6);
+    assert_eq!(applied.len(), 7);
     assert_eq!(applied[0].version, "0.4.0");
     assert_eq!(applied[1].version, "0.5.0");
     assert_eq!(applied[2].version, "0.6.0");
     assert_eq!(applied[3].version, "0.7.0");
     assert_eq!(applied[4].version, "0.8.0");
     assert_eq!(applied[5].version, "0.9.0");
+    assert_eq!(applied[6].version, "0.10.0");
     assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
@@ -562,7 +572,7 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     assert!(index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0')",
     )
     .execute(&store.pool)
     .await
@@ -570,12 +580,13 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 5);
+    assert_eq!(applied.len(), 6);
     assert_eq!(applied[0].version, "0.5.0");
     assert_eq!(applied[1].version, "0.6.0");
     assert_eq!(applied[2].version, "0.7.0");
     assert_eq!(applied[3].version, "0.8.0");
     assert_eq!(applied[4].version, "0.9.0");
+    assert_eq!(applied[5].version, "0.10.0");
     assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 }
 
@@ -602,7 +613,7 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0', '0.8.0', '0.9.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0')",
     )
     .execute(&store.pool)
     .await
@@ -610,11 +621,12 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 4);
+    assert_eq!(applied.len(), 5);
     assert_eq!(applied[0].version, "0.6.0");
     assert_eq!(applied[1].version, "0.7.0");
     assert_eq!(applied[2].version, "0.8.0");
     assert_eq!(applied[3].version, "0.9.0");
+    assert_eq!(applied[4].version, "0.10.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let metadata = migrated.metadata.to_json();
     let agent = &metadata["agent_task"]["agent"];
@@ -668,7 +680,7 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.7.0', '0.8.0', '0.9.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.7.0', '0.8.0', '0.9.0', '0.10.0')",
     )
     .execute(&store.pool)
     .await
@@ -676,10 +688,11 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].version, "0.7.0");
     assert_eq!(applied[1].version, "0.8.0");
     assert_eq!(applied[2].version, "0.9.0");
+    assert_eq!(applied[3].version, "0.10.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let payload = migrated.text_delivery_payload().unwrap();
     assert!(payload.attachments.is_empty());
@@ -695,6 +708,75 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
         .unwrap();
     let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
     assert!(Job::is_current_payload_blob(&payload_blob));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn v0_10_0_schema_migration_rewrites_v7_voice_status_snapshot_outputs() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    let mut old_snapshot = Job::discord_voice_status_snapshot("job_source");
+    old_snapshot.mark_complete();
+    let old_snapshot = store.create_job(old_snapshot).await.unwrap();
+    let mut new_snapshot = Job::discord_voice_status_snapshot("job_source");
+    new_snapshot.mark_complete();
+    new_snapshot.metadata.output = Some(JobOutput::DiscordVoiceStatusSnapshot(
+        DiscordVoiceStatusSnapshotOutput {
+            bots: Vec::new(),
+            sessions: Vec::new(),
+            voice_state_guild_ids: vec!["guild".to_string()],
+            voice_states: vec![OpaqueValue::from_json(&json!({
+                "guild_id": "guild",
+                "user_id": "user-a",
+                "voice_channel_id": "code",
+            }))],
+        },
+    ));
+    let new_snapshot = store.create_job(new_snapshot).await.unwrap();
+
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(encode_pre_v0_10_0_voice_status_snapshot_job(&old_snapshot))
+        .bind(&old_snapshot.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
+        .bind(encode_job_with_blob_version(&new_snapshot, 7))
+        .bind(&new_snapshot.id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM clankcord_schema_migrations WHERE version = '0.10.0'")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+    let applied = store.run_pending_schema_migrations().await.unwrap();
+
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].version, "0.10.0");
+    let migrated_old = store.get_job(&old_snapshot.id).await.unwrap();
+    let Some(JobOutput::DiscordVoiceStatusSnapshot(output)) = migrated_old.metadata.output else {
+        panic!("migrated old status snapshot output");
+    };
+    assert!(output.voice_state_guild_ids.is_empty());
+    assert!(output.voice_states.is_empty());
+    let migrated_new = store.get_job(&new_snapshot.id).await.unwrap();
+    let Some(JobOutput::DiscordVoiceStatusSnapshot(output)) = migrated_new.metadata.output else {
+        panic!("migrated new status snapshot output");
+    };
+    assert_eq!(output.voice_state_guild_ids, vec!["guild".to_string()]);
+    assert_eq!(output.voice_states.len(), 1);
+    assert_eq!(output.voice_states[0].to_json()["voice_channel_id"], "code");
+    for job_id in [&old_snapshot.id, &new_snapshot.id] {
+        let row = sqlx::query("SELECT payload_blob FROM job_payloads WHERE job_id = $1")
+            .bind(job_id)
+            .fetch_one(&store.pool)
+            .await
+            .unwrap();
+        let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+        assert!(Job::is_current_payload_blob(&payload_blob));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2964,6 +3046,120 @@ fn encode_pre_v0_7_0_text_delivery_job(job: &Job, opaque: BinaryPayload) -> Vec<
     bytes
 }
 
+fn encode_pre_v0_10_0_voice_status_snapshot_job(job: &Job) -> Vec<u8> {
+    #[derive(Debug, Clone, Serialize)]
+    struct PreV0_10_0VoiceStatusSnapshotOutput {
+        bots: Vec<()>,
+        sessions: Vec<()>,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    #[allow(dead_code)]
+    enum PreV0_10_0JobOutput {
+        Empty,
+        JobCreated,
+        RuntimeControl,
+        TextDelivery,
+        DiscordTextSend,
+        DiscordForumThreadCreate,
+        DiscordForumThreadRename,
+        AgentSessionStart,
+        TranscriptPublication,
+        RoomAgentPlacement,
+        DiscordVoiceJoin,
+        DiscordVoiceLeave,
+        DiscordVoicePlayback,
+        DiscordVoiceMute,
+        DiscordVoicePlayAudio,
+        DiscordVoiceStatusSnapshot(PreV0_10_0VoiceStatusSnapshotOutput),
+        Record,
+        DiscordVoiceDeafen,
+        DiscordTypingIndicator,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    struct PreV0_10_0JobMetadata {
+        detail: Option<Box<()>>,
+        error: String,
+        timed_out_at: String,
+        cancel_requested: bool,
+        cancelled_by_user_id: String,
+        output: Option<PreV0_10_0JobOutput>,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    struct PreV0_10_0Job {
+        id: String,
+        kind: JobKind,
+        scope_kind: RuntimeScopeKind,
+        guild_id: String,
+        scope_id: String,
+        state: JobState,
+        requested_by_user_id: String,
+        payload: JobPayload,
+        attempts: i64,
+        created_at: String,
+        updated_at: String,
+        next_run_at: Option<String>,
+        started_at: Option<String>,
+        completed_at: Option<String>,
+        cancelled_at: Option<String>,
+        parent_job_id: Option<String>,
+        root_job_id: String,
+        lineage_depth: u8,
+        metadata: PreV0_10_0JobMetadata,
+    }
+
+    let previous = PreV0_10_0Job {
+        id: job.id.clone(),
+        kind: job.kind,
+        scope_kind: job.scope_kind,
+        guild_id: job.guild_id.clone(),
+        scope_id: job.scope_id.clone(),
+        state: job.state,
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        payload: job.payload.clone(),
+        attempts: job.attempts,
+        created_at: job.created_at.clone(),
+        updated_at: job.updated_at.clone(),
+        next_run_at: job.next_run_at.clone(),
+        started_at: job.started_at.clone(),
+        completed_at: job.completed_at.clone(),
+        cancelled_at: job.cancelled_at.clone(),
+        parent_job_id: job.parent_job_id.clone(),
+        root_job_id: job.root_job_id.clone(),
+        lineage_depth: job.lineage_depth,
+        metadata: PreV0_10_0JobMetadata {
+            detail: None,
+            error: job.metadata.error.clone(),
+            timed_out_at: job.metadata.timed_out_at.clone(),
+            cancel_requested: job.metadata.cancel_requested,
+            cancelled_by_user_id: job.metadata.cancelled_by_user_id.clone(),
+            output: Some(PreV0_10_0JobOutput::DiscordVoiceStatusSnapshot(
+                PreV0_10_0VoiceStatusSnapshotOutput {
+                    bots: Vec::new(),
+                    sessions: Vec::new(),
+                },
+            )),
+        },
+    };
+    let body = bincode::serialize(&previous).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&7_u16.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+fn encode_job_with_blob_version(job: &Job, version: u16) -> Vec<u8> {
+    let body = bincode::serialize(job).unwrap();
+    let mut bytes = Vec::with_capacity(10 + body.len());
+    bytes.extend_from_slice(b"CLANKJOB");
+    bytes.extend_from_slice(&version.to_le_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
 fn encode_current_agent_task_with_response(
     job: &Job,
     response_text: &str,
@@ -3029,7 +3225,7 @@ fn encode_current_agent_task_with_response(
     let body = bincode::serialize(&encoded).unwrap();
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
-    bytes.extend_from_slice(&7_u16.to_le_bytes());
+    bytes.extend_from_slice(&8_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }

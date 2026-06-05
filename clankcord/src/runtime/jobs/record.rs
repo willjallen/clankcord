@@ -26,7 +26,7 @@ use super::{
 use crate::Result;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
-const JOB_PAYLOAD_BLOB_VERSION: u16 = 7;
+const JOB_PAYLOAD_BLOB_VERSION: u16 = 8;
 const JOB_PAYLOAD_BLOB_HEADER_LEN: usize =
     JOB_PAYLOAD_BLOB_MAGIC.len() + std::mem::size_of::<u16>();
 
@@ -36,7 +36,9 @@ const _: () = assert!(
 );
 
 const fn job_payload_blob_version_for_clankcord(version: &str) -> u16 {
-    if const_str_eq(version, "0.9.0") {
+    if const_str_eq(version, "0.10.0") {
+        8
+    } else if const_str_eq(version, "0.9.0") {
         7
     } else if const_str_eq(version, "0.8.0") {
         6

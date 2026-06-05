@@ -1,6 +1,8 @@
-﻿- Do NOT write ANY compatability shims, backwards compatability, migration code, or anything that could possibly 
-be construed as anything similar to this in any way
-- HARD CUTS ONLY
+﻿- Do NOT write ANY compatability shims, backwards compatability layers, or anything that could possibly
+be construed as either of those in any way
+- HARD CUTS ONLY for runtime behavior, internal code contracts, CLI/API surfaces, and configuration semantics unless explicitly requested
+- Durable state changes require migrations. Postgres schema/data, persisted timeline/job rows, and encoded payload blobs are durable contracts. Any change that makes existing durable state unreadable or semantically invalid must include an explicit migration in the timeline migration path, with tests proving old persisted records migrate/read correctly. For job payload/blob format changes, update the blob version mapping and migration ledger.
+- Migrations require a crate version bump. The Rust migration file named for a version is applied when durable state is migrating to that version; for example `v0_10_0.rs` contains the changes applied while recording schema version `0.10.0`.
 - No fallbacks. Fallbacks are a code smell. Either we coded things right and are adhering to the spec, or we didn't. 
 - This is not the same thing as not handling edge cases, or having graceful failure conditions around external interfaces like discord etc. These are not fallbacks.
 - We should not treat our own codebase as hostile. Checking an incoming parameter is valid or mutating it to fit a certain spec is stupid. We own the codebase, we own the contracts, we do not need to be defensive against ourselves.
