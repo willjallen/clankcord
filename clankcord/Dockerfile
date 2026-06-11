@@ -34,13 +34,15 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates clang curl jq libopus0 postgresql-client python-is-python3 python3 ripgrep zip \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @openai/codex@0.137.0 \
-    && mkdir -p /app /clankcord/durable /clankcord/state /codex /workspace \
-    && chmod -R 0777 /app /clankcord /codex /workspace
+    && mkdir -p /app /data \
+    && chmod 0777 /data
 
 COPY --from=builder /out/clankcord /usr/local/bin/clankcord
-COPY config.toml config.ex.toml /app/
+COPY config.ex.toml /app/config.ex.toml
+COPY clankcord/res /app/res
+COPY . /app/source
 
-WORKDIR /app
+WORKDIR /data
 
 EXPOSE 8091
 

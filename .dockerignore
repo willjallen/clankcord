@@ -1,6 +1,7 @@
 .git
 .idea
 .vscode
+config.toml
 **/target
 **/runtime-data
 **/*.db

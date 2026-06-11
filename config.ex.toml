@@ -1,7 +1,7 @@
 [paths]
-state_dir = "/clankcord/state"
-timeline_root = "/clankcord/durable/clankcord/timeline"
-agent_workspaces_root = "/clankcord/state/agent-workspaces"
+state_dir = "/data/state"
+timeline_root = "/data/durable/clankcord/timeline"
+agent_workspaces_root = "/data/state/agent-workspaces"
 
 [secrets]
 root = "/run/secrets"
@@ -32,8 +32,8 @@ member_cache_max_age_ms = 3600000
 
 [codex]
 bin = "codex"
-home = "/codex"
-workdir = "/workspace/clankcord"
+home = "/data/codex-home"
+workdir = "/app/source/clankcord"
 model = "gpt-5.5"
 reasoning_effort = "high"
 fast_mode = false
@@ -51,7 +51,7 @@ api_key_secret = "clankcord_linear_api_key"
 thread_auto_archive_minutes = 1440
 
 [prompts]
-dir = "/workspace/clankcord/res/prompts"
+dir = "/app/res/prompts"
 
 [pool]
 idle_channel_name = "idle"
@@ -138,7 +138,7 @@ independent_after_seconds = 45
 active_capture_poll_ms = 200
 
 [voice.sound]
-dir = "/workspace/clankcord/res/audio"
+dir = "/app/res/audio"
 timeout_ms = 3000
 
 [voice.capture]
