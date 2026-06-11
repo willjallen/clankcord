@@ -33,7 +33,7 @@ FROM node:24-bookworm-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates clang curl jq libopus0 postgresql-client python-is-python3 python3 ripgrep zip \
     && rm -rf /var/lib/apt/lists/* \
-    && npm install -g @openai/codex@0.130.0 \
+    && npm install -g @openai/codex@0.137.0 \
     && mkdir -p /app /clankcord/durable /clankcord/state /codex /workspace \
     && chmod -R 0777 /app /clankcord /codex /workspace
 
