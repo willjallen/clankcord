@@ -20,6 +20,10 @@ pub struct VoiceBotStatus {
 }
 
 impl VoiceBotStatus {
+    pub fn disconnect_pending_at(&self, now_ms: i64) -> bool {
+        self.pending_disconnect_until > now_ms
+    }
+
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or_else(|_| json!({}))
     }

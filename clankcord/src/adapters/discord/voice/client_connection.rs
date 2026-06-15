@@ -5,16 +5,18 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, anyhow};
+use serenity::Error as SerenityError;
 use serenity::async_trait;
 use serenity::cache::Cache;
 use serenity::client::{Client, Context, EventHandler};
 use serenity::gateway::ShardManager;
-use serenity::http::Http;
+use serenity::http::{Http, HttpError};
 use serenity::model::application::Interaction;
 use serenity::model::gateway::{GatewayIntents, Ready};
-use serenity::model::id::{ChannelId, GuildId};
+use serenity::model::id::{ChannelId, GuildId, UserId};
 use serenity::model::voice::VoiceState;
 use songbird::driver::{DecodeConfig, DecodeMode};
+use songbird::error::JoinError;
 use songbird::events::{CoreEvent, Event, EventContext, EventHandler as VoiceEventHandler};
 use songbird::input::RawAdapter;
 use songbird::serenity::SerenityInit;
@@ -29,6 +31,8 @@ use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::runtime::VoiceBotStatus;
 
+pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;
+
 pub(super) struct DiscordVoiceClient {
     pub(super) bot_id: String,
     pub(super) ready: bool,
@@ -37,6 +41,8 @@ pub(super) struct DiscordVoiceClient {
     pub(super) current_guild_id: String,
     pub(super) current_channel_id: String,
     pub(super) last_error: String,
+    pub(super) pending_disconnect_events: i64,
+    pub(super) pending_disconnect_until: i64,
     pub(super) user_id: String,
     pub(super) username: String,
     http: Arc<Http>,
@@ -81,6 +87,8 @@ impl DiscordVoiceClient {
             current_guild_id: String::new(),
             current_channel_id: String::new(),
             last_error: String::new(),
+            pending_disconnect_events: 0,
+            pending_disconnect_until: 0,
             user_id: String::new(),
             username: String::new(),
             http,
@@ -125,8 +133,8 @@ impl DiscordVoiceClient {
             current_guild_id: self.current_guild_id.clone(),
             current_channel_id: self.current_channel_id.clone(),
             last_error: self.last_error.clone(),
-            pending_disconnect_events: 0,
-            pending_disconnect_until: 0,
+            pending_disconnect_events: self.pending_disconnect_events,
+            pending_disconnect_until: self.pending_disconnect_until,
             user_id: self.user_id.clone(),
             username: self.username.clone(),
             gateway_running: self
@@ -136,6 +144,32 @@ impl DiscordVoiceClient {
             receive_backend: "songbird".to_string(),
         }
     }
+
+    pub(super) fn mark_disconnect_pending(&mut self, now_ms: i64) {
+        self.joining_live_session_id = None;
+        self.active_live_session_id = None;
+        self.current_guild_id.clear();
+        self.current_channel_id.clear();
+        self.pending_disconnect_events = self.pending_disconnect_events.saturating_add(1);
+        self.pending_disconnect_until = now_ms.saturating_add(VOICE_DISCONNECT_SETTLE_MS);
+    }
+
+    pub(super) fn clear_disconnect_pending(&mut self) {
+        self.pending_disconnect_until = 0;
+    }
+
+    pub(super) fn retain_disconnect_pending(&mut self, pending_disconnect_until: i64) {
+        self.joining_live_session_id = None;
+        self.active_live_session_id = None;
+        self.current_guild_id.clear();
+        self.current_channel_id.clear();
+        self.pending_disconnect_until = self.pending_disconnect_until.max(pending_disconnect_until);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct VoiceLeaveOutcome {
+    pub(super) local_call_removed: bool,
 }
 
 pub(super) async fn join_voice_channel(
@@ -149,6 +183,12 @@ pub(super) async fn join_voice_channel(
     let join = {
         let mut call = call.lock().await;
         call.remove_all_global_events();
+        call.deafen(false)
+            .await
+            .map_err(|error| anyhow!("failed to disable voice deafen before join: {error}"))?;
+        call.mute(false)
+            .await
+            .map_err(|error| anyhow!("failed to disable voice mute before join: {error}"))?;
         call.add_global_event(
             Event::Core(CoreEvent::SpeakingStateUpdate),
             VoiceReceiveHandler {
@@ -186,8 +226,72 @@ pub(super) async fn join_voice_channel(
     Ok(())
 }
 
-pub(super) async fn leave_voice_channel(voice: Arc<Songbird>, guild_id: u64) {
-    let _ = voice.remove(GuildId::new(guild_id)).await;
+pub(super) async fn leave_voice_channel(
+    voice: Arc<Songbird>,
+    user_id: &str,
+    guild_id: u64,
+) -> Result<VoiceLeaveOutcome> {
+    let guild_id = GuildId::new(guild_id);
+    let user_id = UserId::new(parse_discord_id("voice_bot_user_id", user_id)?);
+    let local_call_removed = match voice.remove(guild_id).await {
+        Ok(()) => true,
+        Err(JoinError::NoCall) => false,
+        Err(error) => {
+            return Err(anyhow::Error::new(error).context("failed to remove local voice call"));
+        }
+    };
+    let control_token = config::load_discord_bot_token()?;
+    let control_http = Http::new(&control_token);
+    if discord_voice_channel_id(&control_http, guild_id, user_id)
+        .await?
+        .is_some()
+    {
+        guild_id
+            .disconnect_member(&control_http, user_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to disconnect voice bot user {} from guild {}",
+                    user_id.get(),
+                    guild_id.get()
+                )
+            })?;
+    }
+    if let Some(channel_id) = discord_voice_channel_id(&control_http, guild_id, user_id).await? {
+        anyhow::bail!(
+            "voice bot user {} remained in voice channel {} after disconnect in guild {}",
+            user_id.get(),
+            channel_id,
+            guild_id.get()
+        );
+    }
+    Ok(VoiceLeaveOutcome { local_call_removed })
+}
+
+async fn discord_voice_channel_id(
+    http: &Http,
+    guild_id: GuildId,
+    user_id: UserId,
+) -> Result<Option<String>> {
+    match guild_id.get_user_voice_state(http, user_id).await {
+        Ok(state) => Ok(state
+            .channel_id
+            .map(|channel_id| channel_id.get().to_string())),
+        Err(error) if unknown_voice_state_error(&error) => Ok(None),
+        Err(error) => Err(anyhow::Error::new(error).context(format!(
+            "failed to read Discord voice state for user {} in guild {}",
+            user_id.get(),
+            guild_id.get()
+        ))),
+    }
+}
+
+fn unknown_voice_state_error(error: &SerenityError) -> bool {
+    matches!(
+        error,
+        SerenityError::Http(HttpError::UnsuccessfulRequest(response))
+            if response.status_code.as_u16() == 404 && response.error.code == 10065
+    )
 }
 
 pub(super) async fn set_voice_mute(voice: Arc<Songbird>, guild_id: u64, muted: bool) -> Result<()> {

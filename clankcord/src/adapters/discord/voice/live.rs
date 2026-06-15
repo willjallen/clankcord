@@ -196,6 +196,7 @@ impl LiveVoiceAdapter {
                         finished.bot_id.clone(),
                         finished.guild_id.clone(),
                         client.voice(),
+                        client.user_id.clone(),
                     ));
                 }
             }
@@ -208,6 +209,7 @@ impl LiveVoiceAdapter {
                         client.bot_id.clone(),
                         client.current_guild_id.clone(),
                         client.voice(),
+                        client.user_id.clone(),
                     ));
                 }
                 client.joining_live_session_id = None;
@@ -225,12 +227,16 @@ impl LiveVoiceAdapter {
         }
 
         let mut leave_results = Vec::new();
-        for (bot_id, guild_id, voice) in leave_requests {
+        for (bot_id, guild_id, voice, user_id) in leave_requests {
             let result = match parse_discord_id("guild_id", &guild_id) {
-                Ok(guild_id) => {
-                    leave_voice_channel(voice, guild_id).await;
-                    json!({"botId": bot_id, "guildId": guild_id.to_string(), "status": "left"})
-                }
+                Ok(guild_id) => match leave_voice_channel(voice, &user_id, guild_id).await {
+                    Ok(outcome) => {
+                        json!({"botId": bot_id, "guildId": guild_id.to_string(), "status": "left", "outcome": format!("{outcome:?}")})
+                    }
+                    Err(error) => {
+                        json!({"botId": bot_id, "guildId": guild_id.to_string(), "status": "leave_failed", "error": error.to_string()})
+                    }
+                },
                 Err(error) => {
                     json!({"botId": bot_id, "guildId": guild_id, "status": "invalid_guild", "error": error.to_string()})
                 }
@@ -285,6 +291,7 @@ impl LiveVoiceAdapter {
             })?;
             client.joining_live_session_id = Some(session_id.clone());
             client.last_error.clear();
+            client.clear_disconnect_pending();
             (client.voice(), client.discord_user_id()?)
         };
 
@@ -368,6 +375,7 @@ impl LiveVoiceAdapter {
             client.current_guild_id = room.guild_id.clone();
             client.current_channel_id = room.channel_id.clone();
             client.last_error.clear();
+            client.clear_disconnect_pending();
             Some(client.status())
         };
         if let Some(status) = &bot_status {
@@ -434,23 +442,10 @@ impl LiveVoiceAdapter {
         let session_id = request.session_id;
         let live_session = self.capture_sessions_lock.lock().await.remove(&session_id);
         let Some(live_session) = live_session else {
-            let orphan = {
-                let mut clients = self.voice_clients_lock.lock().await;
-                clients
-                    .iter_mut()
-                    .find(|(_, client)| {
-                        client.current_guild_id == guild_id
-                            && client.current_channel_id == voice_channel_id
-                    })
-                    .map(|(bot_id, client)| {
-                        client.active_live_session_id = None;
-                        client.joining_live_session_id = None;
-                        client.current_guild_id.clear();
-                        client.current_channel_id.clear();
-                        (bot_id.clone(), client.voice())
-                    })
-            };
-            let Some((bot_id, voice)) = orphan else {
+            let orphan = self
+                .orphan_voice_client_handles(&guild_id, &voice_channel_id)
+                .await?;
+            let Some((bot_id, voice, user_id)) = orphan else {
                 return Ok(DiscordVoiceLeaveOutput {
                     session_id,
                     status: "missing_session".to_string(),
@@ -463,10 +458,13 @@ impl LiveVoiceAdapter {
                 });
             };
             let parsed_guild_id = parse_discord_id("guild_id", &guild_id)?;
-            leave_voice_channel(voice, parsed_guild_id).await;
+            leave_voice_channel(voice, &user_id, parsed_guild_id).await?;
             let bot_status = {
-                let clients = self.voice_clients_lock.lock().await;
-                clients.get(&bot_id).map(DiscordVoiceClient::status)
+                let mut clients = self.voice_clients_lock.lock().await;
+                clients.get_mut(&bot_id).map(|client| {
+                    client.mark_disconnect_pending(utc_now().timestamp_millis());
+                    client.status()
+                })
             };
             if let Some(status) = &bot_status {
                 self.persist_bot_status(status).await;
@@ -488,24 +486,21 @@ impl LiveVoiceAdapter {
             live_session.finish(request.reason, local_tz())
         };
 
-        let voice = {
-            let mut clients = self.voice_clients_lock.lock().await;
-            let client = clients.get_mut(&finished.bot_id).ok_or_else(|| {
+        let (voice, user_id) = {
+            let clients = self.voice_clients_lock.lock().await;
+            let client = clients.get(&finished.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", finished.bot_id))
             })?;
-            client.active_live_session_id = None;
-            client.joining_live_session_id = None;
-            client.current_guild_id.clear();
-            client.current_channel_id.clear();
-            client.voice()
+            (client.voice(), client.user_id.clone())
         };
         let guild_id = parse_discord_id("guild_id", &finished.guild_id)?;
-        leave_voice_channel(voice, guild_id).await;
+        leave_voice_channel(voice, &user_id, guild_id).await?;
         let bot_status = {
-            let clients = self.voice_clients_lock.lock().await;
-            clients
-                .get(&finished.bot_id)
-                .map(DiscordVoiceClient::status)
+            let mut clients = self.voice_clients_lock.lock().await;
+            clients.get_mut(&finished.bot_id).map(|client| {
+                client.mark_disconnect_pending(utc_now().timestamp_millis());
+                client.status()
+            })
         };
         if let Some(status) = &bot_status {
             self.persist_bot_status(status).await;
@@ -524,6 +519,49 @@ impl LiveVoiceAdapter {
         })
     }
 
+    async fn orphan_voice_client_handles(
+        &self,
+        guild_id: &str,
+        voice_channel_id: &str,
+    ) -> Result<Option<(String, Arc<songbird::Songbird>, String)>> {
+        let direct_match = {
+            let clients = self.voice_clients_lock.lock().await;
+            clients
+                .iter()
+                .find(|(_, client)| {
+                    client.current_guild_id == guild_id
+                        && client.current_channel_id == voice_channel_id
+                })
+                .map(|(bot_id, client)| (bot_id.clone(), client.voice(), client.user_id.clone()))
+        };
+        if direct_match.is_some() {
+            return Ok(direct_match);
+        }
+
+        let Some(bot_id) = self
+            .timeline_store
+            .list_voice_bot_states()
+            .await?
+            .into_iter()
+            .find(|status| {
+                status.ready
+                    && status.current_guild_id == guild_id
+                    && status.current_channel_id == voice_channel_id
+            })
+            .map(|status| status.bot_id)
+        else {
+            return Ok(None);
+        };
+
+        let durable_match = {
+            let clients = self.voice_clients_lock.lock().await;
+            clients
+                .get(&bot_id)
+                .map(|client| (bot_id, client.voice(), client.user_id.clone()))
+        };
+        Ok(durable_match)
+    }
+
     pub(crate) async fn set_session_mute(
         self: &Arc<Self>,
         request: DiscordVoiceMutePayload,
@@ -539,10 +577,8 @@ impl LiveVoiceAdapter {
                 message: "Voice session is not active.".to_string(),
             });
         };
-        let session = {
-            let live_session = live_session.lock().await;
-            live_session.metadata(local_tz())
-        };
+
+        let session = live_session.lock().await.metadata(local_tz());
         let voice = {
             let clients = self.voice_clients_lock.lock().await;
             let client = clients.get(&session.bot_id).ok_or_else(|| {
@@ -561,7 +597,6 @@ impl LiveVoiceAdapter {
             message: String::new(),
         })
     }
-
     pub(crate) async fn set_session_deafen(
         self: &Arc<Self>,
         request: DiscordVoiceDeafenPayload,
@@ -819,6 +854,14 @@ impl LiveVoiceAdapter {
 
     async fn reconcile_voice_client_presence(&self) -> Result<()> {
         let configured_guild_ids = configured_voice_guild_ids();
+        let now_ms = utc_now().timestamp_millis();
+        let durable_pending_disconnects = self
+            .timeline_store
+            .list_voice_bot_states()
+            .await?
+            .into_iter()
+            .map(|status| (status.bot_id, status.pending_disconnect_until))
+            .collect::<BTreeMap<_, _>>();
         let probes = {
             let clients = self.voice_clients_lock.lock().await;
             clients
@@ -834,18 +877,24 @@ impl LiveVoiceAdapter {
                     } else {
                         vec![client.current_guild_id.clone()]
                     };
+                    let pending_disconnect_until =
+                        match durable_pending_disconnects.get(&client.bot_id) {
+                            Some(value) => *value,
+                            None => 0,
+                        };
                     (
                         client.bot_id.clone(),
                         client.user_id.clone(),
                         client.cache(),
                         guild_ids,
+                        pending_disconnect_until,
                     )
                 })
-                .filter(|(_, _, _, guild_ids)| !guild_ids.is_empty())
+                .filter(|(_, _, _, guild_ids, _)| !guild_ids.is_empty())
                 .collect::<Vec<_>>()
         };
 
-        for (bot_id, user_id, cache, guild_ids) in probes {
+        for (bot_id, user_id, cache, guild_ids, pending_disconnect_until) in probes {
             let discord_user_id = UserId::new(parse_discord_id("user_id", &user_id)?);
             let mut found_voice_state = false;
             let mut checked_guild = false;
@@ -873,6 +922,12 @@ impl LiveVoiceAdapter {
                         .map(|value| value.get().to_string())
                         .unwrap_or_default()
                 };
+                if !actual_channel_id.trim().is_empty() && pending_disconnect_until > now_ms {
+                    self.retain_pending_disconnect_presence(&bot_id, pending_disconnect_until)
+                        .await;
+                    found_voice_state = true;
+                    break;
+                }
                 self.apply_authoritative_voice_presence(
                     &bot_id,
                     &guild_id,
@@ -920,6 +975,9 @@ impl LiveVoiceAdapter {
             };
             client.current_guild_id = guild_id.to_string();
             client.current_channel_id = channel_id.to_string();
+            if channel_id.trim().is_empty() {
+                client.clear_disconnect_pending();
+            }
             Some(client.status())
         };
         if let Some(status) = status {
@@ -961,6 +1019,36 @@ impl LiveVoiceAdapter {
         for session_id in stale_session_ids {
             self.finish_reconciled_session(&session_id, reason).await;
         }
+    }
+
+    async fn retain_pending_disconnect_presence(
+        &self,
+        bot_id: &str,
+        pending_disconnect_until: i64,
+    ) {
+        let status = {
+            let mut clients = self.voice_clients_lock.lock().await;
+            clients.get_mut(bot_id).map(|client| {
+                client.retain_disconnect_pending(pending_disconnect_until);
+                client.status()
+            })
+        };
+        if let Some(status) = status {
+            self.persist_bot_status(&status).await;
+        }
+    }
+
+    async fn persisted_pending_disconnect_until(&self, bot_id: &str) -> Result<i64> {
+        let Some(status) = self
+            .timeline_store
+            .list_voice_bot_states()
+            .await?
+            .into_iter()
+            .find(|status| status.bot_id == bot_id)
+        else {
+            return Ok(0);
+        };
+        Ok(status.pending_disconnect_until)
     }
 
     async fn live_session_ids_for_bot_outside(
@@ -1076,6 +1164,31 @@ impl LiveVoiceAdapter {
             }
         }
 
+        let voice_state_matches_client = {
+            let clients = self.voice_clients_lock.lock().await;
+            let Some(client) = clients.get(bot_id) else {
+                return;
+            };
+            !client.user_id.is_empty() && client.user_id == user_id
+        };
+        if !voice_state_matches_client {
+            return;
+        }
+
+        let pending_disconnect_until = if channel_id.trim().is_empty() {
+            0
+        } else {
+            match self.persisted_pending_disconnect_until(bot_id).await {
+                Ok(value) => value,
+                Err(error) => {
+                    log(&format!(
+                        "loading pending disconnect state for {bot_id} failed: {error}"
+                    ));
+                    return;
+                }
+            }
+        };
+
         let (status, joining_live_session_id) = {
             let mut clients = self.voice_clients_lock.lock().await;
             let Some(client) = clients.get_mut(bot_id) else {
@@ -1084,16 +1197,26 @@ impl LiveVoiceAdapter {
             if client.user_id.is_empty() || client.user_id != user_id {
                 return;
             }
-            client.current_guild_id = guild_id.clone();
-            client.current_channel_id = channel_id.clone();
-            let joining_live_session_id = if client.joining_live_session_id.is_some()
-                && !client.current_channel_id.is_empty()
+            if !channel_id.trim().is_empty()
+                && pending_disconnect_until > utc_now().timestamp_millis()
             {
-                client.joining_live_session_id.clone()
+                client.retain_disconnect_pending(pending_disconnect_until);
+                (Some(client.status()), None)
             } else {
-                None
-            };
-            (Some(client.status()), joining_live_session_id)
+                client.current_guild_id = guild_id.clone();
+                client.current_channel_id = channel_id.clone();
+                if channel_id.trim().is_empty() {
+                    client.clear_disconnect_pending();
+                }
+                let joining_live_session_id = if client.joining_live_session_id.is_some()
+                    && !client.current_channel_id.is_empty()
+                {
+                    client.joining_live_session_id.clone()
+                } else {
+                    None
+                };
+                (Some(client.status()), joining_live_session_id)
+            }
         };
         if let Some(session_id) = joining_live_session_id {
             self.note_bot_join_voice_state(&session_id, &channel_id)

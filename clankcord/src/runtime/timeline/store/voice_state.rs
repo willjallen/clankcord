@@ -290,17 +290,19 @@ impl TimelineStore {
             FROM bot_states bot
             WHERE (bot.payload_json->>'ready')::boolean = TRUE
               AND COALESCE(bot.payload_json->>'currentChannelId', '') = ''
+              AND COALESCE((bot.payload_json->>'pendingDisconnectUntil')::bigint, 0) <= $1
               AND NOT EXISTS (
                 SELECT 1
                 FROM assignments assignment
                 WHERE assignment.voice_bot_id = bot.bot_id
-                  AND assignment.state = ANY($1)
+                  AND assignment.state = ANY($2)
               )
             ORDER BY bot.bot_id
             LIMIT 1
             FOR UPDATE OF bot SKIP LOCKED
             "#,
         )
+        .bind(started_ms)
         .bind(ACTIVE_ASSIGNMENT_STATES)
         .fetch_optional(transaction.as_mut())
         .await?;

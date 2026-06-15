@@ -647,7 +647,7 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn room_placement_builtin_automation_requires_idle_bot_for_auto_join() {
+async fn room_placement_builtin_automation_releases_orphan_bot_outside_configured_rooms() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut bot = ready_bot();
@@ -666,7 +666,16 @@ async fn room_placement_builtin_automation_requires_idle_bot_for_auto_join() {
 
     let result = runtime.run_automations().await.unwrap().to_json();
 
-    assert_eq!(result["createdJobs"], json!([]));
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = store.get_job(job_id).await.unwrap();
+    assert_eq!(job.kind, JobKind::DiscordVoiceLeave);
+    assert_eq!(job.guild_id, "guild");
+    assert_eq!(job.scope_id, "env");
+    let payload = job.discord_voice_leave_payload().unwrap();
+    assert_eq!(payload.session_id, "");
+    assert_eq!(payload.reason, "orphan_voice_bot_presence");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -693,10 +702,96 @@ async fn room_placement_builtin_automation_releases_orphan_voice_bot_presence() 
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
     let job = store.get_job(job_id).await.unwrap();
-    let payload = job.room_agent_placement_payload().unwrap();
-    assert_eq!(payload.action, RoomAgentPlacementAction::Leave);
+    assert_eq!(job.kind, JobKind::DiscordVoiceLeave);
+    assert_eq!(job.guild_id, "guild");
+    assert_eq!(job.scope_id, "code");
+    let payload = job.discord_voice_leave_payload().unwrap();
+    assert_eq!(payload.session_id, "");
     assert_eq!(payload.reason, "orphan_voice_bot_presence");
-    assert_eq!(payload.cooldown_seconds, Some(0));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_groups_orphan_voice_bot_presence_by_channel() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut first_bot = ready_bot();
+    first_bot.current_guild_id = "guild".to_string();
+    first_bot.current_channel_id = "code".to_string();
+    let mut second_bot = ready_bot();
+    second_bot.bot_id = "clanky-vc2".to_string();
+    second_bot.user_id = "bot-user-2".to_string();
+    second_bot.current_guild_id = "guild".to_string();
+    second_bot.current_channel_id = "code".to_string();
+    store.upsert_voice_bot_state(&first_bot).await.unwrap();
+    store.upsert_voice_bot_state(&second_bot).await.unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = store.get_job(job_id).await.unwrap();
+    assert_eq!(job.kind, JobKind::DiscordVoiceLeave);
+    assert_eq!(job.guild_id, "guild");
+    assert_eq!(job.scope_id, "code");
+    let payload = job.discord_voice_leave_payload().unwrap();
+    assert_eq!(payload.session_id, "");
+    assert_eq!(payload.reason, "orphan_voice_bot_presence");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_uses_only_direct_leave_for_empty_orphan_room() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut bot = ready_bot();
+    bot.current_guild_id = "guild".to_string();
+    bot.current_channel_id = "code".to_string();
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    let mut left = voice_state("", "user-a", "User A");
+    left["updated_at"] = json!(six_minutes_ago());
+    store.record_voice_state_update(None, left).await.unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    let created = result["createdJobs"].as_array().unwrap();
+    assert_eq!(created.len(), 1);
+    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
+    let job = store.get_job(job_id).await.unwrap();
+    assert_eq!(job.kind, JobKind::DiscordVoiceLeave);
+    let payload = job.discord_voice_leave_payload().unwrap();
+    assert_eq!(payload.session_id, "");
+    assert_eq!(payload.reason, "orphan_voice_bot_presence");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_waits_for_pending_orphan_disconnect() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut bot = ready_bot();
+    bot.current_guild_id = "guild".to_string();
+    bot.current_channel_id = "code".to_string();
+    bot.pending_disconnect_events = 1;
+    bot.pending_disconnect_until = utc_now().timestamp_millis() + 60_000;
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
+        .await
+        .unwrap();
+    store
+        .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
+        .await
+        .unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    assert_eq!(result["createdJobs"], json!([]));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1122,6 +1217,34 @@ async fn room_placement_builtin_automation_waits_for_configured_deafened_release
     let room = code_room();
     let mut pool = test_pool_config();
     pool.auto_leave_single_deafened_seconds = 7 * 60;
+    write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .mark_voice_assignment_capturing(&assignment.assignment_id)
+        .await
+        .unwrap();
+    let mut state = voice_state_with_flags("code", "user-a", "User A", false, false, false, true);
+    state["updated_at"] = json!(six_minutes_ago());
+    store.record_voice_state_update(None, state).await.unwrap();
+    let mut runtime = test_runtime(store.clone());
+
+    let result = runtime.run_automations().await.unwrap().to_json();
+
+    assert_eq!(result["createdJobs"], json!([]));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn room_placement_builtin_automation_disables_single_deafened_release_at_zero_seconds() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
+    let room = code_room();
+    let mut pool = test_pool_config();
+    pool.auto_leave_single_deafened_seconds = 0;
     write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")

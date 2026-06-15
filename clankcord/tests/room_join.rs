@@ -440,6 +440,26 @@ async fn voice_assignment_claim_requires_idle_bot() {
     assert!(assignment.is_none());
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn voice_assignment_claim_skips_pending_disconnect_bot() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let _state = test_state_dir(raw.path()).await;
+    let store = test_store(raw.path()).await;
+    let room = test_room();
+    let mut bot = ready_bot();
+    bot.pending_disconnect_events = 1;
+    bot.pending_disconnect_until = utc_now().timestamp_millis() + 60_000;
+    store.upsert_voice_bot_state(&bot).await.unwrap();
+
+    let assignment = store
+        .claim_voice_assignment_for_room(&room, "auto_join")
+        .await
+        .unwrap();
+
+    assert!(assignment.is_none());
+}
+
 fn test_runtime(
     timeline_store: clankcord::runtime::timeline::TimelineStore,
     _room: RoomConfig,

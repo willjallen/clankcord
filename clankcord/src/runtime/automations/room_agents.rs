@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::Result;
 use crate::runtime::automations::{
     Automation, AutomationContext, AutomationOutput, AutomationVoiceState,
@@ -5,7 +7,7 @@ use crate::runtime::automations::{
 use crate::runtime::timeline::{parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
-    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig,
+    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, VoiceBotStatus,
     VoiceCaptureSessionStatus,
 };
 use serde_json::Value;
@@ -24,6 +26,11 @@ impl Automation for RoomAgentPlacementAutomation {
         let voice_state = context.voice_state();
         let available_bot = has_available_voice_bot(voice_state);
         let mut output = AutomationOutput::empty();
+        for orphan in orphan_voice_bot_statuses(context) {
+            if !has_active_orphan_voice_leave_job(context, &orphan) {
+                output.emit(orphan_voice_bot_leave_job(&orphan));
+            }
+        }
         for room in context.room_configs() {
             for duplicate in duplicate_voice_bot_sessions_for_room(voice_state, &room) {
                 if !has_active_session_leave_job(context, &duplicate) {
@@ -66,14 +73,6 @@ impl RoomAgentPlacementDecision {
         let manual_leave = manual_leave_active(context, room);
         let auto_suppressed =
             context.room_control_datetime_active(&room.channel_id, "auto_join_suppressed_until");
-
-        if room_has_orphan_voice_bot_presence(context.voice_state(), room) {
-            return Self {
-                action: Some(RoomAgentPlacementAction::Leave),
-                reason: "orphan_voice_bot_presence",
-                cooldown_seconds: Some(0),
-            };
-        }
 
         if voice_bot_present
             && room_empty_past_grace(
@@ -215,6 +214,9 @@ fn room_empty_past_grace(
 }
 
 fn single_deafened_participant_past_grace(occupants: &[Value], grace_seconds: i64) -> bool {
+    if grace_seconds <= 0 {
+        return false;
+    }
     let [occupant] = occupants else {
         return false;
     };
@@ -237,9 +239,11 @@ fn voice_state_updated_at(occupant: &Value) -> Option<chrono::DateTime<chrono::U
 }
 
 fn has_available_voice_bot(voice_state: &AutomationVoiceState) -> bool {
+    let now_ms = utc_now().timestamp_millis();
     voice_state.bots.iter().any(|bot| {
         bot.ready
             && bot.current_channel_id.trim().is_empty()
+            && !bot.disconnect_pending_at(now_ms)
             && !voice_state
                 .assignments
                 .iter()
@@ -263,26 +267,34 @@ fn room_has_voice_bot_presence(voice_state: &AutomationVoiceState, room: &RoomCo
             && assignment.guild_id == room.guild_id
             && assignment.voice_channel_id == room.channel_id
     }) || !active_sessions_for_room(voice_state, room).is_empty()
-        || voice_state.bots.iter().any(|status| {
-            status.ready
-                && status.current_guild_id == room.guild_id
-                && status.current_channel_id == room.channel_id
-        })
 }
 
-fn room_has_orphan_voice_bot_presence(
-    voice_state: &AutomationVoiceState,
-    room: &RoomConfig,
-) -> bool {
-    voice_state.bots.iter().any(|status| {
-        status.ready
-            && status.current_guild_id == room.guild_id
-            && status.current_channel_id == room.channel_id
-    }) && !voice_state.assignments.iter().any(|assignment| {
-        assignment.is_active()
-            && assignment.guild_id == room.guild_id
-            && assignment.voice_channel_id == room.channel_id
-    }) && active_sessions_for_room(voice_state, room).is_empty()
+fn orphan_voice_bot_statuses(context: &AutomationContext<'_>) -> Vec<VoiceBotStatus> {
+    let now_ms = utc_now().timestamp_millis();
+    let mut seen_channels = BTreeSet::new();
+    let mut orphans = Vec::new();
+    for status in &context.voice_state().bots {
+        if status.ready
+            && !status.current_guild_id.trim().is_empty()
+            && !status.current_channel_id.trim().is_empty()
+            && !status.disconnect_pending_at(now_ms)
+            && !context.voice_state().assignments.iter().any(|assignment| {
+                assignment.is_active() && assignment.voice_bot_id == status.bot_id
+            })
+            && !context.voice_state().sessions.iter().any(|session| {
+                session.active
+                    && session.ended_at.trim().is_empty()
+                    && session.bot_id == status.bot_id
+            })
+            && seen_channels.insert((
+                status.current_guild_id.clone(),
+                status.current_channel_id.clone(),
+            ))
+        {
+            orphans.push(status.clone());
+        }
+    }
+    orphans
 }
 
 fn active_sessions_for_room(
@@ -348,6 +360,44 @@ fn has_active_session_leave_job(
         job.discord_voice_leave_payload()
             .is_some_and(|payload| payload.session_id == session.session_id)
     })
+}
+
+fn has_active_orphan_voice_leave_job(
+    context: &AutomationContext<'_>,
+    status: &VoiceBotStatus,
+) -> bool {
+    context.has_active_job_in_guild(
+        JobKind::DiscordVoiceLeave,
+        &status.current_guild_id,
+        |job| {
+            job.scope_id == status.current_channel_id
+                && job.discord_voice_leave_payload().is_some_and(|payload| {
+                    payload.session_id.trim().is_empty()
+                        && payload.reason == "orphan_voice_bot_presence"
+                })
+        },
+    ) || context.has_active_job_in_guild(
+        JobKind::RoomAgentPlacement,
+        &status.current_guild_id,
+        |job| {
+            job.scope_id == status.current_channel_id
+                && job
+                    .room_agent_placement_payload()
+                    .is_some_and(|payload| payload.action == RoomAgentPlacementAction::Leave)
+        },
+    )
+}
+
+fn orphan_voice_bot_leave_job(status: &VoiceBotStatus) -> Job {
+    Job::discord_voice_leave(
+        status.current_guild_id.clone(),
+        status.current_channel_id.clone(),
+        "runtime_automation",
+        DiscordVoiceLeavePayload {
+            session_id: String::new(),
+            reason: "orphan_voice_bot_presence".to_string(),
+        },
+    )
 }
 
 fn duplicate_session_leave_job(session: &VoiceCaptureSessionStatus) -> Job {
