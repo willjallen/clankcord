@@ -74,18 +74,7 @@ fn render_text_content(payload: &DiscordTextSendPayload) -> String {
 fn post_chunks(channel_id: &str, content: &str) -> Result<DiscordPostMetadata> {
     let mut messages = Vec::new();
     for chunk in split_message_chunks(content, MESSAGE_CHUNK_LIMIT) {
-        let payload = discord_request(
-            "POST",
-            &format!("/channels/{channel_id}/messages"),
-            Some(&serde_json::json!({"content": chunk})),
-            None,
-            None,
-            30,
-        )?;
-        messages.push(DiscordPostedMessageMetadata {
-            channel_id: channel_id.to_string(),
-            message_id: string_field(&payload, "id"),
-        });
+        messages.push(post_text_chunk(channel_id, &chunk, None)?);
     }
     Ok(DiscordPostMetadata {
         channel_id: channel_id.to_string(),
@@ -93,16 +82,53 @@ fn post_chunks(channel_id: &str, content: &str) -> Result<DiscordPostMetadata> {
     })
 }
 
+fn post_text_chunk(
+    channel_id: &str,
+    content: &str,
+    allowed_mentions: Option<&crate::runtime::BinaryPayload>,
+) -> Result<DiscordPostedMessageMetadata> {
+    let mut body = serde_json::Map::new();
+    body.insert(
+        "content".to_string(),
+        serde_json::Value::String(content.to_string()),
+    );
+    if let Some(allowed_mentions) = allowed_mentions
+        && !allowed_mentions.is_empty()
+    {
+        body.insert("allowed_mentions".to_string(), allowed_mentions.to_json());
+    }
+    let payload = discord_request(
+        "POST",
+        &format!("/channels/{channel_id}/messages"),
+        Some(&serde_json::Value::Object(body)),
+        None,
+        None,
+        30,
+    )?;
+    Ok(DiscordPostedMessageMetadata {
+        channel_id: channel_id.to_string(),
+        message_id: string_field(&payload, "id"),
+    })
+}
+
 fn post_single_message(
     channel_id: &str,
     payload: &DiscordTextSendPayload,
 ) -> Result<DiscordPostMetadata> {
-    let content = render_text_content(payload);
-    if content.len() > MESSAGE_CHUNK_LIMIT {
-        anyhow::bail!("discord text send with components exceeds message limit");
+    let plan = message_send_plan(payload);
+    let mut messages = Vec::new();
+    for chunk in &plan.leading_text_chunks {
+        messages.push(post_text_chunk(
+            channel_id,
+            chunk,
+            Some(&payload.allowed_mentions),
+        )?);
     }
     let mut body = serde_json::Map::new();
-    body.insert("content".to_string(), serde_json::Value::String(content));
+    body.insert(
+        "content".to_string(),
+        serde_json::Value::String(plan.final_content),
+    );
     if !payload.allowed_mentions.is_empty() {
         body.insert(
             "allowed_mentions".to_string(),
@@ -120,12 +146,13 @@ fn post_single_message(
         None,
         30,
     )?;
+    messages.push(DiscordPostedMessageMetadata {
+        channel_id: channel_id.to_string(),
+        message_id: string_field(&response, "id"),
+    });
     Ok(DiscordPostMetadata {
         channel_id: channel_id.to_string(),
-        messages: vec![DiscordPostedMessageMetadata {
-            channel_id: channel_id.to_string(),
-            message_id: string_field(&response, "id"),
-        }],
+        messages,
     })
 }
 
@@ -133,12 +160,20 @@ fn post_message_with_attachments(
     channel_id: &str,
     payload: &DiscordTextSendPayload,
 ) -> Result<DiscordPostMetadata> {
-    let content = render_text_content(payload);
-    if content.len() > MESSAGE_CHUNK_LIMIT {
-        anyhow::bail!("discord text send with attachments exceeds message limit");
+    let plan = message_send_plan(payload);
+    let mut messages = Vec::new();
+    for chunk in &plan.leading_text_chunks {
+        messages.push(post_text_chunk(
+            channel_id,
+            chunk,
+            Some(&payload.allowed_mentions),
+        )?);
     }
     let mut body = serde_json::Map::new();
-    body.insert("content".to_string(), serde_json::Value::String(content));
+    body.insert(
+        "content".to_string(),
+        serde_json::Value::String(plan.final_content),
+    );
     if !payload.allowed_mentions.is_empty() {
         body.insert(
             "allowed_mentions".to_string(),
@@ -186,11 +221,72 @@ fn post_message_with_attachments(
         None,
         60,
     )?;
+    messages.push(DiscordPostedMessageMetadata {
+        channel_id: channel_id.to_string(),
+        message_id: string_field(&response, "id"),
+    });
     Ok(DiscordPostMetadata {
         channel_id: channel_id.to_string(),
-        messages: vec![DiscordPostedMessageMetadata {
-            channel_id: channel_id.to_string(),
-            message_id: string_field(&response, "id"),
-        }],
+        messages,
     })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageSendPlan {
+    leading_text_chunks: Vec<String>,
+    final_content: String,
+}
+
+fn message_send_plan(payload: &DiscordTextSendPayload) -> MessageSendPlan {
+    let content = render_text_content(payload);
+    let mut chunks = split_message_chunks(&content, MESSAGE_CHUNK_LIMIT);
+    if chunks.is_empty() {
+        chunks.push(String::new());
+    }
+    let final_content = chunks.pop().unwrap_or_default();
+    MessageSendPlan {
+        leading_text_chunks: chunks,
+        final_content,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::{
+        BinaryPayload, TextAttachmentPayload, TextDeliveryKind, TextTarget, TextTargetKind,
+    };
+
+    #[test]
+    fn message_send_plan_splits_long_content_before_final_payload_message() {
+        let payload = DiscordTextSendPayload {
+            intent: TextDeliveryKind::Message,
+            target: TextTarget {
+                kind: TextTargetKind::Channel,
+                channel_id: "channel-1".to_string(),
+                user_id: String::new(),
+            },
+            content: "longword ".repeat(600),
+            source_job_id: "job-source".to_string(),
+            requested_by_user_id: "user-a".to_string(),
+            allowed_mentions: BinaryPayload::empty(),
+            components: BinaryPayload::empty(),
+            attachments: vec![TextAttachmentPayload {
+                path: "/tmp/artifact.zip".to_string(),
+                filename: "artifact.zip".to_string(),
+                size_bytes: 128,
+                sha256: "sha256:abc123".to_string(),
+            }],
+        };
+
+        let plan = message_send_plan(&payload);
+
+        assert!(!plan.leading_text_chunks.is_empty());
+        assert!(
+            plan.leading_text_chunks
+                .iter()
+                .all(|chunk| chunk.len() <= MESSAGE_CHUNK_LIMIT)
+        );
+        assert!(plan.final_content.len() <= MESSAGE_CHUNK_LIMIT);
+    }
 }
