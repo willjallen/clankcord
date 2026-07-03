@@ -30,6 +30,12 @@ RUN --mount=type=cache,id=clankcord-cargo-registry,target=/usr/local/cargo/regis
 
 FROM node:24-bookworm-slim AS runtime
 
+# Half-bandaid: keep glibc from holding freed bulk buffers resident forever.
+# The real fix is to stream bulk audio/request data instead of forcing large
+# Vec/multipart copies that fill malloc arenas and trigger this memory disease.
+ENV MALLOC_ARENA_MAX=2 \
+    MALLOC_TRIM_THRESHOLD_=131072
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates clang curl jq libopus0 postgresql-client python-is-python3 python3 ripgrep zip \
     && rm -rf /var/lib/apt/lists/* \
