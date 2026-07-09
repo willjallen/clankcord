@@ -5,9 +5,9 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
     let config =
         toml::from_str::<AppConfig>(include_str!("../../config.ex.toml")).expect("config parses");
 
-    assert_eq!(config.codex.model, "gpt-5.5");
-    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::High);
-    assert_eq!(config.codex.reasoning_effort.as_str(), "high");
+    assert_eq!(config.codex.model, "gpt-5.6-sol");
+    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::XHigh);
+    assert_eq!(config.codex.reasoning_effort.as_str(), "xhigh");
     assert!(!config.codex.fast_mode);
     assert!(config.codex.linear_mcp.enabled);
     assert_eq!(config.codex.linear_mcp.url, "https://mcp.linear.app/mcp");
@@ -21,22 +21,22 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
 fn codex_reasoning_effort_and_fast_mode_are_typed_config_values() {
     let config_text = include_str!("../../config.ex.toml")
         .replace(
-            "reasoning_effort = \"high\"",
             "reasoning_effort = \"xhigh\"",
+            "reasoning_effort = \"high\"",
         )
         .replace("fast_mode = false", "fast_mode = true");
 
     let config = toml::from_str::<AppConfig>(&config_text).expect("config parses");
 
-    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::XHigh);
-    assert_eq!(config.codex.reasoning_effort.as_str(), "xhigh");
+    assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::High);
+    assert_eq!(config.codex.reasoning_effort.as_str(), "high");
     assert!(config.codex.fast_mode);
 }
 
 #[test]
 fn stale_codex_task_model_key_is_rejected() {
     let config_text = include_str!("../../config.ex.toml")
-        .replace("model = \"gpt-5.5\"", "task_model = \"gpt-5.5\"");
+        .replace("model = \"gpt-5.6-sol\"", "task_model = \"gpt-5.6-sol\"");
 
     let error =
         toml::from_str::<AppConfig>(&config_text).expect_err("config must reject task_model");
@@ -65,7 +65,7 @@ api_key_secret = "clankcord_linear_api_key"
 #[test]
 fn invalid_codex_reasoning_effort_is_rejected() {
     let config_text = include_str!("../../config.ex.toml").replace(
-        "reasoning_effort = \"high\"",
+        "reasoning_effort = \"xhigh\"",
         "reasoning_effort = \"minimal\"",
     );
 
