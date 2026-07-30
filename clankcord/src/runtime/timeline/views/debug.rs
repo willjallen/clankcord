@@ -1,12 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
-use sqlx::Row;
+use sqlx::{Postgres, QueryBuilder, Row};
 
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
@@ -14,14 +13,13 @@ use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::jobs::AgentTaskMetadata;
+use crate::runtime::timeline::util::timeline_event_payload;
 use crate::runtime::timeline::{
     event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
     round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
-use crate::runtime::{
-    AgentRuntime, Job, JobKind, JobState, Runtime, RuntimeScope, RuntimeScopeKind,
-};
+use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
@@ -342,92 +340,83 @@ impl Runtime {
         query_field: DebugSearchField,
         channel: Option<&str>,
     ) -> Result<Vec<Value>> {
-        let mut events = Vec::new();
-        for scope in self.debug_timeline_event_scopes(start, end).await? {
-            if channel.is_some_and(|channel| scope.scope_id != channel) {
-                continue;
-            }
-            let mut scope_events = self
-                .timeline_store
-                .load_scope_events(
-                    scope.kind,
-                    &scope.guild_id,
-                    &scope.scope_id,
-                    start,
-                    end,
-                    kinds,
-                    None,
-                    false,
-                )
-                .await?;
-            events.append(&mut scope_events);
+        if kinds.is_some_and(BTreeSet::is_empty) {
+            return Ok(Vec::new());
         }
-        events.sort_by_key(|event| event_start(event).unwrap_or_else(utc_now));
-        let query = query.trim();
-        if !query.is_empty() {
-            let matched_indexes = events
-                .iter()
-                .enumerate()
-                .filter_map(|(index, event)| {
-                    debug_event_matches_query(event, query, query_field).then_some(index)
-                })
-                .collect::<Vec<_>>();
-            let mut selected_indexes = BTreeSet::new();
-            let context_each_side = limit.saturating_sub(1).min(80) / 2;
-            for index in matched_indexes.into_iter().rev() {
-                let start = index.saturating_sub(context_each_side);
-                let end = (index + context_each_side).min(events.len().saturating_sub(1));
-                for selected in start..=end {
-                    selected_indexes.insert(selected);
-                }
-                if selected_indexes.len() >= limit {
-                    break;
-                }
-            }
-            events = selected_indexes
-                .into_iter()
-                .filter_map(|index| events.get(index).cloned())
-                .collect();
-        }
-        events.reverse();
-        events.truncate(limit);
-        Ok(events.into_iter().map(compact_debug_event).collect())
-    }
 
-    async fn debug_timeline_event_scopes(
-        &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-    ) -> Result<Vec<RuntimeScope>> {
-        let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(
+        let mut statement = QueryBuilder::<Postgres>::new(
             r#"
-            SELECT DISTINCT scope_kind, guild_id, scope_id
-            FROM timeline_events
-            WHERE forgotten = FALSE
+            WITH selected_events AS MATERIALIZED (
+            SELECT e.sequence, e.started_at_ms, e.event_id
+            FROM timeline_events e
+            "#,
+        );
+        let search_uses_room = !query.trim().is_empty()
+            && matches!(query_field, DebugSearchField::All | DebugSearchField::Room);
+        if search_uses_room {
+            statement.push(
+                r#"
+            LEFT JOIN voice_rooms r
+              ON e.scope_kind = 'voice_channel'
+             AND r.guild_id = e.guild_id
+             AND r.voice_channel_id = e.scope_id
+                "#,
+            );
+        }
+        statement.push(
+            r#"
+            WHERE e.forgotten = FALSE
             "#,
         );
         if let Some(start) = start {
-            query
-                .push(" AND ended_at_ms > ")
+            statement
+                .push(" AND e.ended_at_ms > ")
                 .push_bind(instant_ms_dt(start));
         }
         if let Some(end) = end {
-            query
-                .push(" AND started_at_ms < ")
+            statement
+                .push(" AND e.started_at_ms < ")
                 .push_bind(instant_ms_dt(end));
         }
-        query.push(" ORDER BY scope_kind, guild_id, scope_id");
-        let rows = query.build().fetch_all(&self.timeline_store.pool).await?;
-        rows.into_iter()
-            .map(|row| {
-                Ok(RuntimeScope {
-                    kind: RuntimeScopeKind::from_str(
-                        row.try_get::<String, _>("scope_kind")?.as_str(),
-                    )?,
-                    guild_id: row.try_get("guild_id")?,
-                    scope_id: row.try_get("scope_id")?,
-                })
-            })
+        if let Some(kinds) = kinds {
+            statement.push(" AND e.event_kind IN (");
+            let mut separated = statement.separated(", ");
+            for kind in kinds {
+                separated.push_bind(kind);
+            }
+            separated.push_unseparated(")");
+        }
+        if let Some(channel) = channel {
+            statement.push(" AND e.scope_id = ").push_bind(channel);
+        }
+        push_debug_event_search(&mut statement, query, query_field);
+        statement
+            .push(" ORDER BY e.started_at_ms DESC, e.sequence DESC, e.event_id DESC LIMIT ")
+            .push_bind(limit as i64)
+            .push(
+                r#"
+            )
+            SELECT e.*,
+                   r.guild_slug AS room_guild_slug,
+                   r.voice_channel_name AS room_voice_channel_name,
+                   r.voice_channel_slug AS room_voice_channel_slug
+            FROM selected_events selected
+            JOIN timeline_events e ON e.sequence = selected.sequence
+            LEFT JOIN voice_rooms r
+              ON e.scope_kind = 'voice_channel'
+             AND r.guild_id = e.guild_id
+             AND r.voice_channel_id = e.scope_id
+            ORDER BY selected.started_at_ms DESC, selected.sequence DESC, selected.event_id DESC
+                "#,
+            );
+
+        let rows = statement
+            .build()
+            .fetch_all(&self.timeline_store.pool)
+            .await?;
+        rows.iter()
+            .map(timeline_event_payload)
+            .map(|event| event.map(compact_debug_event))
             .collect()
     }
 
@@ -456,87 +445,140 @@ impl Runtime {
     }
 }
 
-fn debug_event_matches_query(event: &Value, query: &str, field: DebugSearchField) -> bool {
-    let haystack = debug_event_search_values(event, field)
-        .join(" ")
-        .to_lowercase();
-    query
+fn push_debug_event_search(
+    statement: &mut QueryBuilder<'_, Postgres>,
+    raw_query: &str,
+    field: DebugSearchField,
+) {
+    let terms = raw_query
         .split_whitespace()
         .map(debug_search_term)
-        .all(|term| haystack.contains(&term))
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    if terms.is_empty() {
+        return;
+    }
+    if matches!(field, DebugSearchField::Feedback) {
+        statement.push(
+            " AND (lower(e.event_kind) = 'feedback' OR lower(e.payload_json->>'kind') = 'feedback')",
+        );
+    }
+    let search_expression = debug_event_search_sql(field);
+    for term in terms {
+        statement
+            .push(" AND strpos(lower(")
+            .push(search_expression)
+            .push("), ")
+            .push_bind(term)
+            .push(") > 0");
+    }
 }
 
-fn debug_event_search_values(event: &Value, field: DebugSearchField) -> Vec<String> {
+fn debug_event_search_sql(field: DebugSearchField) -> &'static str {
     match field {
-        DebugSearchField::All => [
-            DebugSearchField::Detail,
-            DebugSearchField::Feedback,
-            DebugSearchField::Kind,
-            DebugSearchField::JobKind,
-            DebugSearchField::State,
-            DebugSearchField::Command,
-            DebugSearchField::Room,
-            DebugSearchField::Actor,
-        ]
-        .into_iter()
-        .flat_map(|field| debug_event_search_values(event, field))
-        .collect(),
+        DebugSearchField::All => {
+            r#"concat_ws(' ',
+                e.event_kind,
+                e.text,
+                e.speaker_label,
+                e.payload_json->>'kind',
+                e.payload_json->>'text',
+                e.payload_json->>'feedback_message',
+                e.payload_json->>'reason',
+                e.payload_json->>'quality',
+                e.payload_json->>'job_kind',
+                e.payload_json->>'state',
+                e.payload_json->>'command_kind',
+                e.payload_json->>'command_name',
+                r.guild_slug,
+                r.voice_channel_name,
+                r.voice_channel_slug,
+                e.payload_json->>'guild_slug',
+                e.payload_json->>'voice_channel_name',
+                e.payload_json->>'voice_channel_slug',
+                e.payload_json->>'speaker_label',
+                e.payload_json->>'speaker_username',
+                e.payload_json #>> '{result,kind}',
+                e.payload_json #>> '{result,status}',
+                e.payload_json #>> '{result,reason}',
+                e.payload_json #>> '{result,action}',
+                e.payload_json #>> '{result,message}',
+                e.payload_json #>> '{result,summary}',
+                e.payload_json #>> '{command_result,kind}',
+                e.payload_json #>> '{command_result,status}',
+                e.payload_json #>> '{command_result,reason}',
+                e.payload_json #>> '{command_result,action}',
+                e.payload_json #>> '{command_result,message}',
+                e.payload_json #>> '{command_result,summary}',
+                e.payload_json #>> '{command_response,kind}',
+                e.payload_json #>> '{command_response,status}',
+                e.payload_json #>> '{command_response,reason}',
+                e.payload_json #>> '{command_response,action}',
+                e.payload_json #>> '{command_response,message}',
+                e.payload_json #>> '{command_response,summary}'
+            )"#
+        }
         DebugSearchField::Detail => {
-            debug_non_empty_fields(event, &["text", "feedback_message", "reason", "quality"])
-                .into_iter()
-                .chain(debug_result_search_values(event))
-                .collect()
+            r#"concat_ws(' ',
+                e.text,
+                e.payload_json->>'text',
+                e.payload_json->>'feedback_message',
+                e.payload_json->>'reason',
+                e.payload_json->>'quality',
+                e.payload_json #>> '{result,kind}',
+                e.payload_json #>> '{result,status}',
+                e.payload_json #>> '{result,reason}',
+                e.payload_json #>> '{result,action}',
+                e.payload_json #>> '{result,message}',
+                e.payload_json #>> '{result,summary}',
+                e.payload_json #>> '{command_result,kind}',
+                e.payload_json #>> '{command_result,status}',
+                e.payload_json #>> '{command_result,reason}',
+                e.payload_json #>> '{command_result,action}',
+                e.payload_json #>> '{command_result,message}',
+                e.payload_json #>> '{command_result,summary}',
+                e.payload_json #>> '{command_response,kind}',
+                e.payload_json #>> '{command_response,status}',
+                e.payload_json #>> '{command_response,reason}',
+                e.payload_json #>> '{command_response,action}',
+                e.payload_json #>> '{command_response,message}',
+                e.payload_json #>> '{command_response,summary}'
+            )"#
         }
-        DebugSearchField::Feedback => debug_non_empty_fields(
-            event,
-            &["kind", "event_kind", "feedback_message", "text", "reason"],
-        )
-        .into_iter()
-        .filter(|value| {
-            debug_non_empty_fields(event, &["kind", "event_kind"])
-                .iter()
-                .any(|kind| kind == "feedback")
-                || value == "feedback"
-        })
-        .collect(),
-        DebugSearchField::Kind => debug_non_empty_fields(event, &["kind", "event_kind"]),
-        DebugSearchField::JobKind => debug_non_empty_fields(event, &["job_kind"]),
-        DebugSearchField::State => debug_non_empty_fields(event, &["state"]),
+        DebugSearchField::Feedback => {
+            r#"concat_ws(' ',
+                e.event_kind,
+                e.text,
+                e.payload_json->>'kind',
+                e.payload_json->>'feedback_message',
+                e.payload_json->>'text',
+                e.payload_json->>'reason'
+            )"#
+        }
+        DebugSearchField::Kind => "concat_ws(' ', e.event_kind, e.payload_json->>'kind')",
+        DebugSearchField::JobKind => "concat_ws(' ', e.payload_json->>'job_kind')",
+        DebugSearchField::State => "concat_ws(' ', e.payload_json->>'state')",
         DebugSearchField::Command => {
-            debug_non_empty_fields(event, &["command_kind", "command_name"])
+            "concat_ws(' ', e.payload_json->>'command_kind', e.payload_json->>'command_name')"
         }
-        DebugSearchField::Room => debug_non_empty_fields(
-            event,
-            &["guild_slug", "voice_channel_name", "voice_channel_slug"],
-        ),
+        DebugSearchField::Room => {
+            r#"concat_ws(' ',
+                r.guild_slug,
+                r.voice_channel_name,
+                r.voice_channel_slug,
+                e.payload_json->>'guild_slug',
+                e.payload_json->>'voice_channel_name',
+                e.payload_json->>'voice_channel_slug'
+            )"#
+        }
         DebugSearchField::Actor => {
-            debug_non_empty_fields(event, &["speaker_label", "speaker_username"])
+            r#"concat_ws(' ',
+                e.speaker_label,
+                e.payload_json->>'speaker_label',
+                e.payload_json->>'speaker_username'
+            )"#
         }
     }
-}
-
-fn debug_non_empty_fields(event: &Value, fields: &[&str]) -> Vec<String> {
-    fields
-        .iter()
-        .map(|field| string_field(event, field))
-        .filter(|value| !value.trim().is_empty())
-        .collect()
-}
-
-fn debug_result_search_values(event: &Value) -> Vec<String> {
-    let mut values = Vec::new();
-    for result_key in ["result", "command_result", "command_response"] {
-        let Some(result) = event.get(result_key) else {
-            continue;
-        };
-        for field in ["kind", "status", "reason", "action", "message", "summary"] {
-            let value = string_field(result, field);
-            if !value.trim().is_empty() {
-                values.push(value);
-            }
-        }
-    }
-    values
 }
 
 fn parse_debug_search_field(raw: &str) -> Result<DebugSearchField> {

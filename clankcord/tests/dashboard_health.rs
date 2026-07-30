@@ -127,6 +127,99 @@ async fn dashboard_transcript_channel_filter_applies_before_limit() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn dashboard_timeline_limit_returns_newest_events_across_scopes() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(raw.path()).await;
+    let base = Utc::now() - Duration::minutes(30);
+    for index in 0..20 {
+        let (channel_id, channel_name, channel_slug) = if index % 2 == 0 {
+            ("code", "Code Lounge", "code-lounge")
+        } else {
+            ("art", "Art Lounge", "art-lounge")
+        };
+        append_dashboard_speech(
+            &store,
+            raw.path(),
+            channel_id,
+            channel_name,
+            channel_slug,
+            base + Duration::minutes(index),
+            &format!("bounded timeline event {index}"),
+            index + 1,
+        )
+        .await;
+    }
+    let runtime = Runtime::from_store(store).unwrap();
+
+    let overview = runtime
+        .debug_overview(DebugOverviewRequest {
+            timeline_limit: 10,
+            ..DebugOverviewRequest::default()
+        })
+        .await
+        .unwrap();
+    let events = overview["timeline"]["recentEvents"].as_array().unwrap();
+
+    assert_eq!(events.len(), 10);
+    assert_eq!(events[0]["text"], json!("bounded timeline event 19"));
+    assert_eq!(events[9]["text"], json!("bounded timeline event 10"));
+    assert!(
+        events
+            .iter()
+            .all(|event| event["text"] != json!("bounded timeline event 9"))
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dashboard_timeline_search_applies_before_limit() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(raw.path()).await;
+    let base = Utc::now() - Duration::minutes(30);
+    append_dashboard_speech(
+        &store,
+        raw.path(),
+        "code",
+        "Code Lounge",
+        "code-lounge",
+        base,
+        "needle timeline event",
+        1,
+    )
+    .await;
+    for index in 0..15 {
+        append_dashboard_speech(
+            &store,
+            raw.path(),
+            "art",
+            "Art Lounge",
+            "art-lounge",
+            base + Duration::minutes(index + 1),
+            "newer unrelated timeline event",
+            index + 2,
+        )
+        .await;
+    }
+    let runtime = Runtime::from_store(store).unwrap();
+
+    let overview = runtime
+        .debug_overview(DebugOverviewRequest {
+            timeline_limit: 10,
+            timeline_query: "needle".to_string(),
+            timeline_query_field: "detail".to_string(),
+            ..DebugOverviewRequest::default()
+        })
+        .await
+        .unwrap();
+    let events = overview["timeline"]["recentEvents"].as_array().unwrap();
+
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["voice_channel_id"], json!("code"));
+    assert_eq!(events[0]["text"], json!("needle timeline event"));
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn dashboard_job_summary_groups_by_runtime_scope() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());

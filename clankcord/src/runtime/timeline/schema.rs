@@ -482,6 +482,7 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
             "idx_timeline_capture_run_time",
             "idx_timeline_conversation_time",
             "idx_timeline_kind_time",
+            "idx_timeline_recent_unforgotten",
             "idx_timeline_room_kind_time",
             "idx_timeline_room_time",
             "idx_timeline_speaker_time",
@@ -961,6 +962,9 @@ impl TimelineStore {
               ON discord_members(guild_id, normalized_search);
             CREATE INDEX IF NOT EXISTS idx_timeline_kind_time
               ON timeline_events(event_kind, started_at_ms, sequence);
+            CREATE INDEX IF NOT EXISTS idx_timeline_recent_unforgotten
+              ON timeline_events(started_at_ms DESC, sequence DESC, event_id DESC)
+              WHERE forgotten = FALSE;
             CREATE INDEX IF NOT EXISTS idx_transcription_slots_state_priority
               ON transcription_slots(state, priority DESC, created_at_ms, slot_id);
             CREATE INDEX IF NOT EXISTS idx_transcription_slots_scope_speaker_time

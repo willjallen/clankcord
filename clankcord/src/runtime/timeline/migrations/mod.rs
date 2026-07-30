@@ -1,5 +1,6 @@
 mod job_payload_pre_v0_7;
 mod v0_10_0;
+mod v0_11_0;
 mod v0_2_0;
 mod v0_3_0;
 mod v0_4_0;
@@ -83,6 +84,11 @@ const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
         version_text: "0.10.0",
         name: "voice status snapshot payload state",
     },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 11, 0),
+        version_text: "0.11.0",
+        name: "bounded timeline dashboard reads",
+    },
 ];
 
 impl TimelineStore {
@@ -154,6 +160,7 @@ impl TimelineStore {
             "0.8.0" => v0_8_0::run(&mut transaction).await?,
             "0.9.0" => v0_9_0::run(&mut transaction).await?,
             "0.10.0" => v0_10_0::run(&mut transaction).await?,
+            "0.11.0" => v0_11_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

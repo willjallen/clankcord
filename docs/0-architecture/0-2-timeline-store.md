@@ -53,7 +53,7 @@ Timeline migrations are Rust modules under `timeline/migrations/` named for the 
 
 At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
 
-The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.10.0`; changing either value without updating the mapping fails compilation.
+The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.11.0`; changing either value without updating the mapping fails compilation.
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
@@ -72,6 +72,8 @@ The `0.8.0` migration rewrites version-5 `CLANKJOB` payload blobs. Version 6 add
 The `0.9.0` migration rewrites version-6 `CLANKJOB` payload blobs. Version 7 adds the durable transcription mux planner job and the slot indexes used to schedule queued, planned, and muxing transcription work from Postgres.
 
 The `0.10.0` migration rewrites version-7 `CLANKJOB` payload blobs. Version 8 records observed voice-state guild IDs and voice-state payloads on Discord voice status snapshot outputs. The migration accepts the released version-7 snapshot shape and the short-lived version-7 shape written by the voice-state restart fix.
+
+The `0.11.0` migration adds the partial newest-first timeline index used by bounded dashboard reads. It indexes active timeline events by start time, sequence, and event ID so default recent-event reads can stop at their requested row limit without scanning the full event table. Dashboard reads first materialize the bounded event identities and ordering projections, then hydrate JSON payloads only for that selection.
 
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 
@@ -118,7 +120,7 @@ Timeline events are JSONB records with stable projections for room, non-null sta
 
 The store loads ranges by guild, channel, time window, event kinds, capture run, and forgotten-state filtering. Timeline tails, transcript rendering, conversation lists, participant traces, context resolution, and dashboard diagnostics are all derived from these stored events and the records around them.
 
-Rendered views are projections. A conversation is a view over timeline state. A transcript window is a materialized selection over events and spans. The dashboard combines jobs, events, sessions, automations, publications, and artifacts into an operator view. These views can change shape as presentation needs change; the stored facts remain the authority they render from.
+Rendered views are projections. A conversation is a view over timeline state. A transcript window is a materialized selection over events and spans. The dashboard combines jobs, events, sessions, automations, publications, and artifacts into an operator view. Dashboard timeline reads apply their time, kind, channel, search, newest-first ordering, and result limit in one Postgres query, so JSON payload hydration covers only the bounded result set. These views can change shape as presentation needs change; the stored facts remain the authority they render from.
 
 ## Runtime Execution
 
