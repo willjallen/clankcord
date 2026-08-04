@@ -1,6 +1,6 @@
 # Timeline Store
 
-The timeline store is Clankcord's durable memory. It records runtime config snapshots, events, jobs, dependency edges, voice state, capture runs, transcription slots, agent sessions, automations, transcript windows, publication state, and artifact metadata. Runtime handlers read and write canonical state through this store.
+The timeline store is Clankcord's durable memory. It records runtime config snapshots, events, jobs, dependency edges, voice state, capture runs, transcription slots, wake-activation settlement state, agent sessions, automations, transcript windows, publication state, and artifact metadata. Runtime handlers read and write canonical state through this store.
 
 ```text
 runtime domain logic
@@ -30,7 +30,7 @@ Runtime configuration lives in `runtime_config`. Service startup stores the curr
 
 Voice tables describe rooms, room controls, raw Discord voice-state rows, voice bot states, voice assignments, capture runs, capture sessions, and occupancy snapshots. `bot_states` records observed bot health and Discord location. `assignments` records the durable room-to-bot binding and its lifecycle. `capture_sessions` records live capture observations from the Discord adapter. Together they answer which room exists, which control markers are active, which bot is assigned, who is present, which capture run is active, and when a session began or ended.
 
-Timeline and transcript tables store events, conversations, materialized windows, transcription slots, and publications. Speech arrives as `speech_segment` events. Windows select intervals over those events. Publications preserve rendered transcript artifacts.
+Timeline and transcript tables store events, conversations, materialized windows, transcription slots, wake-activation progress, and publications. Speech arrives as `speech_segment` events. Windows select intervals over those events. `wake_activation_progress` anchors each closed request window and its transcription-settlement deadline to the activation job, so retries resume the same bounded wait without rescanning broad event history. Publications preserve rendered transcript artifacts.
 
 Jobs use a projected row plus a typed payload blob.
 
@@ -53,7 +53,7 @@ Timeline migrations are Rust modules under `timeline/migrations/` named for the 
 
 At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
 
-The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.11.0`; changing either value without updating the mapping fails compilation.
+The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.12.0`; changing either value without updating the mapping fails compilation.
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
@@ -74,6 +74,8 @@ The `0.9.0` migration rewrites version-6 `CLANKJOB` payload blobs. Version 7 add
 The `0.10.0` migration rewrites version-7 `CLANKJOB` payload blobs. Version 8 records observed voice-state guild IDs and voice-state payloads on Discord voice status snapshot outputs. The migration accepts the released version-7 snapshot shape and the short-lived version-7 shape written by the voice-state restart fix.
 
 The `0.11.0` migration adds the partial newest-first timeline index used by bounded dashboard reads. It indexes active timeline events by start time, sequence, and event ID so default recent-event reads can stop at their requested row limit without scanning the full event table. Dashboard reads first materialize the bounded event identities and ordering projections, then hydrate JSON payloads only for that selection.
+
+The `0.12.0` migration adds the indexed transcription interval contract, the per-slot `requires_single_slot` constraint, and durable `wake_activation_progress` rows. It terminalizes nonterminal wake activations created under the unbounded settlement contract while preserving their transcription-slot rows and errors as diagnostic evidence.
 
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 

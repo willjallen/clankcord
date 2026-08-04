@@ -9,6 +9,7 @@ use sqlx::{Postgres, QueryBuilder, Row};
 
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
+use crate::adapters::wakeword::wake_provider_health;
 use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
@@ -984,6 +985,11 @@ fn runtime_health(
     automation_count: usize,
 ) -> Value {
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let wake_provider = wake_provider_health();
+    let wake_provider_available = wake_provider
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let bots = status
         .get("bots")
         .and_then(Value::as_array)
@@ -1003,8 +1009,9 @@ fn runtime_health(
         .filter(|job| job.kind == JobKind::AgentTask && !job.state.is_terminal())
         .count();
     json!({
-        "ok": database_ok,
+        "ok": database_ok && wake_provider_available,
         "postgres": database_ok,
+        "wakeProvider": wake_provider,
         "observedBots": bots.len(),
         "readyBots": bots.iter().filter(|bot| bot.get("ready").and_then(Value::as_bool).unwrap_or(false)).count(),
         "activeSessions": sessions.len(),

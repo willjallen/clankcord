@@ -802,10 +802,11 @@ impl TimelineStore {
         decode_job_rows(rows)
     }
 
-    pub async fn list_incomplete_or_failed_audio_segment_jobs_by_scope(
+    pub async fn list_incomplete_or_failed_audio_segment_jobs_overlapping(
         &self,
         guild_id: &str,
         scope_id: &str,
+        window_start: DateTime<Utc>,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
             r#"
@@ -816,12 +817,14 @@ impl TimelineStore {
               AND j.scope_kind = 'voice_channel'
               AND j.scope_id = $2
               AND j.kind = 'audio_segment'
-              AND (j.terminal = FALSE OR j.failed = TRUE)
+              AND j.state <> 'complete'
+              AND j.segment_end_ms >= $3
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id
             "#,
         )
         .bind(guild_id)
         .bind(scope_id)
+        .bind(instant_ms_dt(window_start))
         .fetch_all(&self.pool)
         .await?;
         decode_job_rows(rows)
@@ -1897,9 +1900,10 @@ async fn active_wake_activation_payloads(
 ) -> Result<Vec<ActiveWakeActivation>> {
     let rows = sqlx::query(
         r#"
-        SELECT p.payload_blob
+        SELECT p.payload_blob, progress.request_audio_closed_at_ms
         FROM jobs j
         JOIN job_payloads p ON p.job_id = j.job_id
+        LEFT JOIN wake_activation_progress progress ON progress.job_id = j.job_id
         WHERE j.kind = 'wake_activation'
           AND j.terminal = FALSE
         "#,
@@ -1911,54 +1915,16 @@ async fn active_wake_activation_payloads(
         let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
         let job = Job::decode(&payload_blob)?;
         if let Some(payload) = job.wake_activation_payload() {
-            payloads.push(payload.clone());
+            let request_audio_closed_at = row
+                .try_get::<Option<i64>, _>("request_audio_closed_at_ms")?
+                .and_then(ms_to_datetime);
+            payloads.push(ActiveWakeActivation {
+                payload: payload.clone(),
+                request_audio_closed_at,
+            });
         }
     }
-    let activation_ids = payloads
-        .iter()
-        .map(|payload| payload.activation_id.clone())
-        .collect::<Vec<_>>();
-    let mut closed_at_by_activation = BTreeMap::new();
-    if !activation_ids.is_empty() {
-        let rows = sqlx::query(
-            r#"
-            SELECT payload_json, started_at_ms
-            FROM timeline_events
-            WHERE event_kind = 'wake_activation_window_closed'
-              AND forgotten = FALSE
-              AND payload_json->>'activation_id' = ANY($1)
-            ORDER BY started_at_ms, sequence
-            "#,
-        )
-        .bind(&activation_ids)
-        .fetch_all(transaction.as_mut())
-        .await?;
-        for row in rows {
-            let payload = json_value(&row, "payload_json")?;
-            let activation_id = first_value_string(&payload, &["activation_id"]);
-            if activation_id.is_empty() {
-                continue;
-            }
-            let closed_at =
-                parse_instant(&first_value_string(&payload, &["request_audio_closed_at"])).or_else(
-                    || {
-                        row.try_get::<i64, _>("started_at_ms")
-                            .ok()
-                            .and_then(ms_to_datetime)
-                    },
-                );
-            if let Some(closed_at) = closed_at {
-                closed_at_by_activation.insert(activation_id, closed_at);
-            }
-        }
-    }
-    Ok(payloads
-        .into_iter()
-        .map(|payload| ActiveWakeActivation {
-            request_audio_closed_at: closed_at_by_activation.get(&payload.activation_id).copied(),
-            payload,
-        })
-        .collect())
+    Ok(payloads)
 }
 
 fn audio_segment_has_active_wake_priority(
@@ -1989,7 +1955,8 @@ fn audio_segment_payload_overlaps_wake_window(
         let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
         std::cmp::min(utc_now(), hard_cap)
     });
-    segment.segment_start_time <= window_end
+    let window_start = original_wake_at - chrono::Duration::seconds(payload.lookback_seconds);
+    segment.segment_start_time <= window_end && segment.segment_end_time >= window_start
 }
 
 fn normalize_key_part(value: &str) -> String {

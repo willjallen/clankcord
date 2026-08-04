@@ -1,6 +1,8 @@
 use serde_json::json;
 
-use clankcord::adapters::wakeword::parse_wake_payload;
+use chrono::{Duration, Utc};
+
+use clankcord::adapters::wakeword::{WakeCircuitAdmission, WakeCircuitBreaker, parse_wake_payload};
 
 #[tokio::test(flavor = "current_thread")]
 async fn wakeword_payload_parser_preserves_detector_metadata() {
@@ -23,4 +25,41 @@ async fn wakeword_payload_parser_preserves_detector_metadata() {
     assert_eq!(result.processed_frames, Some(3));
     assert_eq!(result.to_json()["scores"]["hey_clanky"], json!(0.73));
     assert_eq!(result.to_json()["extra"]["adapter"], json!("local-stt"));
+}
+
+#[test]
+fn wake_provider_circuit_opens_backs_off_and_recovers_with_one_half_open_probe() {
+    let circuit = WakeCircuitBreaker::new(3, 30, 120);
+    let now = Utc::now();
+
+    for _ in 0..3 {
+        assert_eq!(circuit.admit(now), Some(WakeCircuitAdmission::Closed));
+        circuit.record_failure(now, "connection refused with secret-looking detail");
+    }
+
+    let open = circuit.snapshot(now + Duration::seconds(1));
+    assert_eq!(open["status"], json!("open"));
+    assert_eq!(open["consecutiveFailures"], json!(3));
+    assert!(circuit.submission_suppressed(now + Duration::seconds(1)));
+    assert_eq!(circuit.admit(now + Duration::seconds(1)), None);
+
+    assert_eq!(
+        circuit.admit(now + Duration::seconds(30)),
+        Some(WakeCircuitAdmission::HalfOpen)
+    );
+    assert_eq!(circuit.admit(now + Duration::seconds(30)), None);
+    circuit.record_failure(now + Duration::seconds(30), "connection refused again");
+    assert_eq!(
+        circuit.snapshot(now + Duration::seconds(31))["status"],
+        json!("open")
+    );
+
+    assert_eq!(
+        circuit.admit(now + Duration::seconds(90)),
+        Some(WakeCircuitAdmission::HalfOpen)
+    );
+    circuit.record_success(now + Duration::seconds(90));
+    let recovered = circuit.snapshot(now + Duration::seconds(90));
+    assert_eq!(recovered["status"], json!("closed"));
+    assert_eq!(recovered["consecutiveFailures"], json!(0));
 }

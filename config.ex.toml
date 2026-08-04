@@ -120,12 +120,16 @@ diarize = false
 [wake]
 base_url = "http://127.0.0.1:8080/v1"
 timeout_seconds = 30
+connect_timeout_seconds = 2
 api_key_secret = ""
 probe_minimum_ms = 250
 probe_window_ms = 2000
 probe_interval_ms = 500
 probe_max_queue_age_seconds = 5
 duplicate_overlap_grace_ms = 750
+circuit_failure_threshold = 3
+circuit_open_initial_seconds = 30
+circuit_open_max_seconds = 300
 
 [wake.activation]
 lookback_seconds = 30
@@ -136,6 +140,8 @@ max_window_seconds = 86400
 additive_preempt_seconds = 10
 independent_after_seconds = 45
 active_capture_poll_ms = 200
+transcription_settlement_seconds = 30
+transcription_poll_ms = 1000
 
 [voice.sound]
 dir = "/app/res/audio"

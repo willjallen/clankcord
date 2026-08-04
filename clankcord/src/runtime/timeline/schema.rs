@@ -232,6 +232,7 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("provider", "text", false),
             column("model", "text", false),
             column("priority", "bigint", false),
+            column("requires_single_slot", "boolean", false),
             column("mux_stream_id", "text", false),
             column("mux_start_ms", "bigint", true),
             column("mux_end_ms", "bigint", true),
@@ -331,6 +332,16 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         &[
             column("job_id", "text", false),
             column("payload_blob", "bytea", false),
+        ],
+    ),
+    table(
+        "wake_activation_progress",
+        &[
+            column("job_id", "text", false),
+            column("request_audio_closed_at_ms", "bigint", false),
+            column("transcription_wait_deadline_at_ms", "bigint", false),
+            column("created_at_ms", "bigint", false),
+            column("updated_at_ms", "bigint", false),
         ],
     ),
     table(
@@ -495,11 +506,19 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
         &[
             "idx_transcription_slots_mux_job",
             "idx_transcription_slots_scope_speaker_time",
+            "idx_transcription_slots_scope_state_interval",
             "idx_transcription_slots_source_mux_state",
             "idx_transcription_slots_source_state_created",
             "idx_transcription_slots_state_priority",
             "transcription_slots_pkey",
             "transcription_slots_source_job_id_key",
+        ],
+    ),
+    (
+        "wake_activation_progress",
+        &[
+            "idx_wake_activation_progress_deadline",
+            "wake_activation_progress_pkey",
         ],
     ),
     ("voice_rooms", &["voice_rooms_pkey"]),
@@ -679,6 +698,7 @@ impl TimelineStore {
               provider TEXT NOT NULL DEFAULT '',
               model TEXT NOT NULL DEFAULT '',
               priority BIGINT NOT NULL DEFAULT 0,
+              requires_single_slot BOOLEAN NOT NULL DEFAULT FALSE,
               mux_stream_id TEXT NOT NULL DEFAULT '',
               mux_start_ms BIGINT,
               mux_end_ms BIGINT,
@@ -766,6 +786,14 @@ impl TimelineStore {
               created_at_ms BIGINT NOT NULL,
               resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
               PRIMARY KEY (parent_job_id, child_job_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS wake_activation_progress (
+              job_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+              request_audio_closed_at_ms BIGINT NOT NULL,
+              transcription_wait_deadline_at_ms BIGINT NOT NULL,
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS automations (
@@ -969,6 +997,9 @@ impl TimelineStore {
               ON transcription_slots(state, priority DESC, created_at_ms, slot_id);
             CREATE INDEX IF NOT EXISTS idx_transcription_slots_scope_speaker_time
               ON transcription_slots(guild_id, voice_channel_id, speaker_user_id, segment_start_ms, segment_end_ms);
+            CREATE INDEX IF NOT EXISTS idx_transcription_slots_scope_state_interval
+              ON transcription_slots(guild_id, voice_channel_id, state, segment_end_ms, segment_start_ms)
+              WHERE state IN ('queued', 'planned', 'muxing', 'failed');
             CREATE INDEX IF NOT EXISTS idx_transcription_slots_mux_job
               ON transcription_slots(mux_job_id, slot_id)
               WHERE mux_job_id <> '';
@@ -977,6 +1008,8 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_transcription_slots_source_mux_state
               ON transcription_slots(transcription_source_id, mux_job_id, state)
               WHERE mux_job_id <> '';
+            CREATE INDEX IF NOT EXISTS idx_wake_activation_progress_deadline
+              ON wake_activation_progress(transcription_wait_deadline_at_ms, job_id);
             CREATE INDEX IF NOT EXISTS idx_capture_runs_room_time
               ON capture_runs(guild_id, voice_channel_id, started_at_ms, ended_at_ms);
             CREATE INDEX IF NOT EXISTS idx_conversations_room_time

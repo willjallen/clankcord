@@ -10,6 +10,7 @@ use crate::Result;
 use crate::adapters::discord::gateway::text::DiscordTextAdapter;
 use crate::adapters::discord::runtime_api::DiscordRuntimeApi;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
+use crate::adapters::wakeword::{wake_probe_submission_suppressed, wake_provider_health};
 use crate::config;
 use crate::runtime::core::execution::RuntimeExecutor;
 use crate::runtime::timeline::{TimelineStore, utc_now};
@@ -379,13 +380,30 @@ async fn handle_runtime_submission(handle: &RuntimeHandle, submission: RuntimeSu
             let _ = reply.send(result);
         }
         RuntimeSubmission::Job { job, reply } => {
-            let result = if job.kind == crate::runtime::JobKind::WakeProbe {
-                handle.timeline_store.create_wake_probe_job(job).await
+            let (result, wake_executor) = if job.kind == crate::runtime::JobKind::WakeProbe
+                && wake_probe_submission_suppressed()
+            {
+                (Ok(suppressed_wake_probe_payload(&job)), false)
+            } else if job.kind == crate::runtime::JobKind::WakeProbe {
+                (
+                    handle
+                        .timeline_store
+                        .create_wake_probe_job(job)
+                        .await
+                        .map(job_created_payload),
+                    true,
+                )
             } else {
-                handle.timeline_store.create_job(job).await
-            }
-            .map(job_created_payload);
-            if result.is_ok() {
+                (
+                    handle
+                        .timeline_store
+                        .create_job(job)
+                        .await
+                        .map(job_created_payload),
+                    true,
+                )
+            };
+            if result.is_ok() && wake_executor {
                 handle.executor.wake();
             }
             let _ = reply.send(result);
@@ -611,6 +629,27 @@ fn error_chain(error: &anyhow::Error) -> String {
 
 fn job_created_payload(job: Job) -> Value {
     json!({"kind": "job_created", "job_ids": [job.id.clone()], "job": job.to_value()})
+}
+
+fn suppressed_wake_probe_payload(job: &Job) -> Value {
+    let mut deleted_audio = false;
+    let mut deletion_error = String::new();
+    if let Some(payload) = job.wake_probe_payload()
+        && payload.source_audio_path.is_file()
+    {
+        match std::fs::remove_file(&payload.source_audio_path) {
+            Ok(()) => deleted_audio = true,
+            Err(error) => deletion_error = error.to_string(),
+        }
+    }
+    json!({
+        "kind": "wake_probe",
+        "status": "suppressed_while_wake_provider_unavailable",
+        "job_id": job.id,
+        "artifact_deleted": deleted_audio,
+        "artifact_deletion_error": deletion_error,
+        "wake_provider": wake_provider_health(),
+    })
 }
 
 pub async fn start_persistent_process() -> Result<()> {

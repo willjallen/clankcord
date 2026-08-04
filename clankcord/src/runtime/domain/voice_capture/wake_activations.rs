@@ -18,6 +18,47 @@ struct CaptureHold {
     next_run_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct TranscriptionSettlement {
+    requester_pending: Vec<String>,
+    requester_failed: Vec<String>,
+    context_pending: Vec<String>,
+    context_failed: Vec<String>,
+}
+
+impl TranscriptionSettlement {
+    fn normalize(&mut self) {
+        for values in [
+            &mut self.requester_pending,
+            &mut self.requester_failed,
+            &mut self.context_pending,
+            &mut self.context_failed,
+        ] {
+            values.sort();
+            values.dedup();
+        }
+    }
+
+    fn context_omissions(&self, deadline_expired: bool) -> Vec<String> {
+        let mut omissions = self.context_failed.clone();
+        if deadline_expired {
+            omissions.extend(self.context_pending.iter().cloned());
+        }
+        omissions.sort();
+        omissions.dedup();
+        omissions
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "requester_pending": self.requester_pending,
+            "requester_failed": self.requester_failed,
+            "context_pending": self.context_pending,
+            "context_failed": self.context_failed,
+        })
+    }
+}
+
 pub fn event_has_wake(event: &Value) -> bool {
     event
         .get("wake")
@@ -229,6 +270,22 @@ pub async fn execute(
     let window_start = original_wake_at - chrono::Duration::seconds(payload.lookback_seconds);
     let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
     let now = utc_now();
+    if let Some(progress) = runtime
+        .timeline_store
+        .wake_activation_progress(&job.id)
+        .await?
+    {
+        return dispatch_after_request_audio(
+            runtime,
+            job,
+            payload,
+            window_start,
+            progress.request_audio_closed_at,
+            progress.transcription_wait_deadline_at,
+            now,
+        )
+        .await;
+    }
     let window_end = if now < hard_cap { now } else { hard_cap };
     let events = runtime
         .timeline_store
@@ -244,8 +301,21 @@ pub async fn execute(
         .await?;
 
     if let Some(closed_at) = activation_window_closed_at(payload, &events) {
-        return dispatch_after_request_audio(runtime, job, payload, window_start, closed_at, now)
-            .await;
+        let deadline_at = transcription_settlement_deadline(closed_at);
+        runtime
+            .timeline_store
+            .record_wake_activation_progress(&job.id, closed_at, deadline_at)
+            .await?;
+        return dispatch_after_request_audio(
+            runtime,
+            job,
+            payload,
+            window_start,
+            closed_at,
+            deadline_at,
+            now,
+        )
+        .await;
     }
 
     let due_at = std::cmp::min(
@@ -282,8 +352,22 @@ pub async fn execute(
 
     let closed_at = if now >= hard_cap { hard_cap } else { due_at };
     record_activation_window_closed(runtime, job, payload, closed_at).await?;
+    let deadline_at = transcription_settlement_deadline(closed_at);
+    runtime
+        .timeline_store
+        .record_wake_activation_progress(&job.id, closed_at, deadline_at)
+        .await?;
 
-    dispatch_after_request_audio(runtime, job, payload, window_start, closed_at, now).await
+    dispatch_after_request_audio(
+        runtime,
+        job,
+        payload,
+        window_start,
+        closed_at,
+        deadline_at,
+        now,
+    )
+    .await
 }
 
 async fn dispatch_after_request_audio(
@@ -292,23 +376,43 @@ async fn dispatch_after_request_audio(
     payload: &WakeActivationPayload,
     window_start: DateTime<Utc>,
     closed_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Value> {
-    runtime
-        .timeline_store
-        .recover_abandoned_transcription_slots()
-        .await?;
-    runtime
-        .timeline_store
-        .requeue_retryable_failed_transcription_slots(
-            config::failed_audio_segment_retry_batch_limit(),
+    let settlement =
+        room_transcription_settlement(runtime, payload, window_start, closed_at).await?;
+    if !settlement.requester_failed.is_empty() {
+        return fail_activation_transcription(
+            runtime,
+            job,
+            payload,
+            closed_at,
+            deadline_at,
+            "requester_transcription_failed",
+            &settlement,
         )
-        .await?;
-    if has_pending_room_transcription(runtime, payload, closed_at).await? {
+        .await;
+    }
+    let deadline_expired = now >= deadline_at;
+    if deadline_expired && !settlement.requester_pending.is_empty() {
+        return fail_activation_transcription(
+            runtime,
+            job,
+            payload,
+            closed_at,
+            deadline_at,
+            "requester_transcription_deadline_exceeded",
+            &settlement,
+        )
+        .await;
+    }
+    if !deadline_expired
+        && (!settlement.requester_pending.is_empty() || !settlement.context_pending.is_empty())
+    {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
         deferred.next_run_at = Some(isoformat_z(Some(
-            now + chrono::Duration::milliseconds(active_capture_poll_ms()),
+            now + chrono::Duration::milliseconds(transcription_poll_ms()),
         )));
         runtime.timeline_store.update_job(&deferred).await?;
         return Ok(json!({
@@ -316,9 +420,13 @@ async fn dispatch_after_request_audio(
             "status": "deferred",
             "reason": "waiting_for_room_transcription",
             "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+            "transcription_settlement": settlement.to_json(),
             "next_run_at": deferred.next_run_at,
         }));
     }
+
+    let context_omissions = settlement.context_omissions(deadline_expired);
 
     let request_events = runtime
         .timeline_store
@@ -341,6 +449,7 @@ async fn dispatch_after_request_audio(
             "status": "no_request_captured",
             "reason": "empty_request_text",
             "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "transcription_context_omissions": context_omissions,
         }));
     }
 
@@ -373,6 +482,7 @@ async fn dispatch_after_request_audio(
                 "job_id": job.id,
                 "activation_id": payload.activation_id,
                 "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "transcription_context_omissions": context_omissions.clone(),
                 "created": created.clone(),
             }),
         )
@@ -381,6 +491,7 @@ async fn dispatch_after_request_audio(
         "kind": "wake_activation",
         "status": "dispatched",
         "request_audio_closed_at": isoformat_z(Some(closed_at)),
+        "transcription_context_omissions": context_omissions,
         "created": created,
     }))
 }
@@ -447,6 +558,41 @@ async fn record_activation_no_request(
         )
         .await?;
     Ok(())
+}
+
+async fn fail_activation_transcription(
+    runtime: &Runtime,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    reason: &str,
+    settlement: &TranscriptionSettlement,
+) -> Result<Value> {
+    runtime
+        .timeline_store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_transcription_failed",
+                "kind": "wake_activation_transcription_failed",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "wake_event_id": payload.wake_event_id,
+                "latest_wake_event_id": payload.latest_wake_event_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "reason": reason,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+                "transcription_settlement": settlement.to_json(),
+                "startedAt": isoformat_z(None),
+                "endedAt": isoformat_z(None),
+            }),
+        )
+        .await?;
+    anyhow::bail!("wake activation transcription_failed: {reason}")
 }
 
 async fn activation_followup_target(
@@ -551,6 +697,10 @@ async fn amend_activation_job(
         idle_seconds,
         flush_grace_seconds,
     ));
+    runtime
+        .timeline_store
+        .clear_wake_activation_progress(&activation.id)
+        .await?;
     runtime.timeline_store.update_job(&activation).await?;
     runtime
         .timeline_store
@@ -690,6 +840,8 @@ fn activation_window_closed_at(
         .filter(|event| {
             first_value_string(event, &["event_kind", "kind"]) == "wake_activation_window_closed"
                 && first_value_string(event, &["activation_id"]) == payload.activation_id
+                && first_value_string(event, &["latest_wake_event_id"])
+                    == payload.latest_wake_event_id
         })
         .filter_map(|event| {
             parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
@@ -746,76 +898,152 @@ async fn live_speaker_capture_hold(
     }))
 }
 
-async fn has_pending_room_transcription(
+async fn room_transcription_settlement(
     runtime: &Runtime,
     payload: &WakeActivationPayload,
+    window_start: DateTime<Utc>,
     closed_at: DateTime<Utc>,
-) -> Result<bool> {
-    if has_live_room_audio_until(runtime, payload, closed_at).await? {
-        return Ok(true);
+) -> Result<TranscriptionSettlement> {
+    let mut settlement = TranscriptionSettlement::default();
+    if let Some(session) = runtime
+        .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
+        .await?
+    {
+        for speaker in session.capture_stats.speakers.values() {
+            let Some((start, end)) = live_capture_interval(speaker) else {
+                continue;
+            };
+            if !time_intervals_overlap(start, end, window_start, closed_at) {
+                continue;
+            }
+            let id = format!("live_capture:{}", speaker.user_id);
+            if is_requester_audio(payload, &speaker.user_id, start, end, closed_at) {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        }
     }
-    if runtime
+
+    for slot in runtime
         .timeline_store
-        .has_pending_transcription_slot_for_room_until(
+        .transcription_slots_for_room_window(
             &payload.guild_id,
             &payload.voice_channel_id,
+            window_start,
             closed_at,
         )
         .await?
     {
-        return Ok(true);
+        let id = format!("transcription_slot:{}", slot.slot_id);
+        let requester = is_requester_audio(
+            payload,
+            &slot.speaker_user_id,
+            slot.segment_start_time,
+            slot.segment_end_time,
+            closed_at,
+        );
+        let pending = matches!(slot.state.as_str(), "queued" | "planned" | "muxing")
+            || (slot.state == "failed"
+                && segments::is_retryable_audio_segment_error_text(&slot.error));
+        if pending {
+            if requester {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        } else if slot.state == "failed" {
+            if requester {
+                settlement.requester_failed.push(id);
+            } else {
+                settlement.context_failed.push(id);
+            }
+        }
     }
-    let jobs = runtime
+
+    for job in runtime
         .timeline_store
-        .list_incomplete_or_failed_audio_segment_jobs_by_scope(
+        .list_incomplete_or_failed_audio_segment_jobs_overlapping(
             &payload.guild_id,
             &payload.voice_channel_id,
+            window_start,
         )
-        .await?;
-    Ok(jobs
-        .iter()
-        .filter(|job| audio_segment_blocks_request_transcription_wait(job))
-        .filter_map(|job| job.audio_segment_payload())
-        .any(|segment| segment.segment_start_time <= closed_at))
+        .await?
+    {
+        let Some(segment) = job.audio_segment_payload() else {
+            continue;
+        };
+        if !time_intervals_overlap(
+            segment.segment_start_time,
+            segment.segment_end_time,
+            window_start,
+            closed_at,
+        ) {
+            continue;
+        }
+        let id = format!("audio_segment:{}", job.id);
+        let requester = is_requester_audio(
+            payload,
+            &segment.speaker_user_id,
+            segment.segment_start_time,
+            segment.segment_end_time,
+            closed_at,
+        );
+        let retryable_failure = job.state == JobState::FailedTimeout
+            || segments::is_retryable_audio_segment_error_text(&job.metadata.error);
+        if !job.state.is_terminal() || retryable_failure {
+            if requester {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        } else if requester {
+            settlement.requester_failed.push(id);
+        } else {
+            settlement.context_failed.push(id);
+        }
+    }
+    settlement.normalize();
+    Ok(settlement)
 }
 
-async fn has_live_room_audio_until(
-    runtime: &Runtime,
-    payload: &WakeActivationPayload,
-    closed_at: DateTime<Utc>,
-) -> Result<bool> {
-    let session = runtime
-        .active_session_for_channel(&payload.guild_id, &payload.voice_channel_id)
-        .await?;
-    let Some(session) = session else {
-        return Ok(false);
-    };
-    Ok(session
-        .capture_stats
-        .speakers
-        .values()
-        .any(|speaker| speaker_capture_blocks_transcription_wait(speaker, closed_at)))
-}
-
-fn speaker_capture_blocks_transcription_wait(
+fn live_capture_interval(
     speaker: &crate::runtime::SessionSpeakerCaptureStats,
-    closed_at: DateTime<Utc>,
-) -> bool {
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let has_live_audio =
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
     if !has_live_audio {
-        return false;
+        return None;
     }
     let segment_started_at = parse_instant(&speaker.segment_started_at);
     let last_pcm_at = parse_instant(&speaker.last_pcm_at);
-    segment_started_at.is_some_and(|started_at| started_at <= closed_at)
-        || last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at <= closed_at)
+    let start = segment_started_at.or(last_pcm_at)?;
+    let end = last_pcm_at.unwrap_or(start);
+    Some((std::cmp::min(start, end), std::cmp::max(start, end)))
 }
 
-fn audio_segment_blocks_request_transcription_wait(job: &Job) -> bool {
-    !job.state.is_terminal()
-        || job.state == JobState::FailedTimeout
-        || segments::is_retryable_audio_segment_error_text(&job.metadata.error)
+fn is_requester_audio(
+    payload: &WakeActivationPayload,
+    speaker_user_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+) -> bool {
+    if speaker_user_id != payload.speaker_user_id {
+        return false;
+    }
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or(closed_at);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    time_intervals_overlap(start, end, latest_wake_at, closed_at)
+}
+
+fn time_intervals_overlap(
+    left_start: DateTime<Utc>,
+    left_end: DateTime<Utc>,
+    right_start: DateTime<Utc>,
+    right_end: DateTime<Utc>,
+) -> bool {
+    left_start <= right_end && left_end >= right_start
 }
 
 fn activation_agent_task_command(
@@ -994,4 +1222,19 @@ fn active_capture_poll_ms() -> i64 {
     config::wake_activation_config()
         .active_capture_poll_ms
         .max(1)
+}
+
+fn transcription_settlement_deadline(closed_at: DateTime<Utc>) -> DateTime<Utc> {
+    closed_at
+        + chrono::Duration::seconds(
+            config::wake_activation_config()
+                .transcription_settlement_seconds
+                .max(1),
+        )
+}
+
+fn transcription_poll_ms() -> i64 {
+    config::wake_activation_config()
+        .transcription_poll_ms
+        .max(100)
 }

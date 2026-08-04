@@ -24,6 +24,11 @@ async fn dashboard_health_reports_postgres_diagnostics() {
     let database = &overview["database"];
 
     assert_eq!(database["ok"], json!(true));
+    assert_eq!(
+        overview["health"]["wakeProvider"]["status"],
+        json!("closed")
+    );
+    assert_eq!(overview["health"]["wakeProvider"]["available"], json!(true));
     assert!(
         database["statistics"]["databaseSizeBytes"]
             .as_i64()

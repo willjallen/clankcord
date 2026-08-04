@@ -236,6 +236,52 @@ pub(crate) async fn execute_transcription_mux_job(
             return Err(RetryableAudioSegmentError::new(class, error).into());
         }
     };
+    if transcription.words.is_empty() && transcription.segments.is_empty() {
+        match untimestamped_mux_disposition(
+            &transcription.text,
+            mux.slots.len(),
+            mux.slots.iter().any(|slot| slot.requires_single_slot),
+        ) {
+            UntimestampedMuxDisposition::CompleteEmpty
+            | UntimestampedMuxDisposition::AssignToOnlySlot => {}
+            UntimestampedMuxDisposition::ReplanAsSingleSlots => {
+                let reason =
+                    "provider returned non-empty text without timestamps for a multi-slot mux";
+                let requeued_slot_ids = runtime
+                    .timeline_store
+                    .requeue_transcription_slots_as_single_slot_muxes(&job.id, reason)
+                    .await?;
+                if requeued_slot_ids.is_empty() {
+                    anyhow::bail!(
+                        "transcription mux {} could not replan timestamp-less slots",
+                        job.id
+                    );
+                }
+                let next_plan_job = runtime
+                    .timeline_store
+                    .ensure_transcription_mux_plan_job(&source.id, 0)
+                    .await?;
+                return Ok(json!({
+                    "kind": "transcription_mux",
+                    "status": "replanned_as_single_slot_muxes",
+                    "transcription_source_id": source.id,
+                    "mux_stream_id": mux.stream_id,
+                    "requeued_slot_ids": requeued_slot_ids,
+                    "next_transcription_mux_plan_job": next_plan_job.map(|job| job.to_value()),
+                }));
+            }
+            UntimestampedMuxDisposition::RejectRepeatedOmission => {
+                let error = anyhow::anyhow!(
+                    "transcription provider repeatedly omitted timestamps for a constrained multi-slot mux"
+                );
+                runtime
+                    .timeline_store
+                    .fail_transcription_slots_for_mux(&job.id, &error.to_string())
+                    .await?;
+                return Err(error);
+            }
+        }
+    }
     let assignments = match assign_transcription_to_slots(&transcription, &mux.slots) {
         Ok(assignments) => assignments,
         Err(error) => {
@@ -392,6 +438,31 @@ struct AssignedTranscript {
     end_mux_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UntimestampedMuxDisposition {
+    CompleteEmpty,
+    AssignToOnlySlot,
+    ReplanAsSingleSlots,
+    RejectRepeatedOmission,
+}
+
+pub fn untimestamped_mux_disposition(
+    transcription_text: &str,
+    slot_count: usize,
+    contains_replanned_slot: bool,
+) -> UntimestampedMuxDisposition {
+    if transcription_text.trim().is_empty() {
+        return UntimestampedMuxDisposition::CompleteEmpty;
+    }
+    if slot_count == 1 {
+        return UntimestampedMuxDisposition::AssignToOnlySlot;
+    }
+    if contains_replanned_slot {
+        return UntimestampedMuxDisposition::RejectRepeatedOmission;
+    }
+    UntimestampedMuxDisposition::ReplanAsSingleSlots
+}
+
 async fn build_mux_audio(
     runtime: &Runtime,
     job: &crate::runtime::Job,
@@ -494,6 +565,9 @@ fn assign_transcription_to_slots(
     }
     if !transcription.segments.is_empty() {
         assign_segments_to_slots(&transcription.segments, slots, &mut assignments)?;
+        return Ok(assignments);
+    }
+    if transcription.text.trim().is_empty() {
         return Ok(assignments);
     }
     if slots.len() == 1 {

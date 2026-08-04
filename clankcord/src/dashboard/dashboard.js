@@ -582,9 +582,14 @@ window.dashboard = function dashboard() {
 
     healthRows() {
       const health = this.data?.health || {};
+      const wake = health.wakeProvider || {};
+      const wakeOk = wake.status === 'closed';
       return [
         { label: 'Runtime', value: health.ok ? 'ok' : 'degraded', className: health.ok ? 'ok' : 'bad' },
         { label: 'Postgres', value: health.postgres ? 'ok' : 'error', className: health.postgres ? 'ok' : 'bad' },
+        { label: 'Wake detector', value: wake.status || 'unknown', className: wakeOk ? 'ok' : 'bad' },
+        { label: 'Wake failures', value: wake.consecutiveFailures ?? 0, className: wake.consecutiveFailures ? 'bad' : '' },
+        { label: 'Wake next probe', value: wake.nextProbeAt || 'ready' },
         { label: 'Ready bots', value: `${health.readyBots ?? 0}/${health.observedBots ?? 0}` },
         { label: 'Active sessions', value: health.activeSessions ?? 0 },
         { label: 'Active agent jobs', value: health.activeAgentJobs ?? 0 },

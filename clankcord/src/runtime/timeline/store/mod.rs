@@ -8,6 +8,7 @@ mod runtime_config;
 mod transcription;
 mod transcripts;
 mod voice_state;
+mod wake_activations;
 
 use crate::config;
 
@@ -16,6 +17,7 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
+pub(crate) use jobs::upsert_job_rows;
 pub(crate) use transcription::TranscriptionSlotRecord;
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};

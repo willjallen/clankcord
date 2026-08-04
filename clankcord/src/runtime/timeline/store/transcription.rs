@@ -38,6 +38,8 @@ pub(crate) struct TranscriptionSlotRecord {
     pub provider: String,
     pub model: String,
     pub priority: i64,
+    pub requires_single_slot: bool,
+    pub error: String,
     pub mux_stream_id: String,
     pub mux_start_ms: Option<i64>,
     pub mux_end_ms: Option<i64>,
@@ -188,27 +190,30 @@ impl TimelineStore {
             return Ok(Vec::new());
         };
         let hard_cap = wake_started_at + chrono::Duration::seconds(payload.max_window_seconds);
+        let window_start = wake_started_at - chrono::Duration::seconds(payload.lookback_seconds);
         let window_end = std::cmp::min(utc_now(), hard_cap);
         let now_ms = instant_ms_dt(utc_now());
         let rows = sqlx::query(
             r#"
             UPDATE transcription_slots
             SET priority = 1000,
-                updated_at_ms = $4,
+                updated_at_ms = $5,
                 payload_json = payload_json || jsonb_build_object(
                   'priority', 1000,
-                  'wake_activation_id', $5
+                  'wake_activation_id', $6
                 )
             WHERE guild_id = $1
               AND voice_channel_id = $2
               AND state = 'queued'
-              AND segment_start_ms <= $3
+              AND segment_start_ms <= $4
+              AND segment_end_ms >= $3
               AND priority < 1000
             RETURNING transcription_source_id
             "#,
         )
         .bind(&payload.guild_id)
         .bind(&payload.voice_channel_id)
+        .bind(instant_ms_dt(window_start))
         .bind(instant_ms_dt(window_end))
         .bind(now_ms)
         .bind(&payload.activation_id)
@@ -527,6 +532,54 @@ impl TimelineStore {
         Ok(())
     }
 
+    pub(crate) async fn requeue_transcription_slots_as_single_slot_muxes(
+        &self,
+        mux_job_id: &str,
+        reason: &str,
+    ) -> Result<Vec<String>> {
+        let rows = sqlx::query(
+            r#"
+            UPDATE transcription_slots
+            SET state = 'queued',
+                mux_job_id = '',
+                mux_stream_id = '',
+                mux_start_ms = NULL,
+                mux_end_ms = NULL,
+                guard_before_ms = 0,
+                guard_after_ms = 0,
+                requires_single_slot = TRUE,
+                updated_at_ms = $2,
+                payload_json =
+                  payload_json
+                    - 'mux_job_id'
+                    - 'mux_stream_id'
+                    - 'mux_start_ms'
+                    - 'mux_end_ms'
+                    - 'guard_before_ms'
+                    - 'guard_after_ms'
+                    - 'error'
+                    || jsonb_build_object(
+                      'state', 'queued',
+                      'requires_single_slot', TRUE,
+                      'timestamp_replan_reason', $3,
+                      'timestamp_replanned_from_mux_job_id', $1,
+                      'timestamp_replanned_at_ms', $2
+                    )
+            WHERE mux_job_id = $1
+              AND state IN ('planned', 'muxing')
+            RETURNING slot_id
+            "#,
+        )
+        .bind(mux_job_id)
+        .bind(instant_ms_dt(utc_now()))
+        .bind(reason)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| row.try_get::<String, _>("slot_id").map_err(Into::into))
+            .collect()
+    }
+
     pub(crate) async fn list_transcription_slots_by_mux_job(
         &self,
         mux_job_id: &str,
@@ -740,29 +793,32 @@ impl TimelineStore {
         .transpose()
     }
 
-    pub(crate) async fn has_pending_transcription_slot_for_room_until(
+    pub(crate) async fn transcription_slots_for_room_window(
         &self,
         guild_id: &str,
         voice_channel_id: &str,
+        window_start: DateTime<Utc>,
         window_end: DateTime<Utc>,
-    ) -> Result<bool> {
-        let row = sqlx::query(
+    ) -> Result<Vec<TranscriptionSlotRecord>> {
+        let rows = sqlx::query(
             r#"
-            SELECT 1
+            SELECT *
             FROM transcription_slots
             WHERE guild_id = $1
               AND voice_channel_id = $2
               AND state IN ('queued', 'planned', 'muxing', 'failed')
-              AND segment_start_ms <= $3
-            LIMIT 1
+              AND segment_start_ms <= $4
+              AND segment_end_ms >= $3
+            ORDER BY segment_start_ms, segment_end_ms, slot_id
             "#,
         )
         .bind(guild_id)
         .bind(voice_channel_id)
+        .bind(instant_ms_dt(window_start))
         .bind(instant_ms_dt(window_end))
-        .fetch_optional(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(row.is_some())
+        rows.iter().map(transcription_slot_from_row).collect()
     }
 }
 
@@ -804,6 +860,8 @@ fn transcription_slot_from_row(row: &PgRow) -> Result<TranscriptionSlotRecord> {
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
         priority: row.try_get("priority")?,
+        requires_single_slot: row.try_get("requires_single_slot")?,
+        error: first_value_string(&payload, &["error"]),
         mux_stream_id: row.try_get("mux_stream_id")?,
         mux_start_ms: row.try_get("mux_start_ms")?,
         mux_end_ms: row.try_get("mux_end_ms")?,
@@ -961,7 +1019,7 @@ fn select_fair_mux_batch(
                     continue;
                 };
                 if selected.len() >= max_slots {
-                    return selected;
+                    return single_slot_compatible_batch(selected);
                 }
                 let mut candidate = selected.clone();
                 candidate.push(slot.clone());
@@ -984,6 +1042,20 @@ fn select_fair_mux_batch(
         {
             break;
         }
+    }
+    single_slot_compatible_batch(selected)
+}
+
+fn single_slot_compatible_batch(
+    mut selected: Vec<TranscriptionSlotRecord>,
+) -> Vec<TranscriptionSlotRecord> {
+    let Some(index) = selected.iter().position(|slot| slot.requires_single_slot) else {
+        return selected;
+    };
+    if index == 0 {
+        selected.truncate(1);
+    } else {
+        selected.truncate(index);
     }
     selected
 }

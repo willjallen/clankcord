@@ -4,6 +4,9 @@ use clankcord::adapters::stt::{
     parse_stt_payload, should_drop_low_confidence_transcription, stt_avg_token_logprob,
     stt_drop_decision, stt_no_speech_probability,
 };
+use clankcord::runtime::domain::voice_capture::{
+    UntimestampedMuxDisposition, untimestamped_mux_disposition,
+};
 
 #[tokio::test(flavor = "current_thread")]
 async fn stt_payload_parser_preserves_quality_metadata() {
@@ -27,6 +30,26 @@ async fn stt_payload_parser_preserves_quality_metadata() {
     assert_eq!(result.metadata["tokens"]["token_count"], json!(2));
     assert_eq!(result.metadata["tokens"]["avg_token_logprob"], json!(-2.5));
     assert_eq!(result.metadata["token_logprobs"][0]["token"], json!("Cl"));
+}
+
+#[test]
+fn untimestamped_mux_results_have_deterministic_attribution_contracts() {
+    assert_eq!(
+        untimestamped_mux_disposition("", 3, false),
+        UntimestampedMuxDisposition::CompleteEmpty
+    );
+    assert_eq!(
+        untimestamped_mux_disposition("one speaker", 1, false),
+        UntimestampedMuxDisposition::AssignToOnlySlot
+    );
+    assert_eq!(
+        untimestamped_mux_disposition("multiple speakers", 3, false),
+        UntimestampedMuxDisposition::ReplanAsSingleSlots
+    );
+    assert_eq!(
+        untimestamped_mux_disposition("multiple speakers", 3, true),
+        UntimestampedMuxDisposition::RejectRepeatedOmission
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

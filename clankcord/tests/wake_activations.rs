@@ -8,7 +8,7 @@ mod common;
 use clankcord::runtime::domain::voice_capture::wake_activations::{
     execute, schedule_from_wake_event,
 };
-use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, sha256_file};
+use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, parse_instant, sha256_file};
 use clankcord::runtime::{
     AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobPayload,
     JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
@@ -935,7 +935,7 @@ async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn wake_activation_waits_for_pending_request_audio_after_old_settlement_window() {
+async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
@@ -991,17 +991,36 @@ async fn wake_activation_waits_for_pending_request_audio_after_old_settlement_wi
         .await
         .unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
+    let error = execute(&mut runtime, &activation_job, &payload)
         .await
-        .unwrap();
+        .unwrap_err()
+        .to_string();
 
-    assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
-    assert!(string_field(&result, "request_audio_closed_at").len() > 0);
+    assert!(error.contains("requester_transcription_deadline_exceeded"));
+    let failure = runtime
+        .timeline_store
+        .load_events(
+            "guild",
+            "code",
+            Some(wake_started_at),
+            Some(now + chrono::Duration::seconds(1)),
+            None,
+            None,
+            false,
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| string_field(event, "event_kind") == "wake_activation_transcription_failed")
+        .expect("visible transcription failure event");
+    assert_eq!(
+        failure["reason"],
+        json!("requester_transcription_deadline_exceeded")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn wake_activation_waits_for_failed_room_transcription_slot_before_dispatch() {
+async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
@@ -1069,8 +1088,159 @@ async fn wake_activation_waits_for_failed_room_transcription_slot_before_dispatc
         .await
         .unwrap();
 
-    assert_eq!(result["status"], json!("deferred"));
-    assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
+    assert_eq!(result["status"], json!("dispatched"));
+    let omissions = result["transcription_context_omissions"]
+        .as_array()
+        .unwrap();
+    assert_eq!(omissions.len(), 1);
+    assert!(
+        omissions[0]
+            .as_str()
+            .unwrap()
+            .starts_with("transcription_slot:")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_fails_immediately_for_terminal_requester_transcription() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store.clone());
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(20);
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    let failed_source_job_id = create_transcription_slot_for_wake_test(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-a",
+        wake_started_at + chrono::Duration::seconds(1),
+        chrono::Duration::seconds(2),
+        61,
+    )
+    .await;
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'failed',
+            payload_json = payload_json || jsonb_build_object(
+              'state', 'failed',
+              'error', 'provider response violated the timestamp contract'
+            )
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(failed_source_job_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+
+    let error = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap_err()
+        .to_string();
+
+    assert!(error.contains("requester_transcription_failed"));
+    assert!(
+        runtime
+            .timeline_store
+            .list_jobs(Some("guild"), None)
+            .await
+            .unwrap()
+            .iter()
+            .all(|job| job.kind != JobKind::AgentTask)
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn wake_activation_ignores_failed_transcription_outside_its_window() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let mut runtime = test_runtime(store.clone());
+    insert_agent_session(&runtime.timeline_store).await;
+    let now = Utc::now();
+    let wake_started_at = now - chrono::Duration::seconds(20);
+    let historical_source_job_id = create_transcription_slot_for_wake_test(
+        &store,
+        &runtime,
+        raw.path(),
+        "user-a",
+        wake_started_at - chrono::Duration::hours(2),
+        chrono::Duration::seconds(2),
+        62,
+    )
+    .await;
+    sqlx::query(
+        r#"
+        UPDATE transcription_slots
+        SET state = 'failed',
+            payload_json = payload_json || jsonb_build_object(
+              'state', 'failed',
+              'error', 'historical provider timestamp failure'
+            )
+        WHERE source_job_id = $1
+        "#,
+    )
+    .bind(historical_source_job_id)
+    .execute(&store.pool)
+    .await
+    .unwrap();
+    let wake = append_event(
+        &runtime.timeline_store,
+        wake_started_at,
+        wake_started_at + chrono::Duration::milliseconds(500),
+        "Will",
+        "user-a",
+        "Hey Clanky",
+        json!({"wake": true}),
+        1,
+    )
+    .await;
+    append_event(
+        &runtime.timeline_store,
+        wake_started_at + chrono::Duration::seconds(2),
+        wake_started_at + chrono::Duration::seconds(4),
+        "Will",
+        "user-a",
+        "tell me the room status",
+        json!({}),
+        2,
+    )
+    .await;
+    let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
+    let activation_job_id = string_field(&scheduled["job"], "job_id");
+    let activation_job = runtime
+        .timeline_store
+        .get_job(&activation_job_id)
+        .await
+        .unwrap();
+    let payload = activation_job.wake_activation_payload().cloned().unwrap();
+
+    let result = execute(&mut runtime, &activation_job, &payload)
+        .await
+        .unwrap();
+
+    assert_eq!(result["status"], json!("dispatched"));
+    assert_eq!(result["transcription_context_omissions"], json!([]));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -1236,6 +1406,24 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
         .unwrap();
     assert_eq!(deferred["status"], json!("deferred"));
     assert_eq!(deferred["reason"], json!("waiting_for_room_transcription"));
+    let progress = sqlx::query(
+        r#"
+        SELECT request_audio_closed_at_ms, transcription_wait_deadline_at_ms
+        FROM wake_activation_progress
+        WHERE job_id = $1
+        "#,
+    )
+    .bind(&activation_job_id)
+    .fetch_one(&runtime.timeline_store.pool)
+    .await
+    .unwrap();
+    let closed_at_ms =
+        sqlx::Row::try_get::<i64, _>(&progress, "request_audio_closed_at_ms").unwrap();
+    let deadline_at_ms =
+        sqlx::Row::try_get::<i64, _>(&progress, "transcription_wait_deadline_at_ms").unwrap();
+    assert_eq!(deadline_at_ms - closed_at_ms, 30_000);
+    let next_run_at = parse_instant(&string_field(&deferred, "next_run_at")).unwrap();
+    assert!(next_run_at >= Utc::now() + chrono::Duration::milliseconds(800));
     let jobs = runtime
         .timeline_store
         .list_jobs(Some("guild"), None)

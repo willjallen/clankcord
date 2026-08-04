@@ -36,7 +36,10 @@ const _: () = assert!(
 );
 
 const fn job_payload_blob_version_for_clankcord(version: &str) -> u16 {
-    if const_str_eq(version, "0.11.0") || const_str_eq(version, "0.10.0") {
+    if const_str_eq(version, "0.12.0")
+        || const_str_eq(version, "0.11.0")
+        || const_str_eq(version, "0.10.0")
+    {
         8
     } else if const_str_eq(version, "0.9.0") {
         7

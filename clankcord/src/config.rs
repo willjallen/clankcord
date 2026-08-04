@@ -213,12 +213,16 @@ impl TranscriptionProvider {
 pub struct WakeConfig {
     pub base_url: String,
     pub timeout_seconds: u64,
+    pub connect_timeout_seconds: u64,
     pub api_key_secret: String,
     pub probe_minimum_ms: i64,
     pub probe_window_ms: i64,
     pub probe_interval_ms: i64,
     pub probe_max_queue_age_seconds: i64,
     pub duplicate_overlap_grace_ms: i64,
+    pub circuit_failure_threshold: u32,
+    pub circuit_open_initial_seconds: u64,
+    pub circuit_open_max_seconds: u64,
     pub activation: WakeActivationConfig,
 }
 
@@ -232,6 +236,8 @@ pub struct WakeActivationConfig {
     pub additive_preempt_seconds: i64,
     pub independent_after_seconds: i64,
     pub active_capture_poll_ms: i64,
+    pub transcription_settlement_seconds: i64,
+    pub transcription_poll_ms: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -615,6 +621,13 @@ pub fn wake_timeout_seconds() -> u64 {
     app_config().wake.timeout_seconds.max(1)
 }
 
+pub fn wake_connect_timeout_seconds() -> u64 {
+    app_config()
+        .wake
+        .connect_timeout_seconds
+        .clamp(1, wake_timeout_seconds())
+}
+
 pub fn wake_api_key() -> Result<String> {
     optional_secret(&app_config().wake.api_key_secret)
 }
@@ -625,6 +638,24 @@ pub fn wake_probe_max_queue_age_seconds() -> i64 {
 
 pub fn wake_duplicate_overlap_grace_ms() -> i64 {
     app_config().wake.duplicate_overlap_grace_ms.max(0)
+}
+
+pub fn wake_circuit_failure_threshold() -> u32 {
+    app_config().wake.circuit_failure_threshold.clamp(1, 100)
+}
+
+pub fn wake_circuit_open_initial_seconds() -> u64 {
+    app_config()
+        .wake
+        .circuit_open_initial_seconds
+        .clamp(1, 3600)
+}
+
+pub fn wake_circuit_open_max_seconds() -> u64 {
+    app_config()
+        .wake
+        .circuit_open_max_seconds
+        .clamp(wake_circuit_open_initial_seconds(), 3600)
 }
 
 pub fn wake_activation_config() -> WakeActivationConfig {

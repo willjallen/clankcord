@@ -515,7 +515,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0')",
     )
     .execute(&store.pool)
     .await
@@ -523,7 +523,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 9);
+    assert_eq!(applied.len(), 10);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
@@ -533,6 +533,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_automation_scope_projection_and
     assert_eq!(applied[6].version, "0.9.0");
     assert_eq!(applied[7].version, "0.10.0");
     assert_eq!(applied[8].version, "0.11.0");
+    assert_eq!(applied[9].version, "0.12.0");
     assert!(!column_exists(&store.pool, "automations", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM automations WHERE automation_id = $1")
         .bind(&record.automation_id)
