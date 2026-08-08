@@ -89,7 +89,7 @@ impl Runtime {
             event["reason"] = json!(reason);
         }
         self.timeline_store
-            .append_event(&session.guild_id, &session.scope_id, event)
+            .append_scope_event(&session.scope(), event)
             .await?;
         Ok(session)
     }

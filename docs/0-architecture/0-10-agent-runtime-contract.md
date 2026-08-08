@@ -107,7 +107,7 @@ Agent thread title refresh uses its own prompt template, `agent-thread-title.md`
 
 Before launching Codex, the task handler checks the process and tool surface expected by the agent. Preflight covers the Codex binary, `rg`, `jq`, `clang`, `python`, `zip`, transcript rendering, transcript search, timeline ranges, conversation listing, context resolution, participant tracing, job inspection, agent-session search, agent-session sunset, agent-session resume, response sending, feedback submission, member resolution, room occupants, automation creation/spec commands, and the coding spec command.
 
-Preflight results are stored with the agent-task metadata. They make tool-surface failures visible in job inspection and the debug dashboard.
+Preflight results are stored with the agent-task metadata. They make tool-surface failures visible in job inspection and the operator dashboard.
 
 When Linear MCP is enabled, preflight also runs `codex mcp list --json` with the same explicit Linear MCP config overrides used by agent invocations. This verifies that Codex accepts the configured Linear MCP server and token environment binding before the model is launched.
 

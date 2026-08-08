@@ -1,5 +1,7 @@
 use super::*;
 
+pub(crate) const OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS: i64 = 6 * 60 * 60;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobVisibility {
     Visible,
@@ -1018,35 +1020,90 @@ impl TimelineStore {
     pub async fn garbage_collect_ephemeral_jobs(&self, limit: usize) -> Result<Value> {
         let limit = limit.clamp(1, 1000) as i64;
         let now_ms = instant_ms_dt(utc_now());
+        let mut transaction = self.pool.begin().await?;
+        let pruned_outcomes =
+            sqlx::query("DELETE FROM operational_job_outcomes WHERE observed_at_ms < $1")
+                .bind(
+                    now_ms.saturating_sub(
+                        OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS.saturating_mul(1000),
+                    ),
+                )
+                .execute(transaction.as_mut())
+                .await?
+                .rows_affected();
         let rows = sqlx::query(
             r#"
-            WITH doomed AS (
-              SELECT j.job_id
-              FROM jobs j
-              WHERE j.ephemeral = TRUE
-                AND j.terminal = TRUE
-                AND j.gc_after_ms IS NOT NULL
-                AND j.gc_after_ms <= $1
-                AND NOT EXISTS (
-                  SELECT 1
-                  FROM job_dependencies d
-                  JOIN jobs parent ON parent.job_id = d.parent_job_id
-                  WHERE d.child_job_id = j.job_id
-                    AND parent.terminal = FALSE
-                )
-              ORDER BY j.gc_after_ms, j.job_id
-              LIMIT $2
-            )
-            DELETE FROM jobs
-            WHERE job_id IN (SELECT job_id FROM doomed)
-            RETURNING job_id
+            SELECT j.job_id
+            FROM jobs j
+            WHERE j.ephemeral = TRUE
+              AND j.terminal = TRUE
+              AND j.gc_after_ms IS NOT NULL
+              AND j.gc_after_ms <= $1
+              AND NOT EXISTS (
+                SELECT 1
+                FROM job_dependencies d
+                JOIN jobs parent ON parent.job_id = d.parent_job_id
+                WHERE d.child_job_id = j.job_id
+                  AND parent.terminal = FALSE
+              )
+            ORDER BY j.gc_after_ms, j.job_id
+            LIMIT $2
+            FOR UPDATE OF j SKIP LOCKED
             "#,
         )
         .bind(now_ms)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(transaction.as_mut())
         .await?;
-        Ok(serde_json::json!({"deleted": rows.len(), "limit": limit}))
+        let job_ids = rows
+            .into_iter()
+            .map(|row| row.try_get::<String, _>("job_id"))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if job_ids.is_empty() {
+            transaction.commit().await?;
+            return Ok(serde_json::json!({
+                "deleted": 0,
+                "prunedOperationalOutcomes": pruned_outcomes,
+                "operationalOutcomeRetentionSeconds": OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS,
+                "limit": limit,
+            }));
+        }
+        let missing_outcomes = sqlx::query(
+            r#"
+            SELECT p.payload_blob
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.job_id = ANY($1)
+              AND NOT EXISTS (
+                SELECT 1
+                FROM operational_job_outcomes outcome
+                WHERE outcome.job_id = j.job_id
+                  AND outcome.state = j.state
+                  AND outcome.observed_at_ms = j.updated_at_ms
+              )
+            ORDER BY j.updated_at_ms, j.job_id
+            "#,
+        )
+        .bind(&job_ids)
+        .fetch_all(transaction.as_mut())
+        .await?;
+        for row in missing_outcomes {
+            let job = Job::decode(&row.try_get::<Vec<u8>, _>("payload_blob")?)?;
+            let projection = project_job(&job);
+            insert_operational_job_outcome(&mut transaction, &job, &projection).await?;
+        }
+        let deleted = sqlx::query("DELETE FROM jobs WHERE job_id = ANY($1)")
+            .bind(&job_ids)
+            .execute(transaction.as_mut())
+            .await?
+            .rows_affected();
+        transaction.commit().await?;
+        Ok(serde_json::json!({
+            "deleted": deleted,
+            "prunedOperationalOutcomes": pruned_outcomes,
+            "operationalOutcomeRetentionSeconds": OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS,
+            "limit": limit,
+        }))
     }
 
     pub async fn list_child_jobs(&self, parent_job_id: &str) -> Result<Vec<Job>> {
@@ -1381,6 +1438,16 @@ pub(crate) async fn upsert_job_rows(
     job: &Job,
 ) -> Result<()> {
     let projection = project_job(job);
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(&job.id)
+        .execute(transaction.as_mut())
+        .await?;
+    let previously_terminal =
+        sqlx::query_scalar::<_, bool>("SELECT terminal FROM jobs WHERE job_id = $1 FOR UPDATE")
+            .bind(&job.id)
+            .fetch_optional(transaction.as_mut())
+            .await?
+            .unwrap_or(false);
     sqlx::query(
         r#"
         INSERT INTO jobs(
@@ -1483,6 +1550,44 @@ pub(crate) async fn upsert_job_rows(
     )
     .bind(&job.id)
     .bind(job.encode()?)
+    .execute(transaction.as_mut())
+    .await?;
+    if projection.terminal && !previously_terminal {
+        insert_operational_job_outcome(transaction, job, &projection).await?;
+    }
+    Ok(())
+}
+
+async fn insert_operational_job_outcome(
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
+    job: &Job,
+    projection: &JobProjection,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO operational_job_outcomes(
+          job_id, scope_kind, guild_id, scope_id, kind, state, lane,
+          created_at_ms, ready_at_ms, started_at_ms, completed_at_ms,
+          observed_at_ms, failed, error_text
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        ON CONFLICT(job_id, state, observed_at_ms) DO NOTHING
+        "#,
+    )
+    .bind(&job.id)
+    .bind(job.scope_kind.as_str())
+    .bind(&job.guild_id)
+    .bind(&job.scope_id)
+    .bind(job.kind.as_str())
+    .bind(job.state.as_str())
+    .bind(projection.lane)
+    .bind(projection.created_at_ms)
+    .bind(projection.ready_at_ms)
+    .bind(projection.started_at_ms)
+    .bind(projection.completed_at_ms)
+    .bind(projection.updated_at_ms)
+    .bind(projection.failed)
+    .bind(job.operational_outcome_reason())
     .execute(transaction.as_mut())
     .await?;
     Ok(())

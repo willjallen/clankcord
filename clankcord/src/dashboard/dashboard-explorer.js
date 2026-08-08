@@ -165,15 +165,31 @@
 
     roomLabel(channelId) {
       const room = this.rooms.find((entry) => entry.channelId === channelId);
-      return room ? this.roomName(room) : channelId;
+      return room ? this.roomName(room) : 'Unresolved voice channel';
     },
 
     jobScopeLabel(job) {
       const scopeId = job?.scope_id || '';
       if (!scopeId) return '';
       const scopeKind = job?.scope_kind || '';
+      const resolved = textValue(job?.scopeLabel).trim();
+      if (resolved) return resolved;
       if (scopeKind === 'voice_channel') return this.roomLabel(scopeId);
-      return [scopeKind, scopeId].filter(Boolean).join(' / ');
+      if (scopeKind === 'dm') {
+        return 'Direct message';
+      }
+      return this.scopeKindLabel(scopeKind);
+    },
+
+    scopeKindLabel(scopeKind) {
+      return ({
+        dm: 'Direct message',
+        voice_channel: 'Voice channel',
+        text_channel: 'Text channel',
+        thread: 'Thread',
+        guild: 'Server',
+        global: 'Global',
+      })[scopeKind] || textValue(scopeKind).replaceAll('_', ' ') || 'Unscoped';
     },
 
     selectedExplorerJobLifecycle() {
@@ -206,15 +222,16 @@
 
     jobMixRows() {
       const rows = new Map();
-      for (const job of this.allJobs()) {
-        const kind = job.kind || 'unknown';
-        const state = job.state || 'unknown';
+      for (const aggregate of this.data?.charts?.jobsByKindState || []) {
+        const kind = aggregate.kind;
+        const state = aggregate.state;
         if (!rows.has(kind)) rows.set(kind, { kind, total: 0, states: {} });
         const row = rows.get(kind);
-        row.total += 1;
-        row.states[state] = (row.states[state] || 0) + 1;
+        const count = Number(aggregate.count || 0);
+        row.total += count;
+        row.states[state] = count;
       }
-      return Array.from(rows.values()).sort((left, right) => right.total - left.total || left.kind.localeCompare(right.kind)).slice(0, 18);
+      return Array.from(rows.values()).sort((left, right) => right.total - left.total || left.kind.localeCompare(right.kind));
     },
 
     jobMixStates(rows) {
@@ -229,54 +246,53 @@
     },
 
     eventTrendRows() {
-      const events = this.timelineEvents
-        .map((event) => ({ event, when: Date.parse(this.eventWhen(event)) }))
-        .filter((entry) => Number.isFinite(entry.when))
-        .sort((left, right) => left.when - right.when);
-      if (!events.length) return { labels: [], series: [] };
-      const first = events[0].when;
-      const last = events[events.length - 1].when;
-      const bucketCount = Math.min(24, Math.max(6, Math.ceil(events.length / 12)));
-      const bucketMs = Math.max(60_000, Math.ceil((last - first + 1) / bucketCount));
-      const labels = Array.from({ length: bucketCount }, (_, index) => this.clock(new Date(first + index * bucketMs).toISOString()));
+      const charts = this.data?.charts || {};
+      const rows = charts.eventsByBucketKind || [];
+      const bucketMs = Number(charts.window?.eventBucketSeconds || 0) * 1000;
+      const from = Date.parse(charts.window?.from);
+      const to = Date.parse(charts.window?.to);
+      if (!bucketMs || !Number.isFinite(from) || !Number.isFinite(to)) return { labels: [], series: [] };
+      const first = from - (from % bucketMs);
+      const last = to - (to % bucketMs);
+      const bucketTimes = [];
+      for (let at = first; at <= last; at += bucketMs) bucketTimes.push(at);
+      const bucketIndexes = new Map(bucketTimes.map((at, index) => [at, index]));
       const kindTotals = new Map();
-      const buckets = new Map();
-      for (const { event, when } of events) {
-        const kind = this.eventKind(event);
-        const bucket = Math.min(bucketCount - 1, Math.floor((when - first) / bucketMs));
-        kindTotals.set(kind, (kindTotals.get(kind) || 0) + 1);
-        if (!buckets.has(kind)) buckets.set(kind, Array(bucketCount).fill(0));
-        buckets.get(kind)[bucket] += 1;
+      const valuesByKind = new Map();
+      for (const row of rows) {
+        const kind = row.kind;
+        const at = Date.parse(row.bucketAt);
+        const count = Number(row.count || 0);
+        const bucket = bucketIndexes.get(at);
+        if (bucket === undefined) continue;
+        if (!valuesByKind.has(kind)) valuesByKind.set(kind, Array(bucketTimes.length).fill(0));
+        valuesByKind.get(kind)[bucket] += count;
+        kindTotals.set(kind, (kindTotals.get(kind) || 0) + count);
       }
       const kinds = Array.from(kindTotals.entries())
         .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
-        .slice(0, 5)
         .map(([kind]) => kind);
-      return { labels, series: kinds.map((kind) => ({ kind, values: buckets.get(kind) || Array(bucketCount).fill(0) })) };
+      return {
+        labels: bucketTimes.map((at) => this.clock(new Date(at).toISOString())),
+        series: kinds.map((kind) => ({ kind, values: valuesByKind.get(kind) })),
+      };
     },
 
     roomActivityRows() {
-      const rows = new Map();
-      const ensure = (channelId) => {
-        const id = channelId || 'unknown';
-        if (!rows.has(id)) rows.set(id, { channelId: id, label: this.roomLabel(id), jobs: 0, speech: 0, transcripts: 0, wake: 0 });
-        return rows.get(id);
-      };
-      this.allJobs().forEach((job) => {
-        const row = ensure(job.scope_id);
-        row.label = this.jobScopeLabel(job) || row.label;
-        row.jobs += 1;
-      });
-      this.timelineEvents.forEach((event) => {
-        const row = ensure(this.eventChannelId(event));
-        const kind = this.eventKind(event);
-        if (kind === 'speech_segment') row.speech += 1;
-        if (kind === 'transcript') row.transcripts += 1;
-        if (kind.startsWith('wake_')) row.wake += 1;
-      });
-      return Array.from(rows.values())
-        .sort((left, right) => (right.jobs + right.speech + right.transcripts + right.wake) - (left.jobs + left.speech + left.transcripts + left.wake) || left.label.localeCompare(right.label))
-        .slice(0, 20);
+      return (this.data?.charts?.scopeActivity || [])
+        .map((row) => ({
+          channelId: row.scopeId,
+          scopeKind: row.scopeKind,
+          guildId: row.guildId,
+          label: row.scopeLabel,
+          jobs: Number(row.jobs || 0),
+          speech: Number(row.speech || 0),
+          transcripts: Number(row.transcripts || 0),
+          wake: Number(row.wake || 0),
+          total: Number(row.total || 0),
+          latestAt: row.latestAt,
+        }))
+        .sort((left, right) => right.total - left.total || left.label.localeCompare(right.label));
     },
 
     jobExplorerRows() {
@@ -288,7 +304,7 @@
         stateClass: this.statusClass(job.state),
         command: this.commandKind(job),
         room: this.jobScopeLabel(job),
-        requester: job.requested_by_user_id,
+        requester: job.requestedByLabel || 'Unresolved requester',
         attempts: job.attempts ?? 0,
         updatedAgo: this.ago(this.jobTime(job)),
         detail: this.jobDetail(job),

@@ -78,6 +78,7 @@
     const table = ensureTable('unified-timeline-table', [
       { title: 'When', field: 'whenMs', width: 95, frozen: true, sorter: 'number', formatter: (cell) => escapeHtml(cell.getRow().getData().when) },
       { title: 'Record', field: 'recordType', width: 85, headerSort: false, formatter: pillFormatter('recordType', 'recordClass') },
+      { title: 'Category', field: 'category', width: 145, headerSort: false },
       { title: 'Event', field: 'eventKind', width: 165, headerSort: false, formatter: pillFormatter('eventKind', 'eventClass') },
       { title: 'Job Type', field: 'jobKind', width: 165, headerSort: false, formatter: pillFormatter('jobKind', 'jobClass') },
       { title: 'State', field: 'state', width: 105, headerSort: false, formatter: pillFormatter('state') },

@@ -301,9 +301,8 @@ impl Runtime {
         completed.mark_complete();
         self.timeline_store.update_job(&completed).await?;
         self.timeline_store
-            .append_event(
-                &job.guild_id,
-                &job.scope_id,
+            .append_scope_event(
+                &job.scope(),
                 json!({
                     "event_kind": "discord_typing_indicator",
                     "kind": "discord_typing_indicator",
@@ -477,9 +476,8 @@ impl Runtime {
             latest.metadata.agent_task_mut().result_suppressed = true;
             self.timeline_store.update_job(&latest).await?;
             self.timeline_store
-                .append_event(
-                    &latest.guild_id,
-                    &latest.scope_id,
+                .append_scope_event(
+                    &latest.scope(),
                     json!({
                         "event_kind": "agent_task_result_suppressed",
                         "kind": "agent_task_result_suppressed",
@@ -554,9 +552,8 @@ impl Runtime {
         job.metadata.agent_task_mut().result_suppressed = true;
         self.timeline_store.update_job(&job).await?;
         self.timeline_store
-            .append_event(
-                &job.guild_id,
-                &job.scope_id,
+            .append_scope_event(
+                &job.scope(),
                 json!({
                     "event_kind": "agent_task_result_suppressed",
                     "kind": "agent_task_result_suppressed",
@@ -678,9 +675,8 @@ impl Runtime {
                 continue;
             }
             self.timeline_store
-                .append_event(
-                    &job.guild_id,
-                    &job.scope_id,
+                .append_scope_event(
+                    &job.scope(),
                     json!({
                         "event_kind": event_kind,
                         "kind": event_kind,

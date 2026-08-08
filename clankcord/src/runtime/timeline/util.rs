@@ -356,17 +356,42 @@ pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
     let started = ms_to_datetime(row.try_get::<i64, _>("started_at_ms")?);
     let ended = ms_to_datetime(row.try_get::<i64, _>("ended_at_ms")?);
     let created = ms_to_datetime(row.try_get::<i64, _>("created_at_ms")?);
-    set_default_string(&mut payload, "event_id", &event_id);
-    set_default_string(&mut payload, "eventId", &event_id);
-    set_default_string(&mut payload, "event_kind", &kind);
-    set_default_string(&mut payload, "kind", &kind);
-    set_default_string(&mut payload, "scope_kind", &scope_kind);
-    set_default_string(&mut payload, "scope_id", &scope_id);
-    set_default_string(&mut payload, "guild_id", &guild_id);
-    set_default_string(&mut payload, "guildId", &guild_id);
+    for (key, value) in [
+        ("event_id", &event_id),
+        ("eventId", &event_id),
+        ("event_kind", &kind),
+        ("kind", &kind),
+        ("scope_kind", &scope_kind),
+        ("scopeKind", &scope_kind),
+        ("scope_id", &scope_id),
+        ("scopeId", &scope_id),
+        ("guild_id", &guild_id),
+        ("guildId", &guild_id),
+    ] {
+        payload.insert(key.to_string(), Value::String(value.to_string()));
+    }
     if scope_kind == "voice_channel" {
-        set_default_string(&mut payload, "voice_channel_id", &scope_id);
-        set_default_string(&mut payload, "channelId", &scope_id);
+        payload.insert(
+            "voice_channel_id".to_string(),
+            Value::String(scope_id.clone()),
+        );
+        payload.insert(
+            "voiceChannelId".to_string(),
+            Value::String(scope_id.clone()),
+        );
+        payload.insert("channelId".to_string(), Value::String(scope_id.clone()));
+    } else {
+        for key in [
+            "voice_channel_id",
+            "voiceChannelId",
+            "channelId",
+            "voice_channel_name",
+            "channelName",
+            "voice_channel_slug",
+            "channelSlug",
+        ] {
+            payload.remove(key);
+        }
     }
     if let Ok(value) = row.try_get::<String, _>("room_guild_slug") {
         if !value.is_empty() {

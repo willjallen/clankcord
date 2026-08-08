@@ -102,9 +102,8 @@ impl Runtime {
             },
         };
         self.timeline_store
-            .append_event(
-                &job.guild_id,
-                &job.scope_id,
+            .append_scope_event(
+                &job.scope(),
                 json!({
                     "event_kind": "discord_typing_indicator",
                     "kind": "discord_typing_indicator",

@@ -305,6 +305,35 @@ async fn resume_reactivates_retired_dm_session() {
     assert_eq!(resumed.resumed_from_agent_session_id, "");
     assert_eq!(resumed.codex_session_id, "codex-session");
     assert_eq!(resumed.route_key, dm_route_key("user-a"));
+    let event_scope = sqlx::query(
+        r#"
+        SELECT scope_kind, guild_id, scope_id, payload_json
+        FROM timeline_events
+        WHERE event_kind = 'agent_session_resumed'
+        ORDER BY sequence DESC
+        LIMIT 1
+        "#,
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&event_scope, "scope_kind").unwrap(),
+        "dm"
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&event_scope, "guild_id").unwrap(),
+        ""
+    );
+    assert_eq!(
+        sqlx::Row::try_get::<String, _>(&event_scope, "scope_id").unwrap(),
+        "user-a"
+    );
+    let event_payload =
+        sqlx::Row::try_get::<serde_json::Value, _>(&event_scope, "payload_json").unwrap();
+    assert_eq!(event_payload["scope_kind"], json!("dm"));
+    assert_eq!(event_payload["scope_id"], json!("user-a"));
+    assert!(event_payload.get("voice_channel_id").is_none());
     assert_eq!(
         store
             .list_agent_session_records("dm", "user-a", "", 500)
@@ -313,6 +342,39 @@ async fn resume_reactivates_retired_dm_session() {
             .len(),
         1
     );
+}
+
+#[test]
+fn agent_session_runtime_scope_covers_voice_dm_and_thread_routes() {
+    let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let max_active_until =
+        (Utc::now() + chrono::Duration::hours(8)).to_rfc3339_opts(SecondsFormat::Millis, true);
+    let voice = AgentSessionRecord::new_voice(
+        "ags_voice_scope",
+        "guild-a",
+        "voice-a",
+        "parent-a",
+        "thread-a",
+        created_at.clone(),
+        max_active_until.clone(),
+    );
+    assert_eq!(
+        voice.scope(),
+        RuntimeScope::voice_channel("guild-a", "voice-a")
+    );
+
+    let dm = AgentSessionRecord::new_dm(
+        "ags_dm_scope",
+        "user-a",
+        created_at.clone(),
+        max_active_until.clone(),
+    );
+    assert_eq!(dm.scope(), RuntimeScope::dm("user-a"));
+
+    let mut thread = voice;
+    thread.route_kind = clankcord::runtime::AgentSessionRouteKind::Thread;
+    thread.discord_thread_id = "thread-a".to_string();
+    assert_eq!(thread.scope(), RuntimeScope::thread("guild-a", "thread-a"));
 }
 
 #[tokio::test(flavor = "current_thread")]

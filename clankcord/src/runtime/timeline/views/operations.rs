@@ -1,123 +1,143 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::PathBuf;
 
-use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder, Row};
 
+use super::dashboard::{dashboard_job_category, dashboard_job_duration_ms};
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
 use crate::adapters::wakeword::wake_provider_health;
 use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
-use crate::runtime::jobs::AgentTaskMetadata;
+use crate::runtime::timeline::store::{
+    OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY,
+};
 use crate::runtime::timeline::util::timeline_event_payload;
 use crate::runtime::timeline::{
-    event_start, instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference,
-    round3, utc_now,
+    instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
 use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
-const AGENT_SESSION_ARTIFACT_MAX_BYTES: usize = 256 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
-const DEBUG_VALUE_MAX_STRING_CHARS: usize = 4000;
-const DEBUG_VALUE_MAX_ARRAY_ITEMS: usize = 100;
+const DASHBOARD_VALUE_MAX_STRING_CHARS: usize = 4000;
+const DASHBOARD_VALUE_MAX_ARRAY_ITEMS: usize = 100;
 const HEALTH_WINDOWS: &[(&str, i64)] = &[("5m", 5 * 60), ("15m", 15 * 60), ("1h", 60 * 60)];
-
-#[derive(Debug, Clone)]
-struct DebugTimeRange {
-    start: Option<DateTime<Utc>>,
-    end: Option<DateTime<Utc>>,
-    label: String,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum DebugSearchField {
-    All,
-    Detail,
-    Feedback,
-    Kind,
-    JobKind,
-    State,
-    Command,
-    Room,
-    Actor,
-}
-
-#[derive(Debug, Clone)]
-pub struct DebugOverviewRequest {
-    pub jobs_limit: usize,
-    pub agent_limit: usize,
-    pub timeline_window: String,
-    pub timeline_start: String,
-    pub timeline_end: String,
-    pub timeline_limit: usize,
-    pub timeline_query: String,
-    pub timeline_query_field: String,
-    pub transcript_since: String,
-    pub transcript_limit: usize,
-    pub transcript_channel: String,
-    pub transcript_query: String,
-    pub publication_limit: usize,
-    pub http_requests: Value,
-}
-
-impl Default for DebugOverviewRequest {
-    fn default() -> Self {
-        Self {
-            jobs_limit: 120,
-            agent_limit: 120,
-            timeline_window: "-1h".to_string(),
-            timeline_start: String::new(),
-            timeline_end: String::new(),
-            timeline_limit: 120,
-            timeline_query: String::new(),
-            timeline_query_field: "all".to_string(),
-            transcript_since: "-24h".to_string(),
-            transcript_limit: 250,
-            transcript_channel: String::new(),
-            transcript_query: String::new(),
-            publication_limit: 120,
-            http_requests: json!({}),
-        }
-    }
-}
+const FAILURE_WINDOW_SECONDS: i64 = 60 * 60;
+const FAILURE_RECENT_LIMIT: i64 = 25;
+const OPERATIONAL_COVERAGE_START_KEY: &str = "operational_job_outcomes_coverage_start_ms";
 
 impl Runtime {
-    pub async fn debug_overview(&self, request: DebugOverviewRequest) -> Result<Value> {
+    pub async fn operational_health_payload(&self) -> Result<Value> {
+        Ok(self
+            .dashboard_summary_payload()
+            .await?
+            .get("health")
+            .cloned()
+            .expect("dashboard summary always contains health"))
+    }
+
+    pub async fn dashboard_summary_payload(&self) -> Result<Value> {
         let now = utc_now();
-        let timeline_range = resolve_debug_time_range(
-            &request.timeline_window,
-            &request.timeline_start,
-            &request.timeline_end,
-            "-1h",
-            now,
-        )?;
-        let transcript_since = resolve_debug_since(&request.transcript_since, "-24h", now)?;
-        let timeline_query_field = parse_debug_search_field(&request.timeline_query_field)?;
-        let jobs_limit = request.jobs_limit.clamp(10, 500);
-        let agent_limit = request.agent_limit.clamp(10, 500);
-        let timeline_limit = request.timeline_limit.clamp(10, 1000);
-        let transcript_limit = request.transcript_limit.clamp(10, 5000);
-        let publication_limit = request.publication_limit.clamp(10, 500);
-        let mut status = self.status_payload(None).await?;
-        if let Value::Object(object) = &mut status {
-            object.insert(
-                "liveOccupancy".to_string(),
-                self.timeline_store
-                    .voice_occupancy_snapshot()
-                    .await
-                    .context("loading live voice occupancy for debug overview")?,
-            );
+        let database = database_health_probe(self).await;
+        if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            return Ok(json!({
+                "generatedAt": isoformat_z(Some(now)),
+                "health": runtime_health_from_facts(
+                    &database,
+                    &RuntimeHealthFacts::default(),
+                    &unavailable_failure_summary(now),
+                    &VoiceObservationSummary::default(),
+                    0,
+                    0,
+                    now,
+                ),
+                "jobs": {"summary": active_job_summary(&[])},
+                "operations": {"backlog": active_job_backlog(&[], now)},
+            }));
         }
-        let active_job_records = self
+
+        let (active_jobs, mut health_facts, failures, voice, inventory) = tokio::try_join!(
+            active_job_aggregates(self, now),
+            lean_terminal_health_facts(self, now),
+            lean_failure_summary(self, now),
+            lean_voice_observation_summary(self, now),
+            dashboard_inventory_counts(self),
+        )?;
+        apply_active_health_facts(&mut health_facts, &active_jobs, now);
+        let (configured_room_count, automation_count) = inventory;
+        Ok(json!({
+            "generatedAt": isoformat_z(Some(now)),
+            "health": runtime_health_from_facts(
+                &database,
+                &health_facts,
+                &failures,
+                &voice,
+                configured_room_count,
+                automation_count,
+                now,
+            ),
+            "jobs": {"summary": active_job_summary(&active_jobs)},
+            "operations": {"backlog": active_job_backlog(&active_jobs, now)},
+        }))
+    }
+
+    async fn dashboard_health_bundle(&self) -> Result<(Value, Value)> {
+        let now = utc_now();
+        let database = database_health_probe(self).await;
+        if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            let failures = unavailable_failure_summary(now);
+            let health = runtime_health(
+                &database,
+                &[],
+                &failures,
+                &VoiceObservationSummary::default(),
+                0,
+                0,
+                now,
+            );
+            return Ok((
+                health,
+                json!({
+                    "coverage": {"complete": false},
+                    "backlog": {},
+                    "windows": [],
+                    "latencies": {},
+                    "failures": failures,
+                }),
+            ));
+        }
+
+        let mut status = self.status_payload(None).await?;
+        let voice = apply_voice_observation_freshness(self, &mut status, now).await?;
+        let operations = operational_diagnostics(self, now).await?;
+        let configured_room_count = self.timeline_store.list_room_configs().await?.len();
+        let automation_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM automations")
+            .fetch_one(&self.timeline_store.pool)
+            .await?;
+        let health = runtime_health(
+            &database,
+            &operations.job_rows,
+            &operations.failure_summary,
+            &voice,
+            configured_room_count,
+            automation_count as usize,
+            now,
+        );
+        Ok((health, operations.payload))
+    }
+
+    pub async fn dashboard_health_payload(&self, http_requests: Value) -> Result<Value> {
+        let now = utc_now();
+        let (health, operations) = self.dashboard_health_bundle().await?;
+        let database = database_diagnostics(self).await;
+        let active_jobs = self
             .timeline_store
-            .list_jobs_by_states(
+            .list_jobs_by_states_with_visibility(
                 None,
                 &[
                     JobState::Queued,
@@ -126,175 +146,34 @@ impl Runtime {
                     JobState::CancelRequested,
                     JobState::ConfirmationPending,
                 ],
+                crate::runtime::timeline::JobVisibility::IncludeEphemeral,
             )
             .await?;
-        let failed_job_records = self
-            .timeline_store
-            .list_jobs_by_states(
-                None,
-                &[
-                    JobState::ApprovalFailed,
-                    JobState::Failed,
-                    JobState::FailedTimeout,
-                    JobState::FailedDraftRetained,
-                ],
-            )
-            .await?;
-        let recent_job_records = self
-            .timeline_store
-            .list_recent_jobs(None, jobs_limit)
-            .await?;
-        let agent_job_records = self
-            .timeline_store
-            .list_jobs_by_kind(JobKind::AgentTask, agent_limit)
-            .await?;
-        let recent_events = self
-            .recent_events(
-                timeline_range.start,
-                timeline_range.end,
-                timeline_limit,
-                &request.timeline_query,
-                timeline_query_field,
-            )
-            .await
-            .context("loading recent timeline events for debug overview")?;
-        let timeline_context_job_records = self
-            .timeline_context_jobs(&recent_events, jobs_limit)
-            .await
-            .context("loading timeline context jobs for debug overview")?;
-        let timeline_querying = !request.timeline_query.trim().is_empty();
-        let summary_jobs = merge_jobs(
-            active_job_records
-                .iter()
-                .chain(failed_job_records.iter())
-                .chain(recent_job_records.iter())
-                .chain(agent_job_records.iter())
-                .chain(timeline_context_job_records.iter()),
-        );
-        let recent_job_records = if timeline_querying {
-            timeline_context_job_records
-        } else if let Some(start) = timeline_range.start {
-            self.timeline_store
-                .list_jobs_updated_between(start, timeline_range.end.unwrap_or(now), jobs_limit)
-                .await?
-        } else {
-            merge_jobs(
-                recent_job_records
-                    .iter()
-                    .chain(timeline_context_job_records.iter()),
-            )
-        };
-        let active_jobs = active_job_records
-            .iter()
-            .map(debug_job_value)
-            .collect::<Vec<_>>();
-        let recent_jobs = recent_job_records
-            .iter()
-            .map(debug_job_value)
-            .collect::<Vec<_>>();
-        let transcript_events = self
-            .recent_transcript_events(
-                transcript_since,
-                transcript_limit,
-                &request.transcript_channel,
-                &request.transcript_query,
-            )
-            .await
-            .context("loading recent transcript events for debug overview")?;
-        let event_kind_counts = event_kind_counts(&recent_events);
-        let database = database_diagnostics(self).await;
-        let operations = operational_diagnostics(self, now)
-            .await
-            .context("loading operational health diagnostics")?;
-        let publications = self
-            .timeline_store
-            .list_publications(None, None, None)
-            .await
-            .context("loading publications for debug overview")?
-            .into_iter()
-            .take(publication_limit)
-            .collect::<Vec<_>>();
-        let automations = self
-            .timeline_store
-            .list_automations(None, None, None)
-            .await
-            .context("loading automations for debug overview")?;
-        let pool = self
-            .timeline_store
-            .runtime_pool_config()
-            .await
-            .context("loading runtime pool config for debug overview")?;
-        let configured_room_count = self
-            .timeline_store
-            .list_room_configs()
-            .await
-            .context("loading room config for debug overview")?
-            .len();
-        let summary = job_summary(&summary_jobs);
-        let health = runtime_health(
-            &summary_jobs,
-            &database,
-            &status,
-            configured_room_count,
-            automations.len(),
-        );
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
-            "process": {
-                "autoJoin": {
-                    "enabled": pool.auto_join_enabled,
-                    "minParticipants": pool.auto_join_min_participants,
-                    "emptyReleaseSeconds": pool.auto_leave_empty_seconds,
-                    "singleDeafenedReleaseSeconds": pool.auto_leave_single_deafened_seconds,
-                    "rejoinCooldownSeconds": pool.auto_rejoin_cooldown_seconds,
-                    "manualOverrideSeconds": pool.manual_override_seconds,
-                },
-                "load": process_load_payload(),
-            },
             "health": health,
             "database": database,
-            "requests": request.http_requests,
-            "load": load_payload(&active_job_records, now),
+            "requests": http_requests,
+            "process": {"load": process_load_payload()},
+            "load": load_payload(&active_jobs, now),
             "operations": operations,
-            "agents": agent_dashboard_payload(&agent_job_records, agent_limit),
-            "status": status,
-            "jobs": {
-                "summary": summary,
-                "active": active_jobs,
-                "recent": recent_jobs,
-            },
-            "timeline": {
-                "window": timeline_range.label,
-                "start": debug_time_label(timeline_range.start),
-                "end": debug_time_label(timeline_range.end),
-                "recentEvents": recent_events,
-                "eventKindCounts": event_kind_counts,
-            },
-            "transcript": {
-                "since": debug_since_label(transcript_since),
-                "events": transcript_events,
-            },
-            "automations": automation_dashboard_payload(&automations),
-            "publications": publications,
-            "links": {
-                "json": "/v1/debug/overview",
-                "poolStatus": "/v1/pool/status",
-                "timelineTail": "/v1/timeline/tail",
-                "jobs": "/v1/jobs",
-            }
         }))
     }
 
-    async fn recent_events(
-        &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-        limit: usize,
-        query: &str,
-        query_field: DebugSearchField,
-    ) -> Result<Vec<Value>> {
-        self.recent_events_by_kind(start, end, limit, None, query, query_field)
-            .await
+    pub async fn dashboard_rooms_payload(&self) -> Result<Value> {
+        let now = utc_now();
+        let mut status = self.status_payload(None).await?;
+        if let Value::Object(object) = &mut status {
+            object.insert(
+                "liveOccupancy".to_string(),
+                self.timeline_store.voice_occupancy_snapshot().await?,
+            );
+        }
+        apply_voice_observation_freshness(self, &mut status, now).await?;
+        Ok(json!({
+            "generatedAt": isoformat_z(Some(now)),
+            "status": status,
+        }))
     }
 
     pub async fn recent_transcript_events(
@@ -312,23 +191,9 @@ impl Runtime {
             limit,
             Some(&kinds),
             query,
-            DebugSearchField::All,
             (!channel.is_empty()).then_some(channel),
         )
         .await
-    }
-
-    async fn recent_events_by_kind(
-        &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-        limit: usize,
-        kinds: Option<&BTreeSet<String>>,
-        query: &str,
-        query_field: DebugSearchField,
-    ) -> Result<Vec<Value>> {
-        self.recent_events_by_kind_filtered(start, end, limit, kinds, query, query_field, None)
-            .await
     }
 
     async fn recent_events_by_kind_filtered(
@@ -338,7 +203,6 @@ impl Runtime {
         limit: usize,
         kinds: Option<&BTreeSet<String>>,
         query: &str,
-        query_field: DebugSearchField,
         channel: Option<&str>,
     ) -> Result<Vec<Value>> {
         if kinds.is_some_and(BTreeSet::is_empty) {
@@ -352,9 +216,7 @@ impl Runtime {
             FROM timeline_events e
             "#,
         );
-        let search_uses_room = !query.trim().is_empty()
-            && matches!(query_field, DebugSearchField::All | DebugSearchField::Room);
-        if search_uses_room {
+        if !query.trim().is_empty() {
             statement.push(
                 r#"
             LEFT JOIN voice_rooms r
@@ -390,7 +252,7 @@ impl Runtime {
         if let Some(channel) = channel {
             statement.push(" AND e.scope_id = ").push_bind(channel);
         }
-        push_debug_event_search(&mut statement, query, query_field);
+        push_transcript_event_search(&mut statement, query);
         statement
             .push(" ORDER BY e.started_at_ms DESC, e.sequence DESC, e.event_id DESC LIMIT ")
             .push_bind(limit as i64)
@@ -417,27 +279,11 @@ impl Runtime {
             .await?;
         rows.iter()
             .map(timeline_event_payload)
-            .map(|event| event.map(compact_debug_event))
+            .map(|event| event.map(compact_dashboard_event))
             .collect()
     }
 
-    async fn timeline_context_jobs(&self, events: &[Value], limit: usize) -> Result<Vec<Job>> {
-        let Some(first) = events.iter().filter_map(event_start).min() else {
-            return Ok(Vec::new());
-        };
-        let Some(last) = events.iter().filter_map(event_start).max() else {
-            return Ok(Vec::new());
-        };
-        self.timeline_store
-            .list_jobs_updated_between(
-                first - Duration::minutes(10),
-                last + Duration::minutes(10),
-                limit,
-            )
-            .await
-    }
-
-    pub async fn debug_agent_job(&self, job_id: &str) -> Result<Value> {
+    pub async fn dashboard_agent_job(&self, job_id: &str) -> Result<Value> {
         let job = self.timeline_store.get_job(job_id).await?;
         if job.kind != JobKind::AgentTask {
             anyhow::bail!("job {job_id} is not an agent task");
@@ -446,25 +292,16 @@ impl Runtime {
     }
 }
 
-fn push_debug_event_search(
-    statement: &mut QueryBuilder<'_, Postgres>,
-    raw_query: &str,
-    field: DebugSearchField,
-) {
+fn push_transcript_event_search(statement: &mut QueryBuilder<'_, Postgres>, raw_query: &str) {
     let terms = raw_query
         .split_whitespace()
-        .map(debug_search_term)
+        .map(transcript_search_term)
         .filter(|term| !term.is_empty())
         .collect::<Vec<_>>();
     if terms.is_empty() {
         return;
     }
-    if matches!(field, DebugSearchField::Feedback) {
-        statement.push(
-            " AND (lower(e.event_kind) = 'feedback' OR lower(e.payload_json->>'kind') = 'feedback')",
-        );
-    }
-    let search_expression = debug_event_search_sql(field);
+    let search_expression = transcript_event_search_sql();
     for term in terms {
         statement
             .push(" AND strpos(lower(")
@@ -475,10 +312,8 @@ fn push_debug_event_search(
     }
 }
 
-fn debug_event_search_sql(field: DebugSearchField) -> &'static str {
-    match field {
-        DebugSearchField::All => {
-            r#"concat_ws(' ',
+fn transcript_event_search_sql() -> &'static str {
+    r#"concat_ws(' ',
                 e.event_kind,
                 e.text,
                 e.speaker_label,
@@ -518,165 +353,14 @@ fn debug_event_search_sql(field: DebugSearchField) -> &'static str {
                 e.payload_json #>> '{command_response,message}',
                 e.payload_json #>> '{command_response,summary}'
             )"#
-        }
-        DebugSearchField::Detail => {
-            r#"concat_ws(' ',
-                e.text,
-                e.payload_json->>'text',
-                e.payload_json->>'feedback_message',
-                e.payload_json->>'reason',
-                e.payload_json->>'quality',
-                e.payload_json #>> '{result,kind}',
-                e.payload_json #>> '{result,status}',
-                e.payload_json #>> '{result,reason}',
-                e.payload_json #>> '{result,action}',
-                e.payload_json #>> '{result,message}',
-                e.payload_json #>> '{result,summary}',
-                e.payload_json #>> '{command_result,kind}',
-                e.payload_json #>> '{command_result,status}',
-                e.payload_json #>> '{command_result,reason}',
-                e.payload_json #>> '{command_result,action}',
-                e.payload_json #>> '{command_result,message}',
-                e.payload_json #>> '{command_result,summary}',
-                e.payload_json #>> '{command_response,kind}',
-                e.payload_json #>> '{command_response,status}',
-                e.payload_json #>> '{command_response,reason}',
-                e.payload_json #>> '{command_response,action}',
-                e.payload_json #>> '{command_response,message}',
-                e.payload_json #>> '{command_response,summary}'
-            )"#
-        }
-        DebugSearchField::Feedback => {
-            r#"concat_ws(' ',
-                e.event_kind,
-                e.text,
-                e.payload_json->>'kind',
-                e.payload_json->>'feedback_message',
-                e.payload_json->>'text',
-                e.payload_json->>'reason'
-            )"#
-        }
-        DebugSearchField::Kind => "concat_ws(' ', e.event_kind, e.payload_json->>'kind')",
-        DebugSearchField::JobKind => "concat_ws(' ', e.payload_json->>'job_kind')",
-        DebugSearchField::State => "concat_ws(' ', e.payload_json->>'state')",
-        DebugSearchField::Command => {
-            "concat_ws(' ', e.payload_json->>'command_kind', e.payload_json->>'command_name')"
-        }
-        DebugSearchField::Room => {
-            r#"concat_ws(' ',
-                r.guild_slug,
-                r.voice_channel_name,
-                r.voice_channel_slug,
-                e.payload_json->>'guild_slug',
-                e.payload_json->>'voice_channel_name',
-                e.payload_json->>'voice_channel_slug'
-            )"#
-        }
-        DebugSearchField::Actor => {
-            r#"concat_ws(' ',
-                e.speaker_label,
-                e.payload_json->>'speaker_label',
-                e.payload_json->>'speaker_username'
-            )"#
-        }
-    }
 }
 
-fn parse_debug_search_field(raw: &str) -> Result<DebugSearchField> {
-    let field = non_empty(raw.trim().to_lowercase(), "all".to_string());
-    match field.as_str() {
-        "all" => Ok(DebugSearchField::All),
-        "detail" => Ok(DebugSearchField::Detail),
-        "feedback" => Ok(DebugSearchField::Feedback),
-        "kind" => Ok(DebugSearchField::Kind),
-        "job_kind" => Ok(DebugSearchField::JobKind),
-        "state" => Ok(DebugSearchField::State),
-        "command" => Ok(DebugSearchField::Command),
-        "room" => Ok(DebugSearchField::Room),
-        "actor" => Ok(DebugSearchField::Actor),
-        _ => anyhow::bail!("invalid dashboard timeline search field: {field}"),
-    }
-}
-
-fn debug_search_term(term: &str) -> String {
+fn transcript_search_term(term: &str) -> String {
     term.trim_start_matches('/').to_lowercase()
 }
 
-fn resolve_debug_time_range(
-    raw_window: &str,
-    raw_start: &str,
-    raw_end: &str,
-    default_window: &str,
-    now: DateTime<Utc>,
-) -> Result<DebugTimeRange> {
-    let window = non_empty(raw_window.trim().to_string(), default_window.to_string());
-    if window.eq_ignore_ascii_case("all") {
-        return Ok(DebugTimeRange {
-            start: None,
-            end: None,
-            label: "all".to_string(),
-        });
-    }
-    if window.eq_ignore_ascii_case("custom") {
-        let start = resolve_debug_bound(raw_start, "timeline start")?;
-        let end = resolve_debug_bound(raw_end, "timeline end")?;
-        if let (Some(start), Some(end)) = (start, end) {
-            if end < start {
-                anyhow::bail!("timeline end must be after timeline start");
-            }
-        }
-        return Ok(DebugTimeRange {
-            start,
-            end,
-            label: "custom".to_string(),
-        });
-    }
-    let start = resolve_time_reference(&window, Some(now))
-        .ok_or_else(|| anyhow::anyhow!("invalid dashboard timeline window: {window}"))?;
-    Ok(DebugTimeRange {
-        start: Some(start),
-        end: None,
-        label: window,
-    })
-}
-
-fn resolve_debug_bound(raw: &str, label: &str) -> Result<Option<DateTime<Utc>>> {
-    let value = raw.trim();
-    if value.is_empty() {
-        return Ok(None);
-    }
-    resolve_time_reference(value, None)
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("invalid dashboard {label}: {value}"))
-}
-
-fn resolve_debug_since(
-    raw: &str,
-    default: &str,
-    now: DateTime<Utc>,
-) -> Result<Option<DateTime<Utc>>> {
-    let value = non_empty(raw.trim().to_string(), default.to_string());
-    if value.eq_ignore_ascii_case("all") {
-        return Ok(None);
-    }
-    resolve_time_reference(&value, Some(now))
-        .map(Some)
-        .ok_or_else(|| anyhow::anyhow!("invalid dashboard time window: {value}"))
-}
-
-fn debug_since_label(since: Option<DateTime<Utc>>) -> String {
-    since
-        .map(|since| isoformat_z(Some(since)))
-        .unwrap_or_else(|| "all".to_string())
-}
-
-fn debug_time_label(time: Option<DateTime<Utc>>) -> String {
-    time.map(|time| isoformat_z(Some(time)))
-        .unwrap_or_else(|| "open".to_string())
-}
-
-fn debug_job_value(job: &Job) -> Value {
-    let mut value = compact_debug_value(job.to_value(), 5);
+pub(super) fn dashboard_job_value(job: &Job) -> Value {
+    let mut value = compact_dashboard_value(job.to_value(), 5);
     if let Value::Object(object) = &mut value {
         let command_kind = job.command_kind();
         if !command_kind.trim().is_empty() {
@@ -686,8 +370,8 @@ fn debug_job_value(job: &Job) -> Value {
     value
 }
 
-fn compact_debug_event(event: Value) -> Value {
-    let compact = compact_debug_value(event, 4);
+fn compact_dashboard_event(event: Value) -> Value {
+    let compact = compact_dashboard_value(event, 4);
     if let Value::Object(object) = &compact {
         let mut result = Map::new();
         for key in [
@@ -732,7 +416,7 @@ fn compact_debug_event(event: Value) -> Value {
         }
         for key in ["result", "command_result", "command_response"] {
             if let Some(value) = object.get(key).filter(|value| !value.is_null()) {
-                result.insert(key.to_string(), compact_debug_value(value.clone(), 2));
+                result.insert(key.to_string(), compact_dashboard_value(value.clone(), 2));
             }
         }
         return Value::Object(result);
@@ -740,7 +424,7 @@ fn compact_debug_event(event: Value) -> Value {
     compact
 }
 
-fn compact_debug_value(value: Value, depth: usize) -> Value {
+fn compact_dashboard_value(value: Value, depth: usize) -> Value {
     match value {
         Value::Object(object) => {
             if depth == 0 {
@@ -748,10 +432,10 @@ fn compact_debug_value(value: Value, depth: usize) -> Value {
             }
             let mut compact = Map::new();
             for (key, value) in object {
-                if omit_debug_key(&key) {
+                if omit_dashboard_key(&key) {
                     continue;
                 }
-                compact.insert(key, compact_debug_value(value, depth - 1));
+                compact.insert(key, compact_dashboard_value(value, depth - 1));
             }
             Value::Object(compact)
         }
@@ -762,20 +446,20 @@ fn compact_debug_value(value: Value, depth: usize) -> Value {
             let original_len = values.len();
             let mut compact = values
                 .into_iter()
-                .take(DEBUG_VALUE_MAX_ARRAY_ITEMS)
-                .map(|value| compact_debug_value(value, depth - 1))
+                .take(DASHBOARD_VALUE_MAX_ARRAY_ITEMS)
+                .map(|value| compact_dashboard_value(value, depth - 1))
                 .collect::<Vec<_>>();
             if original_len > compact.len() {
                 compact.push(json!({"truncated": true, "remaining": original_len - compact.len()}));
             }
             Value::Array(compact)
         }
-        Value::String(value) => Value::String(truncate_debug_string(value)),
+        Value::String(value) => Value::String(truncate_dashboard_string(value)),
         value => value,
     }
 }
 
-fn omit_debug_key(key: &str) -> bool {
+fn omit_dashboard_key(key: &str) -> bool {
     matches!(
         key,
         "stt"
@@ -795,32 +479,15 @@ fn omit_debug_key(key: &str) -> bool {
     )
 }
 
-fn truncate_debug_string(value: String) -> String {
-    if value.chars().count() <= DEBUG_VALUE_MAX_STRING_CHARS {
+fn truncate_dashboard_string(value: String) -> String {
+    if value.chars().count() <= DASHBOARD_VALUE_MAX_STRING_CHARS {
         return value;
     }
     value
         .chars()
-        .take(DEBUG_VALUE_MAX_STRING_CHARS)
+        .take(DASHBOARD_VALUE_MAX_STRING_CHARS)
         .collect::<String>()
         + "...[truncated]"
-}
-
-fn merge_jobs<'a>(jobs: impl Iterator<Item = &'a Job>) -> Vec<Job> {
-    let mut merged = BTreeMap::new();
-    for job in jobs {
-        merged.entry(job.id.clone()).or_insert_with(|| job.clone());
-    }
-    let mut jobs = merged.into_values().collect::<Vec<_>>();
-    jobs.sort_by(|left, right| {
-        first_non_empty([right.updated_at.clone(), right.created_at.clone()])
-            .cmp(&first_non_empty([
-                left.updated_at.clone(),
-                left.created_at.clone(),
-            ]))
-            .then_with(|| right.id.cmp(&left.id))
-    });
-    jobs
 }
 
 #[derive(Debug, Default)]
@@ -834,15 +501,9 @@ struct ScopeJobSummary {
     latest_at: String,
 }
 
-#[derive(Debug, Default)]
-struct EventKindSummary {
-    event_kind: String,
-    count: usize,
-    latest_at: String,
-}
-
 #[derive(Debug, Clone)]
 struct JobDiagnosticRow {
+    job_id: String,
     kind: String,
     state: String,
     lane: String,
@@ -854,6 +515,99 @@ struct JobDiagnosticRow {
     terminal: bool,
     failed: bool,
     cancellable: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FailureDiagnosticRow {
+    job_id: String,
+    scope_kind: String,
+    guild_id: String,
+    scope_id: String,
+    scope_label: String,
+    kind: String,
+    state: String,
+    reason: String,
+    failed_at_ms: i64,
+}
+
+impl FailureDiagnosticRow {
+    fn to_json(&self) -> Value {
+        json!({
+            "jobId": self.job_id,
+            "category": dashboard_job_category(&self.kind),
+            "kind": self.kind,
+            "state": self.state,
+            "scopeKind": self.scope_kind,
+            "guildId": self.guild_id,
+            "scopeId": self.scope_id,
+            "scopeLabel": self.scope_label,
+            "reason": self.reason,
+            "failedAt": ms_iso(self.failed_at_ms),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct OperationalDiagnostics {
+    payload: Value,
+    job_rows: Vec<JobDiagnosticRow>,
+    failure_summary: Value,
+}
+
+#[derive(Debug, Default)]
+struct VoiceObservationSummary {
+    snapshot_at_ms: Option<i64>,
+    fresh_for_seconds: i64,
+    observed_bots: usize,
+    ready_bots: usize,
+    gateway_bots: usize,
+    active_sessions: usize,
+    stale_bots: usize,
+    stale_sessions: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SchedulerHealthFacts {
+    latest_job_id: String,
+    latest_state: String,
+    observed_at_ms: Option<i64>,
+    latest_failed: bool,
+    oldest_due_seconds: i64,
+    oldest_running_seconds: i64,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CapabilityHealthFacts {
+    active: usize,
+    terminal: usize,
+    completed: usize,
+    failed: usize,
+    latest_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct RuntimeHealthFacts {
+    scheduler: SchedulerHealthFacts,
+    transcription: CapabilityHealthFacts,
+    agent_runtime: CapabilityHealthFacts,
+    delivery: CapabilityHealthFacts,
+}
+
+#[derive(Debug)]
+struct ActiveJobAggregate {
+    scope_kind: String,
+    guild_id: String,
+    scope_id: String,
+    kind: String,
+    state: String,
+    lane: String,
+    count: usize,
+    cancellable: usize,
+    due_queued: usize,
+    oldest_created_at_ms: i64,
+    oldest_due_at_ms: Option<i64>,
+    oldest_running_at_ms: Option<i64>,
+    latest_updated_at_ms: i64,
 }
 
 #[derive(Debug, Default)]
@@ -899,6 +653,10 @@ impl JobDiagnosticRow {
 
     fn is_failed(&self) -> bool {
         self.failed || is_failed_state(&self.state)
+    }
+
+    fn terminal_at_ms(&self) -> Option<i64> {
+        self.terminal.then_some(self.updated_at_ms)
     }
 }
 
@@ -977,52 +735,1077 @@ impl BacklogKindSummary {
     }
 }
 
+async fn apply_voice_observation_freshness(
+    runtime: &Runtime,
+    status: &mut Value,
+    now: DateTime<Utc>,
+) -> Result<VoiceObservationSummary> {
+    let now_ms = instant_ms_dt(now);
+    let fresh_for_seconds = scheduler_fresh_for_seconds();
+    let fresh_for_ms = fresh_for_seconds * 1000;
+    let snapshot_at_ms = sqlx::query_scalar::<_, i64>(
+        "SELECT updated_at_ms FROM runtime_status WHERE status_key = $1",
+    )
+    .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
+    .fetch_optional(&runtime.timeline_store.pool)
+    .await?;
+    let snapshot_fresh =
+        snapshot_at_ms.is_some_and(|observed_at_ms| now_ms - observed_at_ms <= fresh_for_ms);
+
+    let bot_rows = sqlx::query("SELECT bot_id, updated_at_ms FROM bot_states ORDER BY bot_id")
+        .fetch_all(&runtime.timeline_store.pool)
+        .await?;
+    let bot_observed_at = bot_rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>("bot_id")?,
+                row.try_get::<i64, _>("updated_at_ms")?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let session_rows =
+        sqlx::query("SELECT session_id, updated_at_ms FROM capture_sessions ORDER BY session_id")
+            .fetch_all(&runtime.timeline_store.pool)
+            .await?;
+    let session_observed_at = session_rows
+        .into_iter()
+        .map(|row| {
+            Ok((
+                row.try_get::<String, _>("session_id")?,
+                row.try_get::<i64, _>("updated_at_ms")?,
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+
+    let object = status
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("runtime status payload must be an object"))?;
+    let bots = object
+        .remove("bots")
+        .and_then(|value| value.as_array().cloned())
+        .ok_or_else(|| anyhow::anyhow!("runtime status payload must contain a bots array"))?;
+    let sessions = object
+        .remove("sessions")
+        .and_then(|value| value.as_array().cloned())
+        .ok_or_else(|| anyhow::anyhow!("runtime status payload must contain a sessions array"))?;
+
+    let mut fresh_bots = Vec::new();
+    let mut stale_bots = Vec::new();
+    let mut ready_bots = 0_usize;
+    let mut gateway_bots = 0_usize;
+    for mut bot in bots {
+        let bot_id = bot
+            .get("botId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("voice bot status must contain botId"))?;
+        let observed_at_ms = *bot_observed_at
+            .get(bot_id)
+            .ok_or_else(|| anyhow::anyhow!("voice bot {bot_id} has no observation timestamp"))?;
+        let fresh = snapshot_fresh && now_ms - observed_at_ms <= fresh_for_ms;
+        add_observation_metadata(&mut bot, observed_at_ms, fresh_for_seconds, fresh, now_ms)?;
+        if fresh {
+            if bot.get("ready").and_then(Value::as_bool).unwrap_or(false) {
+                ready_bots += 1;
+            }
+            if bot
+                .get("gatewayRunning")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                gateway_bots += 1;
+            }
+            fresh_bots.push(bot);
+        } else {
+            stale_bots.push(bot);
+        }
+    }
+
+    let mut fresh_sessions = Vec::new();
+    let mut stale_sessions = Vec::new();
+    let mut fresh_session_ids = BTreeSet::new();
+    for mut session in sessions {
+        let session_id = session
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("capture session status must contain sessionId"))?
+            .to_string();
+        let observed_at_ms = *session_observed_at.get(&session_id).ok_or_else(|| {
+            anyhow::anyhow!("capture session {session_id} has no observation timestamp")
+        })?;
+        let fresh = snapshot_fresh && now_ms - observed_at_ms <= fresh_for_ms;
+        add_observation_metadata(
+            &mut session,
+            observed_at_ms,
+            fresh_for_seconds,
+            fresh,
+            now_ms,
+        )?;
+        if fresh {
+            fresh_session_ids.insert(session_id);
+            fresh_sessions.push(session);
+        } else {
+            stale_sessions.push(session);
+        }
+    }
+
+    if let Some(rooms) = object.get_mut("rooms").and_then(Value::as_array_mut) {
+        for room in rooms {
+            let current_session_id = room
+                .get("activeSessionId")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if !current_session_id.is_empty() && !fresh_session_ids.contains(current_session_id) {
+                room.as_object_mut()
+                    .expect("runtime room status is an object")
+                    .insert("activeSessionId".to_string(), json!(""));
+            }
+        }
+    }
+    if let Some(pool) = object.get_mut("pool").and_then(Value::as_object_mut) {
+        let active_assignments = pool
+            .get("activeAssignments")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        pool.insert("observedBots".to_string(), json!(fresh_bots.len()));
+        pool.insert(
+            "availableBots".to_string(),
+            json!(fresh_bots.len().saturating_sub(active_assignments)),
+        );
+    }
+
+    let stale_bot_count = stale_bots.len();
+    let stale_session_count = stale_sessions.len();
+    let observed_bot_count = fresh_bots.len();
+    let active_session_count = fresh_sessions.len();
+    object.insert("bots".to_string(), Value::Array(fresh_bots));
+    object.insert("sessions".to_string(), Value::Array(fresh_sessions));
+    object.insert(
+        "staleObservations".to_string(),
+        json!({
+            "bots": stale_bots,
+            "sessions": stale_sessions,
+        }),
+    );
+    object.insert(
+        "observation".to_string(),
+        json!({
+            "observedAt": snapshot_at_ms.map(ms_iso),
+            "ageSeconds": snapshot_at_ms.map(|at| age_seconds(now_ms, at)),
+            "freshForSeconds": fresh_for_seconds,
+            "fresh": snapshot_fresh,
+        }),
+    );
+
+    Ok(VoiceObservationSummary {
+        snapshot_at_ms,
+        fresh_for_seconds,
+        observed_bots: observed_bot_count,
+        ready_bots,
+        gateway_bots,
+        active_sessions: active_session_count,
+        stale_bots: stale_bot_count,
+        stale_sessions: stale_session_count,
+    })
+}
+
+fn add_observation_metadata(
+    value: &mut Value,
+    observed_at_ms: i64,
+    fresh_for_seconds: i64,
+    fresh: bool,
+    now_ms: i64,
+) -> Result<()> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("runtime observation payload must be an object"))?;
+    object.insert(
+        "observation".to_string(),
+        json!({
+            "observedAt": ms_iso(observed_at_ms),
+            "ageSeconds": age_seconds(now_ms, observed_at_ms),
+            "freshForSeconds": fresh_for_seconds,
+            "fresh": fresh,
+        }),
+    );
+    Ok(())
+}
+
 fn runtime_health(
-    jobs: &[Job],
     database: &Value,
-    status: &Value,
+    jobs: &[JobDiagnosticRow],
+    failure_summary: &Value,
+    voice: &VoiceObservationSummary,
     configured_room_count: usize,
     automation_count: usize,
+    now: DateTime<Utc>,
 ) -> Value {
+    let facts = runtime_health_facts_from_rows(jobs, instant_ms_dt(now));
+    runtime_health_from_facts(
+        database,
+        &facts,
+        failure_summary,
+        voice,
+        configured_room_count,
+        automation_count,
+        now,
+    )
+}
+
+fn runtime_health_from_facts(
+    database: &Value,
+    facts: &RuntimeHealthFacts,
+    failure_summary: &Value,
+    voice: &VoiceObservationSummary,
+    configured_room_count: usize,
+    automation_count: usize,
+    now: DateTime<Utc>,
+) -> Value {
+    let now_ms = instant_ms_dt(now);
+    let observed_at = isoformat_z(Some(now));
+    let mut components = Vec::new();
+
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
+    let database_diagnostic_errors = database
+        .get("errors")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    let database_status = if !database_ok {
+        "down"
+    } else if database_diagnostic_errors > 0 {
+        "degraded"
+    } else {
+        "ok"
+    };
+    let pool = database
+        .get("pool")
+        .and_then(Value::as_object)
+        .expect("database health payload contains pool state");
+    let open_connections = pool
+        .get("openConnections")
+        .and_then(Value::as_u64)
+        .expect("database pool state contains openConnections");
+    let max_connections = pool
+        .get("configuredMaxConnections")
+        .and_then(Value::as_u64)
+        .expect("database pool state contains configuredMaxConnections");
+    let database_reason = match database_status {
+        "down" => "Connection failed".to_string(),
+        "degraded" => format!(
+            "{database_diagnostic_errors} query errors · {open_connections}/{max_connections} connections"
+        ),
+        _ => format!("{open_connections}/{max_connections} connections"),
+    };
+    components.push(health_component(
+        "postgres",
+        database_status,
+        true,
+        Some(now_ms),
+        30,
+        &database_reason,
+        json!({
+            "queryErrorCount": database_diagnostic_errors,
+            "errors": database.get("errors").cloned().unwrap_or_else(|| json!([])),
+            "pool": database.get("pool").cloned().unwrap_or_else(|| json!({})),
+        }),
+        now_ms,
+    ));
+
+    let scheduler_fresh_for_seconds = scheduler_fresh_for_seconds();
+    let scheduler = &facts.scheduler;
+    let scheduler_observed_at_ms = scheduler.observed_at_ms;
+    let scheduler_age = scheduler_observed_at_ms.map(|at| age_seconds(now_ms, at));
+    let (scheduler_status, scheduler_reason) = match (scheduler_observed_at_ms, scheduler_age) {
+        (None, _) => ("unknown", "No heartbeat".to_string()),
+        (Some(_), Some(age)) if age > scheduler_fresh_for_seconds => (
+            "stale",
+            format!("Heartbeat {age}s old · threshold {scheduler_fresh_for_seconds}s"),
+        ),
+        (Some(_), Some(age)) if scheduler.latest_failed => (
+            "degraded",
+            format!("Heartbeat {age}s ago · latest {}", scheduler.latest_state),
+        ),
+        (Some(_), Some(age)) if scheduler.oldest_due_seconds > scheduler_fresh_for_seconds => (
+            "degraded",
+            format!(
+                "Heartbeat {age}s ago · due backlog {}s",
+                scheduler.oldest_due_seconds
+            ),
+        ),
+        (Some(_), Some(age)) if scheduler.oldest_running_seconds > 30 * 60 => (
+            "degraded",
+            format!(
+                "Heartbeat {age}s ago · running {}s",
+                scheduler.oldest_running_seconds
+            ),
+        ),
+        (Some(_), Some(age)) if scheduler.oldest_due_seconds > 0 => (
+            "ok",
+            format!(
+                "Heartbeat {age}s ago · due backlog {}s",
+                scheduler.oldest_due_seconds
+            ),
+        ),
+        (Some(_), Some(age)) => ("ok", format!("Heartbeat {age}s ago · no due backlog")),
+        (Some(_), None) => unreachable!("scheduler observation age is present"),
+    };
+    components.push(health_component(
+        "scheduler",
+        scheduler_status,
+        true,
+        scheduler_observed_at_ms,
+        scheduler_fresh_for_seconds,
+        &scheduler_reason,
+        json!({
+            "latestJobId": scheduler.latest_job_id,
+            "latestState": scheduler.latest_state,
+            "oldestDueQueuedAgeSeconds": scheduler.oldest_due_seconds,
+            "oldestRunningAgeSeconds": scheduler.oldest_running_seconds,
+        }),
+        now_ms,
+    ));
+
+    let voice_required = configured_room_count > 0;
+    let voice_snapshot_age = voice.snapshot_at_ms.map(|at| age_seconds(now_ms, at));
+    let (voice_status, voice_reason) = match (voice.snapshot_at_ms, voice_snapshot_age) {
+        (None, _) => ("unknown", "No snapshot".to_string()),
+        (Some(_), Some(age)) if age > voice.fresh_for_seconds => (
+            "stale",
+            format!(
+                "Snapshot {age}s old · threshold {}s",
+                voice.fresh_for_seconds
+            ),
+        ),
+        (Some(_), Some(age)) if voice.observed_bots == 0 && voice.stale_bots > 0 => (
+            "down",
+            format!(
+                "0/{} fresh · {} stale · snapshot {age}s old",
+                voice.stale_bots, voice.stale_bots
+            ),
+        ),
+        (Some(_), Some(age)) if voice.observed_bots == 0 && voice_required => (
+            "down",
+            format!("0 bots observed · {configured_room_count} rooms · snapshot {age}s old"),
+        ),
+        (Some(_), Some(age)) if voice.gateway_bots == 0 && voice.observed_bots > 0 => (
+            "down",
+            format!("0/{} gateways · snapshot {age}s old", voice.observed_bots),
+        ),
+        (Some(_), Some(age))
+            if voice.ready_bots < voice.observed_bots
+                || voice.gateway_bots < voice.observed_bots =>
+        {
+            (
+                "degraded",
+                format!(
+                    "{}/{} ready · {}/{} gateways · snapshot {age}s old",
+                    voice.ready_bots, voice.observed_bots, voice.gateway_bots, voice.observed_bots
+                ),
+            )
+        }
+        (Some(_), Some(age)) => (
+            "ok",
+            format!(
+                "{}/{} ready · snapshot {age}s old",
+                voice.ready_bots, voice.observed_bots
+            ),
+        ),
+        (Some(_), None) => unreachable!("voice snapshot age is present"),
+    };
+    components.push(health_component(
+        "voice_gateway",
+        voice_status,
+        voice_required,
+        voice.snapshot_at_ms,
+        voice.fresh_for_seconds,
+        &voice_reason,
+        json!({
+            "configuredRooms": configured_room_count,
+            "observedBots": voice.observed_bots,
+            "readyBots": voice.ready_bots,
+            "gatewayBots": voice.gateway_bots,
+            "staleBotObservations": voice.stale_bots,
+        }),
+        now_ms,
+    ));
+
+    let (capture_status, capture_reason) = match (voice.snapshot_at_ms, voice_snapshot_age) {
+        (None, _) => ("unknown", "No snapshot".to_string()),
+        (Some(_), Some(age)) if age > voice.fresh_for_seconds => (
+            "stale",
+            format!(
+                "Snapshot {age}s old · threshold {}s",
+                voice.fresh_for_seconds
+            ),
+        ),
+        (Some(_), Some(age)) if voice.stale_sessions > 0 => (
+            "stale",
+            format!(
+                "{} active · {} stale · snapshot {age}s old",
+                voice.active_sessions, voice.stale_sessions
+            ),
+        ),
+        (Some(_), Some(age)) => (
+            "ok",
+            format!("{} active · snapshot {age}s old", voice.active_sessions),
+        ),
+        (Some(_), None) => unreachable!("capture snapshot age is present"),
+    };
+    components.push(health_component(
+        "capture",
+        capture_status,
+        voice_required,
+        voice.snapshot_at_ms,
+        voice.fresh_for_seconds,
+        &capture_reason,
+        json!({
+            "activeSessions": voice.active_sessions,
+            "staleSessionObservations": voice.stale_sessions,
+        }),
+        now_ms,
+    ));
+
     let wake_provider = wake_provider_health();
     let wake_provider_available = wake_provider
         .get("available")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let bots = status
-        .get("bots")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let sessions = status
-        .get("sessions")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let failed_jobs = jobs
-        .iter()
-        .filter(|job| is_failed_state(job.state.as_str()))
-        .count();
-    let active_agent_jobs = jobs
-        .iter()
-        .filter(|job| job.kind == JobKind::AgentTask && !job.state.is_terminal())
-        .count();
+    let wake_status = string_field(&wake_provider, "status");
+    let wake_failures = wake_provider
+        .get("consecutiveFailures")
+        .and_then(Value::as_u64)
+        .expect("wake provider health contains consecutiveFailures");
+    let wake_reason = format!("Circuit {wake_status} · {wake_failures} consecutive failures");
+    components.push(health_component(
+        "wake_provider",
+        if wake_provider_available {
+            "ok"
+        } else {
+            "down"
+        },
+        true,
+        Some(now_ms),
+        30,
+        &wake_reason,
+        wake_provider,
+        now_ms,
+    ));
+
+    components.push(capability_health_component(
+        "transcription",
+        &facts.transcription,
+        now_ms,
+    ));
+    components.push(capability_health_component(
+        "agent_runtime",
+        &facts.agent_runtime,
+        now_ms,
+    ));
+    components.push(capability_health_component(
+        "delivery",
+        &facts.delivery,
+        now_ms,
+    ));
+
+    let overall_status = overall_health_status(&components);
     json!({
-        "ok": database_ok && wake_provider_available,
-        "postgres": database_ok,
-        "wakeProvider": wake_provider,
-        "observedBots": bots.len(),
-        "readyBots": bots.iter().filter(|bot| bot.get("ready").and_then(Value::as_bool).unwrap_or(false)).count(),
-        "activeSessions": sessions.len(),
-        "configuredRooms": configured_room_count,
-        "activeAgentJobs": active_agent_jobs,
-        "failedJobs": failed_jobs,
-        "automationsLoaded": automation_count,
+        "ok": overall_status == "ok",
+        "status": overall_status,
+        "observedAt": observed_at,
+        "components": components,
+        "failures": failure_summary,
+        "inventory": {
+            "configuredRooms": configured_room_count,
+            "automationsLoaded": automation_count,
+        },
     })
 }
 
-async fn database_diagnostics(runtime: &Runtime) -> Value {
+fn health_component(
+    component: &str,
+    status: &str,
+    required: bool,
+    observed_at_ms: Option<i64>,
+    fresh_for_seconds: i64,
+    reason: &str,
+    details: Value,
+    now_ms: i64,
+) -> Value {
+    json!({
+        "component": component,
+        "status": status,
+        "required": required,
+        "observedAt": observed_at_ms.map(ms_iso),
+        "ageSeconds": observed_at_ms.map(|at| age_seconds(now_ms, at)),
+        "freshForSeconds": fresh_for_seconds,
+        "reason": reason,
+        "details": details,
+    })
+}
+
+fn capability_health_component(
+    component: &str,
+    facts: &CapabilityHealthFacts,
+    now_ms: i64,
+) -> Value {
+    let (status, reason) = if facts.terminal == 0 {
+        ("unknown", "0 outcomes · 1h".to_string())
+    } else if facts.failed > 0 {
+        (
+            "degraded",
+            format!(
+                "{}/{} complete · {} failed · 1h",
+                facts.completed, facts.terminal, facts.failed
+            ),
+        )
+    } else {
+        (
+            "ok",
+            format!(
+                "{}/{} complete · 0 failed · 1h",
+                facts.completed, facts.terminal
+            ),
+        )
+    };
+    health_component(
+        component,
+        status,
+        false,
+        facts.latest_at_ms,
+        FAILURE_WINDOW_SECONDS,
+        &reason,
+        json!({
+            "window": "1h",
+            "active": facts.active,
+            "terminal": facts.terminal,
+            "completed": facts.completed,
+            "failed": facts.failed,
+        }),
+        now_ms,
+    )
+}
+
+fn runtime_health_facts_from_rows(jobs: &[JobDiagnosticRow], now_ms: i64) -> RuntimeHealthFacts {
+    let scheduler_latest = jobs
+        .iter()
+        .filter(|row| row.kind == "runtime_maintenance" && row.terminal)
+        .max_by_key(|row| row.activity_ms());
+    let mut facts = RuntimeHealthFacts {
+        scheduler: SchedulerHealthFacts {
+            latest_job_id: scheduler_latest
+                .map(|row| row.job_id.clone())
+                .unwrap_or_default(),
+            latest_state: scheduler_latest
+                .map(|row| row.state.clone())
+                .unwrap_or_default(),
+            observed_at_ms: scheduler_latest.map(JobDiagnosticRow::activity_ms),
+            latest_failed: scheduler_latest.is_some_and(JobDiagnosticRow::is_failed),
+            oldest_due_seconds: jobs
+                .iter()
+                .filter(|row| row.state == "queued" && row.ready_at_ms <= now_ms)
+                .map(|row| age_seconds(now_ms, row.ready_at_ms))
+                .max()
+                .unwrap_or(0),
+            oldest_running_seconds: jobs
+                .iter()
+                .filter(|row| row.state == "running")
+                .map(|row| age_seconds(now_ms, row.started_at_ms.unwrap_or(row.created_at_ms)))
+                .max()
+                .unwrap_or(0),
+        },
+        ..RuntimeHealthFacts::default()
+    };
+    for row in jobs {
+        let capability = match row.kind.as_str() {
+            "audio_segment" | "transcription_mux" => Some(&mut facts.transcription),
+            "agent_task" => Some(&mut facts.agent_runtime),
+            "text_delivery" | "discord_text_send" => Some(&mut facts.delivery),
+            _ => None,
+        };
+        let Some(capability) = capability else {
+            continue;
+        };
+        if row.is_active() {
+            capability.active += 1;
+        } else if row
+            .terminal_at_ms()
+            .is_some_and(|at| at >= now_ms - FAILURE_WINDOW_SECONDS * 1000)
+        {
+            capability.terminal += 1;
+            capability.completed += usize::from(row.state == "complete");
+            capability.failed += usize::from(row.is_failed());
+            capability.latest_at_ms = Some(
+                capability
+                    .latest_at_ms
+                    .map_or(row.updated_at_ms, |latest| latest.max(row.updated_at_ms)),
+            );
+        }
+    }
+    facts
+}
+
+fn overall_health_status(components: &[Value]) -> &'static str {
+    let has = |status: &str, required: Option<bool>| {
+        components.iter().any(|component| {
+            component.get("status").and_then(Value::as_str) == Some(status)
+                && required.is_none_or(|required| {
+                    component.get("required").and_then(Value::as_bool) == Some(required)
+                })
+        })
+    };
+    if has("down", Some(true)) {
+        "down"
+    } else if has("stale", Some(true)) {
+        "stale"
+    } else if has("unknown", Some(true)) {
+        "unknown"
+    } else if has("degraded", None) || has("down", Some(false)) || has("stale", Some(false)) {
+        "degraded"
+    } else {
+        "ok"
+    }
+}
+
+fn scheduler_fresh_for_seconds() -> i64 {
+    ((config::runtime_maintenance_interval_ms().saturating_mul(4) + 999) / 1000).max(60)
+}
+
+fn unavailable_failure_summary(now: DateTime<Utc>) -> Value {
+    json!({
+        "window": "1h",
+        "since": isoformat_z(Some(now - Duration::seconds(FAILURE_WINDOW_SECONDS))),
+        "count": 0,
+        "complete": false,
+        "coverageStartsAt": Value::Null,
+        "recent": [],
+    })
+}
+
+async fn database_health_probe(runtime: &Runtime) -> Value {
+    match sqlx::query("SELECT 1")
+        .execute(&runtime.timeline_store.pool)
+        .await
+    {
+        Ok(_) => json!({
+            "ok": true,
+            "errors": [],
+            "pool": postgres_pool_payload(runtime),
+        }),
+        Err(error) => json!({
+            "ok": false,
+            "error": error.to_string(),
+            "errors": [error.to_string()],
+            "pool": postgres_pool_payload(runtime),
+        }),
+    }
+}
+
+async fn active_job_aggregates(
+    runtime: &Runtime,
+    now: DateTime<Utc>,
+) -> Result<Vec<ActiveJobAggregate>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT scope_kind, guild_id, scope_id, kind, state, lane,
+               COUNT(*)::BIGINT AS job_count,
+               COUNT(*) FILTER (WHERE cancellable)::BIGINT AS cancellable_count,
+               COUNT(*) FILTER (
+                 WHERE state = 'queued' AND ready_at_ms <= $1
+               )::BIGINT AS due_queued_count,
+               MIN(created_at_ms) AS oldest_created_at_ms,
+               MIN(ready_at_ms) FILTER (
+                 WHERE state = 'queued' AND ready_at_ms <= $1
+               ) AS oldest_due_at_ms,
+               MIN(COALESCE(started_at_ms, created_at_ms)) FILTER (
+                 WHERE state = 'running'
+               ) AS oldest_running_at_ms,
+               MAX(updated_at_ms) AS latest_updated_at_ms
+        FROM jobs
+        WHERE terminal = FALSE
+        GROUP BY scope_kind, guild_id, scope_id, kind, state, lane
+        ORDER BY state, kind, scope_kind, guild_id, scope_id, lane
+        "#,
+    )
+    .bind(instant_ms_dt(now))
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(ActiveJobAggregate {
+                scope_kind: row.try_get("scope_kind")?,
+                guild_id: row.try_get("guild_id")?,
+                scope_id: row.try_get("scope_id")?,
+                kind: row.try_get("kind")?,
+                state: row.try_get("state")?,
+                lane: row.try_get("lane")?,
+                count: row.try_get::<i64, _>("job_count")? as usize,
+                cancellable: row.try_get::<i64, _>("cancellable_count")? as usize,
+                due_queued: row.try_get::<i64, _>("due_queued_count")? as usize,
+                oldest_created_at_ms: row.try_get("oldest_created_at_ms")?,
+                oldest_due_at_ms: row.try_get("oldest_due_at_ms")?,
+                oldest_running_at_ms: row.try_get("oldest_running_at_ms")?,
+                latest_updated_at_ms: row.try_get("latest_updated_at_ms")?,
+            })
+        })
+        .collect()
+}
+
+fn active_job_summary(rows: &[ActiveJobAggregate]) -> Value {
+    let mut by_state = BTreeMap::<String, usize>::new();
+    let mut by_kind = BTreeMap::<String, usize>::new();
+    let mut by_scope = BTreeMap::<String, ScopeJobSummary>::new();
+    let mut total = 0_usize;
+    let mut queued = 0_usize;
+    let mut running = 0_usize;
+    let mut waiting = 0_usize;
+    let mut cancellable = 0_usize;
+    for row in rows {
+        total += row.count;
+        cancellable += row.cancellable;
+        *by_state.entry(row.state.clone()).or_insert(0) += row.count;
+        *by_kind.entry(row.kind.clone()).or_insert(0) += row.count;
+        match row.state.as_str() {
+            "queued" => queued += row.count,
+            "running" => running += row.count,
+            "waiting" => waiting += row.count,
+            _ => {}
+        }
+        let key = format!("{}\n{}\n{}", row.scope_kind, row.guild_id, row.scope_id);
+        let scope = by_scope.entry(key).or_insert_with(|| ScopeJobSummary {
+            scope_kind: row.scope_kind.clone(),
+            guild_id: row.guild_id.clone(),
+            scope_id: row.scope_id.clone(),
+            ..ScopeJobSummary::default()
+        });
+        scope.total += row.count;
+        scope.active += row.count;
+        let latest_at = ms_iso(row.latest_updated_at_ms);
+        if latest_at > scope.latest_at {
+            scope.latest_at = latest_at;
+        }
+    }
+    json!({
+        "total": total,
+        "active": total,
+        "terminal": 0,
+        "queued": queued,
+        "running": running,
+        "waiting": waiting,
+        "failed": 0,
+        "cancellable": cancellable,
+        "byState": count_rows(by_state, "state"),
+        "byKind": count_rows(by_kind, "kind"),
+        "byScope": scope_job_rows(by_scope),
+    })
+}
+
+fn active_job_backlog(rows: &[ActiveJobAggregate], now: DateTime<Utc>) -> Value {
+    let now_ms = instant_ms_dt(now);
+    let mut total = 0_usize;
+    let mut queued = 0_usize;
+    let mut due_queued = 0_usize;
+    let mut running = 0_usize;
+    let mut waiting = 0_usize;
+    let mut cancel_requested = 0_usize;
+    let mut confirmation_pending = 0_usize;
+    let mut cancellable = 0_usize;
+    let mut oldest_active_age_seconds = 0_i64;
+    let mut oldest_queued_age_seconds = 0_i64;
+    let mut oldest_running_age_seconds = 0_i64;
+    let mut by_state = BTreeMap::<String, usize>::new();
+    let mut by_kind_state = BTreeMap::<(String, String), usize>::new();
+    let mut by_lane_state = BTreeMap::<(String, String), usize>::new();
+    let mut by_kind = BTreeMap::<String, BacklogKindSummary>::new();
+    for row in rows {
+        total += row.count;
+        cancellable += row.cancellable;
+        *by_state.entry(row.state.clone()).or_insert(0) += row.count;
+        *by_kind_state
+            .entry((row.kind.clone(), row.state.clone()))
+            .or_insert(0) += row.count;
+        *by_lane_state
+            .entry((row.lane.clone(), row.state.clone()))
+            .or_insert(0) += row.count;
+        let active_age = age_seconds(now_ms, row.oldest_created_at_ms);
+        oldest_active_age_seconds = oldest_active_age_seconds.max(active_age);
+        let kind = by_kind
+            .entry(row.kind.clone())
+            .or_insert_with(|| BacklogKindSummary {
+                kind: row.kind.clone(),
+                ..BacklogKindSummary::default()
+            });
+        kind.active += row.count;
+        kind.cancellable += row.cancellable;
+        kind.oldest_active_age_seconds = kind.oldest_active_age_seconds.max(active_age);
+        match row.state.as_str() {
+            "queued" => {
+                queued += row.count;
+                due_queued += row.due_queued;
+                oldest_queued_age_seconds = oldest_queued_age_seconds.max(active_age);
+                kind.queued += row.count;
+                kind.due_queued += row.due_queued;
+                kind.oldest_queued_age_seconds = kind.oldest_queued_age_seconds.max(active_age);
+            }
+            "running" => {
+                running += row.count;
+                let running_age = row
+                    .oldest_running_at_ms
+                    .map(|at| age_seconds(now_ms, at))
+                    .unwrap_or(active_age);
+                oldest_running_age_seconds = oldest_running_age_seconds.max(running_age);
+                kind.running += row.count;
+                kind.oldest_running_age_seconds = kind.oldest_running_age_seconds.max(running_age);
+            }
+            "waiting" => {
+                waiting += row.count;
+                kind.waiting += row.count;
+            }
+            "cancel_requested" => {
+                cancel_requested += row.count;
+                kind.cancel_requested += row.count;
+            }
+            "confirmation_pending" => {
+                confirmation_pending += row.count;
+                kind.confirmation_pending += row.count;
+            }
+            _ => {}
+        }
+    }
+    let mut kind_rows = by_kind
+        .into_values()
+        .map(|summary| summary.to_json())
+        .collect::<Vec<_>>();
+    kind_rows.sort_by(|left, right| {
+        json_usize(right, "active")
+            .cmp(&json_usize(left, "active"))
+            .then_with(|| json_usize(right, "dueQueued").cmp(&json_usize(left, "dueQueued")))
+            .then_with(|| string_field(left, "kind").cmp(&string_field(right, "kind")))
+    });
+    json!({
+        "total": total,
+        "queued": queued,
+        "dueQueued": due_queued,
+        "running": running,
+        "waiting": waiting,
+        "cancelRequested": cancel_requested,
+        "confirmationPending": confirmation_pending,
+        "cancellable": cancellable,
+        "oldestActiveAgeSeconds": oldest_active_age_seconds,
+        "oldestQueuedAgeSeconds": oldest_queued_age_seconds,
+        "oldestRunningAgeSeconds": oldest_running_age_seconds,
+        "byState": count_rows(by_state, "state"),
+        "byKindState": count_pair_rows(by_kind_state, "kind", "state"),
+        "byLaneState": count_pair_rows(by_lane_state, "lane", "state"),
+        "byKind": kind_rows,
+    })
+}
+
+fn apply_active_health_facts(
+    facts: &mut RuntimeHealthFacts,
+    rows: &[ActiveJobAggregate],
+    now: DateTime<Utc>,
+) {
+    let now_ms = instant_ms_dt(now);
+    for row in rows {
+        facts.scheduler.oldest_due_seconds = facts.scheduler.oldest_due_seconds.max(
+            row.oldest_due_at_ms
+                .map(|at| age_seconds(now_ms, at))
+                .unwrap_or(0),
+        );
+        facts.scheduler.oldest_running_seconds = facts.scheduler.oldest_running_seconds.max(
+            row.oldest_running_at_ms
+                .map(|at| age_seconds(now_ms, at))
+                .unwrap_or(0),
+        );
+        match row.kind.as_str() {
+            "audio_segment" | "transcription_mux" => {
+                facts.transcription.active += row.count;
+            }
+            "agent_task" => facts.agent_runtime.active += row.count,
+            "text_delivery" | "discord_text_send" => facts.delivery.active += row.count,
+            _ => {}
+        }
+    }
+}
+
+async fn lean_terminal_health_facts(
+    runtime: &Runtime,
+    now: DateTime<Utc>,
+) -> Result<RuntimeHealthFacts> {
+    let since_ms = instant_ms_dt(now) - FAILURE_WINDOW_SECONDS * 1000;
+    let (latest_maintenance, rows) = tokio::try_join!(
+        sqlx::query(
+            r#"
+            SELECT job_id, state, failed, observed_at_ms
+            FROM operational_job_outcomes
+            WHERE kind = 'runtime_maintenance'
+            ORDER BY observed_at_ms DESC, observation_id DESC
+            LIMIT 1
+            "#,
+        )
+        .fetch_optional(&runtime.timeline_store.pool),
+        sqlx::query(
+            r#"
+            SELECT kind, state, failed, COUNT(*)::BIGINT AS outcome_count,
+                   MAX(observed_at_ms) AS latest_at_ms
+            FROM operational_job_outcomes
+            WHERE observed_at_ms >= $1
+              AND kind IN (
+                'audio_segment', 'transcription_mux', 'agent_task',
+                'text_delivery', 'discord_text_send'
+              )
+            GROUP BY kind, state, failed
+            "#,
+        )
+        .bind(since_ms)
+        .fetch_all(&runtime.timeline_store.pool),
+    )?;
+    let mut facts = RuntimeHealthFacts::default();
+    if let Some(row) = latest_maintenance {
+        facts.scheduler.latest_job_id = row.try_get("job_id")?;
+        facts.scheduler.latest_state = row.try_get("state")?;
+        facts.scheduler.latest_failed = row.try_get("failed")?;
+        facts.scheduler.observed_at_ms = Some(row.try_get("observed_at_ms")?);
+    }
+    for row in rows {
+        let kind = row.try_get::<String, _>("kind")?;
+        let capability = match kind.as_str() {
+            "audio_segment" | "transcription_mux" => &mut facts.transcription,
+            "agent_task" => &mut facts.agent_runtime,
+            "text_delivery" | "discord_text_send" => &mut facts.delivery,
+            _ => unreachable!("capability health query constrains job kinds"),
+        };
+        let count = row.try_get::<i64, _>("outcome_count")? as usize;
+        let state = row.try_get::<String, _>("state")?;
+        capability.terminal += count;
+        capability.completed += usize::from(state == "complete") * count;
+        capability.failed += usize::from(row.try_get::<bool, _>("failed")?) * count;
+        let latest_at_ms = row.try_get::<i64, _>("latest_at_ms")?;
+        capability.latest_at_ms = Some(
+            capability
+                .latest_at_ms
+                .map_or(latest_at_ms, |latest| latest.max(latest_at_ms)),
+        );
+    }
+    Ok(facts)
+}
+
+async fn lean_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+    let now_ms = instant_ms_dt(now);
+    let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
+    let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM operational_job_outcomes WHERE failed = TRUE AND observed_at_ms >= $1",
+    )
+    .bind(since_ms)
+    .fetch_one(&runtime.timeline_store.pool)
+    .await?;
+    Ok(json!({
+        "window": "1h",
+        "since": ms_iso(since_ms),
+        "count": count,
+        "complete": coverage_start_ms <= since_ms,
+        "coverageStartsAt": ms_iso(coverage_start_ms),
+        "recent": [],
+    }))
+}
+
+async fn detailed_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+    let now_ms = instant_ms_dt(now);
+    let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
+    let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
+    let count = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM operational_job_outcomes WHERE failed = TRUE AND observed_at_ms >= $1",
+    )
+    .bind(since_ms)
+    .fetch_one(&runtime.timeline_store.pool)
+    .await?;
+    let recent = recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?;
+    Ok(json!({
+        "window": "1h",
+        "since": ms_iso(since_ms),
+        "count": count,
+        "complete": coverage_start_ms <= since_ms,
+        "coverageStartsAt": ms_iso(coverage_start_ms),
+        "recent": recent.into_iter().map(|row| row.to_json()).collect::<Vec<_>>(),
+    }))
+}
+
+async fn lean_voice_observation_summary(
+    runtime: &Runtime,
+    now: DateTime<Utc>,
+) -> Result<VoiceObservationSummary> {
+    let now_ms = instant_ms_dt(now);
+    let fresh_for_seconds = scheduler_fresh_for_seconds();
+    let cutoff_ms = now_ms - fresh_for_seconds * 1000;
+    let row = sqlx::query(
+        r#"
+        SELECT
+          (SELECT updated_at_ms FROM runtime_status WHERE status_key = $2)
+            AS snapshot_at_ms,
+          (SELECT COUNT(*)::BIGINT FROM bot_states) AS bot_count,
+          (SELECT COUNT(*)::BIGINT FROM bot_states WHERE updated_at_ms >= $1) AS fresh_bot_count,
+          (SELECT COUNT(*)::BIGINT FROM bot_states
+             WHERE updated_at_ms >= $1
+               AND COALESCE((payload_json->>'ready')::BOOLEAN, FALSE)) AS ready_bot_count,
+          (SELECT COUNT(*)::BIGINT FROM bot_states
+             WHERE updated_at_ms >= $1
+               AND COALESCE((payload_json->>'gatewayRunning')::BOOLEAN, FALSE)) AS gateway_bot_count,
+          (SELECT COUNT(*)::BIGINT FROM capture_sessions WHERE active = TRUE) AS session_count,
+          (SELECT COUNT(*)::BIGINT FROM capture_sessions
+             WHERE active = TRUE AND updated_at_ms >= $1) AS fresh_session_count
+        "#,
+    )
+    .bind(cutoff_ms)
+    .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
+    .fetch_one(&runtime.timeline_store.pool)
+    .await?;
+    let snapshot_at_ms = row.try_get::<Option<i64>, _>("snapshot_at_ms")?;
+    let snapshot_fresh = snapshot_at_ms.is_some_and(|at| at >= cutoff_ms);
+    let bot_count = row.try_get::<i64, _>("bot_count")? as usize;
+    let session_count = row.try_get::<i64, _>("session_count")? as usize;
+    let fresh_bot_count = row.try_get::<i64, _>("fresh_bot_count")? as usize;
+    let fresh_session_count = row.try_get::<i64, _>("fresh_session_count")? as usize;
+    Ok(VoiceObservationSummary {
+        snapshot_at_ms,
+        fresh_for_seconds,
+        observed_bots: snapshot_fresh.then_some(fresh_bot_count).unwrap_or(0),
+        ready_bots: snapshot_fresh
+            .then_some(row.try_get::<i64, _>("ready_bot_count")? as usize)
+            .unwrap_or(0),
+        gateway_bots: snapshot_fresh
+            .then_some(row.try_get::<i64, _>("gateway_bot_count")? as usize)
+            .unwrap_or(0),
+        active_sessions: snapshot_fresh.then_some(fresh_session_count).unwrap_or(0),
+        stale_bots: if snapshot_fresh {
+            bot_count.saturating_sub(fresh_bot_count)
+        } else {
+            bot_count
+        },
+        stale_sessions: if snapshot_fresh {
+            session_count.saturating_sub(fresh_session_count)
+        } else {
+            session_count
+        },
+    })
+}
+
+async fn dashboard_inventory_counts(runtime: &Runtime) -> Result<(usize, usize)> {
+    let row = sqlx::query(
+        r#"
+        SELECT (SELECT COUNT(*)::BIGINT FROM voice_rooms) AS room_count,
+               (SELECT COUNT(*)::BIGINT FROM automations) AS automation_count
+        "#,
+    )
+    .fetch_one(&runtime.timeline_store.pool)
+    .await?;
+    Ok((
+        row.try_get::<i64, _>("room_count")? as usize,
+        row.try_get::<i64, _>("automation_count")? as usize,
+    ))
+}
+
+pub(super) async fn database_diagnostics(runtime: &Runtime) -> Value {
     if let Err(error) = sqlx::query("SELECT 1")
         .execute(&runtime.timeline_store.pool)
         .await
@@ -1344,6 +2127,7 @@ fn observed_tables() -> &'static [&'static str] {
         "publications",
         "jobs",
         "job_payloads",
+        "operational_job_outcomes",
         "job_dependencies",
         "automations",
     ]
@@ -1381,27 +2165,113 @@ async fn table_counts(runtime: &Runtime) -> Vec<Value> {
     rows
 }
 
-async fn operational_diagnostics(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+async fn operational_diagnostics(
+    runtime: &Runtime,
+    now: DateTime<Utc>,
+) -> Result<OperationalDiagnostics> {
     let since_ms = instant_ms_dt(now - chrono::Duration::seconds(max_health_window_seconds()));
     let job_rows = diagnostic_job_rows(runtime, since_ms).await?;
     let event_rows = diagnostic_event_rows(runtime, since_ms).await?;
-    Ok(json!({
+    let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
+    let failure_summary = failure_summary(runtime, &job_rows, coverage_start_ms, now).await?;
+    let payload = json!({
+        "coverage": {
+            "startsAt": ms_iso(coverage_start_ms),
+            "ageSeconds": age_seconds(instant_ms_dt(now), coverage_start_ms),
+            "retentionSeconds": OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS,
+        },
         "backlog": backlog_payload(&job_rows, now),
-        "windows": operational_windows(&job_rows, &event_rows, now),
-        "latencies": latency_payload(&job_rows, now),
+        "windows": operational_windows(&job_rows, &event_rows, coverage_start_ms, now),
+        "latencies": latency_payload(&job_rows, coverage_start_ms, now),
+        "failures": failure_summary,
+    });
+    Ok(OperationalDiagnostics {
+        payload,
+        job_rows,
+        failure_summary,
+    })
+}
+
+pub(super) async fn dashboard_latency_by_kind_payload(
+    runtime: &Runtime,
+    now: DateTime<Utc>,
+) -> Result<Value> {
+    let now_ms = instant_ms_dt(now);
+    let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
+    let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT job_id, kind, state, lane, created_at_ms,
+               observed_at_ms AS updated_at_ms, ready_at_ms, started_at_ms,
+               completed_at_ms, failed
+        FROM operational_job_outcomes
+        WHERE observed_at_ms >= $1
+        ORDER BY observed_at_ms DESC, observation_id DESC
+        "#,
+    )
+    .bind(since_ms)
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?
+    .into_iter()
+    .map(|row| {
+        Ok(JobDiagnosticRow {
+            job_id: row.try_get("job_id")?,
+            kind: row.try_get("kind")?,
+            state: row.try_get("state")?,
+            lane: row.try_get("lane")?,
+            created_at_ms: row.try_get("created_at_ms")?,
+            updated_at_ms: row.try_get("updated_at_ms")?,
+            ready_at_ms: row.try_get("ready_at_ms")?,
+            started_at_ms: row.try_get("started_at_ms")?,
+            completed_at_ms: row.try_get("completed_at_ms")?,
+            terminal: true,
+            failed: row.try_get("failed")?,
+            cancellable: false,
+        })
+    })
+    .collect::<Result<Vec<_>>>()?;
+    let coverage = window_coverage_payload(coverage_start_ms, since_ms, now_ms);
+    let failures = detailed_failure_summary(runtime, now).await?;
+    Ok(json!({
+        "coverage": {
+            "startsAt": ms_iso(coverage_start_ms),
+            "ageSeconds": age_seconds(now_ms, coverage_start_ms),
+            "retentionSeconds": OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS,
+        },
+        "latencies": {
+            "windows": [{
+                "label": "1h",
+                "since": ms_iso(since_ms),
+                "coverage": coverage,
+            }],
+            "byKind": latency_by_kind(&rows, since_ms),
+        },
+        "failures": failures,
     }))
 }
 
 async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<JobDiagnosticRow>> {
     let rows = sqlx::query(
         r#"
-        SELECT kind, state, lane, created_at_ms, updated_at_ms, ready_at_ms,
-               started_at_ms, completed_at_ms, terminal, failed, cancellable
-        FROM jobs
-        WHERE terminal = FALSE
-           OR created_at_ms >= $1
-           OR updated_at_ms >= $1
-           OR completed_at_ms >= $1
+        SELECT job_id, kind, state, lane,
+               created_at_ms, updated_at_ms, ready_at_ms, started_at_ms,
+               completed_at_ms, terminal, failed, cancellable
+        FROM (
+          SELECT j.job_id, j.kind, j.state, j.lane, j.created_at_ms,
+                 j.updated_at_ms, j.ready_at_ms,
+                 j.started_at_ms, j.completed_at_ms, j.terminal, j.failed,
+                 j.cancellable
+          FROM jobs j
+          WHERE j.terminal = FALSE
+          UNION ALL
+          SELECT outcome.job_id, outcome.kind, outcome.state, outcome.lane,
+                 outcome.created_at_ms, outcome.observed_at_ms AS updated_at_ms,
+                 outcome.ready_at_ms, outcome.started_at_ms,
+                 outcome.completed_at_ms, TRUE AS terminal, outcome.failed,
+                 FALSE AS cancellable
+          FROM operational_job_outcomes outcome
+          WHERE outcome.observed_at_ms >= $1
+        ) observed_jobs
         ORDER BY updated_at_ms DESC
         "#,
     )
@@ -1412,6 +2282,7 @@ async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<Job
     rows.into_iter()
         .map(|row| {
             Ok(JobDiagnosticRow {
+                job_id: row.try_get("job_id")?,
                 kind: row.try_get("kind")?,
                 state: row.try_get("state")?,
                 lane: row.try_get("lane")?,
@@ -1426,6 +2297,112 @@ async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<Job
             })
         })
         .collect()
+}
+
+async fn operational_coverage_start_ms(runtime: &Runtime) -> Result<i64> {
+    let value =
+        sqlx::query_scalar::<_, String>("SELECT value FROM runtime_metadata WHERE key = $1")
+            .bind(OPERATIONAL_COVERAGE_START_KEY)
+            .fetch_one(&runtime.timeline_store.pool)
+            .await?;
+    value.parse::<i64>().map_err(|error| {
+        anyhow::anyhow!(
+            "runtime metadata {OPERATIONAL_COVERAGE_START_KEY} contains invalid milliseconds `{value}`: {error}"
+        )
+    })
+}
+
+async fn failure_summary(
+    runtime: &Runtime,
+    job_rows: &[JobDiagnosticRow],
+    coverage_start_ms: i64,
+    now: DateTime<Utc>,
+) -> Result<Value> {
+    let now_ms = instant_ms_dt(now);
+    let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
+    let count = job_rows
+        .iter()
+        .filter(|row| {
+            row.is_failed()
+                && row
+                    .terminal_at_ms()
+                    .is_some_and(|failed_at_ms| failed_at_ms >= since_ms)
+        })
+        .count();
+    let recent = recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?;
+    Ok(json!({
+        "window": "1h",
+        "since": ms_iso(since_ms),
+        "count": count,
+        "complete": coverage_start_ms <= since_ms,
+        "coverageStartsAt": ms_iso(coverage_start_ms),
+        "recent": recent.into_iter().map(|row| row.to_json()).collect::<Vec<_>>(),
+    }))
+}
+
+async fn recent_failure_rows(
+    runtime: &Runtime,
+    since_ms: i64,
+    limit: i64,
+) -> Result<Vec<FailureDiagnosticRow>> {
+    let mut failures = Vec::new();
+    let outcome_rows = sqlx::query(
+        r#"
+        SELECT job_id, scope_kind, guild_id, scope_id, kind, state,
+               error_text, observed_at_ms
+        FROM operational_job_outcomes
+        WHERE failed = TRUE
+          AND observed_at_ms >= $1
+        ORDER BY observed_at_ms DESC, observation_id DESC
+        LIMIT $2
+        "#,
+    )
+    .bind(since_ms)
+    .bind(limit)
+    .fetch_all(&runtime.timeline_store.pool)
+    .await?;
+    for row in outcome_rows {
+        failures.push(FailureDiagnosticRow {
+            job_id: row.try_get("job_id")?,
+            scope_kind: row.try_get("scope_kind")?,
+            guild_id: row.try_get("guild_id")?,
+            scope_id: row.try_get("scope_id")?,
+            scope_label: String::new(),
+            kind: row.try_get("kind")?,
+            state: row.try_get("state")?,
+            reason: row.try_get("error_text")?,
+            failed_at_ms: row.try_get("observed_at_ms")?,
+        });
+    }
+    let scope_keys = failures
+        .iter()
+        .map(|failure| {
+            (
+                failure.scope_kind.clone(),
+                failure.guild_id.clone(),
+                failure.scope_id.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let scope_labels = runtime.dashboard_scope_label_batch(&scope_keys).await?;
+    for failure in &mut failures {
+        failure.scope_label = scope_labels
+            .get(&(
+                failure.scope_kind.clone(),
+                failure.guild_id.clone(),
+                failure.scope_id.clone(),
+            ))
+            .expect("failure scope label was resolved")
+            .clone();
+    }
+    failures.sort_by(|left, right| {
+        right
+            .failed_at_ms
+            .cmp(&left.failed_at_ms)
+            .then_with(|| right.job_id.cmp(&left.job_id))
+    });
+    failures.truncate(limit as usize);
+    Ok(failures)
 }
 
 async fn diagnostic_event_rows(
@@ -1566,6 +2543,7 @@ fn backlog_payload(rows: &[JobDiagnosticRow], now: DateTime<Utc>) -> Value {
 fn operational_windows(
     jobs: &[JobDiagnosticRow],
     events: &[EventDiagnosticRow],
+    coverage_start_ms: i64,
     now: DateTime<Utc>,
 ) -> Vec<Value> {
     let now_ms = instant_ms_dt(now);
@@ -1594,6 +2572,7 @@ fn operational_windows(
             json!({
                 "label": *label,
                 "since": ms_iso(since_ms),
+                "coverage": window_coverage_payload(coverage_start_ms, since_ms, now_ms),
                 "allJobs": job_window_counts(jobs, since_ms, None),
                 "audioSegmentJobs": job_window_counts(jobs, since_ms, Some("audio_segment")),
                 "wakeProbeJobs": job_window_counts(jobs, since_ms, Some("wake_probe")),
@@ -1656,7 +2635,7 @@ fn job_window_counts(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
     })
 }
 
-fn latency_payload(rows: &[JobDiagnosticRow], now: DateTime<Utc>) -> Value {
+fn latency_payload(rows: &[JobDiagnosticRow], coverage_start_ms: i64, now: DateTime<Utc>) -> Value {
     let now_ms = instant_ms_dt(now);
     let windows = HEALTH_WINDOWS
         .iter()
@@ -1665,6 +2644,7 @@ fn latency_payload(rows: &[JobDiagnosticRow], now: DateTime<Utc>) -> Value {
             json!({
                 "label": *label,
                 "since": ms_iso(since_ms),
+                "coverage": window_coverage_payload(coverage_start_ms, since_ms, now_ms),
                 "all": latency_stats_for(rows, since_ms, None),
                 "stt": latency_stats_for(rows, since_ms, Some("audio_segment")),
                 "wakeword": latency_stats_for(rows, since_ms, Some("wake_probe")),
@@ -1682,8 +2662,8 @@ fn latency_by_kind(rows: &[JobDiagnosticRow], since_ms: i64) -> Vec<Value> {
     let kinds = rows
         .iter()
         .filter(|row| {
-            row.completed_at_ms
-                .is_some_and(|completed| completed >= since_ms)
+            row.terminal_at_ms()
+                .is_some_and(|terminal_at| terminal_at >= since_ms)
         })
         .map(|row| row.kind.clone())
         .collect::<BTreeSet<_>>();
@@ -1719,19 +2699,19 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
     for row in rows.iter().filter(|row| {
         kind.is_none_or(|kind| row.kind == kind)
             && row
-                .completed_at_ms
-                .is_some_and(|completed_at_ms| completed_at_ms >= since_ms)
+                .terminal_at_ms()
+                .is_some_and(|terminal_at_ms| terminal_at_ms >= since_ms)
     }) {
-        let completed_at_ms = row
-            .completed_at_ms
-            .expect("latency row has completed_at_ms");
+        let terminal_at_ms = row
+            .terminal_at_ms()
+            .expect("latency row has a terminal observation time");
         count += 1;
         if row.is_failed() {
             failed += 1;
         }
         let mut invalid_timestamp_order = false;
-        if completed_at_ms >= row.created_at_ms {
-            total_ms.push(completed_at_ms - row.created_at_ms);
+        if terminal_at_ms >= row.created_at_ms {
+            total_ms.push(terminal_at_ms - row.created_at_ms);
         } else {
             excluded.total_ms += 1;
             invalid_timestamp_order = true;
@@ -1756,8 +2736,8 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
                     excluded.queue_ms += 1;
                     invalid_timestamp_order |= !phase_contaminated;
                 }
-                if completed_at_ms >= started_at_ms {
-                    run_ms.push(completed_at_ms - started_at_ms);
+                if terminal_at_ms >= started_at_ms {
+                    run_ms.push(terminal_at_ms - started_at_ms);
                 } else {
                     excluded.run_ms += 1;
                     invalid_timestamp_order = true;
@@ -1772,7 +2752,7 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
         if invalid_timestamp_order {
             excluded.invalid_timestamp_order += 1;
         }
-        latest_ms = Some(latest_ms.map_or(completed_at_ms, |latest| latest.max(completed_at_ms)));
+        latest_ms = Some(latest_ms.map_or(terminal_at_ms, |latest| latest.max(terminal_at_ms)));
     }
 
     json!({
@@ -1784,6 +2764,15 @@ fn latency_stats_for(rows: &[JobDiagnosticRow], since_ms: i64, kind: Option<&str
         "totalMs": latency_metric(total_ms),
         "excluded": excluded.to_json(),
         "latestAt": latest_ms.map(ms_iso).unwrap_or_default(),
+    })
+}
+
+fn window_coverage_payload(coverage_start_ms: i64, since_ms: i64, now_ms: i64) -> Value {
+    let covered_from_ms = coverage_start_ms.max(since_ms);
+    json!({
+        "complete": coverage_start_ms <= since_ms,
+        "startsAt": ms_iso(coverage_start_ms),
+        "coveredSeconds": ((now_ms - covered_from_ms) / 1000).max(0),
     })
 }
 
@@ -1818,7 +2807,7 @@ fn max_health_window_seconds() -> i64 {
         .expect("health windows are configured")
 }
 
-fn process_load_payload() -> Value {
+pub(super) fn process_load_payload() -> Value {
     let status = proc_status_fields();
     let meminfo = proc_meminfo_fields();
     json!({
@@ -2016,7 +3005,7 @@ fn json_usize(value: &Value, key: &str) -> usize {
     value.get(key).and_then(Value::as_u64).unwrap_or(0) as usize
 }
 
-fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
+pub(super) fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
     let mut by_kind = BTreeMap::new();
     let mut by_state = BTreeMap::new();
     let mut oldest_queued_age_seconds = 0_i64;
@@ -2058,29 +3047,11 @@ fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
     })
 }
 
-fn agent_dashboard_payload(jobs: &[Job], limit: usize) -> Value {
-    let agent_jobs = jobs
-        .iter()
-        .filter(|job| job.kind == JobKind::AgentTask)
-        .take(limit)
-        .map(compact_agent_job_payload)
-        .collect::<Vec<_>>();
-    let sessions = agent_sessions_from_jobs(jobs)
-        .into_iter()
-        .map(|session| session.to_json())
-        .collect::<Vec<_>>();
-    json!({
-        "sessions": sessions,
-        "jobs": agent_jobs,
-        "summary": agent_summary(jobs),
-        "codex": {
-            "auth": codex_auth_payload(),
-            "usage": codex_usage_rollup(jobs, utc_now()),
-        },
-    })
+pub(super) fn agent_usage_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
+    codex_usage_rollup(jobs, now)
 }
 
-fn automation_dashboard_payload(records: &[AutomationRecord]) -> Value {
+pub(super) fn automation_dashboard_payload(records: &[AutomationRecord]) -> Value {
     let mut by_state = BTreeMap::<String, usize>::new();
     let mut by_trigger = BTreeMap::<String, usize>::new();
     let mut active = 0_usize;
@@ -2265,126 +3236,6 @@ fn usage_token_field(usage: &Value, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn codex_auth_payload() -> Value {
-    let home = codex_home();
-    let auth_path = home.join("auth.json");
-    let version_path = home.join("version.json");
-    let auth = fs::read_to_string(&auth_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .unwrap_or_else(|| json!({}));
-    let tokens = auth.get("tokens").cloned().unwrap_or_else(|| json!({}));
-    let now = utc_now();
-    let id_claims = jwt_payload(&string_field(&tokens, "id_token"));
-    let access_claims = jwt_payload(&string_field(&tokens, "access_token"));
-    let expiry = jwt_expiry_payload(&access_claims, now);
-    let id_expiry = jwt_expiry_payload(&id_claims, now);
-    let version = fs::read_to_string(&version_path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<Value>(&content).ok())
-        .unwrap_or_else(|| json!({}));
-
-    json!({
-        "home": home.display().to_string(),
-        "authPath": auth_path.display().to_string(),
-        "authPresent": auth.is_object() && !auth.as_object().is_none_or(Map::is_empty),
-        "loginType": if !string_field(&tokens, "access_token").is_empty() { "chatgpt_oauth" } else if auth.get("OPENAI_API_KEY").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty()) { "api_key" } else { "unknown" },
-        "apiKeyPresent": auth.get("OPENAI_API_KEY").and_then(Value::as_str).is_some_and(|value| !value.trim().is_empty()),
-        "account": {
-            "accountId": string_field(&tokens, "account_id"),
-            "subject": string_field(&id_claims, "sub"),
-            "email": string_field(&id_claims, "email"),
-            "name": string_field(&id_claims, "name"),
-            "organizationId": first_non_empty([
-                string_field(&id_claims, "org_id"),
-                string_field(&id_claims, "orgId"),
-                string_field(&id_claims, "organization_id"),
-            ]),
-        },
-        "lastRefresh": string_field(&auth, "last_refresh"),
-        "accessToken": expiry,
-        "idToken": id_expiry,
-        "version": {
-            "latest": string_field(&version, "latest_version"),
-            "lastCheckedAt": string_field(&version, "last_checked_at"),
-        },
-    })
-}
-
-fn codex_home() -> PathBuf {
-    config::codex_home()
-}
-
-fn jwt_payload(token: &str) -> Value {
-    let Some(payload) = token.split('.').nth(1) else {
-        return json!({});
-    };
-    decode_base64_url(payload)
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .unwrap_or_else(|| json!({}))
-}
-
-fn jwt_expiry_payload(claims: &Value, now: DateTime<Utc>) -> Value {
-    let expires_at = claims
-        .get("exp")
-        .and_then(Value::as_i64)
-        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0));
-    json!({
-        "expiresAt": isoformat_z(expires_at),
-        "expiresInSeconds": expires_at.map(|expires_at| (expires_at - now).num_seconds()).unwrap_or(0),
-        "expired": expires_at.is_some_and(|expires_at| expires_at <= now),
-    })
-}
-
-fn decode_base64_url(input: &str) -> Option<Vec<u8>> {
-    let mut output = Vec::new();
-    let mut buffer = 0_u32;
-    let mut bits = 0_u8;
-    for byte in input.bytes() {
-        let value = match byte {
-            b'A'..=b'Z' => byte - b'A',
-            b'a'..=b'z' => byte - b'a' + 26,
-            b'0'..=b'9' => byte - b'0' + 52,
-            b'-' => 62,
-            b'_' => 63,
-            b'=' => break,
-            _ => return None,
-        } as u32;
-        buffer = (buffer << 6) | value;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            output.push(((buffer >> bits) & 0xff) as u8);
-        }
-    }
-    Some(output)
-}
-
-fn agent_summary(jobs: &[Job]) -> Value {
-    let mut total = 0_usize;
-    let mut active = 0_usize;
-    let mut failed = 0_usize;
-    let mut completed = 0_usize;
-    for job in jobs.iter().filter(|job| job.kind == JobKind::AgentTask) {
-        total += 1;
-        if !job.state.is_terminal() {
-            active += 1;
-        }
-        if is_failed_state(job.state.as_str()) {
-            failed += 1;
-        }
-        if job.state == JobState::Complete {
-            completed += 1;
-        }
-    }
-    json!({
-        "total": total,
-        "active": active,
-        "failed": failed,
-        "completed": completed,
-    })
-}
-
 fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
     let mut ordered = jobs
         .iter()
@@ -2489,27 +3340,6 @@ async fn agent_session_payload(
     if truncated {
         rows = rows[rows.len().saturating_sub(AGENT_SESSION_JOB_LIMIT)..].to_vec();
     }
-    let transcript = agent_session_transcript(&rows);
-    let mut timeline = Vec::new();
-    for row in &rows {
-        let job_id = string_field(row, "job_id");
-        let events = row
-            .get("codex")
-            .and_then(|codex| codex.get("timeline"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        for mut event in events {
-            if let Value::Object(object) = &mut event {
-                object.insert("job_id".to_string(), json!(job_id));
-                object.insert(
-                    "selected".to_string(),
-                    json!(job_id == selected.id.as_str()),
-                );
-            }
-            timeline.push(event);
-        }
-    }
     let scope = if selected_session_id.trim().is_empty() {
         "selected_job"
     } else {
@@ -2526,13 +3356,6 @@ async fn agent_session_payload(
         "scopeJobCount": scope_job_count,
         "truncated": truncated,
         "jobs": rows,
-        "transcript": {
-            "content": transcript,
-            "bytes": transcript.len(),
-        },
-        "codex": {
-            "timeline": timeline,
-        },
     }))
 }
 
@@ -2563,174 +3386,43 @@ fn agent_job_matches_selected_session(
 }
 
 fn agent_session_job_payload(job: &Job) -> Value {
-    let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
-    let prompt = read_text_artifact(&metadata.prompt_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
-    let result = read_text_artifact(&metadata.result_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
-    let raw = read_text_artifact(&metadata.raw_result_path, AGENT_SESSION_ARTIFACT_MAX_BYTES);
-    let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
+    let metadata = job.metadata.agent_task();
+    let request = job
+        .command()
+        .map(|command| command.arguments.request_text())
+        .unwrap_or_default();
+    let result_excerpt = metadata
+        .map(|metadata| preview(&metadata.response_text, 1200))
+        .unwrap_or_default();
+    let error = preview(
+        &first_non_empty([
+            job.metadata.error.clone(),
+            metadata
+                .map(|metadata| metadata.dispatch_error_after_cancel.clone())
+                .unwrap_or_default(),
+            metadata
+                .map(|metadata| metadata.dispatch_error.clone())
+                .unwrap_or_default(),
+        ]),
+        1200,
+    );
     json!({
         "job_id": job.id.clone(),
         "state": job.state.as_str(),
         "created_at": job.created_at.clone(),
         "updated_at": job.updated_at.clone(),
-        "request": job.command().map(|command| command.arguments.request_text()).unwrap_or_default(),
-        "session_id": metadata.agent.session_id,
-        "model": metadata.agent.model,
-        "reasoning_effort": metadata.agent.reasoning_effort,
-        "fast_mode": metadata.agent.fast_mode,
-        "prompt": prompt,
-        "result": result,
-        "raw": raw,
-        "codex": codex,
+        "durationMs": dashboard_job_duration_ms(job),
+        "attempts": job.attempts,
+        "request": preview(&request, 1000),
+        "resultExcerpt": result_excerpt,
+        "error": error,
+        "session_id": metadata.map(|metadata| metadata.agent.session_id.clone()).unwrap_or_default(),
+        "model": metadata.map(|metadata| metadata.agent.model.clone()).unwrap_or_default(),
+        "reasoning_effort": metadata.map(|metadata| metadata.agent.reasoning_effort.clone()).unwrap_or_default(),
+        "fast_mode": metadata.is_some_and(|metadata| metadata.agent.fast_mode),
+        "tokenUsage": metadata.map(|metadata| metadata.agent.usage.to_json()).unwrap_or_else(|| json!({})),
+        "detailUrl": format!("/v1/dashboard/agents/{}", job.id),
     })
-}
-
-fn agent_session_transcript(rows: &[Value]) -> String {
-    let mut parts = Vec::new();
-    for row in rows {
-        let job_id = string_field(row, "job_id");
-        let state = string_field(row, "state");
-        let created_at = string_field(row, "created_at");
-        let request = string_field(row, "request");
-        parts.push(format!("JOB {job_id} [{state}] {created_at}"));
-        if !request.trim().is_empty() {
-            parts.push(format!("REQUEST:\n{request}"));
-        }
-        let prompt = row
-            .get("prompt")
-            .and_then(|artifact| artifact.get("content"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        if !prompt.is_empty() {
-            parts.push(format!("PROMPT:\n{prompt}"));
-        }
-        let result = row
-            .get("result")
-            .and_then(|artifact| artifact.get("content"))
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim();
-        if !result.is_empty() {
-            parts.push(format!("RESULT:\n{result}"));
-        }
-        let messages = row
-            .get("codex")
-            .and_then(|codex| codex.get("messages"))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let message_text = messages
-            .iter()
-            .filter_map(|message| {
-                let role = string_field(message, "role");
-                let text = string_field(message, "text");
-                (!text.trim().is_empty()).then(|| format!("{role}: {text}"))
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if !message_text.is_empty() {
-            parts.push(format!("VISIBLE MESSAGES:\n{message_text}"));
-        }
-        parts.push(String::new());
-    }
-    parts.join("\n\n").trim().to_string()
-}
-
-fn compact_agent_job_payload(job: &Job) -> Value {
-    let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
-    let codex = compact_agent_codex_summary(&metadata);
-    let mut job_value = Runtime::public_interaction_job_context(job);
-    if let Value::Object(object) = &mut job_value {
-        let metadata = job.metadata.to_json();
-        if metadata
-            .as_object()
-            .is_some_and(|object| !object.is_empty())
-        {
-            object.insert("metadata".to_string(), metadata);
-        }
-    }
-    json!({
-        "job": job_value,
-        "paths": {
-            "workdir": metadata.workdir_path,
-            "prompt": metadata.prompt_path,
-            "result": metadata.result_path,
-            "raw": metadata.raw_result_path,
-        },
-        "workdir": workspace_artifact(&metadata.workdir_path),
-        "prompt": artifact_stub(&metadata.prompt_path),
-        "result": artifact_stub(&metadata.result_path),
-        "raw": artifact_stub(&metadata.raw_result_path),
-        "codex": codex,
-        "detailUrl": format!("/v1/debug/agents/{}", job.id),
-    })
-}
-
-fn compact_agent_codex_summary(metadata: &AgentTaskMetadata) -> Value {
-    let needs_raw = metadata.agent.session_id.trim().is_empty()
-        || metadata.agent.model.trim().is_empty()
-        || metadata.agent.usage.is_empty();
-    let raw_trace = if needs_raw && !metadata.raw_result_path.trim().is_empty() {
-        let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
-        parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""))
-    } else {
-        json!({})
-    };
-    let usage = if metadata.agent.usage.is_empty() {
-        raw_trace
-            .get("tokenUsage")
-            .cloned()
-            .unwrap_or_else(|| json!({}))
-    } else {
-        usage_payload_info(&metadata.agent.usage.to_json())
-    };
-    json!({
-        "sessionId": first_non_empty([
-            metadata.agent.session_id.clone(),
-            string_field(&raw_trace, "sessionId"),
-        ]),
-        "model": first_non_empty([
-            metadata.agent.model.clone(),
-            string_field(&raw_trace, "model"),
-        ]),
-        "reasoningEffort": metadata.agent.reasoning_effort,
-        "fastMode": metadata.agent.fast_mode,
-        "tokenUsage": usage,
-        "contextUsedTokens": token_usage_input_tokens(&usage),
-        "modelContextWindow": context_window_from_usage(&usage).unwrap_or(0),
-        "contextUsedPercent": context_used_percent(&usage),
-        "eventCount": raw_trace.get("eventCount").and_then(Value::as_u64).unwrap_or(0),
-        "timeline": [],
-        "messages": [],
-        "toolCalls": [],
-    })
-}
-
-fn context_used_percent(usage: &Value) -> f64 {
-    let input = token_usage_input_tokens(usage);
-    let window = context_window_from_usage(usage).unwrap_or(0);
-    if input > 0 && window > 0 {
-        (input as f64 / window as f64) * 100.0
-    } else {
-        0.0
-    }
-}
-
-fn artifact_stub(path: &str) -> Value {
-    let path = path.trim();
-    if path.is_empty() {
-        return json!({"path": "", "exists": false, "bytes": 0, "truncated": false});
-    }
-    match fs::metadata(path) {
-        Ok(metadata) => json!({
-            "path": path,
-            "exists": true,
-            "bytes": metadata.len(),
-            "truncated": false,
-        }),
-        Err(_) => json!({"path": path, "exists": false, "bytes": 0, "truncated": false}),
-    }
 }
 
 fn workspace_artifact(path: &str) -> Value {
@@ -3071,84 +3763,6 @@ fn push_tool_call(tool_calls: &mut Vec<Value>, timeline: &mut Vec<Value>, mut to
     timeline.push(tool_call);
 }
 
-fn job_summary(jobs: &[Job]) -> Value {
-    let mut by_state = BTreeMap::new();
-    let mut by_kind = BTreeMap::new();
-    let mut by_scope = BTreeMap::<String, ScopeJobSummary>::new();
-    let mut active = 0;
-    let mut queued = 0;
-    let mut running = 0;
-    let mut waiting = 0;
-    let mut failed = 0;
-    let mut cancellable = 0;
-
-    for job in jobs {
-        let state = job.state.as_str().to_string();
-        let kind = job.kind.as_str().to_string();
-        *by_state.entry(state.clone()).or_insert(0) += 1;
-        *by_kind.entry(kind).or_insert(0) += 1;
-        if !job.state.is_terminal() {
-            active += 1;
-        }
-        if job.state.is_cancellable() {
-            cancellable += 1;
-        }
-        match state.as_str() {
-            "queued" => queued += 1,
-            "running" => running += 1,
-            "waiting" => waiting += 1,
-            _ => {}
-        }
-        if is_failed_state(&state) {
-            failed += 1;
-        }
-
-        let scope_key = format!(
-            "{}\n{}\n{}",
-            job.scope_kind.as_str(),
-            job.guild_id,
-            job.scope_id
-        );
-        let scope = by_scope
-            .entry(scope_key)
-            .or_insert_with(|| ScopeJobSummary {
-                scope_kind: job.scope_kind.as_str().to_string(),
-                guild_id: job.guild_id.clone(),
-                scope_id: job.scope_id.clone(),
-                ..ScopeJobSummary::default()
-            });
-        scope.total += 1;
-        if !job.state.is_terminal() {
-            scope.active += 1;
-        }
-        if is_failed_state(&state) {
-            scope.failed += 1;
-        }
-        let latest_at = first_non_empty([
-            job.updated_at.clone(),
-            job.created_at.clone(),
-            job.started_at.clone().unwrap_or_default(),
-        ]);
-        if latest_at > scope.latest_at {
-            scope.latest_at = latest_at;
-        }
-    }
-
-    json!({
-        "total": jobs.len(),
-        "active": active,
-        "terminal": jobs.len().saturating_sub(active),
-        "queued": queued,
-        "running": running,
-        "waiting": waiting,
-        "failed": failed,
-        "cancellable": cancellable,
-        "byState": count_rows(by_state, "state"),
-        "byKind": count_rows(by_kind, "kind"),
-        "byScope": scope_job_rows(by_scope),
-    })
-}
-
 fn is_failed_state(state: &str) -> bool {
     state.contains("failed") || state == "approval_failed"
 }
@@ -3193,49 +3807,6 @@ fn scope_job_rows(scopes: BTreeMap<String, ScopeJobSummary>) -> Vec<Value> {
                 "active": scope.active,
                 "failed": scope.failed,
                 "latest_at": scope.latest_at,
-            })
-        })
-        .collect()
-}
-
-fn event_kind_counts(events: &[Value]) -> Vec<Value> {
-    let mut summaries = BTreeMap::<String, EventKindSummary>::new();
-    for event in events {
-        let event_kind = first_non_empty([
-            string_field(event, "event_kind"),
-            string_field(event, "kind"),
-            "event".to_string(),
-        ]);
-        let latest_at = first_non_empty([
-            string_field(event, "startedAt"),
-            string_field(event, "started_at"),
-            string_field(event, "created_at"),
-            string_field(event, "timestamp"),
-        ]);
-        let summary = summaries
-            .entry(event_kind.clone())
-            .or_insert_with(|| EventKindSummary {
-                event_kind,
-                ..EventKindSummary::default()
-            });
-        summary.count += 1;
-        if latest_at > summary.latest_at {
-            summary.latest_at = latest_at;
-        }
-    }
-    let mut rows = summaries.into_values().collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        right
-            .count
-            .cmp(&left.count)
-            .then_with(|| right.latest_at.cmp(&left.latest_at))
-    });
-    rows.into_iter()
-        .map(|summary| {
-            json!({
-                "eventKind": summary.event_kind,
-                "count": summary.count,
-                "latestAt": summary.latest_at,
             })
         })
         .collect()

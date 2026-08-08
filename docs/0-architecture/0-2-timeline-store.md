@@ -17,7 +17,7 @@ TimelineStore
         +--> artifact files
         |
         v
-CLI, HTTP, dashboard, agent, and debug views
+CLI, HTTP, dashboard, agent, and operator views
 ```
 
 The store also owns the artifact root for voice memory and transcript publication. Audio segment jobs refer to ready WAV files with checksums, timing, speaker identity, capture run, and format metadata. Accepted speech is written as `speech_segment` timeline events. Transcript materialization writes durable files under publication directories and stores the paths in publication records.
@@ -43,6 +43,9 @@ job_payloads
 
 job_dependencies
   parent/child edges and resolution policy
+
+operational_job_outcomes
+  bounded terminal-transition observations for dashboard windows
 ```
 
 That shape lets the scheduler claim due work by SQL projection and lets handlers recover the typed Rust payload. `job_payloads.payload_blob` begins with the `CLANKJOB` envelope and a little-endian payload version, followed by the bincode-encoded `Job`. The envelope is decoded before the typed body, so an unknown payload schema fails at the storage contract boundary. Waiting resolution is also storage-driven: the resolver reads waiting parents, summarizes terminal children, and either requeues parents that need domain-specific resume behavior or resolves the parent from child outcomes.
@@ -53,7 +56,7 @@ Timeline migrations are Rust modules under `timeline/migrations/` named for the 
 
 At startup the runtime reads the highest applied version from `clankcord_schema_migrations` and compares it with the running binary version from `Cargo.toml`. An empty ledger is treated as the `0.1.0` baseline. Registered migrations with versions greater than the durable version and less than or equal to the running binary version are applied in semantic-version order. Each migration runs in its own database transaction and inserts its ledger row after the data rewrite succeeds.
 
-The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.12.0`; changing either value without updating the mapping fails compilation.
+The job payload blob version is tied to the running Cargo version by a compile-time assertion in the job record module. The current mapping records `CLANKJOB` version 8 for Clankcord `0.10.0` through `0.13.0`; changing either value without updating the mapping fails compilation.
 
 The `0.2.0` migration rewrites pre-`0.2.0` job payload blobs into the current `CLANKJOB` envelope and re-upserts job projections through the current Rust job contract. It also normalizes pre-`0.2.0` job projection states that are represented differently by the current runtime.
 
@@ -77,6 +80,10 @@ The `0.11.0` migration adds the partial newest-first timeline index used by boun
 
 The `0.12.0` migration adds the indexed transcription interval contract, the per-slot `requires_single_slot` constraint, and durable `wake_activation_progress` rows. It terminalizes nonterminal wake activations created under the unbounded settlement contract while preserving their transcription-slot rows and errors as diagnostic evidence.
 
+The `0.13.0` migration adds `operational_job_outcomes`, a durable ledger of job terminal transitions. A terminal transition is written in the same transaction as the job projection and payload, before ephemeral job garbage collection can remove the source row. Each observation carries the projected scope, kind, lane, lifecycle timestamps, terminal state, failure flag, and canonical failure reason. The migration backfills retained terminal jobs inside the six-hour operational retention horizon and records the ledger coverage start in `runtime_metadata`. Dashboard windows report whether their requested interval begins after that coverage boundary, so a newly migrated database does not present partial history as a complete window.
+
+The same migration canonicalizes scope projections for generic timeline events. Job-linked slash, feedback, delivery, typing, and agent-result events take their scope from the referenced job. Agent-session lifecycle events use the session route: direct-message sessions use the DM user, thread sessions use the Discord thread, and voice sessions retain their voice-room scope. The migration rewrites both projected scope columns and payload scope fields. Timeline hydration treats projected event ID, event kind, and scope as authoritative and removes voice-channel aliases from non-voice events.
+
 Automations and agent sessions follow the same projection-and-envelope pattern. Automations have queryable projections for expiry, scope, and state, with typed payload bytes under the `CLANKAUT` envelope. Agent sessions have queryable projections for routing, lifecycle cap, retirement, resume lineage, and state, with typed payload bytes under the `CLANKAGS` envelope.
 
 ## Code Layout
@@ -87,7 +94,7 @@ The timeline package separates durable contracts, store primitives, and rendered
 
 `timeline/store/mod.rs` owns the `TimelineStore` handle, constructors, artifact path helpers, and shared store types. Targeted store modules under `timeline/store/` hold read and write primitives for jobs, events, voice state, room controls, members, automations, runtime config, agent sessions, maintenance, and transcripts.
 
-`timeline/views/` owns read-only projection helpers for status, history, jobs, members, and debug output. Views coalesce facts across store modules into HTTP, CLI, dashboard, and agent-facing JSON. Canonical state remains in Postgres and artifact files.
+`timeline/views/` owns read-only projection helpers for status, history, jobs, members, and operator output. Views coalesce facts across store modules into HTTP, CLI, dashboard, and agent-facing JSON. Canonical state remains in Postgres and artifact files.
 
 `timeline/util.rs` contains parsing, time, formatting, hashing, audio, and event payload helpers used by the store and views.
 

@@ -14,6 +14,10 @@ impl Runtime {
         voice_state_guild_ids: Vec<String>,
         voice_states: Vec<Value>,
     ) -> Result<()> {
+        let bot_count = bots.len();
+        let session_count = sessions.len();
+        let voice_state_guild_count = voice_state_guild_ids.len();
+        let voice_state_count = voice_states.len();
         self.timeline_store.upsert_voice_bot_states(&bots).await?;
         self.timeline_store
             .upsert_capture_session_statuses(&sessions)
@@ -116,6 +120,15 @@ impl Runtime {
                 )
                 .await?;
         }
+
+        self.timeline_store
+            .record_voice_adapter_snapshot(
+                bot_count,
+                session_count,
+                voice_state_guild_count,
+                voice_state_count,
+            )
+            .await?;
 
         Ok(())
     }

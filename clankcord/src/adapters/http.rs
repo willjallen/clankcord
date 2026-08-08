@@ -22,10 +22,12 @@ use crate::dashboard::{
 use crate::runtime::automations::AutomationState;
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
-    CommandRequest, ContextResolveRequest, DebugOverviewRequest, JobsRequest,
+    CommandRequest, ContextResolveRequest, DashboardAgentsRequest, DashboardJobsRequest,
+    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, JobsRequest,
     ListConversationsRequest, MemberGetRequest, MemberResolveRequest, MemberSearchRequest,
-    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle, SearchTranscriptsRequest,
-    TimelineRangeRequest, TimelineTailRequest,
+    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle, RuntimeScope,
+    RuntimeScopeKind, SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    default_dashboard_categories, parse_dashboard_filter,
 };
 
 static HTTP_REQUEST_METRICS: OnceLock<HttpRequestMetrics> = OnceLock::new();
@@ -328,6 +330,16 @@ pub fn router(handle: RuntimeHandle) -> Router {
         .route("/v1/jobs/run-due", post(jobs_run_due))
         .route("/v1/jobs/{job_id}", get(jobs_get))
         .route("/v1/jobs/{job_id}/retry", post(jobs_retry))
+        .route("/v1/dashboard/timeline", get(dashboard_timeline))
+        .route("/v1/dashboard/jobs", get(dashboard_jobs))
+        .route("/v1/dashboard/summary", get(dashboard_summary))
+        .route("/v1/dashboard/overview", get(dashboard_overview))
+        .route("/v1/dashboard/agents", get(dashboard_agents))
+        .route("/v1/dashboard/agents/{job_id}", get(dashboard_agent_detail))
+        .route("/v1/dashboard/automations", get(dashboard_automations))
+        .route("/v1/dashboard/health", get(dashboard_health))
+        .route("/v1/dashboard/rooms", get(dashboard_rooms))
+        .route("/v1/dashboard/transcript", get(dashboard_transcript))
         .route(
             "/v1/confirmations/{job_id}/approve",
             post(confirmation_approve),
@@ -336,27 +348,33 @@ pub fn router(handle: RuntimeHandle) -> Router {
             "/v1/confirmations/{job_id}/cancel",
             post(confirmation_cancel),
         )
-        .route("/v1/debug/overview", get(debug_overview))
-        .route("/v1/debug/agents/{job_id}", get(debug_agent_job))
-        .route("/debug", get(debug_dashboard))
-        .route("/debug/dashboard.css", get(debug_dashboard_css))
-        .route(
-            "/debug/tabulator_midnight.min.css",
-            get(debug_tabulator_css),
-        )
-        .route("/debug/echarts.min.js", get(debug_echarts_js))
-        .route("/debug/tabulator.min.js", get(debug_tabulator_js))
-        .route("/debug/dashboard-json.js", get(debug_dashboard_json_js))
-        .route("/debug/dashboard-charts.js", get(debug_dashboard_charts_js))
-        .route("/debug/dashboard-tables.js", get(debug_dashboard_tables_js))
-        .route(
-            "/debug/dashboard-explorer.js",
-            get(debug_dashboard_explorer_js),
-        )
-        .route("/debug/dashboard.js", get(debug_dashboard_js))
-        .route("/debug/alpine.min.js", get(debug_alpine_js))
+        .merge(dashboard_asset_router())
         .layer(middleware::from_fn(track_http_request))
         .with_state(state)
+}
+
+pub fn dashboard_asset_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route("/dashboard", get(dashboard_index))
+        .route("/dashboard/dashboard.css", get(dashboard_css))
+        .route(
+            "/dashboard/tabulator_midnight.min.css",
+            get(dashboard_tabulator_css),
+        )
+        .route("/dashboard/echarts.min.js", get(dashboard_echarts_js))
+        .route("/dashboard/tabulator.min.js", get(dashboard_tabulator_js))
+        .route("/dashboard/dashboard-json.js", get(dashboard_json_js))
+        .route("/dashboard/dashboard-charts.js", get(dashboard_charts_js))
+        .route("/dashboard/dashboard-tables.js", get(dashboard_tables_js))
+        .route(
+            "/dashboard/dashboard-explorer.js",
+            get(dashboard_explorer_js),
+        )
+        .route("/dashboard/dashboard.js", get(dashboard_js))
+        .route("/dashboard/alpine.min.js", get(dashboard_alpine_js))
 }
 
 pub async fn serve_until_shutdown(
@@ -375,26 +393,15 @@ pub async fn serve_until_shutdown(
 async fn healthz(State(state): State<AppState>) -> Response {
     let runtime = match state.runtime_context() {
         Ok(runtime) => runtime,
-        Err(error) => return err(error),
+        Err(error) => return health_error(error),
     };
-    let bots = match runtime.timeline_store.list_voice_bot_states().await {
-        Ok(bots) => bots,
-        Err(error) => return err(error),
-    };
-    let sessions = match runtime.timeline_store.list_active_capture_sessions().await {
-        Ok(sessions) => sessions,
-        Err(error) => return err(error),
-    };
-    let rooms = match runtime.timeline_store.list_room_configs().await {
-        Ok(rooms) => rooms,
-        Err(error) => return err(error),
-    };
-    ok(json!({
-        "ok": true,
-        "botsObserved": bots.len(),
-        "activeSessions": sessions.len(),
-        "roomsConfigured": rooms.len(),
-    }))
+    match runtime.operational_health_payload().await {
+        Ok(payload) => {
+            let status = readiness_http_status(&payload);
+            (status, Json(payload)).into_response()
+        }
+        Err(error) => health_error(error),
+    }
 }
 
 async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
@@ -517,25 +524,25 @@ async fn submit_feedback_event(
     runtime: &crate::runtime::Runtime,
     payload: &Value,
 ) -> Result<Value> {
-    let guild_id = first_value_string(payload, &["guild_id", "guildId"]);
-    if guild_id.is_empty() {
-        anyhow::bail!("feedback requires guild_id");
-    }
-    let channel_id = first_value_string(payload, &["scope_id", "channel_id", "channelId"]);
-    if channel_id.is_empty() {
-        anyhow::bail!("feedback requires scope_id");
-    }
     let message = first_value_string(payload, &["content", "message", "feedback_message"]);
     if message.trim().is_empty() {
         anyhow::bail!("feedback requires content");
     }
     let requested_by_user_id = first_value_string(payload, &["requested_by_user_id", "user_id"]);
     let source_job_id = first_value_string(payload, &["source_job_id", "job_id"]);
+    let scope = if source_job_id.is_empty() {
+        feedback_scope(payload)?
+    } else {
+        runtime
+            .timeline_store
+            .get_job(&source_job_id)
+            .await?
+            .scope()
+    };
     let event = runtime
         .timeline_store
-        .append_event(
-            &guild_id,
-            &channel_id,
+        .append_scope_event(
+            &scope,
             json!({
                 "event_kind": "feedback",
                 "kind": "feedback",
@@ -551,6 +558,55 @@ async fn submit_feedback_event(
         "recorded": true,
         "feedback": event,
     }))
+}
+
+fn feedback_scope(payload: &Value) -> Result<RuntimeScope> {
+    let scope_kind = payload
+        .get("scope_kind")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("feedback requires scope_kind"))?
+        .parse::<RuntimeScopeKind>()?;
+    let scope_id = payload
+        .get("scope_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("feedback requires scope_id"))?;
+    let guild_id = payload
+        .get("guild_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match scope_kind {
+        RuntimeScopeKind::VoiceChannel => {
+            if guild_id.is_empty() {
+                anyhow::bail!("voice-channel feedback requires guild_id");
+            }
+            Ok(RuntimeScope::voice_channel(guild_id, scope_id))
+        }
+        RuntimeScopeKind::Dm => {
+            if !guild_id.is_empty() {
+                anyhow::bail!("DM feedback requires an empty guild_id");
+            }
+            Ok(RuntimeScope::dm(scope_id))
+        }
+        RuntimeScopeKind::TextChannel => {
+            if guild_id.is_empty() {
+                anyhow::bail!("text-channel feedback requires guild_id");
+            }
+            Ok(RuntimeScope::text_channel(guild_id, scope_id))
+        }
+        RuntimeScopeKind::Thread => {
+            if guild_id.is_empty() {
+                anyhow::bail!("thread feedback requires guild_id");
+            }
+            Ok(RuntimeScope::thread(guild_id, scope_id))
+        }
+        RuntimeScopeKind::Runtime => {
+            if !guild_id.is_empty() || scope_id != "runtime" {
+                anyhow::bail!("runtime feedback requires empty guild_id and scope_id runtime");
+            }
+            Ok(RuntimeScope::runtime())
+        }
+    }
 }
 
 async fn automation_validate(
@@ -952,57 +1008,126 @@ async fn confirmation_cancel(
     )
 }
 
-async fn debug_overview(
+async fn dashboard_summary(State(state): State<AppState>) -> Response {
+    let runtime = runtime_context!(state);
+    result(runtime.dashboard_summary_payload().await)
+}
+
+async fn dashboard_overview(
     State(state): State<AppState>,
     Query(query): Query<BTreeQuery>,
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
         runtime
-            .debug_overview(DebugOverviewRequest {
+            .dashboard_overview(DashboardOverviewRequest {
                 jobs_limit: query_usize(&query, &["jobsLimit"], 120),
-                agent_limit: query_usize(&query, &["agentLimit"], 120),
-                timeline_window: query_str(&query, &["timelineWindow"]),
-                timeline_start: query_str(&query, &["timelineStart"]),
-                timeline_end: query_str(&query, &["timelineEnd"]),
-                timeline_limit: query_usize(&query, &["timelineLimit"], 120),
-                timeline_query: query_str(&query, &["timelineSearch"]),
-                timeline_query_field: query_str(&query, &["timelineSearchField"]),
-                transcript_since: query_str(&query, &["transcriptSince"]),
-                transcript_limit: query_usize(&query, &["transcriptLimit"], 250),
-                transcript_channel: query_str(&query, &["transcriptChannel"]),
-                transcript_query: query_str(&query, &["transcriptSearch"]),
-                publication_limit: query_usize(&query, &["publicationLimit"], 120),
-                http_requests: http_request_metrics_snapshot(),
             })
             .await,
     )
 }
 
-async fn debug_agent_job(State(state): State<AppState>, Path(job_id): Path<String>) -> Response {
+async fn dashboard_agents(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
     let runtime = runtime_context!(state);
-    result(runtime.debug_agent_job(&job_id).await)
+    result(
+        runtime
+            .dashboard_agents(DashboardAgentsRequest {
+                limit: query_usize(&query, &["limit"], 120),
+            })
+            .await,
+    )
 }
 
-async fn debug_dashboard() -> Html<&'static str> {
+async fn dashboard_automations(State(state): State<AppState>) -> Response {
+    let runtime = runtime_context!(state);
+    result(runtime.dashboard_automations().await)
+}
+
+async fn dashboard_health(State(state): State<AppState>) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .dashboard_health_payload(http_request_metrics_snapshot())
+            .await,
+    )
+}
+
+async fn dashboard_rooms(State(state): State<AppState>) -> Response {
+    let runtime = runtime_context!(state);
+    result(runtime.dashboard_rooms_payload().await)
+}
+
+async fn dashboard_transcript(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(
+        runtime
+            .dashboard_transcript(DashboardTranscriptRequest {
+                since: query_str(&query, &["since"]),
+                limit: query_usize(&query, &["limit"], 250),
+                channel: query_str(&query, &["channel"]),
+                search: query_str(&query, &["search"]),
+            })
+            .await,
+    )
+}
+
+async fn dashboard_timeline(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    let request = match dashboard_timeline_request(&query) {
+        Ok(request) => request,
+        Err(error) => return err(error),
+    };
+    result(runtime.dashboard_timeline(request).await)
+}
+
+async fn dashboard_jobs(
+    State(state): State<AppState>,
+    Query(query): Query<BTreeQuery>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    let request = match dashboard_jobs_request(&query) {
+        Ok(request) => request,
+        Err(error) => return err(error),
+    };
+    result(runtime.dashboard_jobs(request).await)
+}
+
+async fn dashboard_agent_detail(
+    State(state): State<AppState>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let runtime = runtime_context!(state);
+    result(runtime.dashboard_agent_detail(&job_id).await)
+}
+
+async fn dashboard_index() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
-async fn debug_dashboard_css() -> impl IntoResponse {
+async fn dashboard_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         STYLES_CSS,
     )
 }
 
-async fn debug_tabulator_css() -> impl IntoResponse {
+async fn dashboard_tabulator_css() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/css; charset=utf-8")],
         TABULATOR_CSS,
     )
 }
 
-async fn debug_echarts_js() -> impl IntoResponse {
+async fn dashboard_echarts_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1012,7 +1137,7 @@ async fn debug_echarts_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_tabulator_js() -> impl IntoResponse {
+async fn dashboard_tabulator_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1022,7 +1147,7 @@ async fn debug_tabulator_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_dashboard_json_js() -> impl IntoResponse {
+async fn dashboard_json_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1032,7 +1157,7 @@ async fn debug_dashboard_json_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_dashboard_charts_js() -> impl IntoResponse {
+async fn dashboard_charts_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1042,7 +1167,7 @@ async fn debug_dashboard_charts_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_dashboard_tables_js() -> impl IntoResponse {
+async fn dashboard_tables_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1052,7 +1177,7 @@ async fn debug_dashboard_tables_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_dashboard_explorer_js() -> impl IntoResponse {
+async fn dashboard_explorer_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1062,7 +1187,7 @@ async fn debug_dashboard_explorer_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_dashboard_js() -> impl IntoResponse {
+async fn dashboard_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1072,7 +1197,7 @@ async fn debug_dashboard_js() -> impl IntoResponse {
     )
 }
 
-async fn debug_alpine_js() -> impl IntoResponse {
+async fn dashboard_alpine_js() -> impl IntoResponse {
     (
         [(
             header::CONTENT_TYPE,
@@ -1093,6 +1218,35 @@ fn result(payload: Result<Value>) -> Response {
         Ok(payload) => ok(payload),
         Err(error) => err(error),
     }
+}
+
+pub fn readiness_http_status(payload: &Value) -> StatusCode {
+    match payload.get("status").and_then(Value::as_str) {
+        Some("ok" | "degraded") => StatusCode::OK,
+        Some("down" | "stale" | "unknown") | None | Some(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+fn health_error(error: anyhow::Error) -> Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(health_error_payload(&error)),
+    )
+        .into_response()
+}
+
+pub fn health_error_payload(error: &anyhow::Error) -> Value {
+    json!({
+        "ok": false,
+        "status": "down",
+        "observedAt": Utc::now().to_rfc3339(),
+        "components": [{
+            "component": "runtime",
+            "status": "down",
+            "reason": "Health query failed",
+            "details": {"error": error.to_string()},
+        }],
+    })
 }
 
 fn err(error: anyhow::Error) -> Response {
@@ -1132,6 +1286,57 @@ fn query_usize(query: &BTreeQuery, keys: &[&str], fallback: usize) -> usize {
         .find_map(|key| query.get(*key))
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(fallback)
+}
+
+fn dashboard_timeline_request(query: &BTreeQuery) -> Result<DashboardTimelineRequest> {
+    Ok(DashboardTimelineRequest {
+        record_types: dashboard_filter(query, "recordTypes")?,
+        categories: dashboard_category_filter(query)?,
+        kinds: dashboard_filter(query, "kinds")?,
+        event_kinds: dashboard_filter(query, "eventKinds")?,
+        job_kinds: dashboard_filter(query, "jobKinds")?,
+        states: dashboard_filter(query, "states")?,
+        scope_kinds: dashboard_filter(query, "scopeKinds")?,
+        scope_ids: dashboard_filter(query, "scopeIds")?,
+        guild_ids: dashboard_filter(query, "guildIds")?,
+        from: query_str(query, &["from"]),
+        to: query_str(query, &["to"]),
+        search: query_str(query, &["search"]),
+        search_field: query_str(query, &["searchField"]),
+        metadata: query_str(query, &["metadata"]),
+        limit: query_usize(query, &["limit"], 120),
+        cursor: query_str(query, &["cursor"]),
+    })
+}
+
+fn dashboard_jobs_request(query: &BTreeQuery) -> Result<DashboardJobsRequest> {
+    Ok(DashboardJobsRequest {
+        categories: dashboard_category_filter(query)?,
+        kinds: dashboard_filter(query, "kinds")?,
+        job_kinds: dashboard_filter(query, "jobKinds")?,
+        states: dashboard_filter(query, "states")?,
+        scope_kinds: dashboard_filter(query, "scopeKinds")?,
+        scope_ids: dashboard_filter(query, "scopeIds")?,
+        guild_ids: dashboard_filter(query, "guildIds")?,
+        from: query_str(query, &["from"]),
+        to: query_str(query, &["to"]),
+        search: query_str(query, &["search"]),
+        search_field: query_str(query, &["searchField"]),
+        metadata: query_str(query, &["metadata"]),
+        limit: query_usize(query, &["limit"], 120),
+        cursor: query_str(query, &["cursor"]),
+    })
+}
+
+fn dashboard_filter(query: &BTreeQuery, key: &str) -> Result<crate::runtime::DashboardFilter> {
+    parse_dashboard_filter(query.get(key).map(String::as_str), key)
+}
+
+fn dashboard_category_filter(query: &BTreeQuery) -> Result<crate::runtime::DashboardFilter> {
+    let Some(raw) = query.get("categories") else {
+        return Ok(default_dashboard_categories());
+    };
+    parse_dashboard_filter(Some(raw.as_str()), "categories")
 }
 
 fn non_empty_string(value: String) -> Option<String> {

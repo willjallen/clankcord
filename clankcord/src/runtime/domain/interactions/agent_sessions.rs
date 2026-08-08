@@ -403,9 +403,8 @@ impl Runtime {
             .update_agent_session_record(&record)
             .await?;
         self.timeline_store
-            .append_event(
-                &record.guild_id,
-                &record.scope_id,
+            .append_scope_event(
+                &record.scope(),
                 json!({
                     "event_kind": "agent_session_resumed",
                     "kind": "agent_session_resumed",
@@ -469,9 +468,8 @@ impl Runtime {
         let retired = self.timeline_store.retire_due_agent_sessions().await?;
         for record in &retired {
             self.timeline_store
-                .append_event(
-                    &record.guild_id,
-                    &record.scope_id,
+                .append_scope_event(
+                    &record.scope(),
                     json!({
                         "event_kind": "agent_session_retired",
                         "kind": "agent_session_retired",
@@ -504,9 +502,8 @@ impl Runtime {
                 .update_agent_session_record(&record)
                 .await?;
             self.timeline_store
-                .append_event(
-                    &record.guild_id,
-                    &record.scope_id,
+                .append_scope_event(
+                    &record.scope(),
                     json!({
                         "event_kind": "agent_session_retired",
                         "kind": "agent_session_retired",
@@ -766,11 +763,7 @@ fn agent_session_resume_command(record: &AgentSessionRecord) -> String {
 }
 
 fn agent_session_scope(record: &AgentSessionRecord) -> RuntimeScope {
-    if record.route_kind == AgentSessionRouteKind::Dm {
-        RuntimeScope::dm(record.dm_user_id.clone())
-    } else {
-        RuntimeScope::voice_channel(record.guild_id.clone(), record.scope_id.clone())
-    }
+    record.scope()
 }
 
 fn agent_session_matched_fields(

@@ -96,7 +96,7 @@ voice_status_sync
 
 ## HTTP
 
-The HTTP adapter attaches after the service loops are spawned. It serves health, status, voice, command, response, automation, timeline, transcript, conversation, context, participant, member, job, confirmation, debug, and dashboard routes over `RuntimeHandle`.
+The HTTP adapter attaches after the service loops are spawned. It serves health, status, voice, command, response, automation, timeline, transcript, conversation, context, participant, member, job, confirmation, and dashboard routes over `RuntimeHandle`.
 
 Read routes render views from the timeline store. Mutation routes parse boundary JSON and submit jobs or runtime-control requests through runtime intake. The default bind is `0.0.0.0:8091`, configurable through the environment or runtime config.
 

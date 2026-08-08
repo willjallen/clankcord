@@ -36,7 +36,8 @@ const _: () = assert!(
 );
 
 const fn job_payload_blob_version_for_clankcord(version: &str) -> u16 {
-    if const_str_eq(version, "0.12.0")
+    if const_str_eq(version, "0.13.0")
+        || const_str_eq(version, "0.12.0")
         || const_str_eq(version, "0.11.0")
         || const_str_eq(version, "0.10.0")
     {
@@ -367,6 +368,49 @@ impl JobMetadata {
             object.insert("result".to_string(), output.to_json());
         }
         Value::Object(object)
+    }
+
+    pub(crate) fn failure_reason(&self) -> String {
+        let agent_reason = self
+            .agent_task()
+            .map(|task| {
+                let preflight_reason = task
+                    .preflight
+                    .as_ref()
+                    .filter(|preflight| !preflight.ok)
+                    .map(|preflight| {
+                        format!(
+                            "agent preflight failed: {}",
+                            preflight.failed_check_summary()
+                        )
+                    })
+                    .unwrap_or_default();
+                first_non_empty([
+                    task.dispatch_error.clone(),
+                    task.dispatch_error_after_cancel.clone(),
+                    preflight_reason,
+                    task.dispatch_stderr.clone(),
+                ])
+            })
+            .unwrap_or_default();
+        let confirmation_reason = self
+            .confirmation()
+            .map(|confirmation| {
+                first_non_empty([
+                    confirmation.approval_error.clone(),
+                    confirmation.post_error.clone(),
+                ])
+            })
+            .unwrap_or_default();
+        let timeout_reason = (!self.timed_out_at.trim().is_empty())
+            .then(|| format!("job timed out at {}", self.timed_out_at.trim()))
+            .unwrap_or_default();
+        first_non_empty([
+            self.error.clone(),
+            agent_reason,
+            confirmation_reason,
+            timeout_reason,
+        ])
     }
 
     fn agent_task_mut_if_present(&mut self) -> Option<&mut AgentTaskMetadata> {
@@ -1314,40 +1358,70 @@ impl Job {
         }
     }
 
+    pub(crate) fn operational_outcome_reason(&self) -> String {
+        let reason = self.metadata.failure_reason();
+        if !reason.is_empty() {
+            return reason;
+        }
+        if matches!(
+            self.state,
+            JobState::ApprovalFailed
+                | JobState::Failed
+                | JobState::FailedTimeout
+                | JobState::FailedDraftRetained
+        ) {
+            format!(
+                "{} ended as {} without a recorded failure reason",
+                self.kind.as_str(),
+                self.state.as_str()
+            )
+        } else {
+            String::new()
+        }
+    }
+
     pub fn mark_running(&mut self) {
+        let now = now_string();
         self.state = JobState::Running;
         if self
             .started_at
             .as_ref()
             .is_none_or(|value| value.trim().is_empty())
         {
-            self.started_at = Some(now_string());
+            self.started_at = Some(now.clone());
         }
+        self.updated_at = now;
     }
 
     pub fn mark_waiting(&mut self) {
         self.state = JobState::Waiting;
+        self.touch();
     }
 
     pub fn mark_complete(&mut self) {
+        let now = now_string();
         self.state = JobState::Complete;
-        self.completed_at = Some(now_string());
+        self.completed_at = Some(now.clone());
+        self.updated_at = now;
     }
 
     pub fn mark_cancelled(&mut self) {
+        let now = now_string();
         self.state = JobState::Cancelled;
         if self
             .cancelled_at
             .as_ref()
             .is_none_or(|value| value.trim().is_empty())
         {
-            self.cancelled_at = Some(now_string());
+            self.cancelled_at = Some(now.clone());
         }
+        self.updated_at = now;
     }
 
     pub fn mark_cancel_requested(&mut self) {
         self.state = JobState::CancelRequested;
         self.metadata.cancel_requested = true;
+        self.touch();
     }
 
     pub fn cancel_requested(&self) -> bool {
@@ -1357,6 +1431,7 @@ impl Job {
 
     pub fn set_state(&mut self, state: JobState) {
         self.state = state;
+        self.touch();
     }
 
     pub fn touch(&mut self) {

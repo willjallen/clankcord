@@ -1,6 +1,7 @@
 const rootPrefix = location.pathname.startsWith('/__clankcord/') ? '/__clankcord' : '';
 const viewStorageKey = 'clankcord.dashboard.view';
-const filterStorageKey = 'clankcord.dashboard.filters';
+const filterStorageKey = 'clankcord.dashboard.filters.v3';
+const dashboardCategoryIds = ['conversation', 'agent', 'messaging_control', 'automation', 'operations', 'other', 'voice_detail', 'background'];
 
 const defaultFilters = {
   jobsLimit: 120,
@@ -9,17 +10,20 @@ const defaultFilters = {
   timelineStart: '',
   timelineEnd: '',
   timelineLimit: 120,
-  timelineRecordTypes: [],
-  timelineKinds: [],
-  timelineJobStates: [],
-  timelineChannels: [],
+  timelineRecordTypes: null,
+  timelineCategories: null,
+  timelineKinds: null,
+  timelineJobStates: null,
+  timelineChannels: null,
   timelineSearch: '',
   timelineSearchField: 'all',
   transcriptSince: '-24h',
   transcriptLimit: 250,
   transcriptChannel: '',
   transcriptSearch: '',
-  publicationLimit: 120,
+  feedbackSince: '-30d',
+  feedbackLimit: 250,
+  feedbackSearch: '',
   ...window.ClankDashboardExplorer.defaultFilters,
 };
 
@@ -53,13 +57,27 @@ window.dashboard = function dashboard() {
       { id: 'timeline', label: 'Timeline' },
       { id: 'agents', label: 'Agent Jobs' },
       { id: 'automations', label: 'Automations' },
+      { id: 'feedback', label: 'Feedback' },
       { id: 'health', label: 'Health' },
       { id: 'rooms', label: 'Rooms' },
       { id: 'control', label: 'Control' },
       { id: 'transcript', label: 'Transcript' },
-      { id: 'raw', label: 'Raw' },
+      { id: 'raw', label: 'Data' },
     ],
     data: null,
+    timelinePage: {
+      loaded: false,
+      snapshotAt: '',
+      matched: 0,
+      returned: 0,
+      hasMore: false,
+      nextCursor: '',
+      records: [],
+      facets: { recordTypes: [], categories: [], defaultCategories: [], kinds: [], eventKinds: [], jobKinds: [], states: [], scopes: [] },
+    },
+    timelineLoadingMore: false,
+    timelineGeneration: 0,
+    timelineLoadMoreController: null,
     loading: false,
     error: '',
     activeView: localStorage.getItem(viewStorageKey) || 'overview',
@@ -70,11 +88,13 @@ window.dashboard = function dashboard() {
     timelineFilterEditor: '',
     ...window.ClankDashboardExplorer.initialState(),
     agentDetails: {},
+    agentDetailSequences: {},
     agentDetailLoadingId: '',
     agentDetailErrors: {},
     autoRefresh: true,
     timer: null,
-    lastSubwindowScrollAt: 0,
+    refreshController: null,
+    refreshSequence: 0,
     control: {
       roomId: '',
       requestedByUserId: 'dashboard',
@@ -90,21 +110,6 @@ window.dashboard = function dashboard() {
         this.activeView = 'overview';
       }
       this.ensureTimelineWindowDefaults();
-      document.addEventListener('scroll', (event) => {
-        if (event.target?.closest?.('.scroll-region, .tabulator-host')) {
-          this.lastSubwindowScrollAt = Date.now();
-        }
-      }, true);
-      document.addEventListener('pointerdown', (event) => {
-        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid')) {
-          this.lastSubwindowScrollAt = Date.now();
-        }
-      }, true);
-      document.addEventListener('focusin', (event) => {
-        if (event.target?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid')) {
-          this.lastSubwindowScrollAt = Date.now();
-        }
-      }, true);
       this.syncAutoRefresh();
       this.refresh({ force: true });
     },
@@ -113,18 +118,35 @@ window.dashboard = function dashboard() {
       if (this.timer) clearInterval(this.timer);
       this.timer = null;
       if (this.autoRefresh) {
-        this.timer = setInterval(() => this.refresh({ auto: true }), 3000);
+        this.timer = setInterval(() => this.refresh({ auto: true }), this.autoRefreshDelay());
       }
     },
 
-    activateView(view) {
+    autoRefreshDelay() {
+      return ({
+        overview: 10000,
+        timeline: 3000,
+        agents: 10000,
+        automations: 30000,
+        feedback: 30000,
+        health: 30000,
+        rooms: 3000,
+        control: 3000,
+        transcript: 5000,
+        raw: 15000,
+      })[this.activeView];
+    },
+
+    activateView(view, options = {}) {
       if (!this.tabs.some((tab) => tab.id === view)) return;
+      const changed = this.activeView !== view;
       this.activeView = view;
       try {
         localStorage.setItem(viewStorageKey, view);
       } catch {}
-      if (view === 'agents') {
-        this.loadSelectedAgentDetail();
+      if (changed) {
+        this.syncAutoRefresh();
+        if (options.refresh !== false) this.refresh({ force: true });
       }
       this.scheduleRenderInteractive();
     },
@@ -141,11 +163,6 @@ window.dashboard = function dashboard() {
       this.scheduleRenderInteractive();
     },
 
-    timelineLocalFilterChanged() {
-      storeJson(filterStorageKey, this.filters);
-      this.scheduleRenderInteractive();
-    },
-
     clearTimelineSearch() {
       Object.assign(this.filters, {
         timelineSearch: '',
@@ -157,10 +174,11 @@ window.dashboard = function dashboard() {
     clearTimelineFilters() {
       this.timelineFilterEditor = '';
       Object.assign(this.filters, {
-        timelineRecordTypes: [],
-        timelineKinds: [],
-        timelineJobStates: [],
-        timelineChannels: [],
+        timelineRecordTypes: null,
+        timelineCategories: null,
+        timelineKinds: null,
+        timelineJobStates: null,
+        timelineChannels: null,
         timelineWindow: '-1h',
         timelineStart: this.localDateTimeInput(new Date(Date.now() - 60 * 60 * 1000)),
         timelineEnd: '',
@@ -173,67 +191,211 @@ window.dashboard = function dashboard() {
     applyTimelineFilter(values = {}) {
       this.timelineFilterEditor = '';
       Object.assign(this.filters, values);
-      this.activateView('timeline');
-      if ('timelineSearch' in values || 'timelineSearchField' in values || 'timelineWindow' in values || 'timelineStart' in values || 'timelineEnd' in values || 'timelineLimit' in values) {
-        this.timelineFilterChanged();
-      } else {
-        this.timelineLocalFilterChanged();
+      if ('timelineWindow' in values && values.timelineWindow !== 'custom') {
+        this.applyTimelineWindowPreset({ refresh: false });
       }
+      this.activateView('timeline', { refresh: false });
+      this.timelineFilterChanged();
     },
 
     ...window.ClankDashboardExplorer.methods,
 
     jsonUrl() {
-      return `${rootPrefix}/v1/debug/overview?${this.queryParams().toString()}`;
+      return this.activeViewUrl();
     },
 
-    queryParams() {
-      return new URLSearchParams({
-        jobsLimit: String(this.filters.jobsLimit),
-        agentLimit: String(this.filters.agentLimit),
-        timelineWindow: this.filters.timelineWindow,
-        timelineStart: this.timelineInputIso(this.filters.timelineStart),
-        timelineEnd: this.timelineInputIso(this.filters.timelineEnd),
-        timelineLimit: String(this.filters.timelineLimit),
-        timelineSearch: textValue(this.filters.timelineSearch).trim(),
-        timelineSearchField: this.filters.timelineSearchField,
-        transcriptSince: this.filters.transcriptSince,
-        transcriptLimit: String(this.filters.transcriptLimit),
-        transcriptChannel: textValue(this.filters.transcriptChannel).trim(),
-        transcriptSearch: textValue(this.filters.transcriptSearch).trim(),
-        publicationLimit: String(this.filters.publicationLimit),
+    summaryUrl() {
+      return `${rootPrefix}/v1/dashboard/summary`;
+    },
+
+    activeViewUrl() {
+      if (this.activeView === 'timeline') return this.timelineUrl();
+      if (this.activeView === 'feedback') return this.feedbackUrl();
+      if (this.activeView === 'overview') return `${rootPrefix}/v1/dashboard/overview?jobsLimit=${this.filters.jobsLimit}`;
+      if (this.activeView === 'agents') return `${rootPrefix}/v1/dashboard/agents?limit=${this.filters.agentLimit}`;
+      if (this.activeView === 'automations') return `${rootPrefix}/v1/dashboard/automations`;
+      if (this.activeView === 'health') return `${rootPrefix}/v1/dashboard/health`;
+      if (this.activeView === 'rooms' || this.activeView === 'control') return `${rootPrefix}/v1/dashboard/rooms`;
+      if (this.activeView === 'transcript') {
+        const params = new URLSearchParams({
+          since: this.filters.transcriptSince,
+          limit: String(this.filters.transcriptLimit),
+          channel: textValue(this.filters.transcriptChannel).trim(),
+          search: textValue(this.filters.transcriptSearch).trim(),
+        });
+        return `${rootPrefix}/v1/dashboard/transcript?${params.toString()}`;
+      }
+      return this.summaryUrl();
+    },
+
+    timelineQueryParams(cursor = '') {
+      const params = new URLSearchParams({
+        limit: String(this.filters.timelineLimit),
+        search: textValue(this.filters.timelineSearch).trim(),
+        searchField: this.filters.timelineSearchField,
       });
+      const from = this.timelineInputIso(this.filters.timelineStart);
+      const to = this.timelineInputIso(this.filters.timelineEnd);
+      params.set('from', this.filters.timelineWindow === 'all' ? 'all' : from);
+      if (to) params.set('to', to);
+      if (cursor) {
+        params.set('cursor', cursor);
+        params.set('metadata', 'none');
+      }
+      this.setTimelineCategoricalParam(params, 'recordTypes', this.filters.timelineRecordTypes);
+      this.setTimelineCategoryParam(params);
+      this.setTimelineCategoricalParam(params, 'kinds', this.filters.timelineKinds);
+      this.setTimelineCategoricalParam(params, 'states', this.filters.timelineJobStates);
+      this.setTimelineCategoricalParam(params, 'scopeIds', this.filters.timelineChannels);
+      return params;
     },
 
-    shouldDeferAutoRefresh() {
-      if (Date.now() - this.lastSubwindowScrollAt < 1800) return true;
-      if (document.querySelector('.scroll-region:hover, .tabulator-host:hover, .tabulator-popup-container')) return true;
-      const active = document.activeElement;
-      return Boolean(active?.closest?.('.scroll-region, .tabulator-host, .filter-grid, .filterbar, .timeline-filter-grid, .timeline-filter-editor, .timeline-window-grid, .timeline-search-grid'));
+    setTimelineCategoricalParam(params, name, selection) {
+      if (selection === null) return;
+      params.set(name, selection.length ? selection.join(',') : 'none');
+    },
+
+    setTimelineCategoryParam(params) {
+      const selection = this.filters.timelineCategories;
+      if (selection === null) return;
+      if (!selection.length) {
+        params.set('categories', 'none');
+        return;
+      }
+      const all = this.timelineCategoryOptionIds();
+      const selectsAll = all.length > 0 && all.every((category) => selection.includes(category));
+      params.set('categories', selectsAll ? 'all' : selection.join(','));
+    },
+
+    timelineUrl(cursor = '') {
+      return `${rootPrefix}/v1/dashboard/timeline?${this.timelineQueryParams(cursor).toString()}`;
+    },
+
+    feedbackUrl() {
+      const params = new URLSearchParams({
+        recordTypes: 'event',
+        eventKinds: 'feedback',
+        jobKinds: 'none',
+        search: textValue(this.filters.feedbackSearch).trim(),
+        searchField: 'feedback',
+        limit: String(this.filters.feedbackLimit),
+        metadata: 'count',
+      });
+      if (this.filters.feedbackSince !== 'all') {
+        params.set('from', new Date(Date.now() - this.timelineWindowDurationMs(this.filters.feedbackSince)).toISOString());
+      } else {
+        params.set('from', 'all');
+      }
+      return `${rootPrefix}/v1/dashboard/timeline?${params.toString()}`;
+    },
+
+    applyFeedbackPage(page) {
+      this.data = {
+        ...this.data,
+        feedback: {
+          snapshotAt: page.snapshotAt,
+          matched: page.matched,
+          returned: page.returned,
+          hasMore: page.hasMore,
+          events: page.records.map((record) => record.event),
+        },
+      };
+    },
+
+    applyTimelinePage(page, append = false) {
+      if (!append) this.timelineGeneration += 1;
+      const records = append ? this.timelinePage.records.concat(page.records) : page.records;
+      this.timelinePage = {
+        loaded: true,
+        snapshotAt: append ? this.timelinePage.snapshotAt : page.snapshotAt,
+        matched: append ? this.timelinePage.matched : page.matched,
+        returned: records.length,
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor || '',
+        records,
+        facets: append ? this.timelinePage.facets : page.facets,
+      };
+    },
+
+    async loadOlderTimeline() {
+      if (!this.timelinePage.hasMore || !this.timelinePage.nextCursor || this.timelineLoadingMore) return;
+      const generation = this.timelineGeneration;
+      const controller = new AbortController();
+      this.timelineLoadMoreController = controller;
+      this.timelineLoadingMore = true;
+      try {
+        const response = await fetch(this.timelineUrl(this.timelinePage.nextCursor), { cache: 'no-store', signal: controller.signal });
+        if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+        const page = await response.json();
+        if (generation !== this.timelineGeneration) return;
+        this.applyTimelinePage(page, true);
+        this.error = '';
+        this.scheduleRenderInteractive();
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        this.error = `Loading older timeline records failed: ${error.message}`;
+      } finally {
+        if (this.timelineLoadMoreController === controller) {
+          this.timelineLoadingMore = false;
+          this.timelineLoadMoreController = null;
+        }
+      }
     },
 
     async refresh(options = {}) {
-      if (options.auto && this.shouldDeferAutoRefresh()) return;
+      if (options.auto && (this.loading || this.timelineLoadingMore)) return;
+      const sequence = ++this.refreshSequence;
+      if (this.refreshController) this.refreshController.abort();
+      if (this.activeView === 'timeline' && this.timelineLoadMoreController) {
+        this.timelineLoadMoreController.abort();
+      }
+      const controller = new AbortController();
+      this.refreshController = controller;
       const scrollState = this.captureScrollState();
       this.loading = true;
       try {
-        const response = await fetch(this.jsonUrl(), { cache: 'no-store' });
-        if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-        const next = await response.json();
-        this.data = next;
+        const summaryUrl = this.summaryUrl();
+        const viewUrl = this.activeViewUrl();
+        const summaryPromise = this.fetchDashboardJson(summaryUrl, controller.signal);
+        const viewPromise = viewUrl === summaryUrl
+          ? summaryPromise
+          : this.fetchDashboardJson(viewUrl, controller.signal);
+        const [summary, view] = await Promise.all([summaryPromise, viewPromise]);
+        if (sequence !== this.refreshSequence) return;
+        this.data = { ...this.data, ...summary };
+        if (this.activeView === 'timeline') {
+          this.applyTimelinePage(view);
+        } else if (this.activeView === 'feedback') {
+          this.applyFeedbackPage(view);
+        } else {
+          this.data = { ...this.data, ...view };
+        }
         this.error = '';
         this.ensureSelections();
+        this.refreshExplorerSelection();
         setTimeout(() => {
           this.restoreScrollState(scrollState);
-          this.loadSelectedAgentDetail();
+          if (this.activeView === 'agents' && this.selectedAgentJobId) {
+            this.loadSelectedAgentDetail();
+          }
           this.scheduleRenderInteractive();
           this.renderExplorerJson();
         }, 0);
       } catch (error) {
+        if (error.name === 'AbortError') return;
         this.error = `Dashboard refresh failed: ${error.message}`;
       } finally {
-        this.loading = false;
+        if (sequence === this.refreshSequence) {
+          this.loading = false;
+          this.refreshController = null;
+        }
       }
+    },
+
+    async fetchDashboardJson(url, signal) {
+      const response = await fetch(url, { cache: 'no-store', signal });
+      if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+      return response.json();
     },
 
     captureScrollState() {
@@ -294,13 +456,33 @@ window.dashboard = function dashboard() {
       }
     },
 
+    refreshExplorerSelection() {
+      const kind = this.explorerSelection.kind;
+      const id = this.explorerSelectionId();
+      if (!kind || !id) return;
+      const records = kind === 'job'
+        ? this.timelinePage.records.filter((record) => record.recordType === 'job').map((record) => record.job).concat(this.allJobs())
+        : this.timelinePage.records.filter((record) => record.recordType === 'event').map((record) => record.event).concat(this.timelineEvents, this.transcriptEvents, this.feedbackEvents);
+      const current = records.find((record) => (kind === 'job' ? record.job_id : this.eventId(record)) === id);
+      if (current) {
+        this.explorerSelection = { kind, record: current };
+      } else if (this.activeView === 'timeline') {
+        this.explorerSelection = { kind: '', record: null };
+      }
+    },
+
     selectJob(jobId) {
       this.selectedJobId = jobId || '';
       const job = this.allJobs().find((record) => record.job_id === this.selectedJobId);
       if (job) {
         this.selectExplorerRecord('job', job);
       }
-      this.activateView('timeline');
+      this.applyTimelineFilter({
+        timelineCategories: this.timelineDrilldownCategories(job?.category),
+        timelineSearch: this.selectedJobId,
+        timelineSearchField: 'all',
+        timelineWindow: 'all',
+      });
     },
 
     selectAgentJob(jobId) {
@@ -326,28 +508,32 @@ window.dashboard = function dashboard() {
       if (!jobId) return;
       const cached = this.agentDetails[jobId];
       if (cached && !options.force && !this.isActiveState(cached.job?.state)) return;
+      const sequence = (this.agentDetailSequences[jobId] || 0) + 1;
+      this.agentDetailSequences = { ...this.agentDetailSequences, [jobId]: sequence };
       this.agentDetailLoadingId = jobId;
       try {
-        const response = await fetch(`${rootPrefix}/v1/debug/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+        const response = await fetch(`${rootPrefix}/v1/dashboard/agents/${encodeURIComponent(jobId)}`, { cache: 'no-store' });
         if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
         const detail = await response.json();
         const returnedJobId = detail?.job?.job_id || '';
         if (returnedJobId !== jobId) {
           throw new Error(`requested ${jobId}, received ${returnedJobId || 'empty job id'}`);
         }
+        if (this.agentDetailSequences[jobId] !== sequence) return;
         this.agentDetails = { ...this.agentDetails, [jobId]: detail };
         this.agentDetailErrors = { ...this.agentDetailErrors, [jobId]: '' };
         if (this.selectedAgentJobId === jobId && this.error.startsWith('Agent detail load failed:')) {
           this.error = '';
         }
       } catch (error) {
+        if (this.agentDetailSequences[jobId] !== sequence) return;
         const message = `Agent detail load failed: ${error.message}`;
         this.agentDetailErrors = { ...this.agentDetailErrors, [jobId]: message };
         if (this.selectedAgentJobId === jobId) {
           this.error = message;
         }
       } finally {
-        if (this.agentDetailLoadingId === jobId) {
+        if (this.agentDetailLoadingId === jobId && this.agentDetailSequences[jobId] === sequence) {
           this.agentDetailLoadingId = '';
         }
       }
@@ -400,19 +586,21 @@ window.dashboard = function dashboard() {
     subtitle() {
       if (!this.data) return 'Loading...';
       const summary = this.jobSummary();
-      return `Generated ${this.ago(this.data.generatedAt)} | uptime ${this.data.process?.uptimeSeconds ?? 0}s | ${summary.total || 0} jobs tracked`;
+      return `Updated ${this.ago(this.data.generatedAt)} | ${this.data.health?.status || 'unknown'} | ${summary.active || 0} active jobs`;
     },
 
     metrics() {
       const summary = this.jobSummary();
-      const status = this.status();
+      const health = this.data?.health || {};
+      const failures = health.failures || {};
+      const backlog = this.operationBacklog();
       return [
+        { label: 'Health', value: health.status || 'unknown', className: this.statusClass(health.status || 'unknown') },
         { label: 'Active Jobs', value: summary.active || 0, className: summary.active ? 'ok' : 'muted' },
-        { label: 'Queued', value: summary.queued || 0, className: summary.queued ? 'warn' : 'muted' },
+        { label: 'Due Queued', value: backlog.dueQueued || 0, className: backlog.dueQueued ? 'warn' : 'muted' },
         { label: 'Running', value: summary.running || 0, className: summary.running ? 'ok' : 'muted' },
-        { label: 'Waiting', value: summary.waiting || 0, className: summary.waiting ? 'warn' : 'muted' },
-        { label: 'Failed', value: summary.failed || 0, className: summary.failed ? 'bad' : 'muted' },
-        { label: 'Rooms', value: (status.rooms || []).length, className: '' },
+        { label: failures.complete ? 'Failures (1h)' : 'Failures (1h, partial)', value: failures.complete ? (failures.count || 0) : `≥${failures.count || 0}`, className: failures.count ? 'bad' : 'muted' },
+        { label: 'Rooms', value: health.inventory?.configuredRooms || 0, className: '' },
       ];
     },
 
@@ -438,6 +626,20 @@ window.dashboard = function dashboard() {
 
     get agentJobs() {
       return this.data?.agents?.jobs || [];
+    },
+
+    agentSummary() {
+      return this.data?.agents?.summary || {};
+    },
+
+    agentSummaryRows() {
+      const summary = this.agentSummary();
+      return [
+        { label: 'Runs · 24h', value: this.int(summary.total), className: '' },
+        { label: 'Active · now', value: this.int(summary.active), className: summary.active ? 'info' : 'muted' },
+        { label: 'Completed · 24h', value: this.int(summary.completed), className: summary.completed ? 'ok' : 'muted' },
+        { label: 'Failed · 24h', value: this.int(summary.failed), className: summary.failed ? 'bad' : 'muted' },
+      ];
     },
 
     get agentSessions() {
@@ -472,20 +674,40 @@ window.dashboard = function dashboard() {
       return this.data?.transcript?.events || [];
     },
 
+    get feedbackEvents() {
+      return this.data?.feedback?.events || [];
+    },
+
+    feedbackCountLabel() {
+      const feedback = this.data?.feedback || {};
+      const returned = feedback.returned ?? this.feedbackEvents.length;
+      const matched = feedback.matched ?? returned;
+      return feedback.hasMore ? `${returned} of ${matched}` : `${matched}`;
+    },
+
+    feedbackText(event) {
+      return firstText([event?.feedback_message, event?.text, event?.reason]);
+    },
+
+    openFeedbackInTimeline(event = null) {
+      this.applyTimelineFilter({
+        timelineRecordTypes: ['event'],
+        timelineCategories: this.timelineDrilldownCategories(event?.category),
+        timelineKinds: ['feedback'],
+        timelineJobStates: null,
+        timelineChannels: event ? [this.eventChannelId(event)].filter(Boolean) : null,
+        timelineSearch: event ? this.feedbackText(event) : textValue(this.filters.feedbackSearch).trim(),
+        timelineSearchField: 'feedback',
+        timelineWindow: this.filters.feedbackSince,
+      });
+    },
+
     selectedJob() {
       return this.allJobs().find((job) => job.job_id === this.selectedJobId) || null;
     },
 
     selectedAgentEntry() {
-      const jobId = this.selectedAgentJobId;
-      const detail = this.agentDetails[jobId];
-      if (detail) return detail;
-      const overview = this.agentJobs.find((entry) => entry.job?.job_id === jobId);
-      if (overview) return overview;
-      if (jobId && this.agentDetailLoadingId === jobId) {
-        return { job: { job_id: jobId, state: 'loading', kind: 'agent_task' }, codex: {}, session: null };
-      }
-      return null;
+      return this.agentDetails[this.selectedAgentJobId] || null;
     },
 
     selectedAgentJob() {
@@ -508,6 +730,255 @@ window.dashboard = function dashboard() {
       return this.agentDetailErrors[this.selectedAgentJobId] || '';
     },
 
+    agentOutcomeLabel(state) {
+      return ({
+        queued: 'Queued',
+        running: 'Running',
+        waiting: 'Waiting',
+        complete: 'Completed',
+        cancelled: 'Cancelled',
+        cancel_requested: 'Cancellation requested',
+        confirmation_pending: 'Awaiting confirmation',
+        approved: 'Approved',
+        approval_failed: 'Approval failed',
+        failed: 'Failed',
+        failed_timeout: 'Timed out',
+        failed_draft_retained: 'Failed · draft retained',
+      })[state] || textValue(state).replaceAll('_', ' ') || 'Unknown';
+    },
+
+    agentRunDuration(job) {
+      return this.millis(job?.durationMs);
+    },
+
+    agentAttemptLabel(entry) {
+      return this.int(entry?.job?.attempts);
+    },
+
+    agentRunRequest(entry) {
+      return entry?.job?.request || '';
+    },
+
+    agentRunModel(entry) {
+      return entry?.codex?.model || '';
+    },
+
+    agentRunScopeLabel(job) {
+      return job?.scopeLabel || '';
+    },
+
+    selectedAgentRunTitle() {
+      return this.short(this.selectedAgentRequest() || 'Agent run without request text', 180);
+    },
+
+    selectedAgentRequest() {
+      return this.agentRunRequest(this.selectedAgentEntry());
+    },
+
+    selectedAgentFinalResult() {
+      return textValue(this.selectedAgentEntry()?.result?.content).trim();
+    },
+
+    selectedAgentFinalResultStatus() {
+      const artifact = this.selectedAgentEntry()?.result || {};
+      if (!artifact.exists) return 'not captured';
+      const size = artifact.bytes ? this.bytes(artifact.bytes) : 'captured';
+      return artifact.truncated ? `${size} · truncated` : size;
+    },
+
+    selectedAgentFinalResultEmptyMessage() {
+      return this.isTerminalState(this.selectedAgentJob()?.state)
+        ? 'No final result artifact was captured for this run.'
+        : 'The run has not produced a final result yet.';
+    },
+
+    selectedAgentRunFacts() {
+      const job = this.selectedAgentJob() || {};
+      const finishedAt = job.completed_at || (this.isTerminalState(job.state) ? job.updated_at : '');
+      return [
+        ['Duration', this.agentRunDuration(job)],
+        ['Scope', this.agentRunScopeLabel(job)],
+        ['Requester', job.requestedByLabel || 'Unresolved requester'],
+        ['Created', this.dateTime(job.created_at)],
+        ['Started', job.started_at ? this.dateTime(job.started_at) : 'Not started'],
+        ['Finished', finishedAt ? this.dateTime(finishedAt) : 'In progress'],
+      ].map(([label, value]) => ({ label, value }));
+    },
+
+    selectedAgentPhases() {
+      const job = this.selectedAgentJob();
+      if (!job) return [];
+      const terminal = this.isTerminalState(job.state);
+      const finishedAt = job.completed_at || (terminal ? job.updated_at : '');
+      const queueDuration = job.started_at
+        ? this.durationBetween(job.created_at, job.started_at)
+        : this.agentRunDuration(job);
+      const executionDuration = job.started_at
+        ? (finishedAt
+          ? this.durationBetween(job.started_at, finishedAt)
+          : this.millis(Math.max(0, Date.now() - Date.parse(job.started_at))))
+        : '';
+      return [
+        {
+          label: 'Queued',
+          detail: job.started_at ? `${queueDuration} · ${this.dateTime(job.created_at)}` : `waiting ${queueDuration}`,
+          className: job.started_at ? 'complete' : 'active',
+        },
+        {
+          label: 'Execute',
+          detail: job.started_at ? `${executionDuration} · ${this.dateTime(job.started_at)}` : 'not started',
+          className: terminal ? 'complete' : (job.started_at ? 'active' : 'pending'),
+        },
+        {
+          label: 'Outcome',
+          detail: terminal ? `${this.agentOutcomeLabel(job.state)} · ${this.dateTime(finishedAt)}` : this.agentOutcomeLabel(job.state),
+          className: terminal ? this.statusClass(job.state) : 'pending',
+        },
+      ];
+    },
+
+    selectedAgentErrorRows() {
+      const job = this.selectedAgentJob() || {};
+      const metadata = this.jobMetadata(job);
+      const task = this.agentMetadata(job);
+      const rows = [];
+      const seen = new Set();
+      const add = (source, detail, level = 'error') => {
+        const text = textValue(detail).trim();
+        if (!text || seen.has(text)) return;
+        seen.add(text);
+        rows.push({ source, detail: text, level, className: level === 'error' ? 'bad' : 'warn' });
+      };
+      add('Run', metadata.error);
+      add('Dispatch', task.dispatch_error);
+      add('Cancellation', task.dispatch_error_after_cancel);
+      for (const check of task.preflight?.checks || []) {
+        if (!check.ok) {
+          add('Preflight', [check.command, check.error, check.stderr_preview].filter(Boolean).join(' · '));
+        }
+      }
+      add('Codex stderr', task.dispatch_stderr, 'warning');
+      if (task.result_suppressed) {
+        add('Delivery', 'The agent result was intentionally suppressed from delivery.', 'warning');
+      }
+      return rows;
+    },
+
+    selectedAgentAttemptRows() {
+      const job = this.selectedAgentJob() || {};
+      const task = this.agentMetadata(job);
+      const checks = task.preflight?.checks || [];
+      const passed = checks.filter((check) => check.ok).length;
+      return [
+        { label: 'Scheduler attempts', value: this.int(job.attempts) },
+        { label: 'Codex dispatch attempts', value: this.int(task.dispatch_attempts) },
+        { label: 'Preflight checks', value: checks.length ? `${passed} / ${checks.length} passed` : 'not run' },
+        { label: 'Tool calls', value: this.int(this.selectedAgentCodex().toolCalls?.length) },
+      ];
+    },
+
+    selectedAgentUsageRows() {
+      const codex = this.selectedAgentCodex();
+      const total = codex.tokenUsage?.total_token_usage || {};
+      return [
+        { label: 'Input tokens', value: this.int(total.input_tokens) },
+        { label: 'Cached input', value: this.int(total.cached_input_tokens) },
+        { label: 'Output tokens', value: this.int(total.output_tokens) },
+        { label: 'Reasoning output', value: this.int(total.reasoning_output_tokens) },
+        { label: 'Context window', value: this.int(codex.modelContextWindow) },
+      ];
+    },
+
+    selectedAgentContextLabel() {
+      const codex = this.selectedAgentCodex();
+      if (codex.contextUsedPercent > 0) return this.pct(codex.contextUsedPercent);
+      return codex.contextUsedTokens > 0 ? `${this.int(codex.contextUsedTokens)} tok` : '';
+    },
+
+    selectedAgentExecutionTimeline() {
+      const job = this.selectedAgentJob();
+      if (!job) return [];
+      const rows = [];
+      const add = (row) => rows.push({ sequence: rows.length, body: '', status: '', ...row });
+      add({ kind: 'phase', title: 'Run queued', timestamp: job.created_at, status: 'queued' });
+      if (job.next_run_at && job.next_run_at !== job.created_at) {
+        add({ kind: 'phase', title: 'Run became eligible', timestamp: job.next_run_at, status: 'ready' });
+      }
+      if (job.started_at) {
+        add({ kind: 'phase', title: 'Execution started', timestamp: job.started_at, status: 'running' });
+      }
+      for (const event of this.selectedAgentTrace()) {
+        add({
+          kind: event.kind || 'codex',
+          title: this.agentTimelineTitle(event),
+          timestamp: event.timestamp || '',
+          status: event.status || event.phase || '',
+          body: this.traceBody(event),
+        });
+      }
+      const terminalAt = job.completed_at || (this.isTerminalState(job.state) ? job.updated_at : '');
+      if (terminalAt) {
+        add({ kind: 'phase', title: `Run ${this.agentOutcomeLabel(job.state).toLowerCase()}`, timestamp: terminalAt, status: job.state });
+      }
+      return rows.sort((left, right) => {
+        const leftAt = Date.parse(left.timestamp);
+        const rightAt = Date.parse(right.timestamp);
+        if (Number.isFinite(leftAt) && Number.isFinite(rightAt) && leftAt !== rightAt) return leftAt - rightAt;
+        if (Number.isFinite(leftAt) !== Number.isFinite(rightAt)) return Number.isFinite(leftAt) ? -1 : 1;
+        return left.sequence - right.sequence;
+      });
+    },
+
+    agentTimelineTitle(event) {
+      if (event.kind === 'message') {
+        const role = textValue(event.role || 'agent');
+        return `${role.charAt(0).toUpperCase()}${role.slice(1)} message`;
+      }
+      if (event.kind === 'tool_call') {
+        return event.name === 'command_execution' ? 'Command execution' : (event.name || 'Tool call');
+      }
+      return textValue(event.kind).replaceAll('_', ' ') || 'Codex activity';
+    },
+
+    agentTimelineTime(event) {
+      return event.timestamp ? this.dateTime(event.timestamp) : 'Time not recorded';
+    },
+
+    selectedAgentLineage() {
+      const job = this.selectedAgentJob();
+      if (!job) return [];
+      const rows = [];
+      if (job.root_job_id && job.root_job_id !== job.job_id) {
+        rows.push({ role: 'Root', jobId: job.root_job_id, current: false });
+      }
+      if (job.parent_job_id && job.parent_job_id !== job.root_job_id && job.parent_job_id !== job.job_id) {
+        rows.push({ role: 'Parent', jobId: job.parent_job_id, current: false });
+      }
+      rows.push({ role: job.root_job_id === job.job_id ? 'Root / selected' : 'Selected', jobId: job.job_id, current: true });
+      return rows;
+    },
+
+    selectedAgentRelatedRuns() {
+      return [...(this.selectedAgentSession()?.jobs || [])]
+        .sort((left, right) => textValue(right.created_at).localeCompare(textValue(left.created_at)));
+    },
+
+    selectedAgentRelatedWorkLabel() {
+      const session = this.selectedAgentSession() || {};
+      const shown = this.selectedAgentRelatedRuns().length;
+      if (session.truncated) return `${shown} latest of ${this.int(session.totalJobCount)} session runs`;
+      return `${shown} session ${shown === 1 ? 'run' : 'runs'}`;
+    },
+
+    agentSessionScopeLabel(session) {
+      const resolved = textValue(session?.scopeLabel).trim();
+      if (resolved) return resolved;
+      if (textValue(session?.key).startsWith('dm:')) return this.scopeKindLabel('dm');
+      if (textValue(session?.key).startsWith('thread:')) return this.scopeKindLabel('thread');
+      if (textValue(session?.key).startsWith('voice:')) return this.scopeKindLabel('voice_channel');
+      return 'Unresolved session route';
+    },
+
     selectedAutomation() {
       return this.automations.find((record) => record.automation_id === this.selectedAutomationId) || null;
     },
@@ -519,39 +990,13 @@ window.dashboard = function dashboard() {
         ['Job', job.job_id],
         ['Root', job.root_job_id],
         ['Parent', job.parent_job_id],
-        ['Guild', job.guild_id],
-        ['Scope Kind', job.scope_kind],
-        ['Scope ID', job.scope_id],
-        ['Requested By', job.requested_by_user_id],
+        ['Scope', this.jobScopeLabel(job)],
+        ['Requested By', job.requestedByLabel || 'Unresolved requester'],
         ['Attempts', job.attempts ?? 0],
         ['Created', job.created_at],
         ['Updated', job.updated_at],
         ['Started', job.started_at],
         ['Completed', job.completed_at],
-      ].map(([label, value]) => ({ label, value: textValue(value) }));
-    },
-
-    selectedAgentFacts() {
-      const entry = this.selectedAgentEntry();
-      const job = entry?.job || {};
-      const metadata = this.agentMetadata(job);
-      const codex = entry?.codex || {};
-      const stats = this.codexUsageStats(codex, metadata);
-      return [
-        ['Job', job.job_id],
-        ['Scope Kind', job.scope_kind],
-        ['Scope ID', job.scope_id],
-        ['Requester', job.requested_by_user_id],
-        ['Model', codex.model || metadata.agent?.model || ''],
-        ['Reasoning', codex.reasoningEffort || metadata.agent?.reasoning_effort || ''],
-        ['Fast Mode', textValue(codex.fastMode ?? metadata.agent?.fast_mode ?? false)],
-        ['Session', codex.sessionId || metadata.agent?.session_id || ''],
-        ['Trace Scope', entry?.session?.scope || ''],
-        ['Workdir', entry?.workdir?.path || metadata.workdir_path || ''],
-        ['Context', this.contextUsageLabel(stats)],
-        ['Events', codex.eventCount ?? 0],
-        ['Session Jobs', entry?.session?.jobCount ?? ''],
-        ['Scope Jobs', entry?.session?.scopeJobCount ?? ''],
       ].map(([label, value]) => ({ label, value: textValue(value) }));
     },
 
@@ -573,29 +1018,60 @@ window.dashboard = function dashboard() {
     },
 
     recentFailures() {
-      return this.recentJobs.filter((job) => this.statusClass(job.state) === 'bad' || this.jobMetadata(job).error || this.agentMetadata(job).dispatch_error);
+      return this.data?.operations?.failures?.recent || [];
+    },
+
+    failureCoverageLabel() {
+      const failures = this.data?.operations?.failures || {};
+      if (failures.complete) return `${failures.count || 0} in the last hour`;
+      return `at least ${failures.count || 0} since ${this.ago(failures.coverageStartsAt)}`;
+    },
+
+    failureScopeLabel(failure) {
+      if (failure.scopeLabel) return failure.scopeLabel;
+      if (failure.scopeKind === 'voice_channel') return this.roomLabel(failure.scopeId || '');
+      return this.scopeKindLabel(failure.scopeKind || '');
+    },
+
+    traceFailure(failure) {
+      this.applyTimelineFilter({
+        timelineRecordTypes: ['job'],
+        timelineCategories: this.timelineDrilldownCategories(failure.category),
+        timelineKinds: [failure.kind],
+        timelineJobStates: [failure.state],
+        timelineChannels: failure.scopeId ? [failure.scopeId] : null,
+        timelineSearch: failure.jobId,
+        timelineSearchField: 'all',
+        timelineWindow: 'all',
+      });
     },
 
     scopeJobLoad() {
       return this.jobSummary().byScope || [];
     },
 
+    scopeJobLabel(scope) {
+      const resolved = textValue(scope?.scopeLabel).trim();
+      if (resolved) return resolved;
+      if (scope?.scope_kind === 'voice_channel') return this.roomLabel(scope?.scope_id || '');
+      return this.scopeKindLabel(scope?.scope_kind || '');
+    },
+
     healthRows() {
       const health = this.data?.health || {};
-      const wake = health.wakeProvider || {};
-      const wakeOk = wake.status === 'closed';
-      return [
-        { label: 'Runtime', value: health.ok ? 'ok' : 'degraded', className: health.ok ? 'ok' : 'bad' },
-        { label: 'Postgres', value: health.postgres ? 'ok' : 'error', className: health.postgres ? 'ok' : 'bad' },
-        { label: 'Wake detector', value: wake.status || 'unknown', className: wakeOk ? 'ok' : 'bad' },
-        { label: 'Wake failures', value: wake.consecutiveFailures ?? 0, className: wake.consecutiveFailures ? 'bad' : '' },
-        { label: 'Wake next probe', value: wake.nextProbeAt || 'ready' },
-        { label: 'Ready bots', value: `${health.readyBots ?? 0}/${health.observedBots ?? 0}` },
-        { label: 'Active sessions', value: health.activeSessions ?? 0 },
-        { label: 'Active agent jobs', value: health.activeAgentJobs ?? 0 },
-        { label: 'Loaded automations', value: health.automationsLoaded ?? 0 },
-        { label: 'Failed jobs', value: health.failedJobs ?? 0, className: health.failedJobs ? 'bad' : '' },
-      ];
+      const overall = {
+        label: 'Overall',
+        status: health.status,
+        reason: `Observed ${this.ago(health.observedAt)}`,
+        className: this.statusClass(health.status),
+      };
+      const components = (health.components || []).map((component) => ({
+        label: component.component.replaceAll('_', ' '),
+        status: component.status,
+        reason: component.reason,
+        className: this.statusClass(component.status),
+      }));
+      return [overall].concat(components);
     },
 
     loadRows() {
@@ -722,6 +1198,15 @@ window.dashboard = function dashboard() {
       return this.operations().latencies?.byKind || [];
     },
 
+    latencyCoverageLabel(window) {
+      const coverage = window?.coverage || {};
+      return coverage.complete ? 'complete' : `${this.seconds(coverage.coveredSeconds)} observed`;
+    },
+
+    latencyKindCoverageLabel() {
+      return this.latencyCoverageLabel(this.latencyWindows().find((window) => window.label === '1h'));
+    },
+
     codexUsageWindows() {
       return this.data?.agents?.codex?.usage?.windows || [];
     },
@@ -738,7 +1223,7 @@ window.dashboard = function dashboard() {
       });
       this.timelineEvents.concat(this.transcriptEvents).forEach((event) => {
         const id = this.eventChannelId(event);
-        if (id && !channels.has(id)) channels.set(id, { id, label: this.eventChannelName(event) || id });
+        if (id && !channels.has(id)) channels.set(id, { id, label: this.eventScopeLabel(event) });
       });
       return Array.from(channels.values()).sort((left, right) => left.label.localeCompare(right.label));
     },
@@ -861,28 +1346,35 @@ window.dashboard = function dashboard() {
 
     toggleTimelineFilterEditor(field) {
       this.timelineFilterEditor = this.timelineFilterEditor === field ? '' : field;
-      this.lastSubwindowScrollAt = Date.now();
     },
 
     closeTimelineFilterEditor() {
       this.timelineFilterEditor = '';
-      this.lastSubwindowScrollAt = Date.now();
     },
 
     timelineFilterTitle(field) {
       return {
         timelineRecordTypes: 'Record',
+        timelineCategories: 'Category',
         timelineKinds: 'Kind',
-        timelineJobStates: 'Job State',
+        timelineJobStates: 'State',
         timelineChannels: 'Scope',
       }[field] || '';
     },
 
     timelineFilterOptionRows(field) {
-      if (field === 'timelineRecordTypes') return this.timelineRecordTypeOptions();
-      if (field === 'timelineKinds') return this.timelineKindOptions().map((value) => ({ id: value, label: value }));
-      if (field === 'timelineJobStates') return this.timelineJobStateOptions().map((value) => ({ id: value, label: value }));
-      if (field === 'timelineChannels') return this.channelOptions();
+      const facets = this.timelinePage.facets;
+      if (field === 'timelineRecordTypes') return facets.recordTypes.length ? facets.recordTypes.map((value) => ({ id: value, label: value === 'event' ? 'Events' : 'Jobs' })) : this.timelineRecordTypeOptions();
+      if (field === 'timelineCategories') return this.timelineCategoryRows();
+      if (field === 'timelineKinds') {
+        const values = facets.kinds;
+        return (values.length ? values : this.timelineKindOptions()).map((value) => ({ id: value, label: value }));
+      }
+      if (field === 'timelineJobStates') {
+        const values = facets.states.length ? facets.states : this.timelineJobStateOptions();
+        return values.map((value) => ({ id: value, label: value }));
+      }
+      if (field === 'timelineChannels') return facets.scopes.length ? facets.scopes.map((scope) => ({ id: scope.id, label: scope.label })) : this.channelOptions();
       return [];
     },
 
@@ -890,27 +1382,125 @@ window.dashboard = function dashboard() {
       return this.timelineFilterOptionRows(field).map((option) => option.id).filter(Boolean);
     },
 
+    timelineCategoryRows() {
+      const categories = this.timelinePage.facets.categories || [];
+      const defaults = this.timelineDefaultCategoryIds();
+      if (categories.length) {
+        return categories.map((category) => ({
+          ...category,
+          kinds: category.kinds || [],
+          defaultSelected: defaults.includes(category.id),
+        }));
+      }
+      return dashboardCategoryIds.map((id) => ({
+        id,
+        label: id.replaceAll('_', ' '),
+        count: 0,
+        kinds: [],
+        defaultSelected: false,
+      }));
+    },
+
+    timelineCategoryOptionIds() {
+      const categories = this.timelinePage.facets.categories || [];
+      return categories.length ? categories.map((category) => category.id) : [...dashboardCategoryIds];
+    },
+
+    timelineDrilldownCategories(category = '') {
+      return category ? [category] : this.timelineCategoryOptionIds();
+    },
+
+    timelineDefaultCategoryIds() {
+      return [...(this.timelinePage.facets.defaultCategories || [])];
+    },
+
+    timelineCategorySelected(categoryId) {
+      return this.timelineFilterValues('timelineCategories').includes(categoryId);
+    },
+
+    timelineCategoryCoverageSummary() {
+      const total = this.timelineCategoryOptionIds().length;
+      const selected = this.timelineFilterValues('timelineCategories').length;
+      return `${selected}/${total} categories`;
+    },
+
+    timelineKindGroups() {
+      return this.timelineCategoryRows();
+    },
+
+    timelineKindSelected(categoryId, kind) {
+      return this.timelineCategorySelected(categoryId)
+        && this.timelineFilterValues('timelineKinds').includes(kind);
+    },
+
+    normalizeTimelineCategorySelection(values) {
+      const selected = new Set(values);
+      const ordered = this.timelineCategoryOptionIds().filter((category) => selected.has(category));
+      const defaults = this.timelineDefaultCategoryIds();
+      const matchesDefault = ordered.length === defaults.length
+        && defaults.every((category) => selected.has(category));
+      return matchesDefault ? null : ordered;
+    },
+
+    setTimelineCategoryEnabled(categoryId, enabled) {
+      const current = this.timelineFilterValues('timelineCategories');
+      const next = enabled
+        ? current.concat([categoryId])
+        : current.filter((category) => category !== categoryId);
+      this.filters.timelineCategories = this.normalizeTimelineCategorySelection(next);
+    },
+
+    selectAllTimelineKindGroup(categoryId) {
+      this.setTimelineCategoryEnabled(categoryId, true);
+      const explicitKinds = this.rawTimelineFilterValues('timelineKinds');
+      if (explicitKinds !== null) {
+        const group = this.timelineKindGroups().find((category) => category.id === categoryId);
+        const next = explicitKinds.concat(group?.kinds || []);
+        const normalized = this.normalizeTimelineFilterValues('timelineKinds', next);
+        this.filters.timelineKinds = normalized.length === this.timelineFilterOptionIds('timelineKinds').length ? null : normalized;
+      }
+      this.timelineFilterChanged();
+    },
+
+    selectNoTimelineKindGroup(categoryId) {
+      this.setTimelineCategoryEnabled(categoryId, false);
+      this.timelineFilterChanged();
+    },
+
+    toggleTimelineKindValue(categoryId, kind) {
+      if (!this.timelineCategorySelected(categoryId)) {
+        const enabledCategories = new Set(this.timelineFilterValues('timelineCategories'));
+        const groups = this.timelineKindGroups();
+        const explicitKinds = this.rawTimelineFilterValues('timelineKinds');
+        const effectiveEnabledKinds = explicitKinds === null
+          ? groups.filter((group) => enabledCategories.has(group.id)).flatMap((group) => group.kinds)
+          : explicitKinds.filter((selectedKind) => groups.some((group) => enabledCategories.has(group.id) && group.kinds.includes(selectedKind)));
+        this.setTimelineCategoryEnabled(categoryId, true);
+        this.filters.timelineKinds = this.normalizeTimelineFilterValues('timelineKinds', effectiveEnabledKinds.concat([kind]));
+        this.timelineFilterChanged();
+        return;
+      }
+      this.toggleTimelineFilterValue('timelineKinds', kind);
+    },
+
     rawTimelineFilterValues(field) {
+      if (this.filters[field] === null) return null;
       const values = Array.isArray(this.filters[field]) ? this.filters[field] : [];
       return this.normalizeTimelineFilterValues(field, values);
     },
 
     normalizeTimelineFilterValues(field, values) {
-      const options = new Set(this.timelineFilterOptionIds(field));
-      return Array.from(new Set(values.filter((value) => options.has(value))));
+      return Array.from(new Set(values.map(textValue).filter(Boolean)));
     },
 
     timelineFilterValues(field) {
       const explicit = this.rawTimelineFilterValues(field);
-      if (explicit.length) return explicit;
-      return this.timelineFilterOptionIds(field);
+      if (field === 'timelineCategories' && explicit === null) return this.timelineDefaultCategoryIds();
+      return explicit === null ? this.timelineFilterOptionIds(field) : explicit;
     },
 
     effectiveTimelineFilterValues(field) {
-      const selected = this.timelineFilterValues(field);
-      const options = this.timelineFilterOptionIds(field);
-      if (!selected.length || selected.length === options.length) return [];
-      return selected;
+      return this.rawTimelineFilterValues(field);
     },
 
     timelineFilterSelected(field, value) {
@@ -922,33 +1512,70 @@ window.dashboard = function dashboard() {
       const next = current.includes(value)
         ? current.filter((entry) => entry !== value)
         : current.concat([value]);
-      this.filters[field] = this.normalizeTimelineFilterValues(field, next);
-      this.lastSubwindowScrollAt = Date.now();
-      this.timelineLocalFilterChanged();
+      if (field === 'timelineCategories') {
+        this.filters[field] = this.normalizeTimelineCategorySelection(next);
+        this.timelineFilterChanged();
+        return;
+      }
+      const normalized = this.normalizeTimelineFilterValues(field, next);
+      this.filters[field] = normalized.length === this.timelineFilterOptionIds(field).length ? null : normalized;
+      this.timelineFilterChanged();
     },
 
     selectAllTimelineFilterValues(field) {
-      this.filters[field] = this.timelineFilterOptionIds(field);
-      this.lastSubwindowScrollAt = Date.now();
-      this.timelineLocalFilterChanged();
+      this.filters[field] = field === 'timelineCategories' ? this.timelineCategoryOptionIds() : null;
+      this.timelineFilterChanged();
+    },
+
+    selectNoTimelineFilterValues(field) {
+      this.filters[field] = [];
+      this.timelineFilterChanged();
     },
 
     timelineFilterSummary(field) {
-      const values = this.timelineFilterValues(field);
+      const explicit = this.rawTimelineFilterValues(field);
+      if (field === 'timelineCategories') {
+        if (explicit === null) return `Default · ${this.timelineCategoryCoverageSummary()}`;
+        if (!explicit.length) return 'None';
+        if (explicit.length === this.timelineCategoryOptionIds().length) return 'All';
+        if (explicit.length === 1) return this.timelineFilterDisplay(field, explicit[0]);
+        return this.timelineCategoryCoverageSummary();
+      }
+      if (field === 'timelineKinds') {
+        const coverage = this.timelineCategoryCoverageSummary();
+        if (explicit === null) return this.timelineFilterValues('timelineCategories').length === this.timelineCategoryOptionIds().length ? 'All' : `All · ${coverage}`;
+        if (!explicit.length) return 'None';
+        const total = this.timelineFilterOptionIds(field).length;
+        if (explicit.length === 1) return `${this.short(this.timelineFilterDisplay(field, explicit[0]), 16)} · ${coverage}`;
+        return `${explicit.length}/${total} kinds · ${coverage}`;
+      }
+      if (explicit === null) return 'All';
+      if (!explicit.length) return 'None';
+      const values = explicit;
       const total = this.timelineFilterOptionIds(field).length;
-      if (!values.length || values.length === total) return 'All';
       if (values.length === 1) return this.short(this.timelineFilterDisplay(field, values[0]), 22);
       return `${values.length}/${total} selected`;
     },
 
     timelineFilterDisplay(field, value) {
       if (field === 'timelineChannels') {
-        return this.channelOptions().find((channel) => channel.id === value)?.label || value;
+        return this.timelinePage.facets.scopes.find((scope) => scope.id === value)?.label
+          || this.channelOptions().find((channel) => channel.id === value)?.label
+          || this.scopeKindLabel('voice_channel');
       }
       if (field === 'timelineRecordTypes') {
         return this.timelineRecordTypeOptions().find((option) => option.id === value)?.label || value;
       }
+      if (field === 'timelineCategories') {
+        return this.timelineCategoryRows().find((category) => category.id === value)?.label || value;
+      }
       return value;
+    },
+
+    timelineDefaultEmpty() {
+      return this.timelinePage.loaded
+        && this.timelinePage.matched === 0
+        && this.filters.timelineCategories === null;
     },
 
     timelineSearchTerms() {
@@ -1094,10 +1721,10 @@ window.dashboard = function dashboard() {
         .filter(Boolean);
       return this.timelineEvents.filter((event) => {
         if (!this.timelineTimeMatches(Date.parse(this.eventWhen(event)) || 0)) return false;
-        if (kinds.length && !kinds.includes(this.eventKind(event)) && !kinds.includes(event?.job_kind)) return false;
-        if (states.length && !states.includes(event?.state)) return false;
+        if (kinds !== null && (!kinds.length || (!kinds.includes(this.eventKind(event)) && !kinds.includes(event?.job_kind)))) return false;
+        if (states !== null && (!states.length || !states.includes(event?.state))) return false;
         if (globalKind && this.eventKind(event) !== globalKind) return false;
-        if (channels.length && !channels.includes(this.eventChannelId(event))) return false;
+        if (channels !== null && (!channels.length || !channels.includes(this.eventChannelId(event)))) return false;
         if (globalChannel && this.eventChannelId(event) !== globalChannel) return false;
         if (globalGuild && this.eventGuildId(event) !== globalGuild) return false;
         if (!this.recordMatchesTimelineSearch('event', event)) return false;
@@ -1115,21 +1742,11 @@ window.dashboard = function dashboard() {
       });
     },
 
-    timelinePageEvents() {
-      return this.filteredTimelineEvents({ global: false });
-    },
-
     timelinePageRecords() {
-      const recordTypes = this.effectiveTimelineFilterValues('timelineRecordTypes');
-      const events = recordTypes.includes('job') && !recordTypes.includes('event')
-        ? []
-        : this.timelinePageEvents().map((event) => this.timelineEventRecord(event));
-      const jobs = recordTypes.includes('event') && !recordTypes.includes('job')
-        ? []
-        : this.filteredTimelineJobs().map((job) => this.timelineJobRecord(job));
-      return events
-        .concat(jobs)
-        .sort((left, right) => right.whenMs - left.whenMs || left.id.localeCompare(right.id));
+      if (!this.timelinePage.loaded) return [];
+      return this.timelinePage.records.map((record) => record.recordType === 'event'
+        ? this.timelineEventRecord(record.event)
+        : this.timelineJobRecord(record.job));
     },
 
     timelineRecordRows() {
@@ -1137,22 +1754,11 @@ window.dashboard = function dashboard() {
     },
 
     timelineRecordCountLabel() {
-      const total = this.timelineEvents.length + this.allJobs().length;
-      return `${this.timelineRecordRows().length}/${total}`;
-    },
-
-    filteredTimelineJobs() {
-      const kinds = this.effectiveTimelineFilterValues('timelineKinds');
-      const states = this.effectiveTimelineFilterValues('timelineJobStates');
-      const channels = this.effectiveTimelineFilterValues('timelineChannels');
-      return this.allJobs().filter((job) => {
-        if (!this.timelineTimeMatches(Date.parse(this.jobTime(job)) || 0)) return false;
-        if (kinds.length && !kinds.includes(job.kind)) return false;
-        if (states.length && !states.includes(job.state)) return false;
-        if (channels.length && !channels.includes(job.scope_id)) return false;
-        if (!this.recordMatchesTimelineSearch('job', job)) return false;
-        return true;
-      });
+      if (this.timelinePage.loaded) {
+        const suffix = this.timelinePage.hasMore ? ' (more available)' : '';
+        return `${this.timelinePage.returned} of ${this.timelinePage.matched}${suffix}`;
+      }
+      return 'Loading';
     },
 
     timelineEventRecord(event) {
@@ -1161,6 +1767,7 @@ window.dashboard = function dashboard() {
         rowId: `event:${id}`,
         recordType: 'event',
         recordClass: 'info',
+        category: this.timelineFilterDisplay('timelineCategories', event.category),
         when: this.ago(this.eventWhen(event)),
         whenMs: Date.parse(this.eventWhen(event)) || 0,
         eventKind: this.eventKind(event),
@@ -1184,6 +1791,7 @@ window.dashboard = function dashboard() {
         rowId: `job:${job.job_id}`,
         recordType: 'job',
         recordClass: this.statusClass(job.state),
+        category: this.timelineFilterDisplay('timelineCategories', job.category),
         when: this.ago(this.jobTime(job)),
         whenMs: Date.parse(this.jobTime(job)) || 0,
         eventKind: 'job',
@@ -1194,7 +1802,7 @@ window.dashboard = function dashboard() {
         stateClass: this.statusClass(job.state),
         command: this.commandKind(job),
         room: this.jobScopeLabel(job),
-        actor: job.requested_by_user_id || '',
+        actor: job.requestedByLabel || 'Unresolved requester',
         detail: this.jobDetail(job),
         id: job.job_id,
         __kind: 'job',
@@ -1215,7 +1823,7 @@ window.dashboard = function dashboard() {
           const haystack = [
             this.transcriptText(event),
             this.eventSpeaker(event),
-            this.eventChannelName(event),
+            this.eventScopeLabel(event),
             this.eventChannelId(event),
             this.eventGuildId(event),
           ].join(' ').toLowerCase();
@@ -1229,7 +1837,7 @@ window.dashboard = function dashboard() {
       this.filteredTranscriptEvents().forEach((event) => {
         const channelId = this.eventChannelId(event) || 'unknown';
         if (!groups.has(channelId)) {
-          groups.set(channelId, { channelId, channelName: this.eventChannelName(event) || channelId, events: [] });
+          groups.set(channelId, { channelId, channelName: this.eventScopeLabel(event) || 'Unresolved scope', events: [] });
         }
         groups.get(channelId).events.push(event);
       });
@@ -1237,23 +1845,7 @@ window.dashboard = function dashboard() {
     },
 
     selectedAgentTrace() {
-      const codex = this.selectedAgentCodex();
-      return codex.timeline?.length ? codex.timeline : this.mergedCodexEvents(codex);
-    },
-
-    selectedAgentSessionTrace() {
-      return this.selectedAgentSession()?.codex?.timeline || [];
-    },
-
-    sessionTrace() {
-      return this.selectedAgentTrace();
-    },
-
-    mergedCodexEvents(codex) {
-      return [
-        ...(codex.messages || []).map((event) => ({ ...event, kind: 'message' })),
-        ...(codex.toolCalls || []).map((event) => ({ ...event, kind: 'tool_call' })),
-      ];
+      return this.selectedAgentCodex().timeline || [];
     },
 
     traceBody(event) {
@@ -1377,16 +1969,22 @@ window.dashboard = function dashboard() {
       const scopeId = this.eventChannelId(event);
       if (!scopeId) return '';
       const scopeKind = this.eventScopeKind(event);
+      const resolved = textValue(event?.scopeLabel).trim();
+      if (resolved) return resolved;
       if (scopeKind === 'voice_channel') return this.eventChannelName(event);
-      return [scopeKind, scopeId].filter(Boolean).join(' / ');
+      if (scopeKind === 'dm') {
+        const member = firstText([event?.scope_member_label, event?.requestedByLabel, event?.speakerLabel, event?.speaker_label]);
+        return member ? `Direct message with ${member}` : 'Direct message';
+      }
+      return this.scopeKindLabel(scopeKind);
     },
 
     eventChannelName(event) {
-      return event?.channelName || event?.voice_channel_name || event?.channelSlug || this.eventChannelId(event);
+      return event?.channelName || event?.voice_channel_name || event?.channelSlug || 'Unresolved voice channel';
     },
 
     eventSpeaker(event) {
-      return event?.speakerLabel || event?.speaker_label || event?.speakerId || event?.speaker_user_id || '';
+      return event?.requestedByLabel || event?.speakerLabel || event?.speaker_label || event?.speaker_username || '';
     },
 
     eventWhen(event) {
@@ -1394,7 +1992,7 @@ window.dashboard = function dashboard() {
     },
 
     eventId(event) {
-      return event?.job_id || event?.eventId || event?.event_id || '';
+      return event?.event_id || event?.eventId || '';
     },
 
     eventDetail(event) {
@@ -1458,7 +2056,10 @@ window.dashboard = function dashboard() {
 
     automationScope(record) {
       const scope = record?.spec?.scope || {};
-      return [scope.scope_kind, scope.guild_id, scope.scope_id].filter(Boolean).join(' / ');
+      const resolved = textValue(scope.scopeLabel).trim();
+      if (resolved) return resolved;
+      if (scope.scope_kind === 'voice_channel') return this.roomLabel(scope.scope_id || '');
+      return this.scopeKindLabel(scope.scope_kind || '');
     },
 
     automationTrigger(record) {
@@ -1488,7 +2089,11 @@ window.dashboard = function dashboard() {
       if (!sink) return '';
       const kind = sink.kind || Object.keys(sink)[0] || '';
       const id = sink.id || sink.channel_id || sink.channelId || sink.user_id || sink.userId || '';
-      return [kind, id].filter(Boolean).join(':');
+      const resolved = firstText([sink.label, sink.display_name, sink.displayName]);
+      if (resolved) return resolved;
+      if (id && this.rooms.some((room) => room.channelId === id)) return this.roomLabel(id);
+      if (textValue(kind).toLowerCase().includes('user') || textValue(kind).toLowerCase().includes('dm')) return 'Direct message recipient';
+      return this.scopeKindLabel(textValue(kind).replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`).replace(/^_/, ''));
     },
 
     transcriptText(event) {
@@ -1500,7 +2105,7 @@ window.dashboard = function dashboard() {
     },
 
     roomName(room) {
-      return room?.channelName || room?.channelSlug || room?.channelId || '';
+      return room?.channelName || room?.channelSlug || 'Unresolved room';
     },
 
     roomHumanCount(room) {
@@ -1522,8 +2127,8 @@ window.dashboard = function dashboard() {
     statusClass(value) {
       const text = textValue(value).toLowerCase();
       if (['ok', 'ready', 'present', 'complete', 'queued', 'running', 'waiting', 'active', 'approved', 'capturing', 'idle'].some((part) => text.includes(part))) return 'ok';
-      if (['failed', 'error', 'timeout', 'missing', 'degraded'].some((part) => text.includes(part))) return 'bad';
-      if (['cancel', 'pending', 'released', 'absent', 'paused', 'truncated'].some((part) => text.includes(part))) return 'warn';
+      if (['failed', 'error', 'timeout', 'missing', 'degraded', 'down', 'stale'].some((part) => text.includes(part))) return 'bad';
+      if (['cancel', 'pending', 'released', 'absent', 'paused', 'truncated', 'unknown'].some((part) => text.includes(part))) return 'warn';
       return 'info';
     },
 
@@ -1543,6 +2148,11 @@ window.dashboard = function dashboard() {
     clock(iso) {
       if (!iso || !Number.isFinite(Date.parse(iso))) return iso || '';
       return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    },
+
+    dateTime(iso) {
+      if (!iso || !Number.isFinite(Date.parse(iso))) return iso || '';
+      return new Date(iso).toLocaleString();
     },
 
     unixTime(seconds) {

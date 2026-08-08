@@ -92,7 +92,7 @@ Boolean projections such as `terminal`, `failed`, and `ephemeral` exist because 
 
 Command interaction context uses scoped partial indexes. Cancellable-job context reads visible, active, cancellable rows for one voice scope ordered by recent update time. Recent agent-task context reads scoped `agent_task` rows through partial indexes, with requester-owned rows queried first and the remaining result slots filled from non-requester rows. Both paths bound payload decoding by the command context limit.
 
-Timeline event indexes follow the same rule. Room-time reads use scope and timestamp columns in index order. Kind-filtered reads add `event_kind` after the room scope. Capture-run, conversation, and speaker reads use their projected identifiers first, then event time. Range predicates operate on stored timestamp columns so the planner can use ordinary B-tree ordering without expression indexes.
+Timeline event indexes follow the same rule. Room-time reads use scope and timestamp columns in index order. Kind-filtered reads add `event_kind` after the room scope. Capture-run, conversation, and speaker reads use their projected identifiers first, then event time. Range predicates operate on stored timestamp columns so the planner can use ordinary B-tree ordering without expression indexes. Event hydration takes the projected event ID, event kind, scope kind, guild ID, and scope ID as the canonical identity. Non-voice scopes omit voice-channel aliases from hydrated payloads.
 
 ## Scheduler State
 
@@ -167,14 +167,19 @@ Hot scheduling paths use projected columns. JSON operators appear in narrow plac
 
 ## Retention And Table Growth
 
-Retention applies the configured capture-run policy from the maintenance path. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. Transcript event retention uses projected timeline kind, time, capture-run, and forgotten-state columns. With the default durable transcript and job metadata policy, maintenance skips the transcript-event and terminal-job scans. Source audio retention walks capture-run scratch directories during maintenance and deletes expired WAV artifacts. Wake probe and audio segment enqueue paths stay limited to artifact creation and job insertion. Non-ephemeral job metadata retention is policy-driven; the default policy keeps terminal job rows durable. Publication artifacts remain durable publication state.
+Retention applies the configured capture-run policy from the maintenance path. Ephemeral terminal jobs carry `gc_after_ms` and are deleted through a targeted partial index. Every terminal job transition first writes a narrow `operational_job_outcomes` observation in the same transaction as the job update. The ledger has no foreign key to the live job row, so ephemeral garbage collection and policy-driven job deletion preserve complete 5-minute, 15-minute, and 1-hour dashboard outcome windows. Ephemeral-job maintenance prunes observations older than six hours on every pass, including passes with no job deletion candidates. Transcript event retention uses projected timeline kind, time, capture-run, and forgotten-state columns. With the default durable transcript and job metadata policy, maintenance skips the transcript-event and terminal-job scans. Source audio retention walks capture-run scratch directories during maintenance and deletes expired WAV artifacts. Wake probe and audio segment enqueue paths stay limited to artifact creation and job insertion. Non-ephemeral job metadata retention is policy-driven; the default policy keeps terminal job rows durable. Publication artifacts remain durable publication state.
 
 ```text
 ephemeral job
   terminal = TRUE
   gc_after_ms <= now
+      -> verify durable terminal outcome
       -> delete job row
       -> cascade job payload and dependency edges
+
+operational outcome
+  observed_at_ms older than six hours
+      -> delete bounded diagnostic row
 
 terminal retained job
   terminal = TRUE

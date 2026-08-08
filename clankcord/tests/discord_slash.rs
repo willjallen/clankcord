@@ -6,8 +6,8 @@ use clankcord::adapters::discord::gateway::slash::{
     slash_missing_voice_channel_response_content, slash_success_response_content,
 };
 use clankcord::runtime::{
-    BinaryPayload, CommandKind, DebugOverviewRequest, DiscordSlashCommandPayload, Job, JobKind,
-    Runtime, RuntimeScopeKind,
+    BinaryPayload, CommandKind, DashboardFilter, DashboardTimelineRequest,
+    DiscordSlashCommandPayload, Job, JobKind, Runtime, RuntimeScopeKind,
 };
 
 mod common;
@@ -147,17 +147,24 @@ async fn feedback_slash_records_durable_timeline_event() {
         json!("2026-05-15T10:00:00.000Z")
     );
 
-    let overview = Runtime::from_store(store)
+    let page = Runtime::from_store(store)
         .unwrap()
-        .debug_overview(DebugOverviewRequest {
-            timeline_window: "all".to_string(),
-            timeline_query: "/feedback".to_string(),
-            timeline_query_field: "all".to_string(),
-            ..DebugOverviewRequest::default()
+        .dashboard_timeline(DashboardTimelineRequest {
+            record_types: DashboardFilter::Values(BTreeSet::from(["event".to_string()])),
+            job_kinds: DashboardFilter::None,
+            from: "all".to_string(),
+            search: "/feedback".to_string(),
+            metadata: "none".to_string(),
+            ..DashboardTimelineRequest::default()
         })
         .await
         .unwrap();
-    let dashboard_events = overview["timeline"]["recentEvents"].as_array().unwrap();
+    let dashboard_events = page["records"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|record| record.get("event"))
+        .collect::<Vec<_>>();
     let dashboard_slash_event = dashboard_events
         .iter()
         .find(|event| event["kind"] == json!("discord_slash_command"))

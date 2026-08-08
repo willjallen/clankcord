@@ -35,7 +35,7 @@ discord_typing_indicator
 
 ## HTTP
 
-HTTP is an Axum surface over `RuntimeHandle`. It serves health, status, debug, timeline, transcript, job, automation, confirmation, member, context, participant, response, and dashboard routes. Reads render views from durable state. Mutations parse boundary JSON and submit runtime jobs or runtime-control jobs.
+HTTP is an Axum surface over `RuntimeHandle`. It serves health, status, timeline, transcript, job, automation, confirmation, member, context, participant, response, and dashboard routes. Reads render views from durable state. Mutations parse boundary JSON and submit runtime jobs or runtime-control jobs.
 
 The CLI uses HTTP when it is talking to a running service. That keeps command-line calls, dashboard operations, and Discord-triggered work on the same runtime path after the boundary request is parsed.
 

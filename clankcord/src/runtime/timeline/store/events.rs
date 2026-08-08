@@ -382,13 +382,41 @@ impl TimelineStore {
         set_default_string(&mut payload, "event_id", &new_id("evt"));
         let event_id = string_field_map(&payload, "event_id");
         set_default_string(&mut payload, "eventId", &event_id);
-        set_default_string(&mut payload, "scope_kind", scope.kind.as_str());
-        set_default_string(&mut payload, "scope_id", &scope.scope_id);
-        set_default_string(&mut payload, "guild_id", &scope.guild_id);
-        set_default_string(&mut payload, "guildId", &scope.guild_id);
+        for (key, value) in [
+            ("scope_kind", scope.kind.as_str()),
+            ("scopeKind", scope.kind.as_str()),
+            ("scope_id", scope.scope_id.as_str()),
+            ("scopeId", scope.scope_id.as_str()),
+            ("guild_id", scope.guild_id.as_str()),
+            ("guildId", scope.guild_id.as_str()),
+        ] {
+            payload.insert(key.to_string(), Value::String(value.to_string()));
+        }
         if scope.kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
-            set_default_string(&mut payload, "voice_channel_id", &scope.scope_id);
-            set_default_string(&mut payload, "channelId", &scope.scope_id);
+            payload.insert(
+                "voice_channel_id".to_string(),
+                Value::String(scope.scope_id.clone()),
+            );
+            payload.insert(
+                "voiceChannelId".to_string(),
+                Value::String(scope.scope_id.clone()),
+            );
+            payload.insert(
+                "channelId".to_string(),
+                Value::String(scope.scope_id.clone()),
+            );
+        } else {
+            for key in [
+                "voice_channel_id",
+                "voiceChannelId",
+                "channelId",
+                "voice_channel_name",
+                "channelName",
+                "voice_channel_slug",
+                "channelSlug",
+            ] {
+                payload.remove(key);
+            }
         }
         set_default_string(&mut payload, "created_at", &isoformat_z(None));
         let created_at = string_field_map(&payload, "created_at");

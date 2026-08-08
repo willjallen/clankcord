@@ -14,9 +14,8 @@ pub(crate) async fn prepare(
 ) -> Result<JobDecision> {
     runtime
         .timeline_store
-        .append_event(
-            &payload.guild_id,
-            payload.timeline_channel_id(),
+        .append_scope_event(
+            &job.scope(),
             json!({
                 "event_kind": "discord_slash_command",
                 "kind": "discord_slash_command",
@@ -60,9 +59,8 @@ async fn record_feedback(
     let message = slash_option_string(payload, &["message"]);
     runtime
         .timeline_store
-        .append_event(
-            &payload.guild_id,
-            payload.timeline_channel_id(),
+        .append_scope_event(
+            &job.scope(),
             json!({
                 "event_kind": "feedback",
                 "kind": "feedback",

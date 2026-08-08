@@ -2,6 +2,7 @@ mod job_payload_pre_v0_7;
 mod v0_10_0;
 mod v0_11_0;
 mod v0_12_0;
+mod v0_13_0;
 mod v0_2_0;
 mod v0_3_0;
 mod v0_4_0;
@@ -95,6 +96,11 @@ const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
         version_text: "0.12.0",
         name: "bounded wake transcription settlement",
     },
+    RegisteredMigration {
+        version: SchemaVersion::new(0, 13, 0),
+        version_text: "0.13.0",
+        name: "durable operational outcomes and canonical event scopes",
+    },
 ];
 
 impl TimelineStore {
@@ -168,6 +174,7 @@ impl TimelineStore {
             "0.10.0" => v0_10_0::run(&mut transaction).await?,
             "0.11.0" => v0_11_0::run(&mut transaction).await?,
             "0.12.0" => v0_12_0::run(&mut transaction).await?,
+            "0.13.0" => v0_13_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

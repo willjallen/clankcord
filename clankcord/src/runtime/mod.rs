@@ -50,9 +50,11 @@ pub use service::{
     RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
 };
 pub use timeline::views::{
-    ContextResolveRequest, DebugOverviewRequest, ForgetRequest, JobsRequest,
-    ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest, MemberResolveRequest,
-    MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
+    ContextResolveRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
+    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, ForgetRequest,
+    JobsRequest, ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest,
+    MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
     SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    default_dashboard_categories, parse_dashboard_filter,
 };
 pub use util::log;

@@ -59,6 +59,7 @@
       if (!row) return;
       app.applyTimelineFilter({
         timelineRecordTypes: ['job'],
+        timelineCategories: app.timelineDrilldownCategories(),
         timelineKinds: [row.kind],
         timelineJobStates: [params.seriesName],
       });
@@ -75,9 +76,9 @@
       xAxis: { type: 'category', data: rows.map((row) => row.kind), axisLabel: { ...axisText(), rotate: 24 } },
       yAxis: { type: 'value', axisLabel: { ...axisText(), formatter: (value) => app.millis(value) }, splitLine: { lineStyle: { color: '#343b38' } } },
       series: [
-        { name: 'p50 lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p50')) },
-        { name: 'p95 lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p95')) },
-        { name: 'max lifetime', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'max')) },
+        { name: 'p50 total duration', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p50')) },
+        { name: 'p95 total duration', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'p95')) },
+        { name: 'max total duration', type: 'bar', data: rows.map((row) => app.latencyNumber(row, 'totalMs', 'max')) },
       ],
     };
     setChart('latency-kind-chart', option, (params) => {
@@ -85,8 +86,9 @@
       if (row) {
         app.applyTimelineFilter({
           timelineRecordTypes: ['job'],
+          timelineCategories: app.timelineDrilldownCategories(),
           timelineKinds: [row.kind],
-          timelineJobStates: [],
+          timelineJobStates: null,
         });
       }
     });
@@ -114,8 +116,9 @@
       if (params.seriesName) {
         app.applyTimelineFilter({
           timelineRecordTypes: ['event'],
+          timelineCategories: app.timelineDrilldownCategories(),
           timelineKinds: [params.seriesName],
-          timelineJobStates: [],
+          timelineJobStates: null,
         });
       }
     });
@@ -141,6 +144,7 @@
       const row = rows[params.dataIndex];
       if (row) {
         app.applyTimelineFilter({
+          timelineCategories: app.timelineDrilldownCategories(),
           timelineChannels: [row.channelId],
         });
       }

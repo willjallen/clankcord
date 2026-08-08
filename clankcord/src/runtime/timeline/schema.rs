@@ -335,6 +335,26 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "operational_job_outcomes",
+        &[
+            column("observation_id", "bigint", false),
+            column("job_id", "text", false),
+            column("scope_kind", "text", false),
+            column("guild_id", "text", false),
+            column("scope_id", "text", false),
+            column("kind", "text", false),
+            column("state", "text", false),
+            column("lane", "text", false),
+            column("created_at_ms", "bigint", false),
+            column("ready_at_ms", "bigint", false),
+            column("started_at_ms", "bigint", true),
+            column("completed_at_ms", "bigint", true),
+            column("observed_at_ms", "bigint", false),
+            column("failed", "boolean", false),
+            column("error_text", "text", false),
+        ],
+    ),
+    table(
         "wake_activation_progress",
         &[
             column("job_id", "text", false),
@@ -444,6 +464,16 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
         &["idx_job_dependencies_child", "job_dependencies_pkey"],
     ),
     ("job_payloads", &["job_payloads_pkey"]),
+    (
+        "operational_job_outcomes",
+        &[
+            "idx_operational_job_failures_observed",
+            "idx_operational_job_outcomes_job_observed",
+            "idx_operational_job_outcomes_observed_kind",
+            "idx_operational_job_outcomes_transition",
+            "operational_job_outcomes_pkey",
+        ],
+    ),
     (
         "jobs",
         &[
@@ -779,6 +809,24 @@ impl TimelineStore {
               payload_blob BYTEA NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS operational_job_outcomes (
+              observation_id BIGSERIAL PRIMARY KEY,
+              job_id TEXT NOT NULL,
+              scope_kind TEXT NOT NULL,
+              guild_id TEXT NOT NULL,
+              scope_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              state TEXT NOT NULL,
+              lane TEXT NOT NULL,
+              created_at_ms BIGINT NOT NULL,
+              ready_at_ms BIGINT NOT NULL,
+              started_at_ms BIGINT,
+              completed_at_ms BIGINT,
+              observed_at_ms BIGINT NOT NULL,
+              failed BOOLEAN NOT NULL,
+              error_text TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS job_dependencies (
               parent_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
               child_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
@@ -1060,6 +1108,15 @@ impl TimelineStore {
             CREATE INDEX IF NOT EXISTS idx_jobs_ephemeral_gc
               ON jobs(gc_after_ms, job_id)
               WHERE ephemeral = TRUE AND terminal = TRUE;
+            CREATE INDEX IF NOT EXISTS idx_operational_job_outcomes_observed_kind
+              ON operational_job_outcomes(observed_at_ms DESC, kind, observation_id DESC);
+            CREATE INDEX IF NOT EXISTS idx_operational_job_outcomes_job_observed
+              ON operational_job_outcomes(job_id, observed_at_ms DESC, observation_id DESC);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_operational_job_outcomes_transition
+              ON operational_job_outcomes(job_id, state, observed_at_ms);
+            CREATE INDEX IF NOT EXISTS idx_operational_job_failures_observed
+              ON operational_job_outcomes(observed_at_ms DESC, observation_id DESC)
+              WHERE failed = TRUE;
             CREATE INDEX IF NOT EXISTS idx_jobs_wake_stream_queued
               ON jobs(stream_id, ready_at_ms, created_at_ms, job_id)
               WHERE kind = 'wake_probe' AND state = 'queued';

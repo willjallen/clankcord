@@ -2,7 +2,7 @@ use clankcord::runtime::timeline::views::parse_codex_trace;
 use serde_json::Value;
 
 #[test]
-fn current_codex_jsonl_populates_agent_debug_trace() {
+fn current_codex_jsonl_populates_agent_execution_trace() {
     let raw = r#"
 {"type":"thread.started","thread_id":"019e270d-878f-70c0-855e-456d2225d85c"}
 {"type":"turn.started"}

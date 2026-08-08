@@ -4,16 +4,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clankcord Dashboard</title>
-  <link rel="stylesheet" href="./debug/tabulator_midnight.min.css">
-  <link rel="stylesheet" href="./debug/dashboard.css">
-  <script defer src="./debug/echarts.min.js"></script>
-  <script defer src="./debug/tabulator.min.js"></script>
-  <script defer src="./debug/dashboard-json.js"></script>
-  <script defer src="./debug/dashboard-charts.js"></script>
-  <script defer src="./debug/dashboard-tables.js"></script>
-  <script defer src="./debug/dashboard-explorer.js"></script>
-  <script defer src="./debug/dashboard.js"></script>
-  <script defer src="./debug/alpine.min.js"></script>
+  <link rel="stylesheet" href="./dashboard/tabulator_midnight.min.css">
+  <link rel="stylesheet" href="./dashboard/dashboard.css">
+  <script defer src="./dashboard/echarts.min.js"></script>
+  <script defer src="./dashboard/tabulator.min.js"></script>
+  <script defer src="./dashboard/dashboard-json.js"></script>
+  <script defer src="./dashboard/dashboard-charts.js"></script>
+  <script defer src="./dashboard/dashboard-tables.js"></script>
+  <script defer src="./dashboard/dashboard-explorer.js"></script>
+  <script defer src="./dashboard/dashboard.js"></script>
+  <script defer src="./dashboard/alpine.min.js"></script>
 </head>
 <body x-data="dashboard()" x-init="init()" x-cloak>
   <header>
@@ -50,19 +50,19 @@
     <div class="view active" x-show="activeView === 'overview'">
       <div class="chart-grid">
         <section>
-          <h2><span>Jobs By Type And State</span><small>click bars to filter timeline</small></h2>
+          <h2><span>Jobs By Type And State</span><small>last hour + active · click bars to filter</small></h2>
           <div id="job-mix-chart" class="chart-host"></div>
         </section>
         <section>
-          <h2><span>Latency By Job Type</span><small>p50 / p95 / max</small></h2>
+          <h2><span>Latency By Job Type</span><small x-text="`last hour · ${latencyKindCoverageLabel()}`"></small></h2>
           <div id="latency-kind-chart" class="chart-host"></div>
         </section>
         <section>
-          <h2><span>Timeline Activity</span><small>click lines to filter timeline</small></h2>
+          <h2><span>Timeline Activity</span><small>last hour · click lines to filter</small></h2>
           <div id="event-trend-chart" class="chart-host"></div>
         </section>
         <section>
-          <h2><span>Scope Activity</span><small>jobs / speech / transcript / wake</small></h2>
+          <h2><span>Scope Activity</span><small>last hour + active jobs</small></h2>
           <div id="room-activity-chart" class="chart-host"></div>
         </section>
       </div>
@@ -90,19 +90,17 @@
             </div>
           </section>
           <section>
-            <h2><span>Scope Job Load</span><small x-text="scopeJobLoad().length"></small></h2>
+            <h2><span>Recent Scope Job Activity</span><small x-text="scopeJobLoad().length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Scope</th><th>Guild</th><th>ID</th><th>Total</th><th>Active</th><th>Failed</th><th>Latest</th></tr></thead>
+                <thead><tr><th>Scope</th><th>Kind</th><th>Total</th><th>Active</th><th>Latest</th></tr></thead>
                 <tbody>
                   <template x-for="scope in scopeJobLoad()" :key="`${scope.scope_kind}:${scope.guild_id}:${scope.scope_id}`">
                     <tr>
-                      <td x-text="scope.scope_kind"></td>
-                      <td class="mono" x-text="short(scope.guild_id, 14)"></td>
-                      <td class="mono" x-text="short(scope.scope_id, 18)"></td>
+                      <td x-text="scopeJobLabel(scope)"></td>
+                      <td x-text="scopeKindLabel(scope.scope_kind)"></td>
                       <td x-text="scope.total"></td>
                       <td x-text="scope.active"></td>
-                      <td x-text="scope.failed"></td>
                       <td x-text="ago(scope.latest_at)"></td>
                     </tr>
                   </template>
@@ -114,7 +112,7 @@
         </div>
         <div class="stack">
           <section>
-            <h2><span>State Mix</span></h2>
+            <h2><span>Recent Job State Mix</span></h2>
             <div class="dense-list">
               <template x-for="row in jobSummary().byState || []" :key="row.state">
                 <div class="dense-row"><span x-text="row.state"></span><strong x-text="row.count"></strong></div>
@@ -122,23 +120,24 @@
             </div>
           </section>
           <section>
-            <h2><span>Recent Failures</span><small x-text="recentFailures().length"></small></h2>
+            <h2><span>Failures · Last Hour</span><small x-text="failureCoverageLabel()"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Job</th><th>Job Type</th><th>State</th><th>Updated</th><th>Detail</th></tr></thead>
+                <thead><tr><th>When</th><th>Job Type</th><th>State</th><th>Scope</th><th>Reason</th><th>Job</th></tr></thead>
                 <tbody>
-                  <template x-for="job in recentFailures().slice(0, 14)" :key="job.job_id">
+                  <template x-for="failure in recentFailures().slice(0, 14)" :key="`${failure.jobId}:${failure.failedAt}`">
                     <tr>
-                      <td><button class="link-button mono" type="button" @click="selectJob(job.job_id)" x-text="short(job.job_id)"></button></td>
-                      <td><span class="pill" :class="statusClass(job.kind)" x-text="job.kind"></span></td>
-                      <td><span class="pill" :class="statusClass(job.state)" x-text="job.state"></span></td>
-                      <td x-text="ago(jobTime(job))"></td>
-                      <td class="text-cell" x-text="short(jobDetail(job), 170)"></td>
+                      <td x-text="ago(failure.failedAt)"></td>
+                      <td><span class="pill" :class="statusClass(failure.kind)" x-text="failure.kind"></span></td>
+                      <td><span class="pill" :class="statusClass(failure.state)" x-text="failure.state"></span></td>
+                      <td x-text="failureScopeLabel(failure)"></td>
+                      <td class="text-cell" x-text="short(failure.reason || 'No reason recorded', 170)"></td>
+                      <td><button class="link-button mono" type="button" @click="traceFailure(failure)" x-text="short(failure.jobId)"></button></td>
                     </tr>
                   </template>
                 </tbody>
               </table>
-              <div class="empty" x-show="!recentFailures().length">No recent failures.</div>
+              <div class="empty" x-show="!recentFailures().length">No failures observed in the last hour.</div>
             </div>
           </section>
         </div>
@@ -153,24 +152,33 @@
           </select>
         </label>
       </div>
+      <div class="agent-summary-grid" aria-label="Agent run summary">
+        <template x-for="item in agentSummaryRows()" :key="item.label">
+          <div class="agent-summary-card">
+            <span x-text="item.label"></span>
+            <strong :class="item.className" x-text="item.value"></strong>
+          </div>
+        </template>
+      </div>
       <div class="agents-layout">
         <div class="stack">
           <section>
-            <h2><span>Agent Jobs</span><small x-text="agentJobs.length"></small></h2>
+            <h2><span>Recent Runs</span><small x-text="`${agentJobs.length} shown`"></small></h2>
             <div class="table-wrap tall scroll-region">
               <table>
-                <thead><tr><th>Job</th><th>State</th><th>Request</th><th>Session</th><th>Model</th><th>Context</th><th>Updated</th><th>Detail</th></tr></thead>
+                <thead><tr><th>Outcome</th><th>Request</th><th>Scope</th><th>Duration</th><th>Attempts</th><th>Updated</th></tr></thead>
                 <tbody>
                   <template x-for="entry in agentJobs" :key="entry.job?.job_id">
                     <tr class="selectable" :class="{selected: selectedAgentJobId === entry.job?.job_id}" @click="selectAgentJob(entry.job?.job_id)">
-                      <td class="mono" x-text="short(entry.job?.job_id)"></td>
-                      <td><span class="pill" :class="statusClass(entry.job?.state)" x-text="entry.job?.state"></span></td>
-                      <td class="text-cell" x-text="short(agentRequest(entry), 120)"></td>
-                      <td class="mono" x-text="short(agentSessionId(entry), 18)"></td>
-                      <td x-text="agentModel(entry)"></td>
-                      <td x-text="contextUsageLabel(codexUsageStats(entry.codex || {}, agentMetadata(entry.job)))"></td>
+                      <td><span class="pill" :class="statusClass(entry.job?.state)" x-text="agentOutcomeLabel(entry.job?.state)"></span></td>
+                      <td class="agent-run-request">
+                        <strong x-text="short(agentRunRequest(entry) || 'No request text', 150)"></strong>
+                        <span class="muted" x-text="[agentRunModel(entry), short(entry.job?.job_id, 14)].filter(Boolean).join(' · ')"></span>
+                      </td>
+                      <td x-text="agentRunScopeLabel(entry.job || {})"></td>
+                      <td x-text="agentRunDuration(entry.job || {})"></td>
+                      <td x-text="agentAttemptLabel(entry)"></td>
                       <td x-text="ago(jobTime(entry.job || {}))"></td>
-                      <td class="text-cell" x-text="short(jobDetail(entry.job || {}), 130)"></td>
                     </tr>
                   </template>
                 </tbody>
@@ -179,17 +187,15 @@
             </div>
           </section>
           <section>
-            <h2><span>Agent Sessions</span><small x-text="agentSessions.length"></small></h2>
+            <h2><span>Session Routes</span><small x-text="agentSessions.length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Key</th><th>Status</th><th>Codex Session</th><th>Latest Job</th><th>Runs</th><th>Last Used</th><th>Error</th></tr></thead>
+                <thead><tr><th>Scope</th><th>Status</th><th>Runs</th><th>Last Used</th><th>Latest Error</th></tr></thead>
                 <tbody>
                   <template x-for="session in agentSessions" :key="session.key">
                     <tr class="selectable" @click="selectAgentSession(session)">
-                      <td class="mono" x-text="short(session.key, 32)"></td>
+                      <td x-text="agentSessionScopeLabel(session)"></td>
                       <td><span class="pill" :class="statusClass(session.status)" x-text="session.status"></span></td>
-                      <td class="mono" x-text="short(session.session_id, 20)"></td>
-                      <td class="mono" x-text="short(session.active_job_id || session.latest_job_id, 18)"></td>
                       <td x-text="session.invocation_count ?? 0"></td>
                       <td x-text="ago(session.last_used_at)"></td>
                       <td class="text-cell" x-text="short(session.last_error, 100)"></td>
@@ -218,68 +224,138 @@
             </div>
           </section>
         </div>
-        <section>
-          <h2><span>Selected Agent Job</span><small x-text="selectedAgentJobId"></small></h2>
+        <section class="selected-run-panel">
+          <h2><span>Selected Run</span><small class="mono" x-text="short(selectedAgentJobId, 22)"></small></h2>
           <div class="detail agent-detail scroll-region" x-show="selectedAgentEntry()">
             <div class="empty" x-show="selectedAgentDetailLoading()">Loading selected agent job...</div>
             <div class="error inline-error" x-show="selectedAgentDetailError()" x-text="selectedAgentDetailError()"></div>
-            <div class="detail-head">
-              <span class="pill" :class="statusClass(selectedAgentJob()?.kind)" x-text="selectedAgentJob()?.kind"></span>
-              <span class="pill" :class="statusClass(selectedAgentJob()?.state)" x-text="selectedAgentJob()?.state"></span>
-              <span class="mono" x-text="short(selectedAgentCodex().sessionId || agentMetadata(selectedAgentJob()).agent?.session_id || '', 38)"></span>
+            <div class="run-header">
+              <div class="run-header-copy">
+                <h3 x-text="selectedAgentRunTitle()"></h3>
+                <div class="detail-tags">
+                  <span class="pill" :class="statusClass(selectedAgentJob()?.state)" x-text="agentOutcomeLabel(selectedAgentJob()?.state)"></span>
+                  <span class="pill" x-show="agentRunModel(selectedAgentEntry())" x-text="agentRunModel(selectedAgentEntry())"></span>
+                  <span class="pill" x-show="selectedAgentCodex().reasoningEffort" x-text="selectedAgentCodex().reasoningEffort"></span>
+                </div>
+              </div>
+              <button type="button" @click="loadSelectedAgentDetail({force: true})">Refresh detail</button>
             </div>
-            <div class="kv-grid">
-              <template x-for="item in selectedAgentFacts()" :key="item.label">
-                <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
-              </template>
+            <div class="embedded-panel run-timing-panel">
+              <h2><span>Timing</span></h2>
+              <div class="run-fact-grid">
+                <template x-for="item in selectedAgentRunFacts()" :key="item.label">
+                  <div class="kv"><div class="k" x-text="item.label"></div><div class="v" x-text="item.value"></div></div>
+                </template>
+              </div>
+              <div class="run-phase-strip" aria-label="Run phases">
+                <template x-for="phase in selectedAgentPhases()" :key="phase.label">
+                  <div class="run-phase" :class="phase.className">
+                    <span class="run-phase-marker"></span>
+                    <div><strong x-text="phase.label"></strong><span x-text="phase.detail"></span></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div class="run-primary-grid">
+              <article class="run-content-card">
+                <div class="run-content-head"><span>Request</span></div>
+                <div class="run-prose" x-text="selectedAgentRequest() || 'No request text recorded.'"></div>
+              </article>
+              <article class="run-content-card" :class="{'run-content-pending': !selectedAgentFinalResult()}">
+                <div class="run-content-head"><span>Result</span><small x-text="selectedAgentFinalResultStatus()"></small></div>
+                <div class="run-prose" x-text="selectedAgentFinalResult() || selectedAgentFinalResultEmptyMessage()"></div>
+              </article>
+            </div>
+            <div class="embedded-panel" x-show="selectedAgentErrorRows().length">
+              <h2><span>Errors</span><small x-text="selectedAgentErrorRows().length"></small></h2>
+              <div class="run-issue-list">
+                <template x-for="issue in selectedAgentErrorRows()" :key="`${issue.source}:${issue.detail}`">
+                  <div class="run-issue">
+                    <span class="pill" :class="issue.className" x-text="issue.level"></span>
+                    <div><strong x-text="issue.source"></strong><div x-text="issue.detail"></div></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div class="run-operations-grid">
+              <div class="embedded-panel">
+                <h2><span>Attempts</span></h2>
+                <div class="dense-list">
+                  <template x-for="row in selectedAgentAttemptRows()" :key="row.label">
+                    <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+                  </template>
+                </div>
+              </div>
+              <div class="embedded-panel">
+                <h2><span>Usage</span><small x-text="selectedAgentContextLabel()"></small></h2>
+                <div class="dense-list">
+                  <template x-for="row in selectedAgentUsageRows()" :key="row.label">
+                    <div class="dense-row"><span x-text="row.label"></span><strong x-text="row.value"></strong></div>
+                  </template>
+                </div>
+              </div>
             </div>
             <div class="embedded-panel">
-              <h2><span>Selected Job Trace</span><small x-text="`${selectedAgentTrace().length} events`"></small></h2>
-              <div class="agent-trace scroll-region">
-                <template x-for="(event, index) in selectedAgentTrace()" :key="`${selectedAgentJobId}:${event.job_id || event.callId || 'event'}:${index}`">
-                  <article class="timeline-card">
-                    <div class="timeline-head">
-                      <div class="detail-tags">
-                        <span class="pill" :class="statusClass(event.kind)" x-text="event.kind"></span>
-                        <span class="pill" x-show="event.role" x-text="event.role"></span>
-                        <span class="pill" x-show="event.name" x-text="event.name"></span>
-                        <span class="muted" x-text="ago(event.timestamp)"></span>
+              <h2><span>Execution</span><small x-text="`${selectedAgentExecutionTimeline().length} entries · chronological`"></small></h2>
+              <div class="execution-timeline">
+                <template x-for="(event, index) in selectedAgentExecutionTimeline()" :key="`${selectedAgentJobId}:${event.kind}:${event.timestamp}:${index}`">
+                  <article class="execution-event">
+                    <span class="execution-marker" :class="statusClass(event.status || event.kind)"></span>
+                    <div class="execution-event-body">
+                      <div class="execution-event-head">
+                        <div>
+                          <strong x-text="event.title"></strong>
+                          <span class="pill" x-show="event.status" :class="statusClass(event.status)" x-text="event.status"></span>
+                        </div>
+                        <time :datetime="event.timestamp" x-text="agentTimelineTime(event)"></time>
                       </div>
-                      <span class="mono" x-text="short(event.job_id || event.callId || '', 18)"></span>
+                      <div class="run-prose compact" x-show="event.body" x-text="event.body"></div>
                     </div>
-                    <pre x-text="traceBody(event)"></pre>
                   </article>
                 </template>
-                <div class="empty" x-show="!selectedAgentTrace().length && !selectedAgentDetailLoading()">No Codex trace captured for the selected job.</div>
+                <div class="empty" x-show="!selectedAgentExecutionTimeline().length && !selectedAgentDetailLoading()">No execution activity captured for this run.</div>
               </div>
             </div>
-            <details open><summary>Session History Text</summary><pre x-text="selectedAgentSession()?.transcript?.content || ''"></pre></details>
-            <details><summary>Session Trace</summary>
-              <div class="agent-trace scroll-region">
-                <template x-for="(event, index) in selectedAgentSessionTrace()" :key="`session:${selectedAgentJobId}:${event.job_id || event.callId || 'event'}:${index}`">
-                  <article class="timeline-card">
-                    <div class="timeline-head">
-                      <div class="detail-tags">
-                        <span class="pill" :class="statusClass(event.kind)" x-text="event.kind"></span>
-                        <span class="pill" x-show="event.role" x-text="event.role"></span>
-                        <span class="pill" x-show="event.name" x-text="event.name"></span>
-                        <span class="pill" x-show="event.selected">selected</span>
-                        <span class="muted" x-text="ago(event.timestamp)"></span>
-                      </div>
-                      <span class="mono" x-text="short(event.job_id || event.callId || '', 18)"></span>
-                    </div>
-                    <pre x-text="traceBody(event)"></pre>
-                  </article>
+            <div class="embedded-panel">
+              <h2><span>Related Work</span><small x-text="selectedAgentRelatedWorkLabel()"></small></h2>
+              <div class="lineage-strip">
+                <template x-for="node in selectedAgentLineage()" :key="node.role">
+                  <div class="lineage-node" :class="{current: node.current}">
+                    <span x-text="node.role"></span>
+                    <strong class="mono" x-text="short(node.jobId, 20)"></strong>
+                  </div>
                 </template>
-                <div class="empty" x-show="!selectedAgentSessionTrace().length">No session trace captured.</div>
+              </div>
+              <div class="table-wrap related-runs scroll-region">
+                <table>
+                  <thead><tr><th>Outcome</th><th>Request</th><th>Duration</th><th>When</th></tr></thead>
+                  <tbody>
+                    <template x-for="run in selectedAgentRelatedRuns()" :key="run.job_id">
+                      <tr class="selectable" :class="{selected: run.job_id === selectedAgentJobId}" @click="selectAgentJob(run.job_id)">
+                        <td><span class="pill" :class="statusClass(run.state)" x-text="agentOutcomeLabel(run.state)"></span></td>
+                        <td class="agent-run-request"><strong x-text="short(run.request || 'No request text', 120)"></strong><span class="muted mono" x-text="short(run.job_id, 14)"></span></td>
+                        <td x-text="agentRunDuration(run)"></td>
+                        <td x-text="ago(run.updated_at || run.created_at)"></td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+                <div class="empty" x-show="!selectedAgentRelatedRuns().length">No related runs in this Codex session.</div>
+              </div>
+            </div>
+            <details class="advanced-details">
+              <summary>Advanced</summary>
+              <div class="advanced-detail-stack">
+                <details><summary>Prompt Artifact</summary><pre x-text="selectedAgentEntry()?.prompt?.content || ''"></pre></details>
+                <details><summary>Workdir Inventory</summary><pre x-text="json(selectedAgentEntry()?.workdir || {})"></pre></details>
+                <details><summary>Raw Codex JSONL</summary><pre x-text="selectedAgentEntry()?.raw?.content || ''"></pre></details>
+                <details><summary>Job Record</summary><pre x-text="json(selectedAgentJob())"></pre></details>
               </div>
             </details>
-            <details><summary>Prompt Sent For Selected Job</summary><pre x-text="selectedAgentEntry()?.prompt?.content || ''"></pre></details>
-            <details><summary>Agent Workdir</summary><pre x-text="json(selectedAgentEntry()?.workdir || {})"></pre></details>
-            <details><summary>Raw Codex JSONL</summary><pre x-text="selectedAgentEntry()?.raw?.content || ''"></pre></details>
-            <details><summary>Job Record</summary><pre x-text="json(selectedAgentJob())"></pre></details>
           </div>
-          <div class="empty" x-show="!selectedAgentEntry()">No agent job selected.</div>
+          <div class="empty" x-show="selectedAgentJobId && !selectedAgentEntry() && !selectedAgentDetailError()">Loading selected run...</div>
+          <div class="error inline-error" x-show="selectedAgentJobId && !selectedAgentEntry() && selectedAgentDetailError()" x-text="selectedAgentDetailError()"></div>
+          <div class="empty" x-show="!selectedAgentJobId">No agent job selected.</div>
         </section>
       </div>
     </div>
@@ -343,6 +419,44 @@
       </div>
     </div>
 
+    <div class="view active" x-show="activeView === 'feedback'">
+      <section>
+        <h2><span>Feedback Requests</span><small x-text="feedbackCountLabel()"></small></h2>
+        <div class="filterbar">
+          <label>Window
+            <select x-model="filters.feedbackSince" @change="filterChanged()">
+              <option value="-24h">24h</option><option value="-7d">7d</option><option value="-30d">30d</option><option value="all">All</option>
+            </select>
+          </label>
+          <label>Limit
+            <select x-model.number="filters.feedbackLimit" @change="filterChanged()">
+              <option>100</option><option>250</option><option>500</option><option>1000</option>
+            </select>
+          </label>
+          <label>Search <input type="search" x-model.debounce.150ms="filters.feedbackSearch" @input.debounce.150ms="filterChanged()" autocomplete="off" placeholder="Find a request"></label>
+          <button type="button" @click="openFeedbackInTimeline()">Open in Timeline</button>
+        </div>
+        <div class="feedback-list scroll-region">
+          <template x-for="event in feedbackEvents" :key="event.event_id || event.eventId">
+            <article class="feedback-card">
+              <div class="feedback-card-head">
+                <div>
+                  <strong x-text="eventSpeaker(event) || 'Unknown requester'"></strong>
+                  <span class="muted" x-text="eventScopeLabel(event)"></span>
+                </div>
+                <div class="detail-tags">
+                  <span class="muted" x-text="ago(eventWhen(event))"></span>
+                  <button type="button" @click="openFeedbackInTimeline(event)">Trace</button>
+                </div>
+              </div>
+              <div class="feedback-message" x-text="feedbackText(event)"></div>
+            </article>
+          </template>
+          <div class="empty" x-show="!feedbackEvents.length">No feedback requests match this view.</div>
+        </div>
+      </section>
+    </div>
+
     <div class="view active" x-show="activeView === 'health'">
       <div class="layout health-layout">
         <div class="stack">
@@ -350,7 +464,13 @@
             <h2><span>Service Health</span></h2>
             <div class="dense-list">
               <template x-for="row in healthRows()" :key="row.label">
-                <div class="dense-row"><span x-text="row.label"></span><strong :class="row.className" x-text="row.value"></strong></div>
+                <div class="dense-row health-component-row">
+                  <span x-text="row.label"></span>
+                  <span class="health-component-value">
+                    <span class="pill" :class="row.className" x-text="row.status"></span>
+                    <span class="muted" x-text="row.reason"></span>
+                  </span>
+                </div>
               </template>
             </div>
           </section>
@@ -458,14 +578,15 @@
             </div>
           </section>
           <section>
-            <h2><span>Job Latency Windows</span><small>lifetime / ready / queue / start wall</small></h2>
+            <h2><span>Job Latency Windows</span><small>total duration / ready / queue / start wall</small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Window</th><th>Jobs</th><th>Lifetime p50</th><th>Lifetime p95</th><th>Lifetime max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Gaps</th><th>Failed</th></tr></thead>
+                <thead><tr><th>Window</th><th>Coverage</th><th>Jobs</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>STT p95</th><th>Wake p95</th><th>Gaps</th><th>Failed</th></tr></thead>
                 <tbody>
                   <template x-for="window in latencyWindows()" :key="window.label">
                     <tr>
                       <td x-text="window.label"></td>
+                      <td><span class="pill" :class="window.coverage?.complete ? 'ok' : 'warn'" x-text="latencyCoverageLabel(window)"></span></td>
                       <td x-text="int(window.all?.count)"></td>
                       <td x-text="latencyValue(window.all, 'totalMs', 'p50')"></td>
                       <td x-text="latencyValue(window.all, 'totalMs', 'p95')"></td>
@@ -531,10 +652,10 @@
             </div>
           </section>
           <section>
-            <h2><span>Latency By Job Type</span><small>last hour</small></h2>
+            <h2><span>Latency By Job Type</span><small x-text="`last hour · ${latencyKindCoverageLabel()}`"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Lifetime p50</th><th>Lifetime p95</th><th>Lifetime max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>Gaps</th></tr></thead>
+                <thead><tr><th>Job Type</th><th>Samples</th><th>Failed</th><th>Total p50</th><th>Total p95</th><th>Total max</th><th>Ready Delay p95</th><th>Start Wall p95</th><th>Queue p95</th><th>Gaps</th></tr></thead>
                 <tbody>
                   <template x-for="row in latencyKindRows()" :key="row.kind">
                     <tr>
@@ -620,12 +741,11 @@
             <h2><span>Rooms</span><small x-text="rooms.length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Room</th><th>Channel</th><th>Session</th><th>Auto</th><th>Humans</th><th>Control</th><th>Last Speech</th></tr></thead>
+                <thead><tr><th>Room</th><th>Session</th><th>Auto</th><th>Humans</th><th>Control</th><th>Last Speech</th></tr></thead>
                 <tbody>
                   <template x-for="room in rooms" :key="room.channelId">
                     <tr>
                       <td x-text="roomName(room)"></td>
-                      <td class="mono" x-text="short(room.channelId, 18)"></td>
                       <td><span class="pill" :class="room.activeSessionId ? 'ok' : 'warn'" x-text="room.activeSessionId ? 'active' : 'absent'"></span></td>
                       <td x-text="room.autoJoin ? 'yes' : 'no'"></td>
                       <td x-text="roomHumanCount(room)"></td>
@@ -645,7 +765,7 @@
                 <tbody>
                   <template x-for="session in sessions" :key="session.sessionId || session.captureRunId || session.assignmentId">
                     <tr>
-                      <td x-text="session.room?.channelName || session.roomId || session.scopeId || ''"></td>
+                      <td x-text="session.room?.channelName || roomLabel(session.roomId || session.scopeId || '')"></td>
                       <td class="mono" x-text="short(session.captureRunId || session.sessionId || session.assignmentId, 18)"></td>
                       <td><span class="pill" :class="statusClass(session.mode || 'active')" x-text="session.mode || 'active'"></span></td>
                       <td x-text="session.botId || ''"></td>
@@ -663,15 +783,18 @@
             <h2><span>Bots</span><small x-text="bots.length"></small></h2>
             <div class="table-wrap scroll-region">
               <table>
-                <thead><tr><th>Bot</th><th>State</th><th>Assignment</th><th>Voice Channel</th><th>Audio</th></tr></thead>
+                <thead><tr><th>Bot</th><th>State</th><th>Assignment</th><th>Voice Room</th><th>Gateway</th><th>Receive</th><th>Observed</th><th>Error</th></tr></thead>
                 <tbody>
                   <template x-for="bot in bots" :key="bot.botId || bot.voice_bot_id">
                     <tr>
                       <td x-text="bot.botId || bot.voice_bot_id || ''"></td>
-                      <td><span class="pill" :class="statusClass(bot.state || (bot.ready ? 'ready' : 'starting'))" x-text="bot.state || (bot.ready ? 'ready' : 'starting')"></span></td>
+                      <td><span class="pill" :class="statusClass(bot.state || (bot.ready && bot.gatewayRunning ? 'ready' : 'degraded'))" x-text="bot.state || (bot.ready && bot.gatewayRunning ? 'ready' : 'degraded')"></span></td>
                       <td class="mono" x-text="short(bot.assignedSessionId || '', 18)"></td>
-                      <td class="mono" x-text="short(bot.voiceDebug?.voiceClientChannelId || bot.voiceDebug?.voiceStateChannelId || '', 18)"></td>
-                      <td x-text="bot.voiceDebug?.selfDeaf ? 'deaf' : 'listening'"></td>
+                      <td x-text="bot.currentChannelId ? roomLabel(bot.currentChannelId) : 'Disconnected'"></td>
+                      <td><span class="pill" :class="bot.gatewayRunning ? 'ok' : 'bad'" x-text="bot.gatewayRunning ? 'running' : 'stopped'"></span></td>
+                      <td x-text="bot.receiveBackend || 'unavailable'"></td>
+                      <td x-text="ago(bot.observedAt)"></td>
+                      <td class="text-cell" x-text="short(bot.lastError, 120)"></td>
                     </tr>
                   </template>
                 </tbody>
@@ -790,11 +913,14 @@
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineRecordTypes')}" @click="toggleTimelineFilterEditor('timelineRecordTypes')">
               <span>Record</span><strong x-text="timelineFilterSummary('timelineRecordTypes')"></strong>
             </button>
+            <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineCategories')}" @click="toggleTimelineFilterEditor('timelineCategories')">
+              <span>Category</span><strong x-text="timelineFilterSummary('timelineCategories')"></strong>
+            </button>
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineKinds')}" @click="toggleTimelineFilterEditor('timelineKinds')">
               <span>Kind</span><strong x-text="timelineFilterSummary('timelineKinds')"></strong>
             </button>
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineJobStates')}" @click="toggleTimelineFilterEditor('timelineJobStates')">
-              <span>Job State</span><strong x-text="timelineFilterSummary('timelineJobStates')"></strong>
+              <span>State</span><strong x-text="timelineFilterSummary('timelineJobStates')"></strong>
             </button>
             <button type="button" class="filter-trigger" :class="{active: timelineFilterEditorOpen('timelineChannels')}" @click="toggleTimelineFilterEditor('timelineChannels')">
               <span>Scope</span><strong x-text="timelineFilterSummary('timelineChannels')"></strong>
@@ -807,12 +933,44 @@
             <strong x-text="timelineFilterTitle(timelineFilterEditor)"></strong>
             <div class="filter-actions">
               <button type="button" @click="selectAllTimelineFilterValues(timelineFilterEditor)">All</button>
+              <button type="button" @click="selectNoTimelineFilterValues(timelineFilterEditor)">None</button>
               <button type="button" @click="closeTimelineFilterEditor()">Close</button>
             </div>
           </div>
-          <div class="timeline-option-grid">
+          <div class="timeline-option-grid" x-show="timelineFilterEditor !== 'timelineKinds'">
             <template x-for="option in timelineFilterOptionRows(timelineFilterEditor)" :key="option.id">
-              <label class="check timeline-option"><input type="checkbox" :checked="timelineFilterSelected(timelineFilterEditor, option.id)" @change="toggleTimelineFilterValue(timelineFilterEditor, option.id)"> <span x-text="option.label"></span></label>
+              <label class="check timeline-option">
+                <input type="checkbox" :checked="timelineFilterSelected(timelineFilterEditor, option.id)" @change="toggleTimelineFilterValue(timelineFilterEditor, option.id)">
+                <span x-text="option.label"></span>
+                <small x-show="timelineFilterEditor === 'timelineCategories'" x-text="option.count"></small>
+              </label>
+            </template>
+          </div>
+          <div class="timeline-kind-groups" x-show="timelineFilterEditor === 'timelineKinds'">
+            <template x-for="group in timelineKindGroups()" :key="group.id">
+              <div class="timeline-kind-group" :class="{off: !timelineCategorySelected(group.id)}">
+                <div class="timeline-kind-group-head">
+                  <div>
+                    <strong x-text="group.label"></strong>
+                    <span class="muted" x-text="`${group.count} records · ${group.kinds.length} kinds`"></span>
+                  </div>
+                  <div class="timeline-kind-group-state">
+                    <span class="pill" :class="timelineCategorySelected(group.id) ? 'ok' : 'warn'" x-text="timelineCategorySelected(group.id) ? 'on' : 'off'"></span>
+                    <span class="muted" x-show="!group.defaultSelected">opt-in</span>
+                    <button type="button" @click="selectAllTimelineKindGroup(group.id)">All</button>
+                    <button type="button" @click="selectNoTimelineKindGroup(group.id)">None</button>
+                  </div>
+                </div>
+                <div class="timeline-option-grid timeline-kind-options">
+                  <template x-for="kind in group.kinds" :key="`${group.id}:${kind}`">
+                    <label class="check timeline-option">
+                      <input type="checkbox" :checked="timelineKindSelected(group.id, kind)" @change="toggleTimelineKindValue(group.id, kind)">
+                      <span x-text="kind"></span>
+                    </label>
+                  </template>
+                  <div class="empty" x-show="!group.kinds.length">No kinds observed in this window.</div>
+                </div>
+              </div>
             </template>
           </div>
         </div>
@@ -821,6 +979,10 @@
         <section>
           <h2><span>Records</span><small x-text="timelineRecordCountLabel()"></small></h2>
           <div id="unified-timeline-table" class="tabulator-host"></div>
+          <div class="empty timeline-signal-empty" x-show="timelineDefaultEmpty()">No high-signal activity in this window. Enable Voice Detail or Background in Kind to inspect low-level records.</div>
+          <div class="table-actions" x-show="timelinePage.hasMore">
+            <button type="button" @click="loadOlderTimeline()" :disabled="timelineLoadingMore" x-text="timelineLoadingMore ? 'Loading…' : 'Load older records'"></button>
+          </div>
         </section>
         <section>
           <h2><span>Selected Record</span><small x-text="explorerSelectionLabel()"></small></h2>
@@ -844,7 +1006,7 @@
 
     <div class="view active" x-show="activeView === 'transcript'">
       <section>
-        <h2><span>Transcript</span><small x-text="filteredTranscriptEvents().length"></small></h2>
+        <h2><span>Transcript</span><small x-text="`${filteredTranscriptEvents().length} · oldest first`"></small></h2>
         <div class="filterbar">
           <label>Window
             <select x-model="filters.transcriptSince" @change="filterChanged()">
@@ -867,7 +1029,7 @@
         <div class="transcript-view scroll-region">
           <template x-for="group in transcriptGroups()" :key="group.channelId">
             <div class="transcript-group">
-              <div class="transcript-channel"><span x-text="group.channelName"></span><span class="muted mono" x-text="group.channelId"></span></div>
+              <div class="transcript-channel"><span x-text="group.channelName"></span></div>
               <template x-for="event in group.events" :key="event.event_id || event.eventId">
                 <div class="transcript-line">
                   <div class="transcript-time" x-text="clock(eventWhen(event))"></div>
@@ -884,7 +1046,7 @@
 
     <div class="view active" x-show="activeView === 'raw'">
       <section>
-        <h2><span>Raw Debug Snapshot</span></h2>
+        <h2><span>Dashboard Data</span></h2>
         <pre class="raw-view scroll-region" x-text="json(data || {})"></pre>
       </section>
     </div>

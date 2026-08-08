@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::adapters::codex::CodexAdapter;
+use crate::runtime::RuntimeScope;
 use crate::runtime::agents::AgentRole;
 use crate::runtime::jobs::{TextTarget, TextTargetKind};
 use crate::runtime::timeline::isoformat_z;
@@ -247,6 +248,18 @@ impl AgentSessionRecord {
 
     pub fn invocation_key(&self) -> String {
         AgentRuntime::agent_session_key(&self.agent_session_id)
+    }
+
+    pub fn scope(&self) -> RuntimeScope {
+        match self.route_kind {
+            AgentSessionRouteKind::Voice => {
+                RuntimeScope::voice_channel(self.guild_id.clone(), self.scope_id.clone())
+            }
+            AgentSessionRouteKind::Dm => RuntimeScope::dm(self.dm_user_id.clone()),
+            AgentSessionRouteKind::Thread => {
+                RuntimeScope::thread(self.guild_id.clone(), self.discord_thread_id.clone())
+            }
+        }
     }
 
     pub fn thread_route_key(&self) -> String {

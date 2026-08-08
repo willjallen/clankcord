@@ -29,11 +29,10 @@ Member, room-occupant, and agent-session commands are part of the agent contract
 
 ## HTTP
 
-HTTP routes are mounted over the runtime handle. They cover health, status, voice state, commands, responses, automations, feedback, timeline, transcripts, conversations, context, participants, members, jobs, confirmations, debug views, and the dashboard.
+HTTP routes are mounted over the runtime handle. They cover health, status, voice state, commands, responses, automations, feedback, timeline, transcripts, conversations, context, participants, members, jobs, confirmations, and the dashboard.
 
 ```text
 /healthz
-/v1/status
 /v1/status
 /v1/pool/status
 /v1/rooms/occupants
@@ -49,13 +48,28 @@ HTTP routes are mounted over the runtime handle. They cover health, status, voic
 /v1/agent-sessions/*
 /v1/jobs/*
 /v1/confirmations/*
-/v1/debug/*
-/debug
+/v1/dashboard/timeline
+/v1/dashboard/jobs
+/v1/dashboard/summary
+/v1/dashboard/overview
+/v1/dashboard/agents
+/v1/dashboard/agents/{job_id}
+/v1/dashboard/automations
+/v1/dashboard/health
+/v1/dashboard/rooms
+/v1/dashboard/transcript
+/dashboard
 ```
 
-Read routes render runtime and timeline views. Mutation routes submit jobs or runtime-control jobs through `RuntimeHandle`.
+Read routes render runtime and timeline views. Mutation routes submit jobs or runtime-control jobs through `RuntimeHandle`. `/healthz` returns the dashboard component-health contract. Required components in `ok` or `degraded` state are ready and receive HTTP 200; a required component that makes the overall state `down`, `stale`, or `unknown` receives HTTP 503.
 
-The debug overview powers the dashboard health tab. It combines runtime status with process load, HTTP request counters, job backlog and latency windows, speech and wake activity, and Postgres diagnostics. Transcript channel and search filters are applied in the overview read before the transcript limit, so a room-specific debug query returns matching room events even when newer speech exists elsewhere. Job latency windows report completed durable lifecycle timings: lifetime from creation to completion, ready delay from creation to the current ready time for phase-compatible rows, queue time from current ready time to first claim for phase-compatible rows, and start-wall time from first claim to completion. Rows whose current ready time belongs to a later resume are counted as timing gaps for ready-delay and queue metrics. Discord voice playback job start records scheduler claim time; packet-egress timing requires a playback adapter marker. The Postgres payload includes pool usage, `pg_stat_database` counters, connection activity, lock counts, selected server settings, table row counts, and table activity from `pg_stat_user_tables`, giving operators a direct view of cache behavior, database size, active backends, lock waits, dead tuples, scan counts, writes, temp files, and deadlocks.
+`/dashboard` is the browser entry point. Each dashboard view reads a dedicated data endpoint. The common summary uses small indexed aggregates for current health status, active work, backlog, and rolling failure counts. Overview returns bounded job and event drilldown rows plus exact one-hour state, kind, time-bucket, scope-activity, latency, and failure aggregates. Health owns full component freshness, process, HTTP, operational-window, voice-capacity, and Postgres diagnostics. Rooms, Automations, Agents, and Transcript read only their own data planes. The Agents list returns compact run summaries; `/v1/dashboard/agents/{job_id}` is the artifact and trace detail surface. Agent total, completed, and failed cards cover a rolling 24-hour window, while active is current.
+
+Timeline and Jobs apply record type, category, kind, state, scope, time, and search predicates in SQL before the result limit. Category selectors accept `all`, `none`, or an explicit comma-separated subset. An omitted selector uses the canonical high-signal categories: Conversation, Agent, Messaging & Control, Automation, Operations, and Other. Voice Detail contains speech segments and participant state transitions; Background contains job-created duplication, garbage collection, stale sweeps, automation evaluation, session retirement, status synchronization and snapshots, wake probes, typing indicators, transcription planning, and runtime maintenance. Voice Detail and Background are explicit opt-ins. Full metadata responses include category facets, observed kind membership for every category, and the canonical default category ids, so clients share the server taxonomy. `metadata=count` returns an exact matched count without facets, and `metadata=none` returns records without recomputing counts or facets for cursor pages. Cursors pin a snapshot and order combined timeline records deterministically.
+
+Dashboard records include canonical event or job ids, category ids, and resolved scope and requester labels. Voice-room configuration and cached Discord member identity provide human labels for voice and DM scopes. Transcript channel and search predicates run before the transcript limit, and transcript records are returned in chronological order for reading.
+
+Voice bots and capture sessions appear as current capacity only while their authoritative adapter snapshot is fresh; persisted stale observations are reported separately. Terminal job transitions feed 5-minute, 15-minute, and 1-hour windows from the bounded operational ledger, and each window reports whether its coverage is complete. The recent-failure summary uses a 1-hour window and includes the job kind, category, state, human scope label, canonical reason, and failure time. Job latency windows report terminal lifecycle timings: total time from creation to the terminal observation, ready delay from creation to the current ready time for phase-compatible rows, queue time from current ready time to first claim for phase-compatible rows, and run time from first claim to the terminal observation. Rows whose current ready time belongs to a later resume are counted as timing gaps for ready-delay and queue metrics. Discord voice playback job start records scheduler claim time; packet-egress timing requires a playback adapter marker. The Postgres payload includes pool usage, `pg_stat_database` counters, connection activity, lock counts, selected server settings, table row counts, and table activity from `pg_stat_user_tables`, giving operators a direct view of cache behavior, database size, active backends, lock waits, dead tuples, scan counts, writes, temp files, and deadlocks.
 
 ## Runtime Commands
 
@@ -98,7 +112,7 @@ confirmation_required
 
 Discord slash commands use Discord's ephemeral interaction response flow, so the acknowledgement and final edited response are visible only to the invoking user. The gateway reads the invoking member's current voice-state cache entry and stores that voice channel on the slash payload. Voice-scoped commands require that voice channel.
 
-The registered commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)` for the invoker's current voice room, and `/leave` lowers to `command(leave_room)` for that same room. `/wake` appends a manual `wake_detected` timeline event for the invoker's current voice room and schedules normal `wake_activation` work from that event. `/deafen` lowers to `command(deafen_listening)`, and `/undeafen` lowers to `command(resume_listening)`. `/feedback` appends a durable `feedback` timeline event with the submitted text before completing the slash job. When the invoker is in a voice room, the feedback event enters that room timeline; otherwise it enters the invoking text channel timeline. Debug dashboard timeline records expose slash command names and option payloads so operators can search for commands and inspect submitted feedback text. Slash command responses use plain-language ephemeral acknowledgements that describe the requested action and room or repeat the submitted feedback text. A `discord_slash_command` job with another command name completes with `ignored_unknown_command`.
+The registered commands enter as `discord_slash_command` jobs. `/join` lowers to `command(join_room)` for the invoker's current voice room, and `/leave` lowers to `command(leave_room)` for that same room. `/wake` appends a manual `wake_detected` timeline event for the invoker's current voice room and schedules normal `wake_activation` work from that event. `/deafen` lowers to `command(deafen_listening)`, and `/undeafen` lowers to `command(resume_listening)`. `/feedback` appends a durable `feedback` timeline event with the submitted text before completing the slash job. When the invoker is in a voice room, the feedback event enters that room timeline; otherwise it enters the invoking text channel timeline. Dashboard timeline records expose slash command names and option payloads so operators can search for commands and inspect submitted feedback text. Slash command responses use plain-language ephemeral acknowledgements that describe the requested action and room or repeat the submitted feedback text. A `discord_slash_command` job with another command name completes with `ignored_unknown_command`.
 
 Discord text messages enter as `discord_text_message` jobs. Runtime ingress decides whether the message belongs to a DM session, managed agent thread, top-level `agent-chat` channel, or unmanaged channel. DMs and active managed threads become agent tasks. A managed thread attached to a retired voice session creates an agent-session resume job, and that resume creates the agent task. Top-level `agent-chat` messages complete as ignored ingress. The `agent_chat` target remains available as a response sink for `text_delivery`.
 

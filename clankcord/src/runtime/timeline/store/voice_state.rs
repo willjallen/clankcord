@@ -4,6 +4,7 @@ use super::*;
 use crate::runtime::{RoomConfig, VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
 
 const ACTIVE_ASSIGNMENT_STATES: &[&str] = &["joining", "capturing", "leaving"];
+pub(crate) const VOICE_ADAPTER_SNAPSHOT_STATUS_KEY: &str = "voice_adapter_snapshot";
 
 impl TimelineStore {
     pub async fn upsert_voice_bot_state(&self, status: &VoiceBotStatus) -> Result<()> {
@@ -29,6 +30,38 @@ impl TimelineStore {
         for status in statuses {
             self.upsert_voice_bot_state(status).await?;
         }
+        Ok(())
+    }
+
+    pub async fn record_voice_adapter_snapshot(
+        &self,
+        bot_count: usize,
+        session_count: usize,
+        voice_state_guild_count: usize,
+        voice_state_count: usize,
+    ) -> Result<()> {
+        let observed_at = utc_now();
+        let observed_at_ms = instant_ms_dt(observed_at);
+        sqlx::query(
+            r#"
+            INSERT INTO runtime_status(status_key, updated_at_ms, payload_json)
+            VALUES ($1, $2, $3)
+            ON CONFLICT(status_key) DO UPDATE SET
+              updated_at_ms = EXCLUDED.updated_at_ms,
+              payload_json = EXCLUDED.payload_json
+            "#,
+        )
+        .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
+        .bind(observed_at_ms)
+        .bind(json!({
+            "observedAt": isoformat_z(Some(observed_at)),
+            "botCount": bot_count,
+            "sessionCount": session_count,
+            "voiceStateGuildCount": voice_state_guild_count,
+            "voiceStateCount": voice_state_count,
+        }))
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
