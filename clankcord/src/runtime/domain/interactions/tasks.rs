@@ -350,7 +350,6 @@ async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> 
         .store
         .get_agent_session_record(&agent_session_id)
         .await?;
-    let session_key = agent_session.invocation_key();
     let prior_session_id = non_empty(
         latest
             .metadata
@@ -378,10 +377,6 @@ async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> 
     ctx.store.update_job(&prepared).await?;
     let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
         role: AgentRole::Task,
-        session_key,
-        job_id: latest.id.clone(),
-        guild_id: latest.guild_id.clone(),
-        scope_id: latest.scope_id.clone(),
         prior_session_id,
         prompt,
         cwd: Some(workdir.clone()),
@@ -422,14 +417,7 @@ async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> 
     let completed_session = agent_sessions::set_agent_session_codex_session(
         ctx,
         &agent_session_id,
-        non_empty(
-            invocation
-                .session
-                .as_ref()
-                .map(|session| session.session_id.clone())
-                .unwrap_or_default(),
-            invocation.session_id.clone(),
-        ),
+        invocation.session_id.clone(),
     )
     .await?;
     Ok(AgentTaskMetadata {

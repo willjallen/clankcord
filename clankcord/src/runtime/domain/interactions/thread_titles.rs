@@ -251,10 +251,6 @@ async fn invoke_agent_thread_title(
     fs::write(&prompt_path, &prompt)?;
     let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
         role: AgentRole::ThreadTitle,
-        session_key: format!("agent:thread-title:{}", payload.agent_session_id),
-        job_id: job.id.clone(),
-        guild_id: payload.guild_id.clone(),
-        scope_id: payload.voice_channel_id.clone(),
         prior_session_id: String::new(),
         prompt,
         cwd: Some(workdir),

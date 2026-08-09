@@ -3,9 +3,9 @@ use std::fs;
 use std::path::PathBuf;
 
 use crate::Result;
-use crate::adapters::codex::{CodexRunRequest, CodexRunResult};
+use crate::adapters::codex::CodexRunRequest;
 use crate::config::CodexReasoningEffort;
-use crate::runtime::agents::{AgentInfrastructureError, AgentRuntime, AgentSession};
+use crate::runtime::agents::{AgentInfrastructureError, AgentRuntime};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentRole {
@@ -25,10 +25,6 @@ impl AgentRole {
 #[derive(Debug, Clone)]
 pub(crate) struct AgentInvocationRequest {
     pub role: AgentRole,
-    pub session_key: String,
-    pub job_id: String,
-    pub guild_id: String,
-    pub scope_id: String,
     pub prior_session_id: String,
     pub prompt: String,
     pub cwd: Option<PathBuf>,
@@ -52,7 +48,6 @@ pub(crate) struct AgentInvocationResult {
     pub fast_mode: bool,
     pub final_message: String,
     pub command_display: String,
-    pub session: Option<AgentSession>,
 }
 
 impl AgentRuntime {
@@ -60,14 +55,6 @@ impl AgentRuntime {
         if let Some(parent) = request.raw_result_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let started_session = AgentSession::running(
-            request.role,
-            &request.session_key,
-            &request.guild_id,
-            &request.scope_id,
-            &request.job_id,
-            request.prior_session_id.clone(),
-        );
         let codex_result = match self.codex().run(CodexRunRequest {
             prompt: request.prompt,
             session_id: if request.prior_session_id.trim().is_empty() {
@@ -92,8 +79,6 @@ impl AgentRuntime {
                 .into());
             }
         };
-        let completed_session =
-            complete_session(started_session, &codex_result, request.role.as_str());
         Ok(AgentInvocationResult {
             stdout: codex_result.stdout,
             stderr: codex_result.stderr,
@@ -105,23 +90,6 @@ impl AgentRuntime {
             fast_mode: codex_result.fast_mode,
             final_message: codex_result.final_message,
             command_display: codex_result.command_display,
-            session: Some(completed_session),
-        })
-    }
-}
-
-fn complete_session(
-    started_session: AgentSession,
-    result: &CodexRunResult,
-    role: &str,
-) -> AgentSession {
-    if result.success {
-        started_session.complete(result.session_id.clone())
-    } else {
-        started_session.fail(if result.stderr.trim().is_empty() {
-            format!("{role} invocation failed")
-        } else {
-            result.stderr.clone()
         })
     }
 }

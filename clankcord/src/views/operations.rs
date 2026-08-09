@@ -12,7 +12,6 @@ use crate::config;
 use crate::model::job::{Job, JobKind, JobState};
 use crate::runtime::Ctx;
 use crate::runtime::agents::AgentRuntime;
-use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
 use crate::runtime::domain::voice_capture::wake_circuit;
 use crate::runtime::timeline::store::{
@@ -3078,7 +3077,7 @@ fn usage_token_field(usage: &Value, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
+fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSessionView> {
     let mut ordered = jobs
         .iter()
         .filter(|job| job.kind == JobKind::AgentTask)
@@ -3088,17 +3087,19 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
             .cmp(&right.created_at)
             .then_with(|| left.id.cmp(&right.id))
     });
-    let mut sessions = BTreeMap::<String, AgentSession>::new();
+    let mut sessions = BTreeMap::<String, AgentSessionView>::new();
     for job in ordered {
         let key = AgentRuntime::task_session_key(&job.guild_id, &job.scope_id);
-        let entry = sessions.entry(key.clone()).or_insert_with(|| AgentSession {
-            key,
-            role: "task".to_string(),
-            guild_id: job.guild_id.clone(),
-            scope_id: job.scope_id.clone(),
-            created_at: job.created_at.clone(),
-            ..AgentSession::default()
-        });
+        let entry = sessions
+            .entry(key.clone())
+            .or_insert_with(|| AgentSessionView {
+                key,
+                role: "task".to_string(),
+                guild_id: job.guild_id.clone(),
+                scope_id: job.scope_id.clone(),
+                created_at: job.created_at.clone(),
+                ..AgentSessionView::default()
+            });
         entry.invocation_count += 1;
         entry.latest_job_id = job.id.clone();
         entry.last_used_at = job.updated_at.clone();
@@ -3652,4 +3653,57 @@ fn scope_job_rows(scopes: BTreeMap<String, ScopeJobSummary>) -> Vec<Value> {
             })
         })
         .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(super) struct AgentSessionView {
+    pub key: String,
+    pub role: String,
+    pub guild_id: String,
+    pub scope_id: String,
+    pub session_id: String,
+    pub active_job_id: String,
+    pub latest_job_id: String,
+    pub status: AgentSessionStatus,
+    pub invocation_count: u64,
+    pub created_at: String,
+    pub last_used_at: String,
+    pub last_error: String,
+}
+
+impl AgentSessionView {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "key": self.key,
+            "role": self.role,
+            "guild_id": self.guild_id,
+            "scope_id": self.scope_id,
+            "session_id": self.session_id,
+            "active_job_id": self.active_job_id,
+            "latest_job_id": self.latest_job_id,
+            "status": self.status.as_str(),
+            "invocation_count": self.invocation_count,
+            "created_at": self.created_at,
+            "last_used_at": self.last_used_at,
+            "last_error": self.last_error,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum AgentSessionStatus {
+    #[default]
+    Idle,
+    Running,
+    Failed,
+}
+
+impl AgentSessionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::Failed => "failed",
+        }
+    }
 }

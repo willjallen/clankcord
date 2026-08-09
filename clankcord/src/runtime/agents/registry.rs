@@ -1,14 +1,12 @@
 use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Map, Value};
 
 use crate::Result;
 use crate::adapters::codex::CodexAdapter;
 use crate::model::job::{TextTarget, TextTargetKind};
 use crate::model::scope::RuntimeScope;
-use crate::runtime::agents::AgentRole;
-use crate::runtime::timeline::isoformat_z;
 
 const AGENT_SESSION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAGS";
 const AGENT_SESSION_PAYLOAD_BLOB_VERSION: u16 = 1;
@@ -396,102 +394,6 @@ pub fn thread_route_key(guild_id: &str, thread_id: &str) -> String {
         sanitize_route_key_part(guild_id),
         sanitize_route_key_part(thread_id)
     )
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct AgentSession {
-    pub key: String,
-    pub role: String,
-    pub guild_id: String,
-    pub scope_id: String,
-    pub session_id: String,
-    pub active_job_id: String,
-    pub latest_job_id: String,
-    pub status: AgentSessionStatus,
-    pub invocation_count: u64,
-    pub created_at: String,
-    pub last_used_at: String,
-    pub last_error: String,
-}
-
-impl AgentSession {
-    pub(crate) fn running(
-        role: AgentRole,
-        key: &str,
-        guild_id: &str,
-        scope_id: &str,
-        job_id: &str,
-        prior_session_id: impl Into<String>,
-    ) -> Self {
-        let now = isoformat_z(None);
-        Self {
-            key: key.to_string(),
-            role: role.as_str().to_string(),
-            guild_id: guild_id.to_string(),
-            scope_id: scope_id.to_string(),
-            session_id: prior_session_id.into(),
-            active_job_id: job_id.to_string(),
-            latest_job_id: job_id.to_string(),
-            status: AgentSessionStatus::Running,
-            invocation_count: 1,
-            created_at: now.clone(),
-            last_used_at: now,
-            last_error: String::new(),
-        }
-    }
-
-    pub(crate) fn complete(mut self, session_id: String) -> Self {
-        if !session_id.trim().is_empty() {
-            self.session_id = session_id;
-        }
-        self.status = AgentSessionStatus::Idle;
-        self.active_job_id.clear();
-        self.last_used_at = isoformat_z(None);
-        self
-    }
-
-    pub(crate) fn fail(mut self, error: String) -> Self {
-        self.status = AgentSessionStatus::Failed;
-        self.active_job_id.clear();
-        self.last_error = error;
-        self.last_used_at = isoformat_z(None);
-        self
-    }
-
-    pub fn to_json(&self) -> Value {
-        json!({
-            "key": self.key,
-            "role": self.role,
-            "guild_id": self.guild_id,
-            "scope_id": self.scope_id,
-            "session_id": self.session_id,
-            "active_job_id": self.active_job_id,
-            "latest_job_id": self.latest_job_id,
-            "status": self.status.as_str(),
-            "invocation_count": self.invocation_count,
-            "created_at": self.created_at,
-            "last_used_at": self.last_used_at,
-            "last_error": self.last_error,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AgentSessionStatus {
-    #[default]
-    Idle,
-    Running,
-    Failed,
-}
-
-impl AgentSessionStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Running => "running",
-            Self::Failed => "failed",
-        }
-    }
 }
 
 /// Route-key sanitizer: strips non-alphanumerics entirely. This behavior is
