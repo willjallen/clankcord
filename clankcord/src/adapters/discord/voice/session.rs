@@ -12,8 +12,8 @@ use crate::adapters::discord::voice::diagnostics::{DiagnosticsConfig, analyze_pc
 use crate::adapters::discord::voice::types::{
     LiveVoiceSession, SessionAudioSegment, SpeakerBuffer,
 };
+use crate::model::job::{AudioSegmentPayload, WakeProbePayload};
 use crate::runtime::util::first_non_empty;
-use crate::runtime::{AudioSegmentPayload, WakeProbePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WakeProbeConfig {

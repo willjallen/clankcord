@@ -34,8 +34,8 @@ struct JobProjection {
 #[derive(Debug, Clone)]
 struct JobSummary {
     id: String,
-    kind: crate::runtime::JobKind,
-    state: crate::runtime::JobState,
+    kind: crate::model::job::JobKind,
+    state: crate::model::job::JobState,
 }
 
 #[derive(Debug)]
@@ -89,16 +89,16 @@ impl TimelineStore {
         let now = utc_now();
         let mut cancelled = Vec::new();
         for state in [
-            crate::runtime::JobState::Queued,
-            crate::runtime::JobState::Running,
+            crate::model::job::JobState::Queued,
+            crate::model::job::JobState::Running,
         ] {
             let cutoff_ms = instant_ms_dt(now - max_age);
             for mut job in self
                 .list_wake_probe_jobs_stale_in_state(state, cutoff_ms)
                 .await?
             {
-                if state == crate::runtime::JobState::Running {
-                    job.set_state(crate::runtime::JobState::FailedTimeout);
+                if state == crate::model::job::JobState::Running {
+                    job.set_state(crate::model::job::JobState::FailedTimeout);
                     job.metadata.error = "stale wake probe exceeded queue age limit".to_string();
                     job.metadata.timed_out_at = isoformat_z(Some(now));
                 } else {
@@ -126,7 +126,7 @@ impl TimelineStore {
         )
         .bind(format!(
             "discord:members:{}",
-            crate::runtime::jobs::spec::normalize_key_part(guild_id)
+            crate::model::job::spec::normalize_key_part(guild_id)
         ))
         .fetch_optional(&self.pool)
         .await?;
@@ -190,13 +190,13 @@ impl TimelineStore {
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &payload).await?;
         transaction.commit().await?;
-        if payload.state == crate::runtime::JobState::Queued {
+        if payload.state == crate::model::job::JobState::Queued {
             self.wake_dispatcher();
         }
         Ok(())
     }
 
-    pub async fn due_job_kinds(&self) -> Result<BTreeSet<crate::runtime::JobKind>> {
+    pub async fn due_job_kinds(&self) -> Result<BTreeSet<crate::model::job::JobKind>> {
         let now_ms = instant_ms_dt(utc_now());
         let rows = sqlx::query(
             r#"
@@ -212,7 +212,7 @@ impl TimelineStore {
         let mut kinds = BTreeSet::new();
         for row in rows {
             let raw: String = row.try_get("kind")?;
-            if let Ok(kind) = raw.parse::<crate::runtime::JobKind>() {
+            if let Ok(kind) = raw.parse::<crate::model::job::JobKind>() {
                 kinds.insert(kind);
             }
         }
@@ -287,11 +287,11 @@ impl TimelineStore {
 
     pub async fn claim_due_jobs(
         &self,
-        kind: crate::runtime::JobKind,
+        kind: crate::model::job::JobKind,
         limit: usize,
         blocked_ordering_keys: &mut BTreeSet<String>,
     ) -> Result<Vec<Job>> {
-        if kind == crate::runtime::JobKind::AudioSegment {
+        if kind == crate::model::job::JobKind::AudioSegment {
             return self
                 .claim_due_audio_segment_jobs(limit, blocked_ordering_keys)
                 .await;
@@ -521,7 +521,7 @@ impl TimelineStore {
 
     pub(crate) async fn audio_segment_transcription_priority(
         &self,
-        segment: &crate::runtime::AudioSegmentPayload,
+        segment: &crate::model::job::AudioSegmentPayload,
     ) -> Result<i64> {
         let mut transaction = self.pool.begin().await?;
         let wake_activations = active_wake_activation_payloads(&mut transaction).await?;
@@ -558,7 +558,7 @@ impl TimelineStore {
         for row in rows {
             let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
             let mut job = Job::decode(&payload_blob)?;
-            let retryable = job.state == crate::runtime::JobState::FailedTimeout
+            let retryable = job.state == crate::model::job::JobState::FailedTimeout
                 || crate::runtime::domain::voice_capture::segments::is_retryable_audio_segment_error_text(
                     &job.metadata.error,
                 );
@@ -566,7 +566,7 @@ impl TimelineStore {
                 continue;
             }
             job.attempts = job.attempts.saturating_add(1);
-            job.set_state(crate::runtime::JobState::Queued);
+            job.set_state(crate::model::job::JobState::Queued);
             job.started_at = None;
             job.completed_at = None;
             job.next_run_at = Some(isoformat_z(Some(
@@ -586,7 +586,7 @@ impl TimelineStore {
     pub async fn list_jobs(
         &self,
         guild_id: Option<&str>,
-        state: Option<crate::runtime::JobState>,
+        state: Option<crate::model::job::JobState>,
     ) -> Result<Vec<Job>> {
         self.list_jobs_with_visibility(guild_id, state, JobVisibility::Visible)
             .await
@@ -595,7 +595,7 @@ impl TimelineStore {
     pub async fn list_jobs_with_visibility(
         &self,
         guild_id: Option<&str>,
-        state: Option<crate::runtime::JobState>,
+        state: Option<crate::model::job::JobState>,
         visibility: JobVisibility,
     ) -> Result<Vec<Job>> {
         let mut query = QueryBuilder::<Postgres>::new(
@@ -619,7 +619,7 @@ impl TimelineStore {
         &self,
         guild_id: &str,
         scope_id: &str,
-        kind: crate::runtime::JobKind,
+        kind: crate::model::job::JobKind,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
             r#"
@@ -788,7 +788,7 @@ impl TimelineStore {
         &self,
         guild_id: &str,
         scope_id: &str,
-        kind: crate::runtime::JobKind,
+        kind: crate::model::job::JobKind,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
             r#"
@@ -842,7 +842,7 @@ impl TimelineStore {
     pub async fn list_jobs_by_states(
         &self,
         guild_id: Option<&str>,
-        states: &[crate::runtime::JobState],
+        states: &[crate::model::job::JobState],
     ) -> Result<Vec<Job>> {
         self.list_jobs_by_states_with_visibility(guild_id, states, JobVisibility::Visible)
             .await
@@ -851,7 +851,7 @@ impl TimelineStore {
     pub async fn list_jobs_by_states_with_visibility(
         &self,
         guild_id: Option<&str>,
-        states: &[crate::runtime::JobState],
+        states: &[crate::model::job::JobState],
         visibility: JobVisibility,
     ) -> Result<Vec<Job>> {
         if states.is_empty() {
@@ -932,7 +932,7 @@ impl TimelineStore {
 
     pub async fn list_jobs_by_kind(
         &self,
-        kind: crate::runtime::JobKind,
+        kind: crate::model::job::JobKind,
         limit: usize,
     ) -> Result<Vec<Job>> {
         self.list_jobs_by_kind_with_visibility(kind, limit, JobVisibility::Visible)
@@ -941,7 +941,7 @@ impl TimelineStore {
 
     pub async fn list_jobs_by_kind_with_visibility(
         &self,
-        kind: crate::runtime::JobKind,
+        kind: crate::model::job::JobKind,
         limit: usize,
         visibility: JobVisibility,
     ) -> Result<Vec<Job>> {
@@ -965,8 +965,8 @@ impl TimelineStore {
         &self,
         guild_id: &str,
         scope_id: &str,
-        kinds: &[crate::runtime::JobKind],
-        states: &[crate::runtime::JobState],
+        kinds: &[crate::model::job::JobKind],
+        states: &[crate::model::job::JobState],
         updated_after: Option<DateTime<Utc>>,
     ) -> Result<Vec<Job>> {
         if guild_id.trim().is_empty()
@@ -1226,32 +1226,32 @@ impl TimelineStore {
                 continue;
             }
             let mut parent = self.get_job(&parent_summary.id).await?;
-            if crate::runtime::jobs::spec::spec(parent_summary.kind).resume
-                == crate::runtime::jobs::spec::ResumePolicy::Resume
+            if crate::model::job::spec::spec(parent_summary.kind).resume
+                == crate::model::job::spec::ResumePolicy::Resume
             {
-                parent.set_state(crate::runtime::JobState::Queued);
+                parent.set_state(crate::model::job::JobState::Queued);
                 parent.next_run_at = None;
             } else if children
                 .iter()
-                .all(|job| job.state == crate::runtime::JobState::Complete)
+                .all(|job| job.state == crate::model::job::JobState::Complete)
             {
                 parent.mark_complete();
             } else if children
                 .iter()
-                .any(|job| job.state == crate::runtime::JobState::Cancelled)
+                .any(|job| job.state == crate::model::job::JobState::Cancelled)
             {
                 parent.mark_cancelled();
             } else {
                 parent.set_state(
-                    if parent_summary.kind == crate::runtime::JobKind::ConfirmationRequired {
-                        crate::runtime::JobState::ApprovalFailed
+                    if parent_summary.kind == crate::model::job::JobKind::ConfirmationRequired {
+                        crate::model::job::JobState::ApprovalFailed
                     } else {
-                        crate::runtime::JobState::Failed
+                        crate::model::job::JobState::Failed
                     },
                 );
                 parent.metadata.error = children
                     .iter()
-                    .filter(|job| job.state != crate::runtime::JobState::Complete)
+                    .filter(|job| job.state != crate::model::job::JobState::Complete)
                     .map(|job| format!("{} {}", job.id, job.state))
                     .collect::<Vec<_>>()
                     .join("; ");
@@ -1284,7 +1284,7 @@ impl TimelineStore {
 
     async fn list_wake_probe_jobs_stale_in_state(
         &self,
-        state: crate::runtime::JobState,
+        state: crate::model::job::JobState,
         cutoff_ms: i64,
     ) -> Result<Vec<Job>> {
         let rows = sqlx::query(
@@ -1371,7 +1371,7 @@ impl TimelineStore {
     }
 
     async fn ensure_job_voice_room(&self, job: &Job) -> Result<()> {
-        if job.scope_kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+        if job.scope_kind == crate::model::scope::RuntimeScopeKind::VoiceChannel {
             self.ensure_room(&job.guild_id, &job.scope_id, "", "", "")
                 .await?;
         }
@@ -1418,10 +1418,10 @@ fn decode_job_rows(rows: Vec<PgRow>) -> Result<Vec<Job>> {
 fn job_summary_from_row(row: &PgRow) -> Result<JobSummary> {
     let kind = row
         .try_get::<String, _>("kind")?
-        .parse::<crate::runtime::JobKind>()?;
+        .parse::<crate::model::job::JobKind>()?;
     let state = row
         .try_get::<String, _>("state")?
-        .parse::<crate::runtime::JobState>()?;
+        .parse::<crate::model::job::JobState>()?;
     Ok(JobSummary {
         id: row.try_get("job_id")?,
         kind,
@@ -1617,8 +1617,8 @@ fn project_job(job: &Job) -> JobProjection {
         failed,
         ephemeral,
         cancellable: job.state.is_cancellable(),
-        lane: crate::runtime::jobs::spec::spec(job.kind).lane.as_str(),
-        ordering_key: crate::runtime::jobs::spec::ordering_key(job),
+        lane: crate::model::job::spec::spec(job.kind).lane.as_str(),
+        ordering_key: crate::model::job::spec::ordering_key(job),
         command_kind: job.command_kind(),
         source_job_id: source_job_id(job),
         stream_id: wake_probe_stream_id(job).unwrap_or_default().to_string(),
@@ -1630,7 +1630,7 @@ fn project_job(job: &Job) -> JobProjection {
 
 fn wake_probe_stream_id(job: &Job) -> Option<&str> {
     match &job.payload {
-        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
+        crate::model::job::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
         _ => None,
     }
 }
@@ -1645,18 +1645,18 @@ fn sort_jobs_by_created_at(jobs: &mut [Job]) {
 
 fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
     match &job.payload {
-        crate::runtime::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
+        crate::model::job::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
         _ => parse_instant(&job.created_at),
     }
 }
 
-fn is_failed_job_state(state: crate::runtime::JobState) -> bool {
+fn is_failed_job_state(state: crate::model::job::JobState) -> bool {
     matches!(
         state,
-        crate::runtime::JobState::ApprovalFailed
-            | crate::runtime::JobState::Failed
-            | crate::runtime::JobState::FailedTimeout
-            | crate::runtime::JobState::FailedDraftRetained
+        crate::model::job::JobState::ApprovalFailed
+            | crate::model::job::JobState::Failed
+            | crate::model::job::JobState::FailedTimeout
+            | crate::model::job::JobState::FailedDraftRetained
     )
 }
 
@@ -1666,7 +1666,7 @@ fn ephemeral_gc_after_ms(
     terminal: bool,
     failed: bool,
 ) -> Option<i64> {
-    let spec = crate::runtime::jobs::spec::spec(job.kind);
+    let spec = crate::model::job::spec::spec(job.kind);
     if !spec.ephemeral || !terminal {
         return None;
     }
@@ -1680,44 +1680,52 @@ fn ephemeral_gc_after_ms(
 
 fn source_job_id(job: &Job) -> String {
     match &job.payload {
-        crate::runtime::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordTextSend(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordForumThreadCreate(payload) => {
+        crate::model::job::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::DiscordTextSend(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::DiscordForumThreadCreate(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
+        crate::model::job::JobPayload::DiscordForumThreadRename(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::DiscordTypingIndicator(payload) => {
+        crate::model::job::JobPayload::DiscordTypingIndicator(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::DiscordVoicePlayback(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordVoiceDeafen(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::VoiceStatusSync(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::DiscordVoiceStatusSnapshot(payload) => {
+        crate::model::job::JobPayload::DiscordVoicePlayback(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::AutomationEvaluation(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::AgentSessionRetirement(payload) => {
+        crate::model::job::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::DiscordVoiceDeafen(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::DiscordVoicePlayAudio(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
+        crate::model::job::JobPayload::VoiceStatusSync(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::DiscordVoiceStatusSnapshot(payload) => {
             payload.source_job_id.clone()
         }
-        crate::runtime::JobPayload::StaleWakeProbeSweep(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::AutomationEvaluation(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::model::job::JobPayload::AgentSessionRetirement(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::model::job::JobPayload::StaleWakeProbeSweep(payload) => {
+            payload.source_job_id.clone()
+        }
+        crate::model::job::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),
         _ => String::new(),
     }
 }
 
 fn target_job_id(job: &Job) -> String {
     match &job.payload {
-        crate::runtime::JobPayload::RuntimeControl(payload) => payload.target_job_id.clone(),
-        crate::runtime::JobPayload::Command(payload) => payload.command.target_job_id.clone(),
-        crate::runtime::JobPayload::AgentTask(payload) => payload.command.target_job_id.clone(),
-        crate::runtime::JobPayload::ConfirmationRequired(payload) => {
+        crate::model::job::JobPayload::RuntimeControl(payload) => payload.target_job_id.clone(),
+        crate::model::job::JobPayload::Command(payload) => payload.command.target_job_id.clone(),
+        crate::model::job::JobPayload::AgentTask(payload) => payload.command.target_job_id.clone(),
+        crate::model::job::JobPayload::ConfirmationRequired(payload) => {
             payload.command.target_job_id.clone()
         }
         _ => String::new(),
@@ -1726,16 +1734,16 @@ fn target_job_id(job: &Job) -> String {
 
 fn speaker_user_id(job: &Job) -> String {
     match &job.payload {
-        crate::runtime::JobPayload::AudioSegment(payload) => payload.speaker_user_id.clone(),
-        crate::runtime::JobPayload::WakeActivation(payload) => payload.speaker_user_id.clone(),
-        crate::runtime::JobPayload::WakeProbe(payload) => payload.speaker_user_id.clone(),
+        crate::model::job::JobPayload::AudioSegment(payload) => payload.speaker_user_id.clone(),
+        crate::model::job::JobPayload::WakeActivation(payload) => payload.speaker_user_id.clone(),
+        crate::model::job::JobPayload::WakeProbe(payload) => payload.speaker_user_id.clone(),
         _ => String::new(),
     }
 }
 
 fn audio_segment_end_ms(job: &Job) -> Option<i64> {
     match &job.payload {
-        crate::runtime::JobPayload::AudioSegment(payload) => {
+        crate::model::job::JobPayload::AudioSegment(payload) => {
             Some(instant_ms_dt(payload.segment_end_time))
         }
         _ => None,
@@ -1744,7 +1752,7 @@ fn audio_segment_end_ms(job: &Job) -> Option<i64> {
 
 #[derive(Debug, Clone)]
 struct ActiveWakeActivation {
-    payload: crate::runtime::WakeActivationPayload,
+    payload: crate::model::job::WakeActivationPayload,
     request_audio_closed_at: Option<DateTime<Utc>>,
 }
 
@@ -1793,7 +1801,7 @@ fn audio_segment_has_active_wake_priority(
 }
 
 fn audio_segment_payload_overlaps_wake_window(
-    segment: &crate::runtime::AudioSegmentPayload,
+    segment: &crate::model::job::AudioSegmentPayload,
     wake: &ActiveWakeActivation,
 ) -> bool {
     let payload = &wake.payload;

@@ -1,6 +1,6 @@
 use std::fmt;
 
-use crate::runtime::jobs::AgentPreflightMetadata;
+use crate::model::job::AgentPreflightMetadata;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AgentInfrastructureError {

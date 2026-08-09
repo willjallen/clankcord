@@ -4,54 +4,9 @@ pub mod coding;
 pub mod core;
 mod ctx;
 pub mod domain;
-pub use crate::model::job as jobs;
-pub(crate) mod message_chunks;
+pub mod message_chunks;
 pub mod rooms;
-pub use crate::model::scope;
 pub mod timeline;
-pub(crate) mod util;
+pub mod util;
 
-pub use crate::config::{ControlConfig, GuildConfig};
-pub use crate::views::{
-    ContextResolveRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
-    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, ForgetRequest,
-    JobsRequest, ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest,
-    MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
-    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
-    default_dashboard_categories, parse_dashboard_filter,
-};
-pub use agents::{
-    AgentRuntime, AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
-    thread_route_key, voice_route_key,
-};
 pub use ctx::Ctx;
-pub use domain::voice::{
-    ArtifactStatus, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
-    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
-};
-pub use jobs::{
-    AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartOutput,
-    AgentSessionStartPayload, AgentSessionSunsetPayload, AgentTaskPayload,
-    AgentThreadTitleRefreshPayload, AudioSegmentPayload, BinaryPayload, CommandAction,
-    CommandArguments, CommandKind, CommandPayload, CommandRequest, ConfirmationContext,
-    ConfirmationRequiredPayload, DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
-    DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordSlashCommandPayload,
-    DiscordTextMessagePayload, DiscordTextSendOutput, DiscordTextSendPayload, DiscordTypingAction,
-    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput,
-    DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload,
-    DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload, DiscordVoiceMuteOutput,
-    DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
-    DiscordVoiceStatusSnapshotOutput, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
-    Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
-    RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
-    RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleWakeProbeSweepPayload, TextAttachmentPayload, TextDeliveryKind, TextDeliveryOutput,
-    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationOutput,
-    TranscriptPublicationPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
-    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
-};
-pub use message_chunks::split_message_chunks;
-pub use rooms::{RoomConfig, RoomControl};
-pub use scope::{RuntimeScope, RuntimeScopeKind};
-pub use util::log;

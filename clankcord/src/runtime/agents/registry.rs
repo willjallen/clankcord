@@ -5,9 +5,9 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::adapters::codex::CodexAdapter;
-use crate::runtime::RuntimeScope;
+use crate::model::job::{TextTarget, TextTargetKind};
+use crate::model::scope::RuntimeScope;
 use crate::runtime::agents::AgentRole;
-use crate::runtime::jobs::{TextTarget, TextTargetKind};
 use crate::runtime::timeline::isoformat_z;
 
 const AGENT_SESSION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAGS";

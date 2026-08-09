@@ -119,7 +119,7 @@ async fn ensure_member_cache(ctx: &Ctx, guild_id: &str) -> Result<Value> {
         false
     } else {
         ctx.bus
-            .submit_detached(crate::runtime::Job::member_sync(guild_id));
+            .submit_detached(crate::model::job::Job::member_sync(guild_id));
         true
     };
     Ok(json!({

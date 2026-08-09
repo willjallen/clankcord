@@ -3,7 +3,8 @@ use std::str::FromStr;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::runtime::{Job, JobState, RuntimeScopeKind};
+use crate::model::job::{Job, JobState};
+use crate::model::scope::RuntimeScopeKind;
 
 use crate::runtime::Ctx;
 use crate::runtime::timeline::JobVisibility;

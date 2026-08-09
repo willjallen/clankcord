@@ -14,21 +14,24 @@ use crate::adapters::codex::{
     codex_linear_mcp_config_args, codex_response_text, extract_codex_usage,
 };
 use crate::config;
-use crate::runtime::agents::{
-    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
-};
-use crate::runtime::jobs::{
+use crate::model::job::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     AgentTaskOutcome, AgentTaskPhase, BinaryPayload,
+};
+use crate::model::job::{
+    DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind, JobState, TextDeliveryKind,
+    TextDeliveryPayload, TextTarget, TextTargetKind,
+};
+use crate::model::scope::RuntimeScopeKind;
+use crate::runtime::Ctx;
+use crate::runtime::agents::AgentSessionRouteKind;
+use crate::runtime::agents::{
+    AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
 use crate::runtime::timeline::{
     JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
 };
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
-use crate::runtime::{
-    AgentSessionRouteKind, Ctx, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
-    JobState, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-};
 
 use super::linear_mcp::insert_linear_mcp_env;
 
@@ -844,7 +847,7 @@ fn validate_agent_task_job(job: &Job) -> Result<()> {
 }
 
 fn agent_task_session_id(job: &Job) -> Result<String> {
-    let crate::runtime::JobPayload::AgentTask(payload) = &job.payload else {
+    let crate::model::job::JobPayload::AgentTask(payload) = &job.payload else {
         anyhow::bail!("job {} is not an agent task", job.id);
     };
     if payload.agent_session_id.trim().is_empty() {
@@ -855,7 +858,7 @@ fn agent_task_session_id(job: &Job) -> Result<String> {
 
 pub fn agent_task_workdir(job: &Job) -> PathBuf {
     let agent_session_id = match &job.payload {
-        crate::runtime::JobPayload::AgentTask(payload) => payload.agent_session_id.clone(),
+        crate::model::job::JobPayload::AgentTask(payload) => payload.agent_session_id.clone(),
         _ => job.id.clone(),
     };
     agent_workspace_root().join("task").join(agent_session_id)
@@ -1094,8 +1097,8 @@ fn agent_task_source_event_ids(job: &Job) -> std::collections::BTreeSet<String> 
 }
 
 fn agent_task_request_origin(
-    command: Option<&crate::runtime::CommandRequest>,
-    route_kind: &crate::runtime::AgentSessionRouteKind,
+    command: Option<&crate::model::job::CommandRequest>,
+    route_kind: &crate::runtime::agents::AgentSessionRouteKind,
     source_events: &[Value],
     parent: Option<&Job>,
 ) -> AgentPromptRequestOrigin {
@@ -1111,13 +1114,13 @@ fn agent_task_request_origin(
     {
         return AgentPromptRequestOrigin::Text;
     }
-    if *route_kind == crate::runtime::AgentSessionRouteKind::Dm {
+    if *route_kind == crate::runtime::agents::AgentSessionRouteKind::Dm {
         return AgentPromptRequestOrigin::Text;
     }
     if parent.is_some_and(|job| {
         matches!(
             &job.payload,
-            crate::runtime::JobPayload::AgentSessionResume(payload)
+            crate::model::job::JobPayload::AgentSessionResume(payload)
                 if !payload.message.trim().is_empty()
         )
     }) {

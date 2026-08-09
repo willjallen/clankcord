@@ -1,14 +1,15 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
+use crate::model::job::JobMetadata;
+use crate::model::job::{Job, JobKind, JobPayload, JobState};
+use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
+use crate::runtime::agents::{
+    AgentSessionRecord, AgentSessionRouteKind, dm_route_key, thread_route_key, voice_route_key,
+};
 use crate::runtime::automations::{
     AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
     AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState, AutomationTrigger,
-};
-use crate::runtime::jobs::JobMetadata;
-use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, Job, JobKind, JobPayload, JobState, RuntimeScope,
-    RuntimeScopeKind, dm_route_key, thread_route_key, voice_route_key,
 };
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";

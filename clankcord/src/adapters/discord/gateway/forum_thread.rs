@@ -1,10 +1,10 @@
 use crate::Result;
 use crate::adapters::discord::api::{create_forum_thread, rename_thread};
-use crate::runtime::util::string_field;
-use crate::runtime::{
+use crate::model::job::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload,
 };
+use crate::runtime::util::string_field;
 
 pub async fn create(
     payload: DiscordForumThreadCreatePayload,

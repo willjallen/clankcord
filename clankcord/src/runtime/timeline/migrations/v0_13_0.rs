@@ -1,7 +1,7 @@
 use sqlx::Row;
 
 use crate::Result;
-use crate::runtime::Job;
+use crate::model::job::Job;
 
 use super::super::store::OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS;
 

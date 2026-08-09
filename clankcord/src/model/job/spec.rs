@@ -8,7 +8,7 @@
 //! is a compile error, and the scheduler iterates kinds that are actually due
 //! in Postgres, so a queued row can never sit unschedulable in silence.
 
-use crate::runtime::{Job, JobKind, JobPayload};
+use crate::model::job::{Job, JobKind, JobPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobExecutor {
@@ -347,7 +347,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
         }
         JobPayload::Command(payload)
-            if payload.command.command_kind == crate::runtime::CommandKind::AgentTask =>
+            if payload.command.command_kind == crate::model::job::CommandKind::AgentTask =>
         {
             voice_agent_route_ordering_key(&payload.command.guild_id, &payload.command.scope_id)
         }
@@ -355,7 +355,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             if payload.guild_id.trim().is_empty() {
                 format!(
                     "agent:route:{}",
-                    crate::runtime::dm_route_key(&payload.author_user_id)
+                    crate::runtime::agents::dm_route_key(&payload.author_user_id)
                 )
             } else {
                 format!("discord:text:{}", normalize_key_part(&payload.channel_id))
@@ -373,14 +373,14 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             }
         }
         JobPayload::TextDelivery(payload) => {
-            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
+            if payload.target.kind == crate::model::job::TextTargetKind::AgentSession {
                 return format!(
                     "text:session_route:{}:{}",
                     normalize_key_part(&job.guild_id),
                     normalize_key_part(&job.scope_id)
                 );
             }
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+            let target_id = if payload.target.kind == crate::model::job::TextTargetKind::Dm {
                 payload.target.user_id.as_str()
             } else {
                 payload.target.channel_id.as_str()
@@ -396,7 +396,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             }
         }
         JobPayload::DiscordTextSend(payload) => {
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+            let target_id = if payload.target.kind == crate::model::job::TextTargetKind::Dm {
                 payload.target.user_id.as_str()
             } else {
                 payload.target.channel_id.as_str()
@@ -417,13 +417,13 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             format!("discord:thread:{}", normalize_key_part(&payload.thread_id))
         }
         JobPayload::DiscordTypingIndicator(payload) => {
-            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
+            if payload.target.kind == crate::model::job::TextTargetKind::AgentSession {
                 return format!(
                     "discord:typing:source:{}",
                     normalize_key_part(&payload.source_job_id)
                 );
             }
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
+            let target_id = if payload.target.kind == crate::model::job::TextTargetKind::Dm {
                 payload.target.user_id.as_str()
             } else {
                 payload.target.channel_id.as_str()
@@ -460,7 +460,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             if payload.route_kind == "dm" {
                 format!(
                     "agent:route:{}",
-                    crate::runtime::dm_route_key(&payload.dm_user_id)
+                    crate::runtime::agents::dm_route_key(&payload.dm_user_id)
                 )
             } else {
                 voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
@@ -522,7 +522,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
 fn voice_agent_route_ordering_key(guild_id: &str, voice_channel_id: &str) -> String {
     format!(
         "agent:route:{}",
-        crate::runtime::voice_route_key(guild_id, voice_channel_id)
+        crate::runtime::agents::voice_route_key(guild_id, voice_channel_id)
     )
 }
 

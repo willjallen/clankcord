@@ -11,9 +11,10 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::config;
+use crate::model::job::{Job, JobState};
+use crate::runtime::Ctx;
 use crate::runtime::timeline::store::{ActiveMuxStreamRow, TranscriptionSlotRecord};
 use crate::runtime::timeline::{instant_ms_dt, utc_now};
-use crate::runtime::{Ctx, Job, JobState};
 
 /// A provider stream and when it is expected to be free again.
 #[derive(Debug, Clone, Copy)]
@@ -348,6 +349,6 @@ fn estimated_transcription_provider_processing_ms(audio_ms: i64) -> i64 {
 fn transcription_mux_plan_ordering_key(source_id: &str) -> String {
     format!(
         "transcription:mux_plan:{}",
-        crate::runtime::jobs::spec::normalize_key_part(source_id)
+        crate::model::job::spec::normalize_key_part(source_id)
     )
 }

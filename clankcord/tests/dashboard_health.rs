@@ -3,11 +3,13 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::model::job::{CommandRequest, Job, JobState};
+use clankcord::model::scope::RuntimeScope;
+use clankcord::runtime::Ctx;
+use clankcord::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use clankcord::runtime::timeline::{SpeechEventInput, isoformat_z};
-use clankcord::runtime::{
-    CommandRequest, Ctx, DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest,
-    DashboardTranscriptRequest, Job, JobState, RuntimeScope, VoiceBotStatus,
-    VoiceCaptureSessionStatus,
+use clankcord::views::{
+    DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest,
 };
 
 use common::{initialize_test_config, test_store};
@@ -185,7 +187,7 @@ async fn dashboard_summary_uses_active_projection_aggregates_and_bounded_failure
         RuntimeScope::dm("user-a"),
         "user-a",
         JobState::Queued,
-        clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+        clankcord::model::job::JobPayload::Command(clankcord::model::job::CommandPayload {
             command: CommandRequest::agent_task("", "user-a", "user-a", "summary projection"),
         }),
     );
@@ -412,7 +414,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
             RuntimeScope::voice_channel("guild", "voice"),
             "system",
             JobState::Queued,
-            clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+            clankcord::model::job::JobPayload::Command(clankcord::model::job::CommandPayload {
                 command: CommandRequest::agent_task("guild", "voice", "system", "voice"),
             }),
         ))
@@ -423,7 +425,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
             RuntimeScope::dm("user"),
             "system",
             JobState::Failed,
-            clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+            clankcord::model::job::JobPayload::Command(clankcord::model::job::CommandPayload {
                 command: CommandRequest::agent_task("", "user", "system", "dm"),
             }),
         ))
@@ -730,7 +732,7 @@ async fn durable_job_retry_records_each_terminal_outcome() {
         RuntimeScope::dm("user-a"),
         "user-a",
         JobState::Failed,
-        clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+        clankcord::model::job::JobPayload::Command(clankcord::model::job::CommandPayload {
             command: CommandRequest::agent_task("", "user-a", "user-a", "retry outcome"),
         }),
     );
@@ -804,7 +806,7 @@ async fn operational_outcome_retention_is_pruned_without_gc_candidates() {
         RuntimeScope::runtime(),
         "system",
         JobState::Complete,
-        clankcord::runtime::JobPayload::Command(clankcord::runtime::CommandPayload {
+        clankcord::model::job::JobPayload::Command(clankcord::model::job::CommandPayload {
             command: CommandRequest::agent_task("", "runtime", "system", "retention test"),
         }),
     );

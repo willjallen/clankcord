@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::config;
-use crate::runtime::AudioSegmentPayload;
+use crate::model::job::AudioSegmentPayload;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -185,7 +185,7 @@ impl TimelineStore {
 
     pub(crate) async fn promote_transcription_slots_for_wake_activation(
         &self,
-        payload: &crate::runtime::WakeActivationPayload,
+        payload: &crate::model::job::WakeActivationPayload,
     ) -> Result<Vec<String>> {
         let Some(wake_started_at) = parse_instant(&payload.wake_started_at) else {
             return Ok(Vec::new());

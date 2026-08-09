@@ -1,7 +1,7 @@
 use sqlx::Row;
 
 use crate::Result;
-use crate::runtime::{Job, JobState};
+use crate::model::job::{Job, JobState};
 
 use super::super::store::upsert_job_rows;
 

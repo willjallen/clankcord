@@ -1,11 +1,11 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::model::job::{CommandRequest, DiscordTextMessagePayload, Job, JobOutput};
+use crate::runtime::Ctx;
+use crate::runtime::agents::AgentSessionRecord;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
-use crate::runtime::{
-    AgentSessionRecord, CommandRequest, Ctx, DiscordTextMessagePayload, Job, JobOutput,
-};
 
 pub(crate) async fn prepare(
     runtime: &Ctx,
@@ -136,7 +136,7 @@ fn agent_task_for_thread_message(
             serde_json::Value::Array(vec![serde_json::Value::String(event_id)]),
         );
     }
-    command.arguments = crate::runtime::CommandArguments::from_json(Some(&arguments))?;
+    command.arguments = crate::model::job::CommandArguments::from_json(Some(&arguments))?;
 
     Ok(Job::agent_task_for_session(
         session.agent_session_id.clone(),

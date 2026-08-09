@@ -6,19 +6,22 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config::PoolConfig;
+use crate::model::job::{
+    CommandRequest, Job, JobKind, JobState, TextDeliveryKind, TextDeliveryPayload, TextTarget,
+    TextTargetKind,
+};
+use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
+use crate::runtime::Ctx;
 use crate::runtime::automations::room_agents::RoomAgentPlacementAutomation;
 use crate::runtime::automations::{
     AutomationAction, AutomationCondition, AutomationConditionOp, AutomationRecord,
     AutomationScalar, AutomationState, AutomationTextTarget, AutomationTextTargetKind,
     AutomationTrigger,
 };
+use crate::runtime::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::runtime::rooms::{RoomConfig, RoomControl};
 use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
-use crate::runtime::{
-    CommandRequest, Ctx, Job, JobKind, JobState, RoomConfig, RoomControl, RuntimeScope,
-    RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
-    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
-};
 
 pub(crate) trait Automation: Send + Sync {
     fn name(&self) -> &'static str;

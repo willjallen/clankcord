@@ -13,8 +13,9 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config;
 use crate::engine::JobBus;
+use crate::model::job::{Job, JobKind};
 use crate::runtime::timeline::{TimelineStore, instant_ms_dt, utc_now};
-use crate::runtime::{Job, JobKind, log};
+use crate::runtime::util::log;
 
 /// Builds the job a schedule row mints. Only kinds that make sense on a
 /// clock are constructible here; asking for anything else is a declaration

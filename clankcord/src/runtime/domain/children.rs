@@ -1,5 +1,6 @@
 use crate::Result;
-use crate::runtime::{Ctx, Job, JobState};
+use crate::model::job::{Job, JobState};
+use crate::runtime::Ctx;
 
 /// The children of a waiting parent, resolved into the three cases every
 /// multi-child handler cares about. Consume-the-output specifics stay with

@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::runtime::AgentSessionRecord;
+use crate::runtime::agents::AgentSessionRecord;
 use crate::runtime::automations::AutomationRecord;
 
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {

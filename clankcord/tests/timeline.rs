@@ -4,8 +4,9 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::model::job::{CommandRequest, Job, JobState};
+use clankcord::model::scope::RuntimeScope;
 use clankcord::runtime::timeline::{CaptureRunInput, SpeechEventInput};
-use clankcord::runtime::{CommandRequest, Job, JobState, RuntimeScope};
 
 use common::{append_speech, dt, test_store};
 

@@ -6,7 +6,8 @@ use anyhow::Context;
 
 use crate::Result;
 use crate::config;
-use crate::runtime::{AgentSessionRouteKind, TextTargetKind};
+use crate::model::job::TextTargetKind;
+use crate::runtime::agents::AgentSessionRouteKind;
 
 const AGENT_THREAD_TITLE_TEMPLATE_FILE: &str = "agent-thread-title.md";
 

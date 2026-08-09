@@ -1,5 +1,5 @@
 use crate::config::{ControlConfig, GuildConfig, PoolConfig};
-use crate::runtime::RoomConfig;
+use crate::runtime::rooms::RoomConfig;
 
 use super::*;
 

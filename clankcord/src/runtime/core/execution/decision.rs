@@ -1,4 +1,4 @@
-use crate::runtime::{Job, JobFailure, JobOutput};
+use crate::model::job::{Job, JobFailure, JobOutput};
 
 #[derive(Debug, Clone)]
 pub(crate) enum JobDecision {

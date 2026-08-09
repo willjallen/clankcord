@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use crate::Result;
 use crate::adapters::discord::api::{create_dm_channel, discord_request};
-use crate::runtime::jobs::{DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload};
+use crate::model::job::TextTargetKind;
+use crate::model::job::{DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload};
+use crate::runtime::util::log;
 use crate::runtime::util::string_field;
-use crate::runtime::{TextTargetKind, log};
 
 const TYPING_HEARTBEAT_SECONDS: u64 = 8;
 
@@ -53,7 +54,7 @@ pub(crate) async fn execute(
 ) -> Result<DiscordTypingIndicatorOutput> {
     let key = typing_key(&payload);
     match payload.action {
-        crate::runtime::DiscordTypingAction::Start => {
+        crate::model::job::DiscordTypingAction::Start => {
             let channel_id = concrete_channel_id(&payload).await?;
             post_typing(&channel_id).await?;
             supervisor.start(key, channel_id)?;
@@ -64,7 +65,7 @@ pub(crate) async fn execute(
                 status: "started".to_string(),
             })
         }
-        crate::runtime::DiscordTypingAction::Stop => {
+        crate::model::job::DiscordTypingAction::Stop => {
             supervisor.stop(&key);
             Ok(DiscordTypingIndicatorOutput {
                 action: payload.action,

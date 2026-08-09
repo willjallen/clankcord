@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Result;
-use crate::runtime::jobs::{
+use crate::model::job::{
     AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartPayload,
     AgentSessionSunsetPayload, AgentTaskPayload, AgentThreadTitleRefreshPayload,
     AudioSegmentPayload, AutomationEvaluationPayload, BinaryPayload, CommandPayload,
@@ -15,7 +15,7 @@ use crate::runtime::jobs::{
     StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
     VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
-use crate::runtime::{JobPayload, TextDeliveryKind, TextTarget};
+use crate::model::job::{JobPayload, TextDeliveryKind, TextTarget};
 
 /// Frozen wire shape: stale_running_job_sweep payloads exist in pre-v1.0.0
 /// blobs; the kind is removed at v1.0.0 and its rows purged by migration.

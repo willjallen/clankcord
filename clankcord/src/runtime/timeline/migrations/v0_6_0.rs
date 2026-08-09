@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::runtime::jobs::{
+use crate::model::job::{
     AgentInvocationMetadata, AgentPreflightMetadata, AgentTaskMetadata, DiscordPostMetadata,
 };
-use crate::runtime::{BinaryPayload, Job, JobKind, JobOutput, JobState, RuntimeScopeKind};
+use crate::model::job::{BinaryPayload, Job, JobKind, JobOutput, JobState};
+use crate::model::scope::RuntimeScopeKind;
 
 use super::job_payload_pre_v0_7::PreV0_7_0JobPayload;
 
@@ -176,14 +177,14 @@ impl PreV0_6_0Job {
 }
 
 impl PreV0_6_0JobMetadata {
-    fn into_current(self) -> crate::runtime::jobs::JobMetadata {
-        let mut metadata = crate::runtime::jobs::JobMetadata {
+    fn into_current(self) -> crate::model::job::JobMetadata {
+        let mut metadata = crate::model::job::JobMetadata {
             error: self.error,
             timed_out_at: self.timed_out_at,
             cancel_requested: self.cancel_requested,
             cancelled_by_user_id: self.cancelled_by_user_id,
             output: self.output,
-            ..crate::runtime::jobs::JobMetadata::default()
+            ..crate::model::job::JobMetadata::default()
         };
         match self.detail.map(|detail| *detail) {
             Some(PreV0_6_0JobMetadataDetail::AgentTask(task)) => {

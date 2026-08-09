@@ -9,6 +9,8 @@ use super::operations::{
     dashboard_latency_by_kind_payload,
 };
 use crate::Result;
+use crate::model::job::Job;
+use crate::runtime::Ctx;
 use crate::runtime::agents::AgentRuntime;
 use crate::runtime::timeline::JobVisibility;
 use crate::runtime::timeline::util::timeline_event_payload;
@@ -16,7 +18,6 @@ use crate::runtime::timeline::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference, utc_now,
 };
 use crate::runtime::util::{first_non_empty, preview};
-use crate::runtime::{Ctx, Job};
 
 const DEFAULT_FROM: &str = "-1h";
 const DEFAULT_LIMIT: usize = 120;
@@ -408,7 +409,7 @@ pub async fn dashboard_agents(ctx: &Ctx, request: DashboardAgentsRequest) -> Res
     let jobs = ctx
         .store
         .list_jobs_by_kind_with_visibility(
-            crate::runtime::JobKind::AgentTask,
+            crate::model::job::JobKind::AgentTask,
             limit,
             JobVisibility::IncludeEphemeral,
         )
@@ -2057,8 +2058,8 @@ pub(super) fn dashboard_job_duration_ms(job: &Job) -> i64 {
 }
 
 pub(super) fn dashboard_job_category(kind: &str) -> &'static str {
-    match kind.parse::<crate::runtime::JobKind>() {
-        Ok(kind) => crate::runtime::jobs::spec::spec(kind).dashboard.as_str(),
+    match kind.parse::<crate::model::job::JobKind>() {
+        Ok(kind) => crate::model::job::spec::spec(kind).dashboard.as_str(),
         Err(_) => "other",
     }
 }
@@ -2110,9 +2111,9 @@ fn validate_categories(filter: &DashboardFilter) -> Result<()> {
 }
 
 fn job_kinds_for_category(category: &str) -> Vec<&'static str> {
-    crate::runtime::JobKind::ALL
+    crate::model::job::JobKind::ALL
         .iter()
-        .filter(|kind| crate::runtime::jobs::spec::spec(**kind).dashboard.as_str() == category)
+        .filter(|kind| crate::model::job::spec::spec(**kind).dashboard.as_str() == category)
         .map(|kind| kind.as_str())
         .collect()
 }

@@ -1,8 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::runtime::jobs::JobMetadata;
-use crate::runtime::{Job, JobKind, JobState, RuntimeScopeKind};
+use crate::model::job::JobMetadata;
+use crate::model::job::{Job, JobKind, JobState};
+use crate::model::scope::RuntimeScopeKind;
 
 use super::job_payload_pre_v0_7::PreV0_7_0JobPayload;
 

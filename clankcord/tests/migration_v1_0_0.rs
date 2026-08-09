@@ -5,12 +5,12 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use serde_json::json;
 
-use clankcord::runtime::timeline::JobVisibility;
-use clankcord::runtime::{
+use clankcord::model::job::{
     BinaryPayload, CommandRequest, DiscordTypingAction, DiscordTypingIndicatorPayload, Job,
-    JobKind, JobOutput, JobPayload, JobState, RuntimeScope, RuntimeScopeKind, TextTarget,
-    TextTargetKind,
+    JobKind, JobOutput, JobPayload, JobState, TextTarget, TextTargetKind,
 };
+use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
+use clankcord::runtime::timeline::JobVisibility;
 
 use common::{initialize_test_config, test_store};
 
@@ -64,42 +64,42 @@ enum V8JobKind {
 #[derive(Serialize)]
 #[allow(dead_code, clippy::large_enum_variant)]
 enum V8JobPayload {
-    AudioSegment(clankcord::runtime::AudioSegmentPayload),
-    WakeActivation(clankcord::runtime::WakeActivationPayload),
-    AgentTask(clankcord::runtime::AgentTaskPayload),
-    DiscordTextMessage(clankcord::runtime::DiscordTextMessagePayload),
-    DiscordSlashCommand(clankcord::runtime::DiscordSlashCommandPayload),
-    TextDelivery(clankcord::runtime::TextDeliveryPayload),
-    DiscordTextSend(clankcord::runtime::DiscordTextSendPayload),
-    DiscordForumThreadCreate(clankcord::runtime::DiscordForumThreadCreatePayload),
-    DiscordForumThreadRename(clankcord::runtime::DiscordForumThreadRenamePayload),
-    AgentSessionStart(clankcord::runtime::AgentSessionStartPayload),
-    AgentSessionSunset(clankcord::runtime::AgentSessionSunsetPayload),
-    AgentSessionResume(clankcord::runtime::AgentSessionResumePayload),
-    AgentSessionRetirement(clankcord::runtime::AgentSessionRetirementPayload),
-    AgentThreadTitleRefresh(clankcord::runtime::AgentThreadTitleRefreshPayload),
-    TranscriptPublication(clankcord::runtime::TranscriptPublicationPayload),
-    ConfirmationRequired(clankcord::runtime::ConfirmationRequiredPayload),
-    Command(clankcord::runtime::CommandPayload),
-    RoomAgentPlacement(clankcord::runtime::RoomAgentPlacementPayload),
-    DiscordVoiceJoin(clankcord::runtime::DiscordVoiceJoinPayload),
-    DiscordVoiceLeave(clankcord::runtime::DiscordVoiceLeavePayload),
-    DiscordVoicePlayback(clankcord::runtime::DiscordVoicePlaybackPayload),
-    DiscordVoiceMute(clankcord::runtime::DiscordVoiceMutePayload),
-    DiscordVoicePlayAudio(clankcord::runtime::DiscordVoicePlayAudioPayload),
-    RuntimeControl(clankcord::runtime::RuntimeControlPayload),
-    WakeProbe(clankcord::runtime::WakeProbePayload),
-    RuntimeMaintenance(clankcord::runtime::RuntimeMaintenancePayload),
-    VoiceStatusSync(clankcord::runtime::VoiceStatusSyncPayload),
-    DiscordVoiceStatusSnapshot(clankcord::runtime::DiscordVoiceStatusSnapshotPayload),
-    AutomationEvaluation(clankcord::runtime::jobs::AutomationEvaluationPayload),
-    StaleWakeProbeSweep(clankcord::runtime::StaleWakeProbeSweepPayload),
+    AudioSegment(clankcord::model::job::AudioSegmentPayload),
+    WakeActivation(clankcord::model::job::WakeActivationPayload),
+    AgentTask(clankcord::model::job::AgentTaskPayload),
+    DiscordTextMessage(clankcord::model::job::DiscordTextMessagePayload),
+    DiscordSlashCommand(clankcord::model::job::DiscordSlashCommandPayload),
+    TextDelivery(clankcord::model::job::TextDeliveryPayload),
+    DiscordTextSend(clankcord::model::job::DiscordTextSendPayload),
+    DiscordForumThreadCreate(clankcord::model::job::DiscordForumThreadCreatePayload),
+    DiscordForumThreadRename(clankcord::model::job::DiscordForumThreadRenamePayload),
+    AgentSessionStart(clankcord::model::job::AgentSessionStartPayload),
+    AgentSessionSunset(clankcord::model::job::AgentSessionSunsetPayload),
+    AgentSessionResume(clankcord::model::job::AgentSessionResumePayload),
+    AgentSessionRetirement(clankcord::model::job::AgentSessionRetirementPayload),
+    AgentThreadTitleRefresh(clankcord::model::job::AgentThreadTitleRefreshPayload),
+    TranscriptPublication(clankcord::model::job::TranscriptPublicationPayload),
+    ConfirmationRequired(clankcord::model::job::ConfirmationRequiredPayload),
+    Command(clankcord::model::job::CommandPayload),
+    RoomAgentPlacement(clankcord::model::job::RoomAgentPlacementPayload),
+    DiscordVoiceJoin(clankcord::model::job::DiscordVoiceJoinPayload),
+    DiscordVoiceLeave(clankcord::model::job::DiscordVoiceLeavePayload),
+    DiscordVoicePlayback(clankcord::model::job::DiscordVoicePlaybackPayload),
+    DiscordVoiceMute(clankcord::model::job::DiscordVoiceMutePayload),
+    DiscordVoicePlayAudio(clankcord::model::job::DiscordVoicePlayAudioPayload),
+    RuntimeControl(clankcord::model::job::RuntimeControlPayload),
+    WakeProbe(clankcord::model::job::WakeProbePayload),
+    RuntimeMaintenance(clankcord::model::job::RuntimeMaintenancePayload),
+    VoiceStatusSync(clankcord::model::job::VoiceStatusSyncPayload),
+    DiscordVoiceStatusSnapshot(clankcord::model::job::DiscordVoiceStatusSnapshotPayload),
+    AutomationEvaluation(clankcord::model::job::AutomationEvaluationPayload),
+    StaleWakeProbeSweep(clankcord::model::job::StaleWakeProbeSweepPayload),
     StaleRunningJobSweep(V8StaleRunningJobSweepPayload),
-    EphemeralJobGc(clankcord::runtime::EphemeralJobGcPayload),
-    DiscordVoiceDeafen(clankcord::runtime::DiscordVoiceDeafenPayload),
-    DiscordTypingIndicator(clankcord::runtime::DiscordTypingIndicatorPayload),
-    TranscriptionMux(clankcord::runtime::TranscriptionMuxPayload),
-    TranscriptionMuxPlan(clankcord::runtime::TranscriptionMuxPlanPayload),
+    EphemeralJobGc(clankcord::model::job::EphemeralJobGcPayload),
+    DiscordVoiceDeafen(clankcord::model::job::DiscordVoiceDeafenPayload),
+    DiscordTypingIndicator(clankcord::model::job::DiscordTypingIndicatorPayload),
+    TranscriptionMux(clankcord::model::job::TranscriptionMuxPayload),
+    TranscriptionMuxPlan(clankcord::model::job::TranscriptionMuxPlanPayload),
 }
 
 #[derive(Serialize)]

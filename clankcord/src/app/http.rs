@@ -20,14 +20,15 @@ use crate::dashboard::{
     ALPINE_JS, APP_JS, CHARTS_JS, ECHARTS_JS, EXPLORER_JS, INDEX_HTML, JSON_JS, STYLES_CSS,
     TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
 };
+use crate::model::job::CommandRequest;
+use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::runtime::automations::AutomationState;
 use crate::runtime::util::first_value_string;
-use crate::runtime::{
-    CommandRequest, ContextResolveRequest, DashboardAgentsRequest, DashboardJobsRequest,
-    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, JobsRequest,
-    ListConversationsRequest, MemberGetRequest, MemberResolveRequest, MemberSearchRequest,
-    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeScope, RuntimeScopeKind,
-    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+use crate::views::{
+    ContextResolveRequest, DashboardAgentsRequest, DashboardJobsRequest, DashboardOverviewRequest,
+    DashboardTimelineRequest, DashboardTranscriptRequest, JobsRequest, ListConversationsRequest,
+    MemberGetRequest, MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest,
+    RenderTranscriptRequest, SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
     default_dashboard_categories, parse_dashboard_filter,
 };
 
@@ -927,7 +928,7 @@ async fn agent_sessions_sunset(
     result(
         state
             .handle
-            .submit_job(crate::runtime::Job::agent_session_sunset(
+            .submit_job(crate::model::job::Job::agent_session_sunset(
                 agent_session_id,
                 payload.requested_by_user_id,
                 payload.reason,
@@ -944,7 +945,7 @@ async fn agent_sessions_resume(
     result(
         state
             .handle
-            .submit_job(crate::runtime::Job::agent_session_resume(
+            .submit_job(crate::model::job::Job::agent_session_resume(
                 agent_session_id,
                 payload.route_kind,
                 payload.guild_id,
@@ -1351,11 +1352,11 @@ fn dashboard_jobs_request(query: &BTreeQuery) -> Result<DashboardJobsRequest> {
     })
 }
 
-fn dashboard_filter(query: &BTreeQuery, key: &str) -> Result<crate::runtime::DashboardFilter> {
+fn dashboard_filter(query: &BTreeQuery, key: &str) -> Result<crate::views::DashboardFilter> {
     parse_dashboard_filter(query.get(key).map(String::as_str), key)
 }
 
-fn dashboard_category_filter(query: &BTreeQuery) -> Result<crate::runtime::DashboardFilter> {
+fn dashboard_category_filter(query: &BTreeQuery) -> Result<crate::views::DashboardFilter> {
     let Some(raw) = query.get("categories") else {
         return Ok(default_dashboard_categories());
     };

@@ -7,15 +7,16 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::stt::{SttHttpStatusError, transcribe_file_with_source_result_sync};
+use crate::model::job::{
+    AudioSegmentPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
+};
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
+use crate::runtime::Ctx;
 use crate::runtime::domain::transcription::{
     should_drop_low_confidence_transcription, stt_drop_decision,
 };
 use crate::runtime::timeline::store::TranscriptionSlotRecord;
 use crate::runtime::timeline::{SpeechEventInput, read_wav_mono, sha256_file};
-use crate::runtime::{
-    AudioSegmentPayload, Ctx, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
-};
 
 pub(crate) struct AudioSegmentRetryPlan {
     pub delay_for_attempt: fn(i64) -> chrono::Duration,
@@ -108,7 +109,7 @@ fn retry_delay(attempts: i64) -> chrono::Duration {
 
 pub(crate) async fn execute_segment_job(
     runtime: &Ctx,
-    job: &crate::runtime::Job,
+    job: &crate::model::job::Job,
     payload: &AudioSegmentPayload,
 ) -> Result<Value> {
     if let Some(event) = runtime
@@ -186,7 +187,7 @@ pub(crate) async fn execute_segment_job(
 
 pub(crate) async fn execute_transcription_mux_plan_job(
     runtime: &Ctx,
-    _job: &crate::runtime::Job,
+    _job: &crate::model::job::Job,
     payload: &TranscriptionMuxPlanPayload,
 ) -> Result<Value> {
     crate::config::transcription_source(&payload.transcription_source_id)?;
@@ -199,7 +200,7 @@ pub(crate) async fn execute_transcription_mux_plan_job(
 
 pub(crate) async fn execute_transcription_mux_job(
     runtime: &Ctx,
-    job: &crate::runtime::Job,
+    job: &crate::model::job::Job,
     payload: &TranscriptionMuxPayload,
 ) -> Result<Value> {
     let source = crate::config::transcription_source(&payload.transcription_source_id)?;
@@ -468,7 +469,7 @@ pub fn untimestamped_mux_disposition(
 
 async fn build_mux_audio(
     runtime: &Ctx,
-    job: &crate::runtime::Job,
+    job: &crate::model::job::Job,
     slots: &[TranscriptionSlotRecord],
 ) -> Result<BuiltMuxAudio> {
     let Some(first) = slots.first() else {

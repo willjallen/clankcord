@@ -6,17 +6,22 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::model::job::{
+    AgentSessionResumePayload, AgentSessionStartOutput, AgentSessionStartPayload,
+    AgentSessionSunsetPayload, CommandRequest, Job, JobKind, JobOutput, JobState, TextTarget,
+    TextTargetKind,
+};
+use crate::model::scope::RuntimeScope;
+use crate::runtime::Ctx;
+use crate::runtime::agents::{
+    AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
+    voice_route_key,
+};
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{
     event_text, isoformat_z, new_id, parse_instant, resolve_time_reference, utc_now,
 };
 use crate::runtime::util::first_value_string;
-use crate::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, AgentSessionResumePayload, AgentSessionRouteKind,
-    AgentSessionStartOutput, AgentSessionStartPayload, AgentSessionSunsetPayload, CommandRequest,
-    Ctx, Job, JobKind, JobOutput, JobState, RuntimeScope, TextTarget, TextTargetKind, dm_route_key,
-    voice_route_key,
-};
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
 
@@ -617,7 +622,7 @@ async fn agent_session_search_document(ctx: &Ctx, record: &AgentSessionRecord) -
         .list_jobs_by_scope_kind(&record.guild_id, &record.scope_id, JobKind::AgentTask)
         .await?
     {
-        if let crate::runtime::JobPayload::AgentTask(payload) = &job.payload
+        if let crate::model::job::JobPayload::AgentTask(payload) = &job.payload
             && payload.agent_session_id == record.agent_session_id
         {
             parts.push(serde_json::to_string(&job.to_value())?);

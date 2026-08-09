@@ -37,7 +37,7 @@ pub(crate) use sqlx::postgres::PgRow;
 pub(crate) use sqlx::{Postgres, QueryBuilder, Row as SqlxRow};
 
 pub(crate) use crate::Result;
-pub(crate) use crate::runtime::Job;
+pub(crate) use crate::model::job::Job;
 pub(crate) use crate::runtime::util::{first_value_string, non_empty, string_field};
 
 pub(crate) use super::util::{

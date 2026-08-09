@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 
-use crate::runtime::{Ctx, RoomConfig, RoomControl};
+use crate::runtime::Ctx;
+use crate::runtime::rooms::{RoomConfig, RoomControl};
 
 pub async fn pause_room(
     ctx: &Ctx,

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::runtime::jobs::{
+use crate::model::job::{
     AgentSessionStartOutput, AgentTaskMetadata, BinaryPayload, DiscordForumThreadCreateOutput,
     DiscordForumThreadRenameOutput, DiscordTextSendOutput, DiscordTypingIndicatorOutput,
     DiscordVoiceDeafenOutput, DiscordVoiceJoinOutput, DiscordVoiceMuteOutput,
@@ -9,8 +9,9 @@ use crate::runtime::jobs::{
     JobOutput, RoomAgentPlacementOutput, RuntimeControlOutput, TextDeliveryOutput,
     TranscriptPublicationOutput,
 };
-use crate::runtime::{Job, JobKind, JobPayload, JobState, RuntimeScopeKind};
-use crate::runtime::{VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::model::job::{Job, JobKind, JobPayload, JobState};
+use crate::model::scope::RuntimeScopeKind;
+use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
 const PRE_V0_10_0_JOB_PAYLOAD_BLOB_VERSION: u16 = 7;
@@ -231,8 +232,8 @@ impl PreV0_10_0JobMetadata {
 }
 
 impl PreV0_10_0DiscordVoiceLeaveOutput {
-    fn into_current(self) -> Result<crate::runtime::jobs::DiscordVoiceLeaveOutput> {
-        Ok(crate::runtime::jobs::DiscordVoiceLeaveOutput {
+    fn into_current(self) -> Result<crate::model::job::DiscordVoiceLeaveOutput> {
+        Ok(crate::model::job::DiscordVoiceLeaveOutput {
             session_id: self.session_id,
             status: self.status,
             session: self.session,
@@ -268,7 +269,7 @@ impl PreV0_10_0JobOutput {
             Self::DiscordVoiceMute(output) => JobOutput::DiscordVoiceMute(output),
             Self::DiscordVoicePlayAudio(output) => JobOutput::DiscordVoicePlayAudio(output),
             Self::DiscordVoiceStatusSnapshot(output) => JobOutput::DiscordVoiceStatusSnapshot(
-                crate::runtime::jobs::DiscordVoiceStatusSnapshotOutput {
+                crate::model::job::DiscordVoiceStatusSnapshotOutput {
                     bots: output.bots,
                     sessions: output.sessions,
                     voice_state_guild_ids: Vec::new(),

@@ -3,15 +3,18 @@ use serde_json::json;
 
 mod common;
 
-use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
-use clankcord::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
-    BinaryPayload, CommandRequest, Ctx, DiscordForumThreadCreateOutput,
-    DiscordForumThreadRenamePayload, DiscordTextMessagePayload, DiscordTextSendPayload, Job,
-    JobKind, JobOutput, JobPayload, JobState, RuntimeScope, RuntimeScopeKind, TextDeliveryKind,
-    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
-    voice_route_key,
+use clankcord::model::job::{
+    AgentSessionStartOutput, AgentSessionStartPayload, BinaryPayload, CommandRequest,
+    DiscordForumThreadCreateOutput, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
+    DiscordTextSendPayload, Job, JobKind, JobOutput, JobPayload, JobState, TextDeliveryKind,
+    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
+use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
+use clankcord::runtime::Ctx;
+use clankcord::runtime::agents::{
+    AgentSessionRecord, AgentSessionRecordState, dm_route_key, voice_route_key,
+};
+use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_records_route_by_voice_and_thread() {
@@ -397,7 +400,7 @@ fn agent_session_runtime_scope_covers_voice_dm_and_thread_routes() {
     assert_eq!(dm.scope(), RuntimeScope::dm("user-a"));
 
     let mut thread = voice;
-    thread.route_kind = clankcord::runtime::AgentSessionRouteKind::Thread;
+    thread.route_kind = clankcord::runtime::agents::AgentSessionRouteKind::Thread;
     thread.discord_thread_id = "thread-a".to_string();
     assert_eq!(thread.scope(), RuntimeScope::thread("guild-a", "thread-a"));
 }

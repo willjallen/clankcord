@@ -6,12 +6,12 @@ use crate::Result;
 use crate::adapters::discord::api::{
     create_dm_channel, discord_multipart_request, discord_request,
 };
-use crate::runtime::jobs::{DiscordPostMetadata, DiscordPostedMessageMetadata};
-use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
-use crate::runtime::util::string_field;
-use crate::runtime::{
+use crate::model::job::{DiscordPostMetadata, DiscordPostedMessageMetadata};
+use crate::model::job::{
     DiscordTextSendOutput, DiscordTextSendPayload, TextDeliveryKind, TextTargetKind,
 };
+use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
+use crate::runtime::util::string_field;
 
 pub async fn send(payload: DiscordTextSendPayload) -> Result<DiscordTextSendOutput> {
     tokio::task::spawn_blocking(move || send_blocking(payload)).await?
@@ -85,7 +85,7 @@ fn post_chunks(channel_id: &str, content: &str) -> Result<DiscordPostMetadata> {
 fn post_text_chunk(
     channel_id: &str,
     content: &str,
-    allowed_mentions: Option<&crate::runtime::BinaryPayload>,
+    allowed_mentions: Option<&crate::model::job::BinaryPayload>,
 ) -> Result<DiscordPostedMessageMetadata> {
     let mut body = serde_json::Map::new();
     body.insert(
@@ -253,7 +253,7 @@ fn message_send_plan(payload: &DiscordTextSendPayload) -> MessageSendPlan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{
+    use crate::model::job::{
         BinaryPayload, TextAttachmentPayload, TextDeliveryKind, TextTarget, TextTargetKind,
     };
 

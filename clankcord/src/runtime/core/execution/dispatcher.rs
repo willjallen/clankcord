@@ -1,10 +1,11 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::model::job::{Job, JobKind, JobOutput, JobState};
 use crate::ports::discord::DiscordApi;
+use crate::runtime::Ctx;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::voice_capture::segments;
-use crate::runtime::{Ctx, Job, JobKind, JobOutput, JobState};
 
 use super::routes;
 
@@ -70,7 +71,7 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
         }
         JobKind::AgentThreadTitleRefresh => {
             let decision = match &running.payload {
-                    crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
+                    crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
                         crate::runtime::domain::interactions::thread_titles::prepare_agent_thread_title_refresh_job(ctx, &running, payload)
                             .await
                     }
@@ -170,7 +171,7 @@ pub(crate) async fn fail_dispatched_job(
     latest.set_state(JobState::Failed);
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
-    crate::runtime::log(&format!("job dispatch failed {job_id}: {error_text}"));
+    crate::runtime::util::log(&format!("job dispatch failed {job_id}: {error_text}"));
     Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
 }
 
@@ -196,7 +197,7 @@ pub(crate) async fn requeue_dispatched_job(
     )));
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
-    crate::runtime::log(&format!(
+    crate::runtime::util::log(&format!(
         "{log_prefix} {job_id}: attempt {} next_run_at {} error: {error_text}",
         latest.attempts,
         latest.next_run_at.clone().unwrap_or_default()

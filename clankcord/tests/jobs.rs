@@ -5,12 +5,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use clankcord::config;
-use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
-use clankcord::runtime::jobs::DiscordPostMetadata;
-use clankcord::runtime::jobs::JobMetadata;
-use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
-use clankcord::runtime::{
-    AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest, Ctx,
+use clankcord::model::job::DiscordPostMetadata;
+use clankcord::model::job::JobMetadata;
+use clankcord::model::job::{
+    AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
     DiscordTextSendPayload, DiscordTypingAction, DiscordTypingIndicatorOutput,
     DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
@@ -18,10 +16,14 @@ use clankcord::runtime::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotOutput, Job, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
-    RoomConfig, RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
-    WakeActivationPayload, WakeProbePayload,
+    TextAttachmentPayload, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
+    TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
+use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
+use clankcord::runtime::Ctx;
+use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
+use clankcord::runtime::rooms::RoomConfig;
+use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::views::JobsRequest;
 
 mod common;
@@ -1083,7 +1085,7 @@ async fn v0_13_0_schema_migration_canonicalizes_generic_timeline_event_scopes() 
             RuntimeScope::dm("dm-user"),
             "dm-user",
             JobState::Queued,
-            JobPayload::Command(clankcord::runtime::CommandPayload {
+            JobPayload::Command(clankcord::model::job::CommandPayload {
                 command: CommandRequest::agent_task("", "dm-user", "dm-user", "dm feedback"),
             }),
         ))
@@ -1094,7 +1096,7 @@ async fn v0_13_0_schema_migration_canonicalizes_generic_timeline_event_scopes() 
             RuntimeScope::text_channel("guild-a", "text-a"),
             "user-a",
             JobState::Queued,
-            JobPayload::Command(clankcord::runtime::CommandPayload {
+            JobPayload::Command(clankcord::model::job::CommandPayload {
                 command: CommandRequest::agent_task("guild-a", "text-a", "user-a", "text delivery"),
             }),
         ))
@@ -1105,7 +1107,7 @@ async fn v0_13_0_schema_migration_canonicalizes_generic_timeline_event_scopes() 
             RuntimeScope::voice_channel("guild-a", "voice-a"),
             "user-a",
             JobState::Queued,
-            JobPayload::Command(clankcord::runtime::CommandPayload {
+            JobPayload::Command(clankcord::model::job::CommandPayload {
                 command: CommandRequest::agent_task("guild-a", "voice-a", "user-a", "voice typing"),
             }),
         ))

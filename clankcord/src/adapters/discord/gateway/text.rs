@@ -10,7 +10,8 @@ use crate::Result;
 use crate::adapters::discord::gateway::{components, registration, slash};
 use crate::config::load_discord_bot_token;
 use crate::engine::JobBus;
-use crate::runtime::{DiscordTextMessagePayload, Job, log};
+use crate::model::job::{DiscordTextMessagePayload, Job};
+use crate::runtime::util::log;
 
 #[derive(Clone)]
 pub struct DiscordTextAdapter {

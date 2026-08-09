@@ -5,10 +5,10 @@ use serde_json::json;
 use clankcord::adapters::discord::gateway::slash::{
     slash_missing_voice_channel_response_content, slash_success_response_content,
 };
-use clankcord::runtime::{
-    BinaryPayload, CommandKind, Ctx, DashboardFilter, DashboardTimelineRequest,
-    DiscordSlashCommandPayload, Job, JobKind, RuntimeScopeKind,
-};
+use clankcord::model::job::{BinaryPayload, CommandKind, DiscordSlashCommandPayload, Job, JobKind};
+use clankcord::model::scope::RuntimeScopeKind;
+use clankcord::runtime::Ctx;
+use clankcord::views::{DashboardFilter, DashboardTimelineRequest};
 
 mod common;
 use common::{initialize_test_config, test_store};

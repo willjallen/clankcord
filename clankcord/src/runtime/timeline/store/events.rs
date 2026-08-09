@@ -369,13 +369,13 @@ impl TimelineStore {
         voice_channel_id: &str,
         event: Value,
     ) -> Result<Value> {
-        let scope = crate::runtime::RuntimeScope::voice_channel(guild_id, voice_channel_id);
+        let scope = crate::model::scope::RuntimeScope::voice_channel(guild_id, voice_channel_id);
         self.append_scope_event(&scope, event).await
     }
 
     pub async fn append_scope_event(
         &self,
-        scope: &crate::runtime::RuntimeScope,
+        scope: &crate::model::scope::RuntimeScope,
         event: Value,
     ) -> Result<Value> {
         let mut payload = event.as_object().cloned().unwrap_or_default();
@@ -392,7 +392,7 @@ impl TimelineStore {
         ] {
             payload.insert(key.to_string(), Value::String(value.to_string()));
         }
-        if scope.kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+        if scope.kind == crate::model::scope::RuntimeScopeKind::VoiceChannel {
             payload.insert(
                 "voice_channel_id".to_string(),
                 Value::String(scope.scope_id.clone()),
@@ -449,7 +449,7 @@ impl TimelineStore {
             ],
         );
         let capture_run_id = first_string(&payload, &["capture_run_id", "captureRunId"]);
-        if scope.kind == crate::runtime::RuntimeScopeKind::VoiceChannel {
+        if scope.kind == crate::model::scope::RuntimeScopeKind::VoiceChannel {
             self.ensure_room(
                 &scope.guild_id,
                 &scope.scope_id,
@@ -757,7 +757,7 @@ impl TimelineStore {
         include_forgotten: bool,
     ) -> Result<Vec<Value>> {
         self.load_scope_events(
-            crate::runtime::RuntimeScopeKind::VoiceChannel,
+            crate::model::scope::RuntimeScopeKind::VoiceChannel,
             guild_id,
             voice_channel_id,
             start,
@@ -771,7 +771,7 @@ impl TimelineStore {
 
     pub async fn load_scope_events(
         &self,
-        scope_kind: crate::runtime::RuntimeScopeKind,
+        scope_kind: crate::model::scope::RuntimeScopeKind,
         guild_id: &str,
         scope_id: &str,
         start: Option<DateTime<Utc>>,

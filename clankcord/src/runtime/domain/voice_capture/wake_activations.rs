@@ -3,14 +3,15 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::model::job::{
+    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
+};
+use crate::runtime::Ctx;
 use crate::runtime::domain::voice_capture::segments;
 use crate::runtime::timeline::{
     event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
 };
 use crate::runtime::util::{first_value_string, non_empty};
-use crate::runtime::{
-    CommandRequest, Ctx, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
-};
 
 #[derive(Debug, Clone, Copy)]
 struct CaptureHold {
@@ -1005,7 +1006,7 @@ async fn room_transcription_settlement(
 }
 
 fn live_capture_interval(
-    speaker: &crate::runtime::SessionSpeakerCaptureStats,
+    speaker: &crate::runtime::domain::voice::SessionSpeakerCaptureStats,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let has_live_audio =
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;

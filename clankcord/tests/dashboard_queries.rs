@@ -5,12 +5,15 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::model::job::{CommandRequest, Job};
+use clankcord::model::scope::RuntimeScope;
+use clankcord::runtime::Ctx;
 use clankcord::runtime::automations::AutomationSpec;
 use clankcord::runtime::timeline::{instant_ms_dt, isoformat_z};
-use clankcord::runtime::{
-    CommandRequest, Ctx, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
-    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, Job,
-    RuntimeScope, default_dashboard_categories, parse_dashboard_filter,
+use clankcord::views::{
+    DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest, DashboardOverviewRequest,
+    DashboardTimelineRequest, DashboardTranscriptRequest, default_dashboard_categories,
+    parse_dashboard_filter,
 };
 
 use common::{initialize_test_config, test_store};
@@ -655,7 +658,7 @@ async fn dashboard_overview_aggregates_the_full_hour_and_excludes_stale_failures
     insert_voice_room(&store, "guild", "code", "Code Lounge").await;
 
     let mut stale = Job::runtime_maintenance(500);
-    stale.set_state(clankcord::runtime::JobState::Failed);
+    stale.set_state(clankcord::model::job::JobState::Failed);
     stale.created_at = isoformat_z(Some(now - Duration::hours(3)));
     stale.updated_at = stale.created_at.clone();
     stale.completed_at = Some(stale.created_at.clone());
@@ -663,7 +666,7 @@ async fn dashboard_overview_aggregates_the_full_hour_and_excludes_stale_failures
 
     for index in 0..5 {
         let mut fresh = Job::runtime_maintenance(500);
-        fresh.set_state(clankcord::runtime::JobState::Failed);
+        fresh.set_state(clankcord::model::job::JobState::Failed);
         fresh.created_at =
             isoformat_z(Some(now - Duration::minutes(10) + Duration::seconds(index)));
         fresh.updated_at = fresh.created_at.clone();
@@ -765,7 +768,7 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         "operator",
         CommandRequest::agent_task("guild", "code", "operator", "old failed task"),
     );
-    stale_failed.set_state(clankcord::runtime::JobState::Failed);
+    stale_failed.set_state(clankcord::model::job::JobState::Failed);
     stale_failed.created_at = isoformat_z(Some(Utc::now() - Duration::days(8)));
     stale_failed.updated_at = stale_failed.created_at.clone();
     stale_failed.completed_at = Some(stale_failed.created_at.clone());
@@ -778,7 +781,7 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         "operator",
         CommandRequest::agent_task("guild", "code", "operator", &large_request),
     );
-    fresh_failed.set_state(clankcord::runtime::JobState::Failed);
+    fresh_failed.set_state(clankcord::model::job::JobState::Failed);
     fresh_failed.metadata.error = "e".repeat(100_000);
     fresh_failed.created_at = isoformat_z(Some(Utc::now() + Duration::seconds(1)));
     fresh_failed.updated_at = fresh_failed.created_at.clone();

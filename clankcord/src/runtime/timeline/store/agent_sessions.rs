@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::runtime::{AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind};
+use crate::runtime::agents::{AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind};
 
 impl TimelineStore {
     pub async fn create_agent_session_record(

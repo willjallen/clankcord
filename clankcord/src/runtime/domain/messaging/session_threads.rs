@@ -5,10 +5,10 @@ use crate::errors::{
     discord_error_channel_id, discord_error_is_unavailable_channel, discord_error_text_channel_id,
     discord_error_text_is_unavailable_channel,
 };
+use crate::model::job::{Job, TextTarget, TextTargetKind};
+use crate::runtime::Ctx;
+use crate::runtime::agents::{AgentSessionRecord, AgentSessionRecordState};
 use crate::runtime::util::{first_non_empty, preview};
-use crate::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, Ctx, Job, TextTarget, TextTargetKind,
-};
 
 pub(crate) const UNAVAILABLE_SESSION_THREAD_STATUS: &str = "skipped_unavailable_session_thread";
 
@@ -107,7 +107,7 @@ pub(crate) async fn agent_session_for_source_job(
         );
     }
     let source = ctx.store.get_job(source_job_id).await?;
-    let crate::runtime::JobPayload::AgentTask(agent_task) = &source.payload else {
+    let crate::model::job::JobPayload::AgentTask(agent_task) = &source.payload else {
         anyhow::bail!(
             "{surface} job {} uses session target but source job {} is not an agent task",
             job.id,

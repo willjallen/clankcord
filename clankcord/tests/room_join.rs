@@ -1,9 +1,11 @@
-use clankcord::runtime::timeline::utc_now;
-use clankcord::runtime::{
-    Ctx, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
-    JobOutput, JobState, RoomAgentPlacementAction, RoomConfig, VoiceBotStatus,
-    VoiceCaptureSessionStatus,
+use clankcord::model::job::{
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
+    JobOutput, JobState, RoomAgentPlacementAction,
 };
+use clankcord::runtime::Ctx;
+use clankcord::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
+use clankcord::runtime::rooms::RoomConfig;
+use clankcord::runtime::timeline::utc_now;
 
 mod common;
 use common::{initialize_test_config, test_state_dir, test_store};
@@ -531,7 +533,7 @@ fn ready_bot_with(bot_id: &str, user_id: &str) -> VoiceBotStatus {
 
 fn capture_session_for_assignment(
     room: &RoomConfig,
-    assignment: &clankcord::runtime::VoiceAssignment,
+    assignment: &clankcord::runtime::domain::voice::VoiceAssignment,
 ) -> VoiceCaptureSessionStatus {
     VoiceCaptureSessionStatus {
         session_id: assignment.capture_run_id.clone(),

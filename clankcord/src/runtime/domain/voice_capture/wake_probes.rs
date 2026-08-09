@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::adapters::wakeword::detect_wake_file_sync;
 use crate::config;
+use crate::model::job::{Job, WakeProbePayload};
+use crate::runtime::Ctx;
 use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use crate::runtime::domain::voice_capture::wake_circuit::{
     acquire_wake_probe_admission, record_wake_provider_failure, record_wake_provider_success,
@@ -13,7 +15,6 @@ use crate::runtime::domain::voice_capture::wake_circuit::{
 use crate::runtime::timeline::store::WakeCircuitAdmission;
 use crate::runtime::timeline::{event_end, event_start, isoformat_z, sha256_file};
 use crate::runtime::util::first_value_string;
-use crate::runtime::{Ctx, Job, WakeProbePayload};
 
 pub(crate) async fn execute_probe_job(
     runtime: &Ctx,

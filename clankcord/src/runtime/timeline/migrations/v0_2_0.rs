@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::runtime::jobs::JobMetadata;
-use crate::runtime::{
-    BinaryPayload, DiscordSlashCommandPayload, Job, JobKind, JobPayload, JobState, RuntimeScopeKind,
+use crate::model::job::JobMetadata;
+use crate::model::job::{
+    BinaryPayload, DiscordSlashCommandPayload, Job, JobKind, JobPayload, JobState,
 };
+use crate::model::scope::RuntimeScopeKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum PreV0_2_0JobState {

@@ -1,15 +1,14 @@
 use std::collections::BTreeSet;
 
 use crate::Result;
+use crate::model::job::{DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction};
 use crate::runtime::automations::{
     Automation, AutomationContext, AutomationOutput, AutomationVoiceState,
 };
+use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::runtime::rooms::RoomConfig;
 use crate::runtime::timeline::{parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
-use crate::runtime::{
-    DiscordVoiceLeavePayload, Job, JobKind, RoomAgentPlacementAction, RoomConfig, VoiceBotStatus,
-    VoiceCaptureSessionStatus,
-};
 use serde_json::Value;
 
 pub(crate) struct RoomAgentPlacementAutomation;

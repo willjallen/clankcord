@@ -21,15 +21,16 @@ use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::engine::JobBus;
 use crate::errors::discord_tool_error;
-use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
-use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
-use crate::runtime::{
+use crate::model::job::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue, VoiceBotStatus,
-    log,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue,
 };
+use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
+use crate::runtime::domain::voice::VoiceBotStatus;
+use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
+use crate::runtime::util::log;
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
 
@@ -747,7 +748,9 @@ impl LiveVoiceAdapter {
         })
     }
 
-    pub async fn session_statuses(&self) -> Vec<crate::runtime::VoiceCaptureSessionStatus> {
+    pub async fn session_statuses(
+        &self,
+    ) -> Vec<crate::runtime::domain::voice::VoiceCaptureSessionStatus> {
         let sessions = {
             let sessions = self.capture_sessions_lock.lock().await;
             sessions.values().cloned().collect::<Vec<_>>()
@@ -791,7 +794,7 @@ impl LiveVoiceAdapter {
 
     async fn persist_capture_session_status(
         &self,
-        status: &crate::runtime::VoiceCaptureSessionStatus,
+        status: &crate::runtime::domain::voice::VoiceCaptureSessionStatus,
     ) {
         if let Err(error) = self
             .timeline_store
@@ -821,7 +824,7 @@ impl LiveVoiceAdapter {
         }
     }
 
-    async fn submit_capture_job(&self, job: crate::runtime::Job) {
+    async fn submit_capture_job(&self, job: crate::model::job::Job) {
         let job_id = job.id.clone();
         if let Err(error) = self.bus.submit(job).await {
             log(&format!("capture job submission failed {job_id}: {error}"));
@@ -1340,7 +1343,7 @@ impl LiveVoiceAdapter {
     }
 }
 
-fn sound_asset_path(cue: crate::runtime::DiscordVoicePlaybackCue) -> PathBuf {
+fn sound_asset_path(cue: crate::model::job::DiscordVoicePlaybackCue) -> PathBuf {
     crate::config::voice_sound_dir().join(cue.asset_file_name())
 }
 

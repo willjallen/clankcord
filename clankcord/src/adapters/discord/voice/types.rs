@@ -6,11 +6,12 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::discord::voice::diagnostics::default_packet_debug;
-use crate::runtime::timeline::format_timestamp_local;
-use crate::runtime::{
-    ArtifactStatus, RoomConfig, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
+use crate::runtime::domain::voice::{
+    ArtifactStatus, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
     VoiceCaptureSessionStatus,
 };
+use crate::runtime::rooms::RoomConfig;
+use crate::runtime::timeline::format_timestamp_local;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SpeakerBuffer {

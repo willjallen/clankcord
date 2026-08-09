@@ -4,6 +4,14 @@ use std::path::Path;
 
 use crate::Result;
 use crate::config;
+use crate::model::job::{
+    BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
+    JobOutput, JobState, TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload,
+    TextTarget, TextTargetKind,
+};
+use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
+use crate::runtime::Ctx;
+use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::messaging::session_threads::{
     discord_error_text_targets_unavailable_session_thread,
@@ -11,11 +19,6 @@ use crate::runtime::domain::messaging::session_threads::{
 };
 use crate::runtime::timeline::sha256_file;
 use crate::runtime::util::{first_non_empty, string_field};
-use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, BinaryPayload, Ctx, DiscordForumThreadCreatePayload,
-    DiscordTextSendPayload, Job, JobKind, JobOutput, JobState, RuntimeScope, RuntimeScopeKind,
-    TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
-};
 
 enum TextDeliveryTarget {
     Ready(TextTarget),
@@ -29,7 +32,7 @@ enum TextDeliveryTarget {
 pub(crate) async fn submit_agent_response_delivery(ctx: &Ctx, value: &Value) -> Result<Value> {
     let job = text_delivery_job_from_value(ctx, value).await?;
     let source_job_id = match &job.payload {
-        crate::runtime::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
+        crate::model::job::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
         _ => String::new(),
     };
     let created = if source_job_id.trim().is_empty() {
@@ -351,7 +354,7 @@ fn completed_child_of_kind(children: &[Job], kind: JobKind) -> Result<Option<&Jo
 
 fn discord_text_send_child_target(child: &Job) -> Option<&TextTarget> {
     match &child.payload {
-        crate::runtime::JobPayload::DiscordTextSend(payload) => Some(&payload.target),
+        crate::model::job::JobPayload::DiscordTextSend(payload) => Some(&payload.target),
         _ => None,
     }
 }

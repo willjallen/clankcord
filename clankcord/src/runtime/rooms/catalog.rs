@@ -3,8 +3,9 @@ use std::collections::BTreeSet;
 use crate::Result;
 use crate::errors::discord_tool_error;
 
+use crate::runtime::Ctx;
+use crate::runtime::rooms::RoomConfig;
 use crate::runtime::util::{non_empty, slugify};
-use crate::runtime::{Ctx, RoomConfig};
 
 pub async fn known_rooms(ctx: &Ctx) -> Result<Vec<RoomConfig>> {
     let mut rooms = ctx.store.list_room_configs().await?;

@@ -1,5 +1,5 @@
 use crate::Result;
-use crate::runtime::Job;
+use crate::model::job::Job;
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
 const PRE_V0_9_0_JOB_PAYLOAD_BLOB_VERSION: u16 = 6;

@@ -1,9 +1,9 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::model::job::MemberSyncPayload;
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
-use crate::runtime::jobs::MemberSyncPayload;
 use crate::runtime::timeline::{instant_ms_dt, utc_now};
 
 /// Refreshes the durable members table for one guild from Discord. The

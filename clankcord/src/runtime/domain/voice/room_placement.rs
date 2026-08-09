@@ -5,12 +5,14 @@ use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::{first_non_empty, single_child_of_kind};
 
-use crate::runtime::{
-    Ctx, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
+use crate::model::job::{
+    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput,
     DiscordVoiceLeavePayload, DiscordVoicePlaybackCue, Job, JobKind, JobOutput, JobState,
-    RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload, RoomConfig,
-    VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
+    RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
 };
+use crate::runtime::Ctx;
+use crate::runtime::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::runtime::rooms::RoomConfig;
 
 pub(crate) async fn prepare_join_room_jobs(
     ctx: &Ctx,

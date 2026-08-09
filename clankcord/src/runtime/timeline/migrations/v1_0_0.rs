@@ -18,8 +18,8 @@ use serde::Deserialize;
 use sqlx::Row as SqlxRow;
 
 use crate::Result;
-use crate::runtime::Job;
-use crate::runtime::jobs::{AgentTaskMetadata, AgentTaskOutcome, AgentTaskPhase};
+use crate::model::job::Job;
+use crate::model::job::{AgentTaskMetadata, AgentTaskOutcome, AgentTaskPhase};
 use crate::runtime::timeline::isoformat_z;
 
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
@@ -168,7 +168,7 @@ fn strip_v8_header<'a>(job_id: &str, blob: &'a [u8]) -> Result<&'a [u8]> {
 // task metadata differ.
 // ---------------------------------------------------------------------------
 
-use crate::runtime::jobs::{
+use crate::model::job::{
     AgentInvocationMetadata, AgentPreflightMetadata, AgentSessionResumePayload,
     AgentSessionRetirementPayload, AgentSessionStartPayload, AgentSessionSunsetPayload,
     AgentTaskPayload, AgentThreadTitleRefreshPayload, AudioSegmentPayload,
@@ -183,8 +183,9 @@ use crate::runtime::jobs::{
     TranscriptionMuxPayload, TranscriptionMuxPlanPayload, VoiceStatusSyncPayload,
     WakeActivationPayload, WakeProbePayload,
 };
-use crate::runtime::jobs::{ConfirmationJobMetadata, DiscordPostMetadata};
-use crate::runtime::{JobKind, JobState, RuntimeScopeKind};
+use crate::model::job::{ConfirmationJobMetadata, DiscordPostMetadata};
+use crate::model::job::{JobKind, JobState};
+use crate::model::scope::RuntimeScopeKind;
 
 #[derive(Debug, Deserialize)]
 struct V8Job {
@@ -437,8 +438,8 @@ struct V8JobMetadata {
 }
 
 impl V8JobMetadata {
-    fn into_current(self) -> crate::runtime::jobs::JobMetadata {
-        let mut metadata = crate::runtime::jobs::JobMetadata {
+    fn into_current(self) -> crate::model::job::JobMetadata {
+        let mut metadata = crate::model::job::JobMetadata {
             detail: None,
             error: self.error,
             timed_out_at: self.timed_out_at,

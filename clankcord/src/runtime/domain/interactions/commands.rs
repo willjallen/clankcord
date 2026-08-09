@@ -1,15 +1,16 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::model::job::{
+    CommandKind, CommandRequest, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+    DiscordVoicePlaybackCue, Job, JobKind, JobOutput, RoomAgentPlacementAction,
+};
+use crate::model::scope::RuntimeScope;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::{isoformat_z, utc_now};
 use crate::runtime::util::string_field;
-use crate::runtime::{
-    CommandKind, CommandRequest, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
-    DiscordVoicePlaybackCue, ForgetRequest, Job, JobKind, JobOutput, MaterializeTranscriptRequest,
-    RoomAgentPlacementAction, RuntimeScope,
-};
+use crate::views::{ForgetRequest, MaterializeTranscriptRequest};
 
 use crate::runtime::Ctx;
 

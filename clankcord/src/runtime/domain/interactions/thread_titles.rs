@@ -11,20 +11,22 @@ use crate::Result;
 use crate::adapters::codex::codex_response_text;
 use crate::config;
 use crate::errors::discord_error_text_is_unavailable_channel;
+use crate::model::job::{
+    AgentThreadTitleRefreshPayload, DiscordForumThreadRenamePayload, Job, JobKind, JobOutput,
+    JobPayload, JobState, TextTargetKind,
+};
+use crate::model::scope::RuntimeScope;
+use crate::runtime::Ctx;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
+use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_unavailable_channel_id,
 };
 use crate::runtime::timeline::JobVisibility;
 use crate::runtime::util::{first_non_empty, first_value_string, preview};
-use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload, Ctx,
-    DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, RuntimeScope,
-    TextTargetKind,
-};
 
 use super::linear_mcp::insert_linear_mcp_env;
 

@@ -32,8 +32,8 @@ use crate::adapters::discord::voice::capture::VoiceData;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
-use crate::runtime::VoiceBotStatus;
-use crate::runtime::log;
+use crate::runtime::domain::voice::VoiceBotStatus;
+use crate::runtime::util::log;
 
 pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;
 

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 use crate::Result;
-use crate::runtime::{Job, JobKind};
+use crate::model::job::{Job, JobKind};
 
 pub fn log(message: &str) {
     eprintln!("[clankcord-voice] {message}");

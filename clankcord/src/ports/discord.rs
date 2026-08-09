@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use crate::Result;
-use crate::runtime::{
+use crate::model::job::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
     DiscordTextSendPayload, DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload,

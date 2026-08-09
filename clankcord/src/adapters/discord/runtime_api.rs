@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use crate::adapters::discord::gateway::{forum_thread, text_send, typing};
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::ports::discord::{DiscordApi, DiscordApiFuture};
-use crate::runtime::{
+use crate::model::job::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
     DiscordTextSendPayload, DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload,
@@ -12,6 +11,7 @@ use crate::runtime::{
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
     DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
+use crate::ports::discord::{DiscordApi, DiscordApiFuture};
 
 #[derive(Clone)]
 pub(crate) struct DiscordRuntimeApi {

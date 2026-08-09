@@ -4,7 +4,8 @@ use crate::Result;
 use crate::runtime::timeline::utc_now;
 use serde_json::Value;
 
-use crate::runtime::{Ctx, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::runtime::Ctx;
+use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 
 pub async fn sync_voice_adapter_status(
     ctx: &Ctx,

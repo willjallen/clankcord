@@ -1,11 +1,14 @@
 use crate::Result;
-use crate::runtime::core::execution::JobDecision;
-use crate::runtime::util::single_child_of_kind;
-use crate::runtime::{
-    Ctx, DiscordVoiceDeafenPayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
+use crate::model::job::{
+    DiscordVoiceDeafenPayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload, Job, JobKind,
-    JobOutput, JobState, RoomConfig, VoiceCaptureSessionStatus,
+    JobOutput, JobState,
 };
+use crate::runtime::Ctx;
+use crate::runtime::core::execution::JobDecision;
+use crate::runtime::domain::voice::VoiceCaptureSessionStatus;
+use crate::runtime::rooms::RoomConfig;
+use crate::runtime::util::single_child_of_kind;
 
 pub(crate) async fn prepare_voice_playback_job(
     ctx: &Ctx,
