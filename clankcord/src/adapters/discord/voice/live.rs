@@ -196,32 +196,34 @@ impl LiveVoiceAdapter {
                         finished.bot_id.clone(),
                         finished.guild_id.clone(),
                         client.voice(),
-                        client.user_id.clone(),
+                        client.state.user_id.clone(),
                     ));
                 }
             }
             for client in clients.values_mut() {
-                if !client.current_guild_id.trim().is_empty()
-                    && seen_leave_requests
-                        .insert((client.bot_id.clone(), client.current_guild_id.clone()))
+                if !client.state.current_guild_id.trim().is_empty()
+                    && seen_leave_requests.insert((
+                        client.state.bot_id.clone(),
+                        client.state.current_guild_id.clone(),
+                    ))
                 {
                     leave_requests.push((
-                        client.bot_id.clone(),
-                        client.current_guild_id.clone(),
+                        client.state.bot_id.clone(),
+                        client.state.current_guild_id.clone(),
                         client.voice(),
-                        client.user_id.clone(),
+                        client.state.user_id.clone(),
                     ));
                 }
-                client.joining_live_session_id = None;
-                client.active_live_session_id = None;
-                client.current_guild_id.clear();
-                client.current_channel_id.clear();
-                client.ready = false;
-                client.last_error = "runtime shutdown".to_string();
+                client.state.joining_live_session_id = None;
+                client.state.active_live_session_id = None;
+                client.state.current_guild_id.clear();
+                client.state.current_channel_id.clear();
+                client.state.ready = false;
+                client.state.last_error = "runtime shutdown".to_string();
                 bot_statuses.push(client.status());
                 shard_managers.push(client.shard_manager());
                 if let Some(task) = client.take_client_task() {
-                    client_tasks.push((client.bot_id.clone(), task));
+                    client_tasks.push((client.state.bot_id.clone(), task));
                 }
             }
         }
@@ -289,8 +291,8 @@ impl LiveVoiceAdapter {
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
-            client.joining_live_session_id = Some(session_id.clone());
-            client.last_error.clear();
+            client.state.joining_live_session_id = Some(session_id.clone());
+            client.state.last_error.clear();
             client.clear_disconnect_pending();
             (client.voice(), client.discord_user_id()?)
         };
@@ -370,11 +372,11 @@ impl LiveVoiceAdapter {
             let client = clients.get_mut(&request.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", request.bot_id))
             })?;
-            client.joining_live_session_id = None;
-            client.active_live_session_id = Some(session_id.clone());
-            client.current_guild_id = room.guild_id.clone();
-            client.current_channel_id = room.channel_id.clone();
-            client.last_error.clear();
+            client.state.joining_live_session_id = None;
+            client.state.active_live_session_id = Some(session_id.clone());
+            client.state.current_guild_id = room.guild_id.clone();
+            client.state.current_channel_id = room.channel_id.clone();
+            client.state.last_error.clear();
             client.clear_disconnect_pending();
             Some(client.status())
         };
@@ -425,8 +427,8 @@ impl LiveVoiceAdapter {
     async fn mark_join_failed(&self, bot_id: &str, error: &str) -> Option<VoiceBotStatus> {
         let mut clients = self.voice_clients_lock.lock().await;
         let client = clients.get_mut(bot_id)?;
-        client.joining_live_session_id = None;
-        client.last_error = error.to_string();
+        client.state.joining_live_session_id = None;
+        client.state.last_error = error.to_string();
         let status = client.status();
         drop(clients);
         self.persist_bot_status(&status).await;
@@ -491,7 +493,7 @@ impl LiveVoiceAdapter {
             let client = clients.get(&finished.bot_id).ok_or_else(|| {
                 discord_tool_error(format!("voice bot {} is not running", finished.bot_id))
             })?;
-            (client.voice(), client.user_id.clone())
+            (client.voice(), client.state.user_id.clone())
         };
         let guild_id = parse_discord_id("guild_id", &finished.guild_id)?;
         leave_voice_channel(voice, &user_id, guild_id).await?;
@@ -529,10 +531,12 @@ impl LiveVoiceAdapter {
             clients
                 .iter()
                 .find(|(_, client)| {
-                    client.current_guild_id == guild_id
-                        && client.current_channel_id == voice_channel_id
+                    client.state.current_guild_id == guild_id
+                        && client.state.current_channel_id == voice_channel_id
                 })
-                .map(|(bot_id, client)| (bot_id.clone(), client.voice(), client.user_id.clone()))
+                .map(|(bot_id, client)| {
+                    (bot_id.clone(), client.voice(), client.state.user_id.clone())
+                })
         };
         if direct_match.is_some() {
             return Ok(direct_match);
@@ -557,7 +561,7 @@ impl LiveVoiceAdapter {
             let clients = self.voice_clients_lock.lock().await;
             clients
                 .get(&bot_id)
-                .map(|client| (bot_id, client.voice(), client.user_id.clone()))
+                .map(|client| (bot_id, client.voice(), client.state.user_id.clone()))
         };
         Ok(durable_match)
     }
@@ -768,12 +772,12 @@ impl LiveVoiceAdapter {
             let clients = self.voice_clients_lock.lock().await;
             let bot_user_ids = clients
                 .values()
-                .map(|client| client.user_id.clone())
+                .map(|client| client.state.user_id.clone())
                 .filter(|value| !value.trim().is_empty())
                 .collect::<BTreeSet<_>>();
             let caches = clients
                 .values()
-                .filter(|client| client.ready)
+                .filter(|client| client.state.ready)
                 .map(DiscordVoiceClient::cache)
                 .collect::<Vec<_>>();
             (bot_user_ids, caches)
@@ -846,24 +850,24 @@ impl LiveVoiceAdapter {
             clients
                 .values()
                 .filter(|client| {
-                    client.ready
-                        && client.joining_live_session_id.is_none()
-                        && !client.user_id.trim().is_empty()
+                    client.state.ready
+                        && client.state.joining_live_session_id.is_none()
+                        && !client.state.user_id.trim().is_empty()
                 })
                 .map(|client| {
-                    let guild_ids = if client.current_guild_id.trim().is_empty() {
+                    let guild_ids = if client.state.current_guild_id.trim().is_empty() {
                         configured_guild_ids.clone()
                     } else {
-                        vec![client.current_guild_id.clone()]
+                        vec![client.state.current_guild_id.clone()]
                     };
                     let pending_disconnect_until =
-                        match durable_pending_disconnects.get(&client.bot_id) {
+                        match durable_pending_disconnects.get(&client.state.bot_id) {
                             Some(value) => *value,
                             None => 0,
                         };
                     (
-                        client.bot_id.clone(),
-                        client.user_id.clone(),
+                        client.state.bot_id.clone(),
+                        client.state.user_id.clone(),
                         client.cache(),
                         guild_ids,
                         pending_disconnect_until,
@@ -920,8 +924,8 @@ impl LiveVoiceAdapter {
             let Some(client) = clients.get_mut(bot_id) else {
                 return;
             };
-            client.current_guild_id = guild_id.to_string();
-            client.current_channel_id = channel_id.to_string();
+            client.state.current_guild_id = guild_id.to_string();
+            client.state.current_channel_id = channel_id.to_string();
             if channel_id.trim().is_empty() {
                 client.clear_disconnect_pending();
             }
@@ -943,18 +947,20 @@ impl LiveVoiceAdapter {
             let mut clients = self.voice_clients_lock.lock().await;
             clients.get_mut(bot_id).map(|client| {
                 if client
+                    .state
                     .active_live_session_id
                     .as_ref()
                     .is_some_and(|session_id| stale_session_ids_set.contains(session_id))
                 {
-                    client.active_live_session_id = None;
+                    client.state.active_live_session_id = None;
                 }
                 if client
+                    .state
                     .joining_live_session_id
                     .as_ref()
                     .is_some_and(|session_id| stale_session_ids_set.contains(session_id))
                 {
-                    client.joining_live_session_id = None;
+                    client.state.joining_live_session_id = None;
                 }
                 client.status()
             })
@@ -1051,10 +1057,10 @@ impl LiveVoiceAdapter {
         let status = {
             let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
-                client.ready = true;
-                client.user_id = ready.user_id.clone();
-                client.username = ready.username.clone();
-                client.last_error.clear();
+                client.state.ready = true;
+                client.state.user_id = ready.user_id.clone();
+                client.state.username = ready.username.clone();
+                client.state.last_error.clear();
                 Some(client.status())
             } else {
                 None
@@ -1087,7 +1093,7 @@ impl LiveVoiceAdapter {
             let clients = self.voice_clients_lock.lock().await;
             clients
                 .values()
-                .map(|client| client.user_id.clone())
+                .map(|client| client.state.user_id.clone())
                 .filter(|value| !value.is_empty())
                 .collect::<Vec<_>>()
         };
@@ -1110,7 +1116,7 @@ impl LiveVoiceAdapter {
             let Some(client) = clients.get(bot_id) else {
                 return;
             };
-            !client.user_id.is_empty() && client.user_id == user_id
+            !client.state.user_id.is_empty() && client.state.user_id == user_id
         };
         if !voice_state_matches_client {
             return;
@@ -1135,7 +1141,7 @@ impl LiveVoiceAdapter {
             let Some(client) = clients.get_mut(bot_id) else {
                 return;
             };
-            if client.user_id.is_empty() || client.user_id != user_id {
+            if client.state.user_id.is_empty() || client.state.user_id != user_id {
                 return;
             }
             if !channel_id.trim().is_empty()
@@ -1144,15 +1150,15 @@ impl LiveVoiceAdapter {
                 client.retain_disconnect_pending(pending_disconnect_until);
                 (Some(client.status()), None)
             } else {
-                client.current_guild_id = guild_id.clone();
-                client.current_channel_id = channel_id.clone();
+                client.state.current_guild_id = guild_id.clone();
+                client.state.current_channel_id = channel_id.clone();
                 if channel_id.trim().is_empty() {
                     client.clear_disconnect_pending();
                 }
-                let joining_live_session_id = if client.joining_live_session_id.is_some()
-                    && !client.current_channel_id.is_empty()
+                let joining_live_session_id = if client.state.joining_live_session_id.is_some()
+                    && !client.state.current_channel_id.is_empty()
                 {
-                    client.joining_live_session_id.clone()
+                    client.state.joining_live_session_id.clone()
                 } else {
                     None
                 };
@@ -1192,8 +1198,8 @@ impl LiveVoiceAdapter {
         let status = {
             let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
-                client.ready = false;
-                client.last_error = error.to_string();
+                client.state.ready = false;
+                client.state.last_error = error.to_string();
                 Some(client.status())
             } else {
                 None

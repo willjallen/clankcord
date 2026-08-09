@@ -38,7 +38,11 @@ use crate::runtime::util::log;
 
 pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;
 
-pub(super) struct DiscordVoiceClient {
+/// The engine-owned lifecycle state of one voice bot. This is the half of
+/// the registry that moves to the capture engine when the transport goes
+/// behind a VoiceTransport trait; nothing in it touches serenity.
+#[derive(Debug, Default, Clone)]
+pub(super) struct VoiceBotState {
     pub(super) bot_id: String,
     pub(super) ready: bool,
     pub(super) joining_live_session_id: Option<String>,
@@ -50,6 +54,10 @@ pub(super) struct DiscordVoiceClient {
     pub(super) pending_disconnect_until: i64,
     pub(super) user_id: String,
     pub(super) username: String,
+}
+
+pub(super) struct DiscordVoiceClient {
+    pub(super) state: VoiceBotState,
     http: Arc<Http>,
     cache: Arc<Cache>,
     voice: Arc<Songbird>,
@@ -86,17 +94,10 @@ impl DiscordVoiceClient {
         let client_task = spawn_gateway_task(Arc::downgrade(adapter), bot_id.clone(), client);
 
         Ok(Self {
-            bot_id,
-            ready: false,
-            joining_live_session_id: None,
-            active_live_session_id: None,
-            current_guild_id: String::new(),
-            current_channel_id: String::new(),
-            last_error: String::new(),
-            pending_disconnect_events: 0,
-            pending_disconnect_until: 0,
-            user_id: String::new(),
-            username: String::new(),
+            state: VoiceBotState {
+                bot_id,
+                ..VoiceBotState::default()
+            },
             http,
             cache,
             voice,
@@ -106,10 +107,10 @@ impl DiscordVoiceClient {
     }
 
     pub(super) fn discord_user_id(&self) -> Result<String> {
-        if self.user_id.trim().is_empty() {
-            anyhow::bail!("voice client {} is not ready", self.bot_id);
+        if self.state.user_id.trim().is_empty() {
+            anyhow::bail!("voice client {} is not ready", self.state.bot_id);
         }
-        Ok(self.user_id.clone())
+        Ok(self.state.user_id.clone())
     }
 
     pub(super) fn voice(&self) -> Arc<Songbird> {
@@ -134,15 +135,15 @@ impl DiscordVoiceClient {
 
     pub(super) fn status(&self) -> VoiceBotStatus {
         VoiceBotStatus {
-            bot_id: self.bot_id.clone(),
-            ready: self.ready,
-            current_guild_id: self.current_guild_id.clone(),
-            current_channel_id: self.current_channel_id.clone(),
-            last_error: self.last_error.clone(),
-            pending_disconnect_events: self.pending_disconnect_events,
-            pending_disconnect_until: self.pending_disconnect_until,
-            user_id: self.user_id.clone(),
-            username: self.username.clone(),
+            bot_id: self.state.bot_id.clone(),
+            ready: self.state.ready,
+            current_guild_id: self.state.current_guild_id.clone(),
+            current_channel_id: self.state.current_channel_id.clone(),
+            last_error: self.state.last_error.clone(),
+            pending_disconnect_events: self.state.pending_disconnect_events,
+            pending_disconnect_until: self.state.pending_disconnect_until,
+            user_id: self.state.user_id.clone(),
+            username: self.state.username.clone(),
             gateway_running: self
                 .client_task
                 .as_ref()
@@ -152,24 +153,28 @@ impl DiscordVoiceClient {
     }
 
     pub(super) fn mark_disconnect_pending(&mut self, now_ms: i64) {
-        self.joining_live_session_id = None;
-        self.active_live_session_id = None;
-        self.current_guild_id.clear();
-        self.current_channel_id.clear();
-        self.pending_disconnect_events = self.pending_disconnect_events.saturating_add(1);
-        self.pending_disconnect_until = now_ms.saturating_add(VOICE_DISCONNECT_SETTLE_MS);
+        self.state.joining_live_session_id = None;
+        self.state.active_live_session_id = None;
+        self.state.current_guild_id.clear();
+        self.state.current_channel_id.clear();
+        self.state.pending_disconnect_events =
+            self.state.pending_disconnect_events.saturating_add(1);
+        self.state.pending_disconnect_until = now_ms.saturating_add(VOICE_DISCONNECT_SETTLE_MS);
     }
 
     pub(super) fn clear_disconnect_pending(&mut self) {
-        self.pending_disconnect_until = 0;
+        self.state.pending_disconnect_until = 0;
     }
 
     pub(super) fn retain_disconnect_pending(&mut self, pending_disconnect_until: i64) {
-        self.joining_live_session_id = None;
-        self.active_live_session_id = None;
-        self.current_guild_id.clear();
-        self.current_channel_id.clear();
-        self.pending_disconnect_until = self.pending_disconnect_until.max(pending_disconnect_until);
+        self.state.joining_live_session_id = None;
+        self.state.active_live_session_id = None;
+        self.state.current_guild_id.clear();
+        self.state.current_channel_id.clear();
+        self.state.pending_disconnect_until = self
+            .state
+            .pending_disconnect_until
+            .max(pending_disconnect_until);
     }
 }
 
