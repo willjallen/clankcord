@@ -1,9 +1,7 @@
 use axum::http::StatusCode;
 use serde_json::json;
 
-use clankcord::adapters::http::{
-    dashboard_asset_router, health_error_payload, readiness_http_status,
-};
+use clankcord::app::http::{dashboard_asset_router, health_error_payload, readiness_http_status};
 
 #[test]
 fn dashboard_readiness_status_and_error_copy_are_explicit() {
@@ -84,7 +82,7 @@ async fn dashboard_assets_resolve_and_legacy_debug_routes_are_absent() {
     }
     server.abort();
 
-    let source = include_str!("../src/adapters/http.rs");
+    let source = include_str!("../src/app/http.rs");
     for path in [
         "/v1/dashboard/timeline",
         "/v1/dashboard/jobs",

@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::app::service::RuntimeHandle;
 use crate::dashboard::{
     ALPINE_JS, APP_JS, CHARTS_JS, ECHARTS_JS, EXPLORER_JS, INDEX_HTML, JSON_JS, STYLES_CSS,
     TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
@@ -25,8 +26,8 @@ use crate::runtime::{
     CommandRequest, ContextResolveRequest, DashboardAgentsRequest, DashboardJobsRequest,
     DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, JobsRequest,
     ListConversationsRequest, MemberGetRequest, MemberResolveRequest, MemberSearchRequest,
-    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeHandle, RuntimeScope,
-    RuntimeScopeKind, SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    ParticipantTraceRequest, RenderTranscriptRequest, RuntimeScope, RuntimeScopeKind,
+    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
     default_dashboard_categories, parse_dashboard_filter,
 };
 

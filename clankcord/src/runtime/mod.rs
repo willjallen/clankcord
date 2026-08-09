@@ -4,11 +4,10 @@ pub mod coding;
 pub mod core;
 mod ctx;
 pub mod domain;
-pub mod jobs;
+pub use crate::model::job as jobs;
 pub(crate) mod message_chunks;
 pub mod rooms;
-pub mod scope;
-pub mod service;
+pub use crate::model::scope;
 pub mod timeline;
 pub(crate) mod util;
 
@@ -55,5 +54,4 @@ pub use jobs::{
 pub use message_chunks::split_message_chunks;
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};
-pub use service::{RuntimeHandle, RuntimeService, start_blocking, start_persistent_process};
 pub use util::log;

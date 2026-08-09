@@ -888,7 +888,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
         return Ok(0);
     };
     match command {
-        Command::Start => Ok(crate::runtime::start_blocking()),
+        Command::Start => Ok(crate::app::service::start_blocking()),
         Command::Status(args) => status(args),
         Command::Rooms { command } => {
             match command.unwrap_or(RoomsCommand::Status(StatusArgs::default())) {

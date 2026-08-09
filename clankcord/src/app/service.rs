@@ -466,10 +466,9 @@ pub async fn start_persistent_process() -> Result<()> {
     let runner = service.spawn();
     let signal_task = spawn_process_signal_listener(runner.shutdown_sender());
     let http_shutdown = wait_for_shutdown_request(runner.shutdown_receiver());
-    let serve_result =
-        crate::adapters::http::serve_until_shutdown(handle, http_addr, http_shutdown)
-            .await
-            .context("serving HTTP API");
+    let serve_result = crate::app::http::serve_until_shutdown(handle, http_addr, http_shutdown)
+        .await
+        .context("serving HTTP API");
     runner.request_shutdown("HTTP server stopped");
     let shutdown_result = runner.shutdown().await.context("stopping runtime service");
     signal_task.abort();

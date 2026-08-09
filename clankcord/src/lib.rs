@@ -7,6 +7,7 @@ pub mod config;
 pub mod dashboard;
 pub mod engine;
 pub mod errors;
+pub mod model;
 pub mod ports;
 pub mod runtime;
 pub mod views;
