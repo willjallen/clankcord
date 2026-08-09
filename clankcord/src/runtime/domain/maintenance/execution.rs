@@ -2,11 +2,11 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
 };
 use crate::runtime::Ctx;
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::maintenance::STALE_RUNNING_JOB_TIMEOUT_MINUTES;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
 

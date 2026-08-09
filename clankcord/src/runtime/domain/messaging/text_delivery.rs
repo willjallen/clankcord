@@ -4,6 +4,7 @@ use std::path::Path;
 
 use crate::Result;
 use crate::config;
+use crate::engine::JobDecision;
 use crate::model::job::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload,
@@ -12,7 +13,6 @@ use crate::model::job::{
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::runtime::Ctx;
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::messaging::session_threads::{
     discord_error_text_targets_unavailable_session_thread,
     discord_error_text_unavailable_channel_id,

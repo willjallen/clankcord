@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::model::job::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
     JobOutput, TextDeliveryKind, TextTarget, TextTargetKind, TranscriptPublicationOutput,
@@ -11,7 +12,6 @@ use crate::model::job::{
 };
 use crate::model::scope::RuntimeScope;
 use crate::runtime::Ctx;
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
 use crate::runtime::rooms::RoomConfig;
 use crate::runtime::timeline::isoformat_z;

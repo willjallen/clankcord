@@ -1,13 +1,13 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::model::job::{Job, JobKind, JobOutput, JobState};
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::voice_capture::segments;
 
-use super::routes;
+use crate::engine::routes;
 
 pub async fn dispatch_claimed_runtime_job<A>(
     ctx: &Ctx,
@@ -18,7 +18,7 @@ where
     A: DiscordApi,
 {
     let job_id = running.id.clone();
-    match routes::execute_runtime_async_with_external_api(ctx, &running, external_api).await {
+    match routes::execute(ctx, &running, external_api).await {
         Ok(decision) => apply_job_decision(ctx, &job_id, running, decision).await,
         Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
     }

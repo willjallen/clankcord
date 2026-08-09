@@ -31,7 +31,7 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
     placement.requested_by_user_id = "user-a".to_string();
     let parent = store.create_job(placement).await.unwrap();
 
-    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent,
@@ -91,7 +91,7 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
         .await
         .unwrap();
 
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent.clone(),
@@ -140,7 +140,7 @@ async fn leave_room_placement_disconnects_orphan_voice_bot_presence() {
         .await
         .unwrap();
 
-    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent,
@@ -268,7 +268,7 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     }));
     store.update_job(&completed_child).await.unwrap();
 
-    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent.clone(),
@@ -292,7 +292,7 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     completed_playback.metadata.error = "missing cue asset".to_string();
     store.update_job(&completed_playback).await.unwrap();
 
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent.clone(),

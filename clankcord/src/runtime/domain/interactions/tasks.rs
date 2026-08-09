@@ -183,13 +183,8 @@ async fn resolve_agent_task_delivery(
         }));
     }
     if deliveries.iter().any(|child| !child.state.is_terminal()) {
-        return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
-            ctx,
-            &job_id,
-            latest,
-            Vec::new(),
-        )
-        .await;
+        return crate::engine::dispatcher::wait_dispatched_job(ctx, &job_id, latest, Vec::new())
+            .await;
     }
     let deadline = parse_instant(&task.await_delivery_until);
     if deadline.is_some_and(|deadline| utc_now() < deadline) {

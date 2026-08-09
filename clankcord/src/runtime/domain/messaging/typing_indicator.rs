@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::model::job::{
     DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, TextTarget,
     TextTargetKind,
@@ -8,7 +9,6 @@ use crate::model::job::{
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_targets_unavailable_session_thread,
     discord_error_unavailable_channel_id,

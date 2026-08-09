@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::engine::JobDecision;
 use crate::model::job::{
     AgentSessionResumePayload, AgentSessionStartOutput, AgentSessionStartPayload,
     AgentSessionSunsetPayload, CommandRequest, Job, JobKind, JobOutput, JobState, TextTarget,
@@ -17,7 +18,6 @@ use crate::runtime::agents::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
     voice_route_key,
 };
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{
     event_text, isoformat_z, new_id, parse_instant, resolve_time_reference, utc_now,
 };

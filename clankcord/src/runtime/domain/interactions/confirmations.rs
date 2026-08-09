@@ -3,12 +3,12 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::errors::discord_tool_error;
 use crate::model::job::{
     BinaryPayload, CommandRequest, ConfirmationContext, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextDeliveryKind, TextTarget, TextTargetKind,
 };
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::isoformat_z;
 

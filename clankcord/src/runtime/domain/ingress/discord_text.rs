@@ -1,10 +1,10 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::model::job::{CommandRequest, DiscordTextMessagePayload, Job, JobOutput};
 use crate::runtime::Ctx;
 use crate::runtime::agents::AgentSessionRecord;
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 
 pub(crate) async fn prepare(

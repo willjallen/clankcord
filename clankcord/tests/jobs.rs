@@ -1372,7 +1372,7 @@ async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
     assert_eq!(claimed.len(), 1);
 
     let runtime = Ctx::new(store.clone());
-    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
         &runtime,
         claimed.pop().unwrap(),
     )
@@ -1432,7 +1432,7 @@ async fn audio_segment_slot_inherits_room_wake_priority() {
         .await
         .unwrap();
     let runtime = Ctx::new(store.clone());
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
         &runtime,
         claimed.into_iter().next().unwrap(),
     )
@@ -1531,7 +1531,7 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
             .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
             .await
             .unwrap();
-        clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
             &runtime,
             claimed.into_iter().next().unwrap(),
         )
@@ -2099,7 +2099,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -2936,12 +2936,10 @@ async fn completed_agent_task_with_missing_response_delivery_completes_terminall
     assert_eq!(claimed.len(), 1);
 
     let runtime = Ctx::new(store.clone());
-    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
-        &runtime,
-        claimed[0].clone(),
-    )
-    .await
-    .unwrap();
+    let result =
+        clankcord::engine::dispatcher::dispatch_claimed_blocking_job(&runtime, claimed[0].clone())
+            .await
+            .unwrap();
 
     assert_eq!(result["dispatched"], json!(true));
     assert_eq!(result["outcome"], json!("submitted_without_delivery"));
@@ -3976,7 +3974,7 @@ async fn create_audio_segment_slot(
         .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
         .await
         .unwrap();
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
         &runtime,
         claimed.into_iter().next().unwrap(),
     )
@@ -3997,7 +3995,7 @@ async fn run_transcription_mux_planner(
         .await
         .unwrap();
     let runtime = Ctx::new(store.clone());
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         claimed.into_iter().next().unwrap(),

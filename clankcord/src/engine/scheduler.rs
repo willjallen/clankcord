@@ -258,12 +258,9 @@ where
             let job_id = job.id.clone();
             let kind = job.kind;
             let ctx = Ctx::new(timeline_store);
-            let result = crate::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
-                &ctx,
-                &external_api,
-                job,
-            )
-            .await;
+            let result =
+                crate::engine::dispatcher::dispatch_claimed_runtime_job(&ctx, &external_api, job)
+                    .await;
             if let Err(error) = result {
                 log(&format!(
                     "runtime job worker failed {job_id} ({kind}): {}",
@@ -284,10 +281,7 @@ where
             let kind = job.kind;
             let result = runtime_handle.block_on(async move {
                 let ctx = Ctx::new(timeline_store);
-                crate::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
-                    &ctx, job,
-                )
-                .await
+                crate::engine::dispatcher::dispatch_claimed_blocking_job(&ctx, job).await
             });
             match result {
                 Ok(_) => {}

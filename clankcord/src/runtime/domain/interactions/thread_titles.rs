@@ -10,6 +10,7 @@ use super::prompts::{
 use crate::Result;
 use crate::adapters::codex::codex_response_text;
 use crate::config;
+use crate::engine::JobDecision;
 use crate::errors::discord_error_text_is_unavailable_channel;
 use crate::model::job::{
     AgentThreadTitleRefreshPayload, DiscordForumThreadRenamePayload, Job, JobKind, JobOutput,
@@ -21,7 +22,6 @@ use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_unavailable_channel_id,
 };

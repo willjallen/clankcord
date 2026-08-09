@@ -1,7 +1,6 @@
 pub mod agents;
 pub mod automations;
 pub mod coding;
-pub mod core;
 mod ctx;
 pub mod domain;
 pub mod message_chunks;

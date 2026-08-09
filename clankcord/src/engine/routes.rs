@@ -1,19 +1,69 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload,
 };
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
-use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::ingress::discord_slash;
 use crate::runtime::domain::ingress::discord_text;
 use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
 
-pub(crate) async fn execute_runtime_async(runtime: &Ctx, job: &Job) -> Result<JobDecision> {
+pub(crate) async fn execute<A>(runtime: &Ctx, job: &Job, external_api: &A) -> Result<JobDecision>
+where
+    A: DiscordApi,
+{
     match &job.payload {
+        JobPayload::DiscordTextSend(payload) => {
+            crate::runtime::domain::messaging::discord_io::execute_discord_text_send_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordForumThreadCreate(payload) => {
+            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_create_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordForumThreadRename(payload) => {
+            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordTypingIndicator(payload) => {
+            crate::runtime::domain::messaging::typing_indicator::execute_discord_typing_indicator_job(runtime, job, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceJoin(payload) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_join_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceLeave(payload) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_leave_job(runtime, job, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceMute(payload) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_mute_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoiceDeafen(payload) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_deafen_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::DiscordVoicePlayAudio(payload) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(runtime, payload, external_api)
+                .await
+        }
+        JobPayload::MemberSync(payload) => {
+            Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                &crate::runtime::domain::maintenance::member_sync::execute(runtime, payload, external_api)
+                    .await?,
+            )?))
+        }
+        JobPayload::DiscordVoiceStatusSnapshot(_) => {
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(runtime, external_api)
+                .await
+        }
+
         JobPayload::RuntimeControl(payload) => runtime_control::prepare(runtime, payload).await,
         JobPayload::RuntimeMaintenance(payload) => {
             crate::runtime::domain::maintenance::execution::prepare_runtime_maintenance_job(runtime, job, payload).await
@@ -73,65 +123,6 @@ pub(crate) async fn execute_runtime_async(runtime: &Ctx, job: &Job) -> Result<Jo
             "job payload {} is not handled by async dispatcher",
             payload.kind()
         ),
-    }
-}
-
-pub(crate) async fn execute_runtime_async_with_external_api<A>(
-    runtime: &Ctx,
-    job: &Job,
-    external_api: &A,
-) -> Result<JobDecision>
-where
-    A: DiscordApi,
-{
-    match &job.payload {
-        JobPayload::DiscordTextSend(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_text_send_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordForumThreadCreate(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_create_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordForumThreadRename(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordTypingIndicator(payload) => {
-            crate::runtime::domain::messaging::typing_indicator::execute_discord_typing_indicator_job(runtime, job, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordVoiceJoin(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_join_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordVoiceLeave(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_leave_job(runtime, job, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordVoiceMute(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_mute_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordVoiceDeafen(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_deafen_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::DiscordVoicePlayAudio(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(runtime, payload, external_api)
-                .await
-        }
-        JobPayload::MemberSync(payload) => {
-            Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-                &crate::runtime::domain::maintenance::member_sync::execute(runtime, payload, external_api)
-                    .await?,
-            )?))
-        }
-        JobPayload::DiscordVoiceStatusSnapshot(_) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(runtime, external_api)
-                .await
-        }
-        _ => execute_runtime_async(runtime, job).await,
     }
 }
 

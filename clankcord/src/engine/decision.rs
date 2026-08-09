@@ -1,7 +1,7 @@
 use crate::model::job::{Job, JobFailure, JobOutput};
 
 #[derive(Debug, Clone)]
-pub(crate) enum JobDecision {
+pub enum JobDecision {
     Complete(JobOutput),
     Fail(JobFailure),
     Wait,
@@ -9,7 +9,7 @@ pub(crate) enum JobDecision {
 }
 
 impl JobDecision {
-    pub(crate) fn fail(message: impl Into<String>) -> Self {
+    pub fn fail(message: impl Into<String>) -> Self {
         Self::Fail(JobFailure::new(message))
     }
 }
