@@ -496,18 +496,13 @@ async fn command_submit(State(state): State<AppState>, Json(payload): Json<Value
 }
 
 async fn response_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {
-    let job = {
-        let runtime = state.runtime_context();
-        match crate::runtime::domain::messaging::text_delivery::text_delivery_job_from_value(
+    let runtime = state.runtime_context();
+    result(
+        crate::runtime::domain::messaging::text_delivery::submit_agent_response_delivery(
             &runtime, &payload,
         )
-        .await
-        {
-            Ok(job) => job,
-            Err(error) => return err(error),
-        }
-    };
-    result(state.handle.submit_job(job).await)
+        .await,
+    )
 }
 
 async fn feedback_submit(State(state): State<AppState>, Json(payload): Json<Value>) -> Response {

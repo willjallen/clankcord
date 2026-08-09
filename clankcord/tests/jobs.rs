@@ -228,6 +228,9 @@ struct EncodedCurrentAgentInvocationMetadata {
 
 #[derive(Debug, Clone, Serialize)]
 struct EncodedCurrentAgentTaskMetadata {
+    outcome: EncodedCurrentAgentTaskOutcome,
+    phase: EncodedCurrentAgentTaskPhase,
+    await_delivery_until: String,
     dispatch_attempts: i64,
     dispatch_error: String,
     dispatch_error_after_cancel: String,
@@ -243,6 +246,18 @@ struct EncodedCurrentAgentTaskMetadata {
     command: String,
     result_suppressed: bool,
     discord_post: Option<DiscordPostMetadata>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+enum EncodedCurrentAgentTaskOutcome {
+    Pending,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+enum EncodedCurrentAgentTaskPhase {
+    #[allow(dead_code)]
+    Dispatch,
+    AwaitDelivery,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2911,7 +2926,7 @@ async fn completed_agent_task_with_missing_response_delivery_completes_terminall
     .unwrap();
 
     assert_eq!(result["dispatched"], json!(true));
-    assert_eq!(result["response"], json!("submitted_without_delivery"));
+    assert_eq!(result["outcome"], json!("submitted_without_delivery"));
     let completed = store.get_job(&created.id).await.unwrap();
     assert_eq!(completed.state, JobState::Complete);
     assert!(completed.completed_at.is_some());
@@ -3737,6 +3752,9 @@ fn encode_current_agent_task(
         metadata: EncodedCurrentJobMetadata {
             detail: Some(Box::new(EncodedCurrentJobMetadataDetail::AgentTask(
                 EncodedCurrentAgentTaskMetadata {
+                    outcome: EncodedCurrentAgentTaskOutcome::Pending,
+                    phase: EncodedCurrentAgentTaskPhase::AwaitDelivery,
+                    await_delivery_until: "2020-01-01T00:00:00.000Z".to_string(),
                     dispatch_attempts: 0,
                     dispatch_error: dispatch_error.to_string(),
                     dispatch_error_after_cancel: String::new(),

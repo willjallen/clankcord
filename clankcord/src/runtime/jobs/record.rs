@@ -185,8 +185,65 @@ impl DiscordPostMetadata {
     }
 }
 
+/// How an agent task ended, as a typed fact instead of in-band strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) enum AgentTaskOutcome {
+    /// The task has not finished (or predates typed outcomes).
+    #[default]
+    Pending,
+    /// A text delivery child completed — the reply reached its target.
+    ResponseSubmitted,
+    /// The agent claimed submission but no delivery child appeared.
+    SubmittedWithoutDelivery,
+    /// The agent explicitly decided no reply was needed.
+    NoResponseNeeded,
+    /// The agent finished with no final text at all.
+    EmptyResponse,
+    /// The agent returned final text instead of using the response command.
+    FinalTextSuppressed,
+    /// A runtime restart interrupted the running task.
+    Interrupted,
+}
+
+impl AgentTaskOutcome {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::ResponseSubmitted => "response_submitted",
+            Self::SubmittedWithoutDelivery => "submitted_without_delivery",
+            Self::NoResponseNeeded => "no_response_needed",
+            Self::EmptyResponse => "empty_response",
+            Self::FinalTextSuppressed => "final_text_suppressed",
+            Self::Interrupted => "interrupted",
+        }
+    }
+}
+
+/// Where a claimed agent task resumes. Two phases, named and persisted —
+/// never divined from child rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub(crate) enum AgentTaskPhase {
+    /// Run the agent subprocess.
+    #[default]
+    Dispatch,
+    /// The agent exited; awaiting its text delivery child (bounded).
+    AwaitDelivery,
+}
+
+impl AgentTaskPhase {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Dispatch => "dispatch",
+            Self::AwaitDelivery => "await_delivery",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub(crate) struct AgentTaskMetadata {
+    pub outcome: AgentTaskOutcome,
+    pub phase: AgentTaskPhase,
+    pub await_delivery_until: String,
     pub dispatch_attempts: i64,
     pub dispatch_error: String,
     pub dispatch_error_after_cancel: String,
@@ -207,6 +264,21 @@ pub(crate) struct AgentTaskMetadata {
 impl AgentTaskMetadata {
     pub(crate) fn to_json(&self) -> Value {
         let mut object = Map::new();
+        if self.outcome != AgentTaskOutcome::Pending {
+            object.insert(
+                "outcome".to_string(),
+                Value::String(self.outcome.as_str().to_string()),
+            );
+        }
+        object.insert(
+            "phase".to_string(),
+            Value::String(self.phase.as_str().to_string()),
+        );
+        insert_non_empty(
+            &mut object,
+            "await_delivery_until",
+            &self.await_delivery_until,
+        );
         insert_i64_if_nonzero(&mut object, "dispatch_attempts", self.dispatch_attempts);
         insert_non_empty(&mut object, "dispatch_error", &self.dispatch_error);
         insert_non_empty(

@@ -17,13 +17,9 @@ use crate::config;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
-use crate::runtime::domain::messaging::session_threads::{
-    UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_targets_unavailable_session_thread,
-    discord_error_text_unavailable_channel_id,
-};
 use crate::runtime::jobs::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
-    BinaryPayload, DiscordTypingIndicatorOutput,
+    AgentTaskOutcome, AgentTaskPhase, BinaryPayload,
 };
 use crate::runtime::timeline::{
     JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
@@ -31,8 +27,7 @@ use crate::runtime::timeline::{
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
     AgentSessionRouteKind, Ctx, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload,
-    TextTarget, TextTargetKind,
+    JobState, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 use super::linear_mcp::insert_linear_mcp_env;
@@ -49,275 +44,276 @@ pub(crate) async fn recover_interrupted_agent_tasks(ctx: &Ctx) -> Result<Vec<Val
         .into_iter()
         .filter(|job| job.kind == JobKind::AgentTask)
     {
-        let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &job.id).await?;
-        if !submitted_text_deliveries.is_empty() {
+        let delivered = agent_task_delivery_children(ctx, &job)
+            .await?
+            .into_iter()
+            .any(|child| child.state == JobState::Complete);
+        if delivered {
+            // The reply genuinely reached its target before the restart; the
+            // completed delivery child is the evidence.
             let mut completed = job.clone();
             completed.mark_complete();
-            completed.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
+            completed.metadata.agent_task_mut().outcome = AgentTaskOutcome::ResponseSubmitted;
             ctx.store.update_job(&completed).await?;
             recovered.push(json!({
-                    "dispatched": true,
-                    "job": completed.to_value(),
-                    "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
-                    "recovered": true,
-                }));
+                "dispatched": true,
+                "job": completed.to_value(),
+                "recovered": true,
+            }));
             continue;
         }
         let mut interrupted = job.clone();
         interrupted.set_state(JobState::Failed);
         let error_text = "agent task was interrupted by runtime restart".to_string();
         interrupted.metadata.error = error_text.clone();
+        interrupted.metadata.agent_task_mut().outcome = AgentTaskOutcome::Interrupted;
         interrupted.metadata.agent_task_mut().dispatch_error = error_text;
         ctx.store.update_job(&interrupted).await?;
-        let result = json!({
+        recovered.push(json!({
             "dispatched": false,
             "job": interrupted.to_value(),
             "interrupted": true,
-        });
-        recovered.push(result);
+        }));
     }
     Ok(recovered)
 }
 
+/// How long a finished agent run waits for its text delivery child before
+/// the outcome is classified from the raw response text. The `clankcord
+/// responses send` POST normally lands while the agent process is still
+/// running, so this deadline is only reached when the agent never submitted.
+const AWAIT_DELIVERY_GRACE_SECONDS: i64 = 30;
+const AWAIT_DELIVERY_POLL_MS: i64 = 2000;
+
+/// The agent task state machine. The phase register is explicit and
+/// persisted: `Dispatch` runs the agent subprocess; `AwaitDelivery` waits
+/// (bounded) for the reply to arrive as a text delivery child. Typing
+/// indicators are lineage-only children and never gate completion.
 pub(crate) async fn dispatch_claimed_agent_task_job(ctx: &Ctx, job: Job) -> Result<Value> {
     let job_id = job.id.clone();
-    let mut latest = ctx.store.get_job(&job_id).await.unwrap_or(job);
-    let children = ctx.store.list_child_jobs(&latest.id).await?;
-    let mut task_metadata = latest
+    let latest = ctx.store.get_job(&job_id).await.unwrap_or(job);
+    let task = latest
         .metadata
         .agent_task()
         .cloned()
         .unwrap_or_else(AgentTaskMetadata::default);
-    if agent_task_retry_after_stopped_error(&task_metadata, &children) {
-        latest.metadata.agent_task_mut().dispatch_error.clear();
-        ctx.store.update_job(&latest).await?;
-        task_metadata = latest
-            .metadata
-            .agent_task()
-            .cloned()
-            .unwrap_or_else(AgentTaskMetadata::default);
+    match task.phase {
+        AgentTaskPhase::Dispatch => run_agent_task_dispatch_phase(ctx, latest, task).await,
+        AgentTaskPhase::AwaitDelivery => resolve_agent_task_delivery(ctx, latest, task).await,
     }
-    if agent_task_has_dispatch_outcome(&task_metadata) {
-        return finish_agent_task_after_typing_stop(ctx, latest, task_metadata).await;
-    }
+}
 
-    let attempts = task_metadata.dispatch_attempts;
+async fn run_agent_task_dispatch_phase(
+    ctx: &Ctx,
+    latest: Job,
+    task: AgentTaskMetadata,
+) -> Result<Value> {
+    let job_id = latest.id.clone();
+    let attempts = task.dispatch_attempts;
     if attempts >= 3 {
         let mut failed = latest.clone();
         failed.set_state(JobState::Failed);
         failed.metadata.error = "agent task dispatch attempts exhausted".to_string();
         ctx.store.update_job(&failed).await?;
-        return Ok(
-            json!({"dispatched": false, "job": failed.to_value(), "reason": "agent task dispatch attempts exhausted"}),
-        );
+        return Ok(json!({
+            "dispatched": false,
+            "job": failed.to_value(),
+            "reason": "agent task dispatch attempts exhausted",
+        }));
     }
-
-    match agent_task_typing_child(&children, DiscordTypingAction::Start, Some(attempts)) {
-        Some(start) if !start.state.is_terminal() => {
-            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
-                ctx,
-                &job_id,
-                latest,
-                Vec::new(),
-            )
-            .await;
-        }
-        Some(start) if start.state != JobState::Complete => {
-            if !complete_unavailable_typing_start_child(ctx, &latest, start).await? {
-                return crate::runtime::core::execution::dispatcher::fail_dispatched_job(
-                    ctx,
-                    &job_id,
-                    latest,
-                    anyhow::anyhow!(
-                        "agent task typing start dependency {} ended as {}: {}",
-                        start.id,
-                        start.state,
-                        start.metadata.error
-                    ),
-                )
-                .await;
-            }
-        }
-        Some(_) => {}
-        None => {
-            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
-                ctx,
-                &job_id,
-                latest.clone(),
-                vec![agent_task_typing_job(
-                    &latest,
-                    DiscordTypingAction::Start,
-                    attempts,
-                )],
-            )
-            .await;
-        }
-    }
-
-    match dispatch_agent_task(ctx, &latest).await {
-        Ok(dispatch_result) => {
+    submit_lineage_typing_job(ctx, &latest, DiscordTypingAction::Start, attempts).await;
+    let dispatch = dispatch_agent_task(ctx, &latest).await;
+    submit_lineage_typing_job(ctx, &latest, DiscordTypingAction::Stop, attempts).await;
+    match dispatch {
+        Ok(mut dispatched_task) => {
             let mut prepared = ctx.store.get_job(&job_id).await?;
-            prepared.metadata.set_agent_task(dispatch_result);
+            dispatched_task.phase = AgentTaskPhase::AwaitDelivery;
+            dispatched_task.await_delivery_until = isoformat_z(Some(
+                utc_now() + chrono::Duration::seconds(AWAIT_DELIVERY_GRACE_SECONDS),
+            ));
+            dispatched_task.dispatch_attempts = attempts;
+            prepared.metadata.set_agent_task(dispatched_task.clone());
             ctx.store.update_job(&prepared).await?;
-            wait_for_agent_task_typing_stop(ctx, prepared, attempts).await
+            resolve_agent_task_delivery(ctx, prepared, dispatched_task).await
         }
         Err(error) => {
             let preflight = error
                 .downcast_ref::<AgentInfrastructureError>()
                 .and_then(AgentInfrastructureError::preflight)
                 .cloned();
-            let error_text = error.to_string();
-            let mut failed = ctx.store.get_job(&job_id).await?;
             if let Some(preflight) = preflight {
+                let mut failed = ctx.store.get_job(&job_id).await?;
                 failed.metadata.agent_task_mut().preflight = Some(preflight);
+                ctx.store.update_job(&failed).await?;
             }
-            failed.metadata.agent_task_mut().dispatch_error = error_text;
-            ctx.store.update_job(&failed).await?;
-            wait_for_agent_task_typing_stop(ctx, failed, attempts).await
+            fail_agent_task_job(ctx, job_id, attempts, error).await
         }
     }
 }
 
-async fn finish_agent_task_after_typing_stop(
+/// The rendezvous with the loopback reply. The delivery arrives as a child
+/// of this task (created by the /v1/responses handler), so the standard
+/// parent/child resolution machinery drives resumption; the poll below is
+/// only the bounded fallback for an agent that never submitted.
+async fn resolve_agent_task_delivery(
     ctx: &Ctx,
-    job: Job,
-    task_metadata: AgentTaskMetadata,
+    latest: Job,
+    task: AgentTaskMetadata,
 ) -> Result<Value> {
-    let job_id = job.id.clone();
-    let children = ctx.store.list_child_jobs(&job_id).await?;
-    if let Some(stop) = agent_task_typing_child(&children, DiscordTypingAction::Stop, None) {
-        if !stop.state.is_terminal() {
-            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
-                ctx,
-                &job_id,
-                job,
-                Vec::new(),
-            )
-            .await;
-        }
-        if stop.state != JobState::Complete {
-            return crate::runtime::core::execution::dispatcher::fail_dispatched_job(
-                ctx,
-                &job_id,
-                job,
-                anyhow::anyhow!(
-                    "agent task typing stop dependency {} ended as {}: {}",
-                    stop.id,
-                    stop.state,
-                    stop.metadata.error
-                ),
-            )
-            .await;
-        }
-        let attempts = stop
-            .discord_typing_indicator_payload()
-            .map(|payload| payload.agent_task_attempt)
-            .unwrap_or(task_metadata.dispatch_attempts);
-        if !task_metadata.dispatch_error.trim().is_empty() {
-            return fail_agent_task_job(
-                ctx,
-                job_id,
-                attempts,
-                anyhow::anyhow!(task_metadata.dispatch_error),
-            )
-            .await;
-        }
-        return match complete_agent_task_job(ctx, job_id.clone(), task_metadata).await {
-            Ok(value) => Ok(value),
-            Err(error) => fail_agent_task_job(ctx, job_id, attempts, error).await,
-        };
+    let job_id = latest.id.clone();
+    if latest.cancel_requested() {
+        return cancel_agent_task_job(ctx, latest).await;
     }
-
-    let attempts = agent_task_typing_child(&children, DiscordTypingAction::Start, None)
-        .and_then(|start| start.discord_typing_indicator_payload())
-        .map(|payload| payload.agent_task_attempt)
-        .unwrap_or(task_metadata.dispatch_attempts);
-    wait_for_agent_task_typing_stop(ctx, job, attempts).await
-}
-
-async fn wait_for_agent_task_typing_stop(ctx: &Ctx, job: Job, attempts: i64) -> Result<Value> {
-    let job_id = job.id.clone();
-    crate::runtime::core::execution::dispatcher::wait_dispatched_job(
-        ctx,
-        &job_id,
-        job.clone(),
-        vec![agent_task_typing_job(
-            &job,
-            DiscordTypingAction::Stop,
-            attempts,
-        )],
-    )
-    .await
-}
-
-async fn complete_unavailable_typing_start_child(
-    ctx: &Ctx,
-    job: &Job,
-    start: &Job,
-) -> Result<bool> {
-    let Some(payload) = start.discord_typing_indicator_payload() else {
-        return Ok(false);
-    };
-    if payload.action != DiscordTypingAction::Start
-        || payload.target.kind != TextTargetKind::AgentSession
+    let deliveries = agent_task_delivery_children(ctx, &latest).await?;
+    if deliveries
+        .iter()
+        .any(|child| child.state == JobState::Complete)
     {
-        return Ok(false);
+        let mut completed = latest;
+        completed.metadata.agent_task_mut().outcome = AgentTaskOutcome::ResponseSubmitted;
+        completed.mark_complete();
+        ctx.store.update_job(&completed).await?;
+        return Ok(json!({
+            "dispatched": true,
+            "job": completed.to_value(),
+            "outcome": AgentTaskOutcome::ResponseSubmitted.as_str(),
+        }));
     }
-    let JobPayload::AgentTask(agent_task) = &job.payload else {
-        return Ok(false);
-    };
-    let session = ctx
-        .store
-        .get_agent_session_record(&agent_task.agent_session_id)
+    if deliveries.iter().any(|child| !child.state.is_terminal()) {
+        return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
+            ctx,
+            &job_id,
+            latest,
+            Vec::new(),
+        )
+        .await;
+    }
+    let deadline = parse_instant(&task.await_delivery_until);
+    if deadline.is_some_and(|deadline| utc_now() < deadline) {
+        let mut polling = latest;
+        polling.set_state(JobState::Queued);
+        polling.next_run_at = Some(isoformat_z(Some(
+            utc_now() + chrono::Duration::milliseconds(AWAIT_DELIVERY_POLL_MS),
+        )));
+        ctx.store.update_job(&polling).await?;
+        return Ok(json!({
+            "dispatched": true,
+            "job": polling.to_value(),
+            "awaiting_delivery": true,
+        }));
+    }
+    if !task.dispatch_error.trim().is_empty() {
+        return fail_agent_task_job(
+            ctx,
+            job_id,
+            task.dispatch_attempts,
+            anyhow::anyhow!(task.dispatch_error),
+        )
+        .await;
+    }
+    let outcome = classify_undelivered_agent_response(&task.response_text);
+    complete_agent_task_without_delivery(ctx, latest, outcome).await
+}
+
+fn classify_undelivered_agent_response(response_text: &str) -> AgentTaskOutcome {
+    let response_text = response_text.trim();
+    if response_text == "RESPONSE_SUBMITTED" {
+        return AgentTaskOutcome::SubmittedWithoutDelivery;
+    }
+    if agent_task_no_response_reason(response_text).is_some() {
+        return AgentTaskOutcome::NoResponseNeeded;
+    }
+    if response_text.is_empty() {
+        return AgentTaskOutcome::EmptyResponse;
+    }
+    AgentTaskOutcome::FinalTextSuppressed
+}
+
+async fn cancel_agent_task_job(ctx: &Ctx, mut latest: Job) -> Result<Value> {
+    let cancelled_at = non_empty(
+        latest.cancelled_at.clone().unwrap_or_default(),
+        isoformat_z(None),
+    );
+    latest.mark_cancelled();
+    latest.cancelled_at = Some(cancelled_at);
+    latest.completed_at = Some(isoformat_z(None));
+    latest.metadata.agent_task_mut().result_suppressed = true;
+    ctx.store.update_job(&latest).await?;
+    ctx.store
+        .append_scope_event(
+            &latest.scope(),
+            json!({
+                "event_kind": "agent_task_result_suppressed",
+                "kind": "agent_task_result_suppressed",
+                "job_id": latest.id.clone(),
+                "job_kind": latest.kind.as_str(),
+                "reason": "job was cancelled before the agent task result was posted",
+            }),
+        )
         .await?;
-    let thread_id = first_non_empty([
-        discord_error_text_unavailable_channel_id(&start.metadata.error),
-        session.text_target.channel_id.clone(),
-        session.discord_thread_id.clone(),
-    ]);
-    let target = TextTarget {
-        kind: TextTargetKind::Channel,
-        channel_id: thread_id.clone(),
-        user_id: String::new(),
-    };
-    if !discord_error_text_targets_unavailable_session_thread(&start.metadata.error, &target) {
-        return Ok(false);
-    }
-    crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(
-        ctx,
-        &agent_task.agent_session_id,
-        &thread_id,
-        &start.id,
-        &start.metadata.error,
-    )
-    .await?;
-    let mut completed = start.clone();
-    completed.metadata.error.clear();
-    completed.metadata.output = Some(JobOutput::DiscordTypingIndicator(
-        DiscordTypingIndicatorOutput {
-            action: DiscordTypingAction::Start,
-            target: target.clone(),
-            source_job_id: payload.source_job_id.clone(),
-            status: UNAVAILABLE_SESSION_THREAD_STATUS.to_string(),
-        },
-    ));
-    completed.mark_complete();
-    ctx.store.update_job(&completed).await?;
+    Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}))
+}
+
+async fn complete_agent_task_without_delivery(
+    ctx: &Ctx,
+    mut job: Job,
+    outcome: AgentTaskOutcome,
+) -> Result<Value> {
+    job.mark_complete();
+    job.metadata.agent_task_mut().outcome = outcome;
+    job.metadata.agent_task_mut().result_suppressed = true;
+    ctx.store.update_job(&job).await?;
     ctx.store
         .append_scope_event(
             &job.scope(),
             json!({
-                "event_kind": "discord_typing_indicator",
-                "kind": "discord_typing_indicator",
-                "job_id": start.id,
-                "source_job_id": payload.source_job_id,
-                "action": payload.action.as_str(),
-                "target": target.to_json(),
-                "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+                "event_kind": "agent_task_result_suppressed",
+                "kind": "agent_task_result_suppressed",
+                "job_id": job.id.clone(),
+                "job_kind": job.kind.as_str(),
+                "reason": outcome.as_str(),
             }),
         )
         .await?;
-    Ok(true)
+    Ok(json!({
+        "dispatched": true,
+        "job": job.to_value(),
+        "outcome": outcome.as_str(),
+    }))
+}
+
+/// Typing indicators carry lineage (parent_job_id) but no dependency edge:
+/// they never park the parent and never gate its completion.
+async fn submit_lineage_typing_job(
+    ctx: &Ctx,
+    parent: &Job,
+    action: DiscordTypingAction,
+    attempts: i64,
+) {
+    let mut typing = agent_task_typing_job(parent, action, attempts);
+    if let Err(error) = typing.attach_to_parent(parent) {
+        log(&format!(
+            "typing indicator lineage attach failed for {}: {error}",
+            parent.id
+        ));
+        return;
+    }
+    if let Err(error) = ctx.store.create_job(typing).await {
+        log(&format!(
+            "typing indicator submission failed for {}: {error}",
+            parent.id
+        ));
+    }
+}
+
+async fn agent_task_delivery_children(ctx: &Ctx, job: &Job) -> Result<Vec<Job>> {
+    Ok(ctx
+        .store
+        .list_child_jobs(&job.id)
+        .await?
+        .into_iter()
+        .filter(|child| child.kind == JobKind::TextDelivery)
+        .collect())
 }
 
 async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> {
@@ -461,114 +457,6 @@ async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> 
     })
 }
 
-async fn complete_agent_task_job(
-    ctx: &Ctx,
-    job_id: String,
-    dispatch_result: AgentTaskMetadata,
-) -> Result<Value> {
-    let mut latest = ctx.store.get_job(&job_id).await?;
-    latest.metadata.set_agent_task(dispatch_result);
-    ctx.store.update_job(&latest).await?;
-    if latest.cancel_requested() {
-        let cancelled_at = non_empty(
-            latest.cancelled_at.clone().unwrap_or_default(),
-            isoformat_z(None),
-        );
-        latest.mark_cancelled();
-        latest.cancelled_at = Some(cancelled_at);
-        latest.completed_at = Some(isoformat_z(None));
-        latest.metadata.agent_task_mut().result_suppressed = true;
-        ctx.store.update_job(&latest).await?;
-        ctx.store
-            .append_scope_event(
-                &latest.scope(),
-                json!({
-                    "event_kind": "agent_task_result_suppressed",
-                    "kind": "agent_task_result_suppressed",
-                    "job_id": job_id,
-                    "job_kind": latest.kind.as_str(),
-                    "reason": "job was cancelled before the agent task result was posted",
-                }),
-            )
-            .await?;
-        return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
-    }
-    let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &latest.id).await?;
-    if !submitted_text_deliveries.is_empty() {
-        latest.mark_complete();
-        ctx.store.update_job(&latest).await?;
-        return Ok(json!({
-            "dispatched": true,
-            "job": latest.to_value(),
-            "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
-        }));
-    }
-    let response_text = latest
-        .metadata
-        .agent_task()
-        .map(|task| task.response_text.clone())
-        .unwrap_or_default();
-    let response_text = response_text.trim();
-    if response_text == "RESPONSE_SUBMITTED" {
-        return complete_agent_task_with_suppressed_result(
-            ctx,
-            latest,
-            "agent reported RESPONSE_SUBMITTED without creating a text delivery job",
-            "submitted_without_delivery",
-        )
-        .await;
-    }
-    if let Some(reason) = agent_task_no_response_reason(response_text) {
-        return complete_agent_task_with_suppressed_result(ctx, latest, reason, "none").await;
-    }
-    if response_text.is_empty() {
-        return complete_agent_task_with_suppressed_result(
-            ctx,
-            latest,
-            "agent completed without final response text",
-            "empty",
-        )
-        .await;
-    }
-    complete_agent_task_with_suppressed_result(
-        ctx,
-        latest,
-        "agent returned final text instead of submitting through Clankcord response command",
-        "final_text_without_delivery",
-    )
-    .await
-}
-
-async fn text_delivery_jobs_for_source(ctx: &Ctx, source_job_id: &str) -> Result<Vec<Job>> {
-    ctx.store
-        .list_text_delivery_jobs_for_source(source_job_id)
-        .await
-}
-
-async fn complete_agent_task_with_suppressed_result(
-    ctx: &Ctx,
-    mut job: Job,
-    reason: &'static str,
-    response: &'static str,
-) -> Result<Value> {
-    job.mark_complete();
-    job.metadata.agent_task_mut().result_suppressed = true;
-    ctx.store.update_job(&job).await?;
-    ctx.store
-        .append_scope_event(
-            &job.scope(),
-            json!({
-                "event_kind": "agent_task_result_suppressed",
-                "kind": "agent_task_result_suppressed",
-                "job_id": job.id.clone(),
-                "job_kind": job.kind.as_str(),
-                "reason": reason,
-            }),
-        )
-        .await?;
-    Ok(json!({"dispatched": true, "job": job.to_value(), "response": response}))
-}
-
 async fn fail_agent_task_job(
     ctx: &Ctx,
     job_id: String,
@@ -593,10 +481,10 @@ async fn fail_agent_task_job(
         ctx.store.update_job(&latest).await?;
         return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
     }
-    let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &job_id).await?;
+    let submitted_text_deliveries = agent_task_delivery_children(ctx, &latest).await?;
     if !submitted_text_deliveries.is_empty() {
         latest.mark_complete();
-        latest.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
+        latest.metadata.agent_task_mut().outcome = AgentTaskOutcome::ResponseSubmitted;
         latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
         ctx.store.update_job(&latest).await?;
         return Ok(json!({
@@ -640,14 +528,11 @@ async fn fail_agent_task_job(
 }
 
 async fn agent_unavailable_text_delivery_job(ctx: &Ctx, job: &Job) -> Result<Option<Job>> {
-    if !text_delivery_jobs_for_source(ctx, &job.id)
-        .await?
-        .is_empty()
-    {
+    if !agent_task_delivery_children(ctx, job).await?.is_empty() {
         return Ok(None);
     }
     let requested_by_user_id = agent_task_requester_id(job);
-    let response = Job::text_delivery(
+    let mut response = Job::text_delivery(
         job.scope(),
         requested_by_user_id.clone(),
         TextDeliveryPayload::new(
@@ -659,6 +544,7 @@ async fn agent_unavailable_text_delivery_job(ctx: &Ctx, job: &Job) -> Result<Opt
             false,
         ),
     );
+    response.attach_to_parent(job)?;
     ctx.store.create_job(response).await.map(Some)
 }
 
@@ -717,34 +603,6 @@ fn agent_task_typing_job(job: &Job, action: DiscordTypingAction, attempts: i64) 
             agent_task_attempt: attempts,
         },
     )
-}
-
-fn agent_task_typing_child(
-    children: &[Job],
-    action: DiscordTypingAction,
-    attempts: Option<i64>,
-) -> Option<&Job> {
-    children.iter().rev().find(|child| {
-        child
-            .discord_typing_indicator_payload()
-            .is_some_and(|payload| {
-                payload.action == action
-                    && attempts.is_none_or(|attempts| payload.agent_task_attempt == attempts)
-            })
-    })
-}
-
-fn agent_task_has_dispatch_outcome(task: &AgentTaskMetadata) -> bool {
-    !task.dispatch_error.trim().is_empty()
-        || !task.agent.provider.trim().is_empty()
-        || !task.command.trim().is_empty()
-}
-
-fn agent_task_retry_after_stopped_error(task: &AgentTaskMetadata, children: &[Job]) -> bool {
-    !task.dispatch_error.trim().is_empty()
-        && agent_task_typing_child(children, DiscordTypingAction::Stop, None)
-            .and_then(Job::discord_typing_indicator_payload)
-            .is_some_and(|payload| task.dispatch_attempts > payload.agent_task_attempt)
 }
 
 fn agent_task_error_text_is_infrastructure(error_text: &str) -> bool {

@@ -37,4 +37,5 @@ pub use record::{DiscordPostMetadata, DiscordPostedMessageMetadata};
 
 pub(crate) use record::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
+    AgentTaskOutcome, AgentTaskPhase,
 };

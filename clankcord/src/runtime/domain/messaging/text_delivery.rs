@@ -23,6 +23,29 @@ enum TextDeliveryTarget {
     WaitFor(Job),
 }
 
+/// The agent loopback entry: `clankcord responses send` posts here. The
+/// delivery is created as a child of its source agent task, so lineage
+/// covers the system's most important causal chain and the parent/child
+/// machinery drives the task's completion.
+pub(crate) async fn submit_agent_response_delivery(ctx: &Ctx, value: &Value) -> Result<Value> {
+    let job = text_delivery_job_from_value(ctx, value).await?;
+    let source_job_id = match &job.payload {
+        crate::runtime::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
+        _ => String::new(),
+    };
+    let created = if source_job_id.trim().is_empty() {
+        ctx.store.create_job(job).await?
+    } else {
+        let parent = ctx.store.get_job(&source_job_id).await?;
+        ctx.store.create_child_job(&parent, job).await?
+    };
+    Ok(serde_json::json!({
+        "kind": "job_created",
+        "job_ids": [created.id.clone()],
+        "job": created.to_value(),
+    }))
+}
+
 pub(crate) async fn text_delivery_job_from_value(ctx: &Ctx, value: &Value) -> Result<Job> {
     let mut payload = TextDeliveryPayload::from_json(value)?;
     let source = if payload.source_job_id.trim().is_empty() {

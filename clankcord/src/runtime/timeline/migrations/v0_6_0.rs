@@ -208,6 +208,9 @@ impl PreV0_6_0JobMetadata {
 impl PreV0_6_0AgentTaskMetadata {
     fn into_current(self) -> AgentTaskMetadata {
         AgentTaskMetadata {
+            outcome: Default::default(),
+            phase: Default::default(),
+            await_delivery_until: String::new(),
             dispatch_attempts: self.dispatch_attempts,
             dispatch_error: self.dispatch_error,
             dispatch_error_after_cancel: self.dispatch_error_after_cancel,
