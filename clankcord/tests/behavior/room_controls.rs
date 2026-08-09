@@ -7,8 +7,7 @@ use clankcord::model::job::{CommandKind, CommandRequest, Job, JobKind};
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::TimelineStore;
 
-mod common;
-use common::{initialize_test_config, test_store};
+use crate::support::{initialize_test_config, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn pause_and_resume_room_controls_are_timeline_store_state() {

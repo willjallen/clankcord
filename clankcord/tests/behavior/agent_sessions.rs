@@ -1,7 +1,6 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 
-mod common;
 
 use clankcord::domain::Ctx;
 use clankcord::domain::agents::{
@@ -19,7 +18,7 @@ use clankcord::store::{JobVisibility, TimelineStore};
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_records_route_by_voice_and_thread() {
     let raw = tempfile::tempdir().unwrap();
-    let store = common::test_store(&raw.path().join("voice")).await;
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
@@ -57,7 +56,7 @@ async fn agent_session_records_route_by_voice_and_thread() {
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_payload_blob_uses_current_envelope() {
     let raw = tempfile::tempdir().unwrap();
-    let store = common::test_store(&raw.path().join("voice")).await;
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
@@ -100,7 +99,7 @@ async fn agent_session_payload_blob_uses_current_envelope() {
 #[tokio::test(flavor = "current_thread")]
 async fn retired_agent_sessions_stop_matching_active_route() {
     let raw = tempfile::tempdir().unwrap();
-    let store = common::test_store(&raw.path().join("voice")).await;
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut record = AgentSessionRecord::new_voice(
@@ -132,7 +131,7 @@ async fn retired_agent_sessions_stop_matching_active_route() {
 #[tokio::test(flavor = "current_thread")]
 async fn active_route_excludes_sessions_at_eight_hour_cap() {
     let raw = tempfile::tempdir().unwrap();
-    let store = common::test_store(&raw.path().join("voice")).await;
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::hours(9);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
@@ -156,8 +155,8 @@ async fn active_route_excludes_sessions_at_eight_hour_cap() {
 #[tokio::test(flavor = "current_thread")]
 async fn maintenance_retires_capped_agent_sessions() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::hours(9);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
@@ -203,8 +202,8 @@ async fn maintenance_retires_capped_agent_sessions() {
 #[tokio::test(flavor = "current_thread")]
 async fn maintenance_retires_sessions_when_bound_voice_session_ended() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut record = AgentSessionRecord::new_voice(
@@ -246,8 +245,8 @@ async fn maintenance_retires_sessions_when_bound_voice_session_ended() {
 #[tokio::test(flavor = "current_thread")]
 async fn user_sunset_retires_session() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let record = AgentSessionRecord::new_voice(
@@ -290,8 +289,8 @@ async fn user_sunset_retires_session() {
 #[tokio::test(flavor = "current_thread")]
 async fn resume_reactivates_retired_dm_session() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::hours(1);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut source = AgentSessionRecord::new_dm(
@@ -408,8 +407,8 @@ fn agent_session_runtime_scope_covers_voice_dm_and_thread_routes() {
 #[tokio::test(flavor = "current_thread")]
 async fn dm_text_message_creates_dm_scoped_agent_task_and_event() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let text = store
         .create_job(Job::discord_text_message(DiscordTextMessagePayload {
             guild_id: String::new(),
@@ -469,8 +468,8 @@ async fn dm_text_message_creates_dm_scoped_agent_task_and_event() {
 #[tokio::test(flavor = "current_thread")]
 async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::hours(1);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut source = AgentSessionRecord::new_voice(
@@ -566,8 +565,8 @@ async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
 #[tokio::test(flavor = "current_thread")]
 async fn discord_thread_message_resumes_retired_voice_session() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::hours(1);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut source = AgentSessionRecord::new_voice(
@@ -686,8 +685,8 @@ async fn discord_thread_message_resumes_retired_voice_session() {
 #[tokio::test(flavor = "current_thread")]
 async fn retired_start_session_does_not_spawn_agent_task() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now();
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut record = AgentSessionRecord::new_voice_starting(
@@ -753,7 +752,7 @@ async fn retired_start_session_does_not_spawn_agent_task() {
 #[tokio::test(flavor = "current_thread")]
 async fn search_returns_retired_sessions_with_resume_command() {
     let raw = tempfile::tempdir().unwrap();
-    let store = common::test_store(&raw.path().join("voice")).await;
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::minutes(10);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut record = AgentSessionRecord::new_voice(
@@ -810,8 +809,8 @@ async fn search_returns_retired_sessions_with_resume_command() {
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_thread_uses_readable_default_name_and_intro() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     store
         .record_voice_state_update(None, voice_state("code", "user-a", "Will"))
         .await
@@ -820,7 +819,7 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
         .record_voice_state_update(None, voice_state("code", "user-b", "Nia"))
         .await
         .unwrap();
-    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
+    let created_at = crate::support::dt(2026, 5, 17, 3, 28, 0);
     let max_active_until = created_at + chrono::Duration::hours(8);
     store
         .create_agent_session_record(AgentSessionRecord::new_voice_starting(
@@ -962,9 +961,9 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
 #[tokio::test(flavor = "current_thread")]
 async fn session_text_delivery_reopens_deleted_stored_thread() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
-    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
+    let created_at = crate::support::dt(2026, 5, 17, 3, 28, 0);
     let max_active_until = created_at + chrono::Duration::hours(8);
     store
         .create_agent_session_record(AgentSessionRecord::new_voice(
@@ -1112,8 +1111,8 @@ async fn session_text_delivery_reopens_deleted_stored_thread() {
 #[tokio::test(flavor = "current_thread")]
 async fn session_response_reroutes_after_resume_takeover() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     let created_at = Utc::now() - chrono::Duration::minutes(10);
     let max_active_until = created_at + chrono::Duration::hours(8);
     let mut source = AgentSessionRecord::new_voice(
@@ -1200,8 +1199,8 @@ async fn session_response_reroutes_after_resume_takeover() {
 #[tokio::test(flavor = "current_thread")]
 async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_response() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     insert_active_thread_session(&store, "ags_title").await;
     insert_completed_agent_response(
         &store,
@@ -1255,8 +1254,8 @@ async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_res
 #[tokio::test(flavor = "current_thread")]
 async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_count() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     insert_active_thread_session(&store, "ags_title").await;
     insert_completed_agent_response(&store, "ags_title", "question one", "answer one", "user-a")
         .await;
@@ -1298,8 +1297,8 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
 #[tokio::test(flavor = "current_thread")]
 async fn thread_title_refresh_marks_deleted_thread_unavailable() {
     let raw = tempfile::tempdir().unwrap();
-    common::initialize_test_config(raw.path());
-    let store = common::test_store(&raw.path().join("voice")).await;
+    crate::support::initialize_test_config(raw.path());
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
     insert_active_thread_session(&store, "ags_title_deleted").await;
     let refresh = store
         .create_job(Job::agent_thread_title_refresh(
@@ -1395,7 +1394,7 @@ fn voice_state(channel_id: &str, user_id: &str, display_name: &str) -> serde_jso
 }
 
 async fn insert_active_thread_session(store: &TimelineStore, id: &str) {
-    let created_at = common::dt(2026, 5, 17, 3, 28, 0);
+    let created_at = crate::support::dt(2026, 5, 17, 3, 28, 0);
     let max_active_until = created_at + chrono::Duration::hours(8);
     store
         .create_agent_session_record(AgentSessionRecord::new_voice(

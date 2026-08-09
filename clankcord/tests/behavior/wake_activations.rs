@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-mod common;
 
 use clankcord::domain::Ctx;
 use clankcord::domain::agents::AgentSessionRecord;
@@ -16,7 +15,7 @@ use clankcord::model::job::{
 };
 use clankcord::store::{SpeechEventInput, TimelineStore, parse_instant, sha256_file};
 
-use common::{dt, test_store};
+use crate::support::{dt, test_store};
 
 const EXPECTED_WAKE_ACTIVATION_MAX_WINDOW_SECONDS: i64 = 86_400;
 

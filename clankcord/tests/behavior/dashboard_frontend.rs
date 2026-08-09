@@ -4,7 +4,7 @@ use std::process::Command;
 #[test]
 fn dashboard_frontend_contracts() {
     let test_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
+        .join("tests").join("behavior")
         .join("dashboard_frontend.mjs");
     let output = Command::new("node")
         .arg("--test")

@@ -1,4 +1,3 @@
-mod common;
 
 use clankcord::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use clankcord::adapters::discord::voice::capture::{
@@ -8,7 +7,7 @@ use clankcord::adapters::discord::voice::session::{
     AudioPipelineOutcome, SegmentCloseReason, SessionAudioPipeline, WakeProbeConfig,
 };
 
-use common::test_voice_session;
+use crate::support::test_voice_session;
 
 fn pcm_frame(amplitude: i16) -> Vec<u8> {
     let mut pcm = Vec::with_capacity(PCM_20MS_SILENCE.len());

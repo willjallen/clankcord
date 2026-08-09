@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
+#[path = "support/mod.rs"]
 mod common;
 
 use clankcord::model::job::{CommandRequest, Job, JobState};

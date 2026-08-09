@@ -1,4 +1,3 @@
-mod common;
 
 use std::collections::BTreeSet;
 
@@ -12,7 +11,7 @@ use clankcord::model::job::{
 use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
 use clankcord::store::JobVisibility;
 
-use common::{initialize_test_config, test_store};
+use crate::support::{initialize_test_config, test_store};
 
 // ---------------------------------------------------------------------------
 // Faithful v0.13.0 (blob v8) writers. Variant orders match the shipped

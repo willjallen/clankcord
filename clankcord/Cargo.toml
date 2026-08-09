@@ -37,3 +37,23 @@ path = "src/lib.rs"
 [[bin]]
 name = "clankcord"
 path = "src/main.rs"
+
+[[test]]
+name = "basic"
+path = "tests/basic/main.rs"
+
+[[test]]
+name = "behavior"
+path = "tests/behavior/main.rs"
+
+[[test]]
+name = "integrity"
+path = "tests/integrity/main.rs"
+
+[[test]]
+name = "migration"
+path = "tests/migration/main.rs"
+
+[[test]]
+name = "performance"
+path = "tests/performance/main.rs"

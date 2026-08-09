@@ -10,8 +10,7 @@ use clankcord::model::job::{BinaryPayload, CommandKind, DiscordSlashCommandPaylo
 use clankcord::model::scope::RuntimeScopeKind;
 use clankcord::views::{DashboardFilter, DashboardTimelineRequest};
 
-mod common;
-use common::{initialize_test_config, test_store};
+use crate::support::{initialize_test_config, test_store};
 
 #[test]
 fn discord_slash_command_job_round_trips() {

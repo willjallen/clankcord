@@ -7,8 +7,7 @@ use clankcord::model::job::{
 };
 use clankcord::store::utc_now;
 
-mod common;
-use common::{initialize_test_config, test_state_dir, test_store};
+use crate::support::{initialize_test_config, test_state_dir, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn join_room_placement_creates_discord_voice_join_child_job() {

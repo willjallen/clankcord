@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
-const dashboardDirectory = path.resolve(testDirectory, '../src/dashboard');
+const dashboardDirectory = path.resolve(testDirectory, '../../src/dashboard');
 const storage = new Map();
 
 globalThis.location = { pathname: '/dashboard' };

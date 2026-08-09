@@ -26,6 +26,7 @@ use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
 use clankcord::store::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::views::JobsRequest;
 
+#[path = "support/mod.rs"]
 mod common;
 use common::{initialize_test_config, test_store};
 

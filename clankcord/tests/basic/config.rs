@@ -1,9 +1,11 @@
+use std::env;
+use std::fs;
 use clankcord::config::{AppConfig, CodexReasoningEffort};
 
 #[test]
 fn codex_invocation_options_are_loaded_from_config_toml() {
     let config =
-        toml::from_str::<AppConfig>(include_str!("../../config.ex.toml")).expect("config parses");
+        toml::from_str::<AppConfig>(include_str!("../../../config.ex.toml")).expect("config parses");
 
     assert_eq!(config.codex.model, "gpt-5.6-sol");
     assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::XHigh);
@@ -19,7 +21,7 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
 
 #[test]
 fn codex_reasoning_effort_and_fast_mode_are_typed_config_values() {
-    let config_text = include_str!("../../config.ex.toml")
+    let config_text = include_str!("../../../config.ex.toml")
         .replace(
             "reasoning_effort = \"xhigh\"",
             "reasoning_effort = \"high\"",
@@ -35,7 +37,7 @@ fn codex_reasoning_effort_and_fast_mode_are_typed_config_values() {
 
 #[test]
 fn stale_codex_task_model_key_is_rejected() {
-    let config_text = include_str!("../../config.ex.toml")
+    let config_text = include_str!("../../../config.ex.toml")
         .replace("model = \"gpt-5.6-sol\"", "task_model = \"gpt-5.6-sol\"");
 
     let error =
@@ -46,7 +48,7 @@ fn stale_codex_task_model_key_is_rejected() {
 
 #[test]
 fn codex_linear_mcp_config_is_required() {
-    let config_text = include_str!("../../config.ex.toml").replace(
+    let config_text = include_str!("../../../config.ex.toml").replace(
         r#"
 [codex.linear_mcp]
 enabled = true
@@ -64,7 +66,7 @@ api_key_secret = "clankcord_linear_api_key"
 
 #[test]
 fn invalid_codex_reasoning_effort_is_rejected() {
-    let config_text = include_str!("../../config.ex.toml").replace(
+    let config_text = include_str!("../../../config.ex.toml").replace(
         "reasoning_effort = \"xhigh\"",
         "reasoning_effort = \"minimal\"",
     );
@@ -73,4 +75,24 @@ fn invalid_codex_reasoning_effort_is_rejected() {
         toml::from_str::<AppConfig>(&config_text).expect_err("config must reject invalid effort");
 
     assert!(error.to_string().contains("unknown variant `minimal`"));
+}
+
+#[test]
+fn codex_bypass_sandbox_uses_environment_override() {
+    let tempdir = tempfile::tempdir().expect("create temp config dir");
+    fs::write(
+        tempdir.path().join("config.toml"),
+        include_str!("../../../config.ex.toml"),
+    )
+    .expect("write config");
+
+    let original_dir = env::current_dir().expect("read current dir");
+    env::set_current_dir(tempdir.path()).expect("enter temp config dir");
+    unsafe {
+        env::set_var("CLANKCORD_CODEX_BYPASS_SANDBOX", "true");
+    }
+
+    assert!(clankcord::config::codex_bypass_sandbox());
+
+    env::set_current_dir(original_dir).expect("restore current dir");
 }

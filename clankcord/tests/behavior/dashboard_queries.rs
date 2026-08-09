@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use chrono::{Duration, Utc};
 use serde_json::json;
 
-mod common;
 
 use clankcord::domain::Ctx;
 use clankcord::domain::automations::AutomationSpec;
@@ -16,7 +15,7 @@ use clankcord::views::{
     parse_dashboard_filter,
 };
 
-use common::{initialize_test_config, test_store};
+use crate::support::{initialize_test_config, test_store};
 
 #[test]
 fn dashboard_filter_parser_preserves_all_none_and_subset() {

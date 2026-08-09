@@ -82,7 +82,7 @@ async fn dashboard_assets_resolve_and_legacy_debug_routes_are_absent() {
     }
     server.abort();
 
-    let source = include_str!("../src/app/http.rs");
+    let source = include_str!("../../src/app/http.rs");
     for path in [
         "/v1/dashboard/timeline",
         "/v1/dashboard/jobs",

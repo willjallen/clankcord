@@ -17,6 +17,7 @@ use clankcord::model::job::{
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::{TimelineStore, isoformat_z, utc_now};
 
+#[path = "support/mod.rs"]
 mod common;
 use common::test_store;
 

@@ -118,7 +118,7 @@ fn serve_once(body: String) -> (String, thread::JoinHandle<String>) {
 }
 
 fn write_config(dir: &std::path::Path, base_url: &str) {
-    let config = include_str!("../../config.ex.toml").replace(
+    let config = include_str!("../../../config.ex.toml").replace(
         "base_url = \"http://127.0.0.1:8091\"",
         &format!("base_url = \"{base_url}\""),
     );

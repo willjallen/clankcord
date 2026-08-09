@@ -1,7 +1,6 @@
 use serde_json::json;
 
-mod common;
-use common::test_store;
+use crate::support::test_store;
 
 #[tokio::test(flavor = "current_thread")]
 async fn member_search_matches_spaced_name_to_camel_name() {

@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use serde_json::json;
 
-mod common;
 
 use clankcord::domain::Ctx;
 use clankcord::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
@@ -12,7 +11,7 @@ use clankcord::views::{
     DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest,
 };
 
-use common::{initialize_test_config, test_store};
+use crate::support::{initialize_test_config, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn dashboard_health_reports_postgres_diagnostics() {
