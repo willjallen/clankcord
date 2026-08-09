@@ -7,23 +7,21 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use serenity::model::gateway::Ready;
-use serenity::model::guild::Member;
-use serenity::model::id::{GuildId, UserId};
-use serenity::model::voice::VoiceState;
 use tokio::sync::Mutex;
 
 use crate::Result;
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
-    DiscordVoiceClient, describe_error, join_voice_channel, leave_voice_channel,
-    load_client_token_specs, parse_discord_id, play_voice_file, set_voice_deafen, set_voice_mute,
+    BotPresenceProbe, DiscordVoiceClient, collect_guild_voice_states, describe_error,
+    join_voice_channel, leave_voice_channel, load_client_token_specs, parse_discord_id,
+    play_voice_file, probe_bot_presence, resolve_member_profile, set_voice_deafen, set_voice_mute,
 };
 use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig};
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::engine::JobBus;
 use crate::errors::discord_tool_error;
+use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
 use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
 use crate::runtime::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
@@ -777,32 +775,9 @@ impl LiveVoiceAdapter {
                 .collect::<Vec<_>>();
             (bot_user_ids, caches)
         };
-        let mut guild_ids = BTreeSet::new();
-        let mut states = BTreeMap::new();
-        for cache in caches {
-            for guild_id in &configured_guild_ids {
-                let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
-                let Some(guild) = cache.guild(discord_guild_id) else {
-                    continue;
-                };
-                guild_ids.insert(guild_id.clone());
-                for (user_id, state) in &guild.voice_states {
-                    let user_id = user_id.get().to_string();
-                    if bot_user_ids.contains(&user_id) || state.channel_id.is_none() {
-                        continue;
-                    }
-                    let mut payload = voice_state_payload(state);
-                    set_voice_state_payload_guild(&mut payload, guild_id);
-                    states
-                        .entry((guild_id.clone(), user_id))
-                        .or_insert_with(|| payload);
-                }
-            }
-        }
-        Ok(VoiceStateSnapshot {
-            guild_ids: guild_ids.into_iter().collect(),
-            states: states.into_values().collect(),
-        })
+        let (guild_ids, states) =
+            collect_guild_voice_states(&caches, &configured_guild_ids, &bot_user_ids)?;
+        Ok(VoiceStateSnapshot { guild_ids, states })
     }
 
     async fn persist_bot_status(&self, status: &VoiceBotStatus) {
@@ -896,66 +871,34 @@ impl LiveVoiceAdapter {
         };
 
         for (bot_id, user_id, cache, guild_ids, pending_disconnect_until) in probes {
-            let discord_user_id = UserId::new(parse_discord_id("user_id", &user_id)?);
-            let mut found_voice_state = false;
-            let mut checked_guild = false;
-            let mut guilds_to_check = guild_ids;
-            if guilds_to_check.iter().all(|guild_id| {
-                let Ok(parsed) = parse_discord_id("guild_id", guild_id) else {
-                    return false;
-                };
-                cache.guild(GuildId::new(parsed)).is_none()
-            }) {
-                guilds_to_check = configured_guild_ids.clone();
-            }
-            for guild_id in guilds_to_check {
-                let actual_channel_id = {
-                    let discord_guild_id = GuildId::new(parse_discord_id("guild_id", &guild_id)?);
-                    let Some(guild) = cache.guild(discord_guild_id) else {
-                        continue;
-                    };
-                    checked_guild = true;
-                    let Some(state) = guild.voice_states.get(&discord_user_id) else {
-                        continue;
-                    };
-                    state
-                        .channel_id
-                        .map(|value| value.get().to_string())
-                        .unwrap_or_default()
-                };
-                if !actual_channel_id.trim().is_empty() && pending_disconnect_until > now_ms {
-                    self.retain_pending_disconnect_presence(&bot_id, pending_disconnect_until)
+            match probe_bot_presence(&cache, &user_id, &guild_ids, &configured_guild_ids)? {
+                BotPresenceProbe::Present {
+                    guild_id,
+                    channel_id,
+                } => {
+                    if !channel_id.trim().is_empty() && pending_disconnect_until > now_ms {
+                        self.retain_pending_disconnect_presence(&bot_id, pending_disconnect_until)
+                            .await;
+                    } else {
+                        self.apply_authoritative_voice_presence(
+                            &bot_id,
+                            &guild_id,
+                            &channel_id,
+                            "discord_voice_state_cache",
+                        )
                         .await;
-                    found_voice_state = true;
-                    break;
-                }
-                self.apply_authoritative_voice_presence(
-                    &bot_id,
-                    &guild_id,
-                    &actual_channel_id,
-                    "discord_voice_state_cache",
-                )
-                .await;
-                found_voice_state = true;
-                break;
-            }
-            if !checked_guild {
-                for guild_id in &configured_guild_ids {
-                    let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
-                    if cache.guild(discord_guild_id).is_some() {
-                        checked_guild = true;
-                        break;
                     }
                 }
-            }
-            if checked_guild && !found_voice_state {
-                self.apply_authoritative_voice_presence(
-                    &bot_id,
-                    "",
-                    "",
-                    "discord_voice_state_cache_absent",
-                )
-                .await;
+                BotPresenceProbe::Absent => {
+                    self.apply_authoritative_voice_presence(
+                        &bot_id,
+                        "",
+                        "",
+                        "discord_voice_state_cache_absent",
+                    )
+                    .await;
+                }
+                BotPresenceProbe::Unknown => {}
             }
         }
 
@@ -1101,13 +1044,13 @@ impl LiveVoiceAdapter {
         ));
     }
 
-    pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: Ready) {
+    pub(super) async fn mark_client_ready(&self, bot_id: &str, ready: VoiceClientReady) {
         let status = {
             let mut clients = self.voice_clients_lock.lock().await;
             if let Some(client) = clients.get_mut(bot_id) {
                 client.ready = true;
-                client.user_id = ready.user.id.get().to_string();
-                client.username = ready.user.name.clone();
+                client.user_id = ready.user_id.clone();
+                client.username = ready.username.clone();
                 client.last_error.clear();
                 Some(client.status())
             } else {
@@ -1117,32 +1060,26 @@ impl LiveVoiceAdapter {
         if let Some(status) = status {
             self.persist_bot_status(&status).await;
         }
-        log(&format!("bot {bot_id} ready as {}", ready.user.name));
+        log(&format!("bot {bot_id} ready as {}", ready.username));
     }
 
     pub(super) async fn note_voice_state(
         &self,
         bot_id: &str,
-        old: Option<VoiceState>,
-        state: VoiceState,
+        old: Option<VoiceStateInfo>,
+        state: VoiceStateInfo,
     ) {
-        if let Some(member) = old.as_ref().and_then(|state| state.member.as_ref()) {
-            self.cache_speaker_profile(capture_user_from_member(member))
+        if let Some(profile) = old.as_ref().and_then(|state| state.member_profile.as_ref()) {
+            self.cache_speaker_profile(capture_user_from_profile(profile))
                 .await;
         }
-        if let Some(member) = state.member.as_ref() {
-            self.cache_speaker_profile(capture_user_from_member(member))
+        if let Some(profile) = state.member_profile.as_ref() {
+            self.cache_speaker_profile(capture_user_from_profile(profile))
                 .await;
         }
-        let user_id = state.user_id.get().to_string();
-        let guild_id = state
-            .guild_id
-            .map(|value| value.get().to_string())
-            .unwrap_or_default();
-        let channel_id = state
-            .channel_id
-            .map(|value| value.get().to_string())
-            .unwrap_or_default();
+        let user_id = state.user_id.clone();
+        let guild_id = state.guild_id.clone();
+        let channel_id = state.channel_id.clone();
         let bot_user_ids = {
             let clients = self.voice_clients_lock.lock().await;
             clients
@@ -1152,8 +1089,8 @@ impl LiveVoiceAdapter {
                 .collect::<Vec<_>>()
         };
         if !guild_id.is_empty() && !bot_user_ids.iter().any(|bot_id| bot_id == &user_id) {
-            let old_payload = old.as_ref().map(voice_state_payload);
-            let new_payload = voice_state_payload(&state);
+            let old_payload = old.as_ref().map(|state| state.payload.clone());
+            let new_payload = state.payload.clone();
             if let Err(error) = self
                 .timeline_store
                 .record_voice_state_update(old_payload, new_payload)
@@ -1372,18 +1309,15 @@ impl LiveVoiceAdapter {
             }
         };
 
-        match GuildId::new(guild_id)
-            .member(http, UserId::new(user_id_number))
-            .await
-        {
-            Ok(member) => {
-                let profile = capture_user_from_member(&member);
+        match resolve_member_profile(http, guild_id, user_id_number).await {
+            Some(profile) => {
+                let profile = capture_user_from_profile(&profile);
                 self.cache_speaker_profile(profile.clone()).await;
                 Some(profile)
             }
-            Err(error) => {
+            None => {
                 log(&format!(
-                    "speaker profile resolution failed for {user_id} in guild {guild_id}: {error}"
+                    "speaker profile resolution failed for {user_id} in guild {guild_id}"
                 ));
                 None
             }
@@ -1403,81 +1337,6 @@ impl LiveVoiceAdapter {
             .lock()
             .await
             .insert(profile.id.clone(), profile);
-    }
-}
-
-fn capture_user_from_member(member: &Member) -> CaptureUser {
-    CaptureUser {
-        id: member.user.id.get().to_string(),
-        display_name: member.display_name().to_string(),
-        global_name: member.user.global_name.clone().unwrap_or_default(),
-        name: member.user.name.clone(),
-    }
-}
-
-fn voice_state_payload(state: &VoiceState) -> Value {
-    let guild_id = state
-        .guild_id
-        .map(|value| value.get().to_string())
-        .unwrap_or_default();
-    let channel_id = state
-        .channel_id
-        .map(|value| value.get().to_string())
-        .unwrap_or_default();
-    let user_id = state.user_id.get().to_string();
-    let member = state.member.as_ref();
-    let display_name = member
-        .map(|member| member.display_name().to_string())
-        .unwrap_or_else(|| user_id.to_string());
-    let username = member
-        .map(|member| member.user.name.clone())
-        .unwrap_or_default();
-    let global_name = member
-        .and_then(|member| member.user.global_name.clone())
-        .unwrap_or_default();
-    let nick = member
-        .and_then(|member| member.nick.clone())
-        .unwrap_or_default();
-    let request_to_speak_timestamp = state
-        .request_to_speak_timestamp
-        .map(|value| value.to_string())
-        .unwrap_or_default();
-    json!({
-        "guild_id": guild_id,
-        "guildId": guild_id,
-        "voice_channel_id": channel_id,
-        "voiceChannelId": channel_id,
-        "channelId": channel_id,
-        "user_id": user_id,
-        "userId": user_id,
-        "speaker_user_id": user_id,
-        "username": username,
-        "global_name": global_name,
-        "globalName": global_name,
-        "nick": if nick.is_empty() { Value::Null } else { Value::String(nick) },
-        "display_name": display_name,
-        "member_display_name": display_name,
-        "deaf": state.deaf,
-        "mute": state.mute,
-        "self_deaf": state.self_deaf,
-        "self_mute": state.self_mute,
-        "self_stream": state.self_stream.unwrap_or(false),
-        "self_video": state.self_video,
-        "suppress": state.suppress,
-        "voice_session_id": state.session_id,
-        "request_to_speak_timestamp": if request_to_speak_timestamp.is_empty() {
-            Value::Null
-        } else {
-            Value::String(request_to_speak_timestamp)
-        },
-        "updated_at": crate::runtime::timeline::isoformat_z(None),
-    })
-}
-
-fn set_voice_state_payload_guild(payload: &mut Value, guild_id: &str) {
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("guild_id".to_string(), json!(guild_id));
-        object.insert("guildId".to_string(), json!(guild_id));
     }
 }
 
@@ -1509,4 +1368,13 @@ fn configured_voice_guild_ids() -> Vec<String> {
         guild_ids.insert(control_guild_id);
     }
     guild_ids.into_iter().collect()
+}
+
+fn capture_user_from_profile(profile: &VoiceMemberProfile) -> CaptureUser {
+    CaptureUser {
+        id: profile.id.clone(),
+        display_name: profile.display_name.clone(),
+        global_name: profile.global_name.clone(),
+        name: profile.name.clone(),
+    }
 }

@@ -5,4 +5,5 @@
 
 pub mod discord;
 pub mod stt;
+pub mod voice;
 pub mod wake;

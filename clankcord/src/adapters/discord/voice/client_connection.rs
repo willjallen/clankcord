@@ -5,6 +5,7 @@ use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as AnyhowContext, anyhow};
+use serde_json::{Value, json};
 use serenity::Error as SerenityError;
 use serenity::async_trait;
 use serenity::cache::Cache;
@@ -13,6 +14,7 @@ use serenity::gateway::ShardManager;
 use serenity::http::{Http, HttpError};
 use serenity::model::application::Interaction;
 use serenity::model::gateway::{GatewayIntents, Ready};
+use serenity::model::guild::Member;
 use serenity::model::id::{ChannelId, GuildId, UserId};
 use serenity::model::voice::VoiceState;
 use songbird::driver::{DecodeConfig, DecodeMode};
@@ -29,7 +31,9 @@ use crate::adapters::discord::gateway::components;
 use crate::adapters::discord::voice::capture::VoiceData;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
+use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
 use crate::runtime::VoiceBotStatus;
+use crate::runtime::log;
 
 pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;
 
@@ -63,6 +67,7 @@ impl DiscordVoiceClient {
         );
         let handler = DiscordGatewayHandler {
             adapter: Arc::downgrade(adapter),
+            bus: adapter.bus(),
             bot_id: bot_id.clone(),
         };
         let intents = GatewayIntents::GUILDS
@@ -520,6 +525,7 @@ async fn wait_for_track_end(
 
 struct DiscordGatewayHandler {
     adapter: Weak<LiveVoiceAdapter>,
+    bus: crate::engine::JobBus,
     bot_id: String,
 }
 
@@ -527,13 +533,27 @@ struct DiscordGatewayHandler {
 impl EventHandler for DiscordGatewayHandler {
     async fn ready(&self, _ctx: Context, ready: Ready) {
         if let Some(adapter) = self.adapter.upgrade() {
-            adapter.mark_client_ready(&self.bot_id, ready).await;
+            adapter
+                .mark_client_ready(
+                    &self.bot_id,
+                    VoiceClientReady {
+                        user_id: ready.user.id.get().to_string(),
+                        username: ready.user.name.clone(),
+                    },
+                )
+                .await;
         }
     }
 
     async fn voice_state_update(&self, _ctx: Context, old: Option<VoiceState>, new: VoiceState) {
         if let Some(adapter) = self.adapter.upgrade() {
-            adapter.note_voice_state(&self.bot_id, old, new).await;
+            adapter
+                .note_voice_state(
+                    &self.bot_id,
+                    old.as_ref().map(voice_state_info),
+                    voice_state_info(&new),
+                )
+                .await;
         }
     }
 
@@ -541,9 +561,7 @@ impl EventHandler for DiscordGatewayHandler {
         let Interaction::Component(component) = interaction else {
             return;
         };
-        if let Some(adapter) = self.adapter.upgrade() {
-            components::handle_component_interaction(adapter.bus(), ctx, component).await;
-        }
+        components::handle_component_interaction(self.bus.clone(), ctx, component).await;
     }
 }
 
@@ -613,4 +631,214 @@ fn pcm_i16_to_le_bytes(samples: &[i16]) -> Vec<u8> {
         bytes.extend_from_slice(&sample.to_le_bytes());
     }
     bytes
+}
+
+pub(super) fn voice_member_profile(member: &Member) -> VoiceMemberProfile {
+    VoiceMemberProfile {
+        id: member.user.id.get().to_string(),
+        display_name: member.display_name().to_string(),
+        global_name: member.user.global_name.clone().unwrap_or_default(),
+        name: member.user.name.clone(),
+    }
+}
+
+pub(super) fn voice_state_info(state: &VoiceState) -> VoiceStateInfo {
+    VoiceStateInfo {
+        user_id: state.user_id.get().to_string(),
+        guild_id: state
+            .guild_id
+            .map(|value| value.get().to_string())
+            .unwrap_or_default(),
+        channel_id: state
+            .channel_id
+            .map(|value| value.get().to_string())
+            .unwrap_or_default(),
+        member_profile: state.member.as_ref().map(voice_member_profile),
+        payload: voice_state_payload(state),
+    }
+}
+
+fn voice_state_payload(state: &VoiceState) -> Value {
+    let guild_id = state
+        .guild_id
+        .map(|value| value.get().to_string())
+        .unwrap_or_default();
+    let channel_id = state
+        .channel_id
+        .map(|value| value.get().to_string())
+        .unwrap_or_default();
+    let user_id = state.user_id.get().to_string();
+    let member = state.member.as_ref();
+    let display_name = member
+        .map(|member| member.display_name().to_string())
+        .unwrap_or_else(|| user_id.to_string());
+    let username = member
+        .map(|member| member.user.name.clone())
+        .unwrap_or_default();
+    let global_name = member
+        .and_then(|member| member.user.global_name.clone())
+        .unwrap_or_default();
+    let nick = member
+        .and_then(|member| member.nick.clone())
+        .unwrap_or_default();
+    let request_to_speak_timestamp = state
+        .request_to_speak_timestamp
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+    json!({
+        "guild_id": guild_id,
+        "guildId": guild_id,
+        "voice_channel_id": channel_id,
+        "voiceChannelId": channel_id,
+        "channelId": channel_id,
+        "user_id": user_id,
+        "userId": user_id,
+        "speaker_user_id": user_id,
+        "username": username,
+        "global_name": global_name,
+        "globalName": global_name,
+        "nick": if nick.is_empty() { Value::Null } else { Value::String(nick) },
+        "display_name": display_name,
+        "member_display_name": display_name,
+        "deaf": state.deaf,
+        "mute": state.mute,
+        "self_deaf": state.self_deaf,
+        "self_mute": state.self_mute,
+        "self_stream": state.self_stream.unwrap_or(false),
+        "self_video": state.self_video,
+        "suppress": state.suppress,
+        "voice_session_id": state.session_id,
+        "request_to_speak_timestamp": if request_to_speak_timestamp.is_empty() {
+            Value::Null
+        } else {
+            Value::String(request_to_speak_timestamp)
+        },
+        "updated_at": crate::runtime::timeline::isoformat_z(None),
+    })
+}
+
+/// Resolves a member profile over the Discord HTTP API. Transport only; the
+/// engine caches and consumes the profile.
+pub(super) async fn resolve_member_profile(
+    http: std::sync::Arc<serenity::http::Http>,
+    guild_id: u64,
+    user_id: u64,
+) -> Option<VoiceMemberProfile> {
+    match GuildId::new(guild_id)
+        .member(http, UserId::new(user_id))
+        .await
+    {
+        Ok(member) => Some(voice_member_profile(&member)),
+        Err(error) => {
+            log(&format!(
+                "member profile fetch failed for {user_id} in guild {guild_id}: {error}"
+            ));
+            None
+        }
+    }
+}
+
+/// Walks the gateway caches for every configured guild and returns the
+/// non-bot voice states as canonical payloads. Transport only.
+pub(super) fn collect_guild_voice_states(
+    caches: &[std::sync::Arc<Cache>],
+    configured_guild_ids: &[String],
+    bot_user_ids: &std::collections::BTreeSet<String>,
+) -> Result<(Vec<String>, Vec<Value>)> {
+    let mut guild_ids = std::collections::BTreeSet::new();
+    let mut states = std::collections::BTreeMap::new();
+    for cache in caches {
+        for guild_id in configured_guild_ids {
+            let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
+            let Some(guild) = cache.guild(discord_guild_id) else {
+                continue;
+            };
+            guild_ids.insert(guild_id.clone());
+            for (user_id, state) in &guild.voice_states {
+                let user_id = user_id.get().to_string();
+                if bot_user_ids.contains(&user_id) || state.channel_id.is_none() {
+                    continue;
+                }
+                let mut payload = voice_state_payload(state);
+                if let Some(object) = payload.as_object_mut() {
+                    object.insert("guild_id".to_string(), json!(guild_id));
+                    object.insert("guildId".to_string(), json!(guild_id));
+                }
+                states
+                    .entry((guild_id.clone(), user_id))
+                    .or_insert_with(|| payload);
+            }
+        }
+    }
+    Ok((
+        guild_ids.into_iter().collect(),
+        states.into_values().collect(),
+    ))
+}
+
+/// What the gateway cache says about one bot's voice presence.
+pub(super) enum BotPresenceProbe {
+    /// A voice state row exists; `channel_id` is empty when the state has no
+    /// channel.
+    Present {
+        guild_id: String,
+        channel_id: String,
+    },
+    /// At least one guild was visible and no voice state row exists.
+    Absent,
+    /// No relevant guild is visible in this client's cache yet.
+    Unknown,
+}
+
+pub(super) fn probe_bot_presence(
+    cache: &std::sync::Arc<Cache>,
+    user_id: &str,
+    preferred_guild_ids: &[String],
+    configured_guild_ids: &[String],
+) -> Result<BotPresenceProbe> {
+    let discord_user_id = UserId::new(parse_discord_id("user_id", user_id)?);
+    let mut checked_guild = false;
+    let all_preferred_invisible = preferred_guild_ids.iter().all(|guild_id| {
+        let Ok(parsed) = parse_discord_id("guild_id", guild_id) else {
+            return false;
+        };
+        cache.guild(GuildId::new(parsed)).is_none()
+    });
+    let guilds_to_check: Vec<String> = if all_preferred_invisible {
+        configured_guild_ids.to_vec()
+    } else {
+        preferred_guild_ids.to_vec()
+    };
+    for guild_id in guilds_to_check {
+        let discord_guild_id = GuildId::new(parse_discord_id("guild_id", &guild_id)?);
+        let Some(guild) = cache.guild(discord_guild_id) else {
+            continue;
+        };
+        checked_guild = true;
+        let Some(state) = guild.voice_states.get(&discord_user_id) else {
+            continue;
+        };
+        let channel_id = state
+            .channel_id
+            .map(|value| value.get().to_string())
+            .unwrap_or_default();
+        return Ok(BotPresenceProbe::Present {
+            guild_id,
+            channel_id,
+        });
+    }
+    if !checked_guild {
+        for guild_id in configured_guild_ids {
+            let discord_guild_id = GuildId::new(parse_discord_id("guild_id", guild_id)?);
+            if cache.guild(discord_guild_id).is_some() {
+                checked_guild = true;
+                break;
+            }
+        }
+    }
+    Ok(if checked_guild {
+        BotPresenceProbe::Absent
+    } else {
+        BotPresenceProbe::Unknown
+    })
 }
