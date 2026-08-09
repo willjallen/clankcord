@@ -7,10 +7,13 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
 use crate::config;
+use crate::engine::dispatcher;
+use crate::engine::schedules;
 use crate::model::job::spec::{JobExecutor, JobLane, spec};
 use crate::model::job::{Job, JobKind};
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
+use crate::runtime::domain::maintenance::execution;
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::util::log;
 
@@ -88,11 +91,11 @@ where
 
         for pass in 0..max_passes {
             let timed_out_running_jobs =
-                crate::runtime::domain::maintenance::execution::recover_stale_running_jobs_for_maintenance_pass(
-                    &Ctx::new(self.timeline_store.clone()),
-                )
+                execution::recover_stale_running_jobs_for_maintenance_pass(&Ctx::new(
+                    self.timeline_store.clone(),
+                ))
                 .await?;
-            let schedule_submissions = crate::engine::schedules::run_due_schedules(
+            let schedule_submissions = schedules::run_due_schedules(
                 &self.timeline_store,
                 &crate::engine::JobBus::new(self.timeline_store.clone()),
             )
@@ -258,9 +261,7 @@ where
             let job_id = job.id.clone();
             let kind = job.kind;
             let ctx = Ctx::new(timeline_store);
-            let result =
-                crate::engine::dispatcher::dispatch_claimed_runtime_job(&ctx, &external_api, job)
-                    .await;
+            let result = dispatcher::dispatch_claimed_runtime_job(&ctx, &external_api, job).await;
             if let Err(error) = result {
                 log(&format!(
                     "runtime job worker failed {job_id} ({kind}): {}",
@@ -281,7 +282,7 @@ where
             let kind = job.kind;
             let result = runtime_handle.block_on(async move {
                 let ctx = Ctx::new(timeline_store);
-                crate::engine::dispatcher::dispatch_claimed_blocking_job(&ctx, job).await
+                dispatcher::dispatch_claimed_blocking_job(&ctx, job).await
             });
             match result {
                 Ok(_) => {}

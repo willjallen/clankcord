@@ -7,6 +7,9 @@ use crate::model::job::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
 };
 use crate::runtime::Ctx;
+use crate::runtime::domain::interactions::agent_sessions;
+use crate::runtime::domain::transcription::mux;
+use crate::runtime::domain::voice::playback;
 use crate::runtime::domain::voice_capture::segments;
 use crate::runtime::timeline::{
     event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
@@ -120,7 +123,7 @@ pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Va
                     .expect("wake activation job payload"),
             )
             .await?;
-            let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_channel(
+            let _ = playback::create_voice_playback_job_for_channel(
                 runtime,
                 &guild_id,
                 &voice_channel_id,
@@ -154,7 +157,7 @@ pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Va
                 .expect("wake activation job payload"),
         )
         .await?;
-        let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_channel(
+        let _ = playback::create_voice_playback_job_for_channel(
             runtime,
             &guild_id,
             &voice_channel_id,
@@ -220,7 +223,7 @@ pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Va
     ));
     let job = runtime.store.create_job(job).await?;
     let promotion = promote_wake_transcription_slots(runtime, &payload).await?;
-    let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_channel(
+    let _ = playback::create_voice_playback_job_for_channel(
         runtime,
         &guild_id,
         &voice_channel_id,
@@ -247,12 +250,7 @@ async fn promote_wake_transcription_slots(
         .await?;
     let mut planner_jobs = Vec::new();
     for source_id in &source_ids {
-        if let Some(job) =
-            crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
-                runtime, source_id, 0,
-            )
-            .await?
-        {
+        if let Some(job) = mux::ensure_transcription_mux_plan_job(runtime, source_id, 0).await? {
             planner_jobs.push(job.to_value());
         }
     }
@@ -448,15 +446,14 @@ async fn dispatch_after_request_audio(
     }
 
     let command = activation_agent_task_command(payload, &request_events, closed_at)?;
-    let agent_job =
-        crate::runtime::domain::interactions::agent_sessions::agent_session_start_or_task_job(
-            runtime,
-            &payload.guild_id,
-            &payload.voice_channel_id,
-            &payload.speaker_user_id,
-            command,
-        )
-        .await?;
+    let agent_job = agent_sessions::agent_session_start_or_task_job(
+        runtime,
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        &payload.speaker_user_id,
+        command,
+    )
+    .await?;
     let created_job = runtime.store.create_child_job(job, agent_job).await?;
     let created = json!({
         "kind": format!("{}_created", created_job.kind.as_str()),
@@ -514,7 +511,7 @@ async fn record_activation_window_closed(
             }),
         )
         .await?;
-    let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_channel(
+    let _ = playback::create_voice_playback_job_for_channel(
         runtime,
         &payload.guild_id,
         &payload.voice_channel_id,
@@ -857,12 +854,9 @@ async fn live_speaker_capture_hold(
     latest_wake_at: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<Option<CaptureHold>> {
-    let session = crate::runtime::domain::voice::playback::active_session_for_channel(
-        runtime,
-        &payload.guild_id,
-        &payload.voice_channel_id,
-    )
-    .await?;
+    let session =
+        playback::active_session_for_channel(runtime, &payload.guild_id, &payload.voice_channel_id)
+            .await?;
     let Some(session) = session else {
         return Ok(None);
     };
@@ -900,12 +894,9 @@ async fn room_transcription_settlement(
     closed_at: DateTime<Utc>,
 ) -> Result<TranscriptionSettlement> {
     let mut settlement = TranscriptionSettlement::default();
-    if let Some(session) = crate::runtime::domain::voice::playback::active_session_for_channel(
-        runtime,
-        &payload.guild_id,
-        &payload.voice_channel_id,
-    )
-    .await?
+    if let Some(session) =
+        playback::active_session_for_channel(runtime, &payload.guild_id, &payload.voice_channel_id)
+            .await?
     {
         for speaker in session.capture_stats.speakers.values() {
             let Some((start, end)) = live_capture_interval(speaker) else {

@@ -4,6 +4,7 @@ use crate::Result;
 use crate::engine::JobDecision;
 use crate::model::job::{CommandKind, CommandRequest, DiscordSlashCommandPayload, Job, JobOutput};
 use crate::runtime::Ctx;
+use crate::runtime::domain::interactions::commands;
 use crate::runtime::domain::voice_capture::wake_activations;
 
 pub(crate) async fn prepare(
@@ -142,12 +143,8 @@ async fn queue_command_child(
     payload: &DiscordSlashCommandPayload,
     command_kind: CommandKind,
 ) -> Result<JobDecision> {
-    crate::runtime::domain::interactions::commands::create_command_job(
-        runtime,
-        command_request(payload, command_kind)?,
-        Some(job),
-    )
-    .await?;
+    commands::create_command_job(runtime, command_request(payload, command_kind)?, Some(job))
+        .await?;
     Ok(JobDecision::Wait)
 }
 

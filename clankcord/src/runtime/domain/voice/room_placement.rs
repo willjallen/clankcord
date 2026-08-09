@@ -11,8 +11,11 @@ use crate::model::job::{
     RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
 };
 use crate::runtime::Ctx;
+use crate::runtime::domain::voice::playback;
 use crate::runtime::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::runtime::rooms::RoomConfig;
+use crate::runtime::rooms::catalog;
+use crate::runtime::rooms::control_state;
 
 pub(crate) async fn prepare_join_room_jobs(
     ctx: &Ctx,
@@ -87,7 +90,7 @@ pub(crate) async fn prepare_join_room_jobs(
     }
 
     if should_record_manual_hold_for_join(reason) {
-        crate::runtime::rooms::control_state::set_room_manual_hold(
+        control_state::set_room_manual_hold(
             ctx,
             &room,
             pool.manual_override_seconds,
@@ -196,7 +199,7 @@ pub(crate) async fn fail_join_room_job(
     error: &str,
 ) -> Result<()> {
     let pool = ctx.store.runtime_pool_config().await?;
-    crate::runtime::rooms::control_state::suppress_room_auto_join(
+    control_state::suppress_room_auto_join(
         ctx,
         &request.room,
         pool.auto_rejoin_cooldown_seconds,
@@ -231,9 +234,8 @@ pub(crate) async fn prepare_leave_room_jobs(
 ) -> Result<JobDecision> {
     let leave_reason = normalized_leave_reason(reason);
     if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-        let room =
-            crate::runtime::rooms::catalog::room_for_identifier(ctx, Some(identifier)).await?;
-        crate::runtime::rooms::control_state::suppress_room_auto_join(
+        let room = catalog::room_for_identifier(ctx, Some(identifier)).await?;
+        control_state::suppress_room_auto_join(
             ctx,
             &room,
             cooldown_seconds,
@@ -252,7 +254,7 @@ pub(crate) async fn prepare_leave_room_jobs(
                 .await?;
             if let Some(session) = session_for_assignment(ctx, &assignment).await? {
                 return Ok(JobDecision::WaitFor(vec![
-                    crate::runtime::domain::voice::playback::voice_playback_job_for_session(
+                    playback::voice_playback_job_for_session(
                         ctx,
                         &session,
                         requested_by_user_id,
@@ -311,16 +313,14 @@ pub(crate) async fn prepare_leave_room_jobs(
             .await?;
         if let Some(session) = session_for_assignment(ctx, &assignment).await? {
             requested_sessions.insert(session.session_id.clone());
-            requests.push(
-                crate::runtime::domain::voice::playback::voice_playback_job_for_session(
-                    ctx,
-                    &session,
-                    requested_by_user_id,
-                    DiscordVoicePlaybackCue::Leave,
-                    "manual_leave_all",
-                    source_job_id,
-                ),
-            );
+            requests.push(playback::voice_playback_job_for_session(
+                ctx,
+                &session,
+                requested_by_user_id,
+                DiscordVoicePlaybackCue::Leave,
+                "manual_leave_all",
+                source_job_id,
+            ));
         } else {
             requests.push(Job::discord_voice_leave(
                 assignment.guild_id.clone(),
@@ -337,16 +337,14 @@ pub(crate) async fn prepare_leave_room_jobs(
         if requested_sessions.contains(&session.session_id) {
             continue;
         }
-        requests.push(
-            crate::runtime::domain::voice::playback::voice_playback_job_for_session(
-                ctx,
-                &session,
-                requested_by_user_id,
-                DiscordVoicePlaybackCue::Leave,
-                "manual_leave_all",
-                source_job_id,
-            ),
-        );
+        requests.push(playback::voice_playback_job_for_session(
+            ctx,
+            &session,
+            requested_by_user_id,
+            DiscordVoicePlaybackCue::Leave,
+            "manual_leave_all",
+            source_job_id,
+        ));
     }
     if requests.is_empty() {
         return Ok(JobDecision::Complete(JobOutput::RoomAgentPlacement(
@@ -401,14 +399,15 @@ pub(crate) async fn resume_room_agent_placement_job(
                         if let JobOutput::RoomAgentPlacement(output) = &placement_output {
                             if let Some(session) = &output.session {
                                 return Ok(JobDecision::WaitFor(vec![
-                                        crate::runtime::domain::voice::playback::voice_playback_job_for_session(ctx,
-                                            session,
-                                            &request.requested_by_user_id,
-                                            DiscordVoicePlaybackCue::Join,
-                                            "room_join",
-                                            &job.id,
-                                        ),
-                                    ]));
+                                    playback::voice_playback_job_for_session(
+                                        ctx,
+                                        session,
+                                        &request.requested_by_user_id,
+                                        DiscordVoicePlaybackCue::Join,
+                                        "room_join",
+                                        &job.id,
+                                    ),
+                                ]));
                             }
                         }
                     }

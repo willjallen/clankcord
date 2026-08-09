@@ -7,8 +7,11 @@ use crate::model::job::JobState;
 use crate::runtime::Ctx;
 use crate::runtime::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::runtime::rooms::RoomConfig;
+use crate::runtime::rooms::catalog;
+use crate::runtime::rooms::control_state;
 use crate::runtime::timeline::format_timestamp_local;
 use crate::runtime::util::first_non_empty;
+use crate::views::jobs;
 
 pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
     let bots = ctx.store.list_voice_bot_states().await?;
@@ -56,7 +59,7 @@ pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
         .await?
         .into_iter()
         .filter(|job| job.scope_id == room.channel_id && !job.state.is_terminal())
-        .map(|job| crate::views::jobs::public_job_view(&job))
+        .map(|job| jobs::public_job_view(&job))
         .collect::<Vec<_>>();
     Ok(json!({
         "room": room.to_json(),
@@ -65,7 +68,7 @@ pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
         "assignedVoiceBotId": assignment.as_ref().map(|value| value.voice_bot_id.as_str()).or_else(|| session.as_ref().map(|value| value.bot_id.as_str())).unwrap_or(""),
         "captureRunId": assignment.as_ref().map(|value| value.capture_run_id.as_str()).or_else(|| session.as_ref().map(|value| value.capture_run_id.as_str())).unwrap_or(""),
         "retentionPolicy": retention_policy,
-        "control": crate::runtime::rooms::control_state::room_control_status(ctx, room).await?,
+        "control": control_state::room_control_status(ctx, room).await?,
         "occupancy": occupancy,
         "livePublications": live_publications,
         "activeJobs": active_jobs,
@@ -77,9 +80,7 @@ pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
 
 pub async fn status_payload(ctx: &Ctx, room_identifier: Option<&str>) -> Result<Value> {
     if let Some(identifier) = room_identifier.filter(|value| !value.trim().is_empty()) {
-        return match crate::runtime::rooms::catalog::room_for_identifier(ctx, Some(identifier))
-            .await
-        {
+        return match catalog::room_for_identifier(ctx, Some(identifier)).await {
             Ok(room) => status_for_room(ctx, &room).await,
             Err(error) => Ok(json!({"ok": false, "error": error.to_string()})),
         };
@@ -92,7 +93,7 @@ pub async fn status_payload(ctx: &Ctx, room_identifier: Option<&str>) -> Result<
         sessions.push(enrich_session_status(ctx, session).await.to_json());
     }
     let mut rooms = Vec::new();
-    for room in crate::runtime::rooms::catalog::known_rooms(ctx).await? {
+    for room in catalog::known_rooms(ctx).await? {
         let occupancy = ctx
             .store
             .get_occupancy(&room.guild_id, &room.channel_id)
@@ -106,7 +107,7 @@ pub async fn status_payload(ctx: &Ctx, room_identifier: Option<&str>) -> Result<
                 "autoJoin": room.auto_join,
                 "activeSessionId": active_session_for_room(&active_sessions, &room).map(|session| session.session_id).unwrap_or_default(),
                 "activeAssignmentId": active_assignment_for_room(&active_assignments, &room).map(|assignment| assignment.assignment_id).unwrap_or_default(),
-                "control": crate::runtime::rooms::control_state::room_control_status(ctx, &room).await?,
+                "control": control_state::room_control_status(ctx, &room).await?,
                 "occupancy": occupancy,
             }));
     }
@@ -116,7 +117,7 @@ pub async fn status_payload(ctx: &Ctx, room_identifier: Option<&str>) -> Result<
         "sessions": sessions,
         "assignments": active_assignments.iter().map(VoiceAssignment::to_json).collect::<Vec<_>>(),
         "rooms": rooms,
-        "roomControls": crate::runtime::rooms::control_state::room_controls_json(ctx).await?,
+        "roomControls": control_state::room_controls_json(ctx).await?,
     }))
 }
 

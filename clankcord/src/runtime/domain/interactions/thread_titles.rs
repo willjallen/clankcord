@@ -22,9 +22,12 @@ use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
+use crate::runtime::domain::interactions::agent_sessions;
+use crate::runtime::domain::messaging::session_threads;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_unavailable_channel_id,
 };
+use crate::runtime::rooms::catalog;
 use crate::runtime::timeline::JobVisibility;
 use crate::runtime::util::{first_non_empty, first_value_string, preview};
 
@@ -81,12 +84,7 @@ pub(crate) async fn agent_thread_title_refresh_jobs(
         }
         let current_thread_name = match latest_agent_thread_title(ctx, &record).await? {
             Some(title) => title,
-            None => {
-                crate::runtime::domain::interactions::agent_sessions::default_agent_thread_name(
-                    ctx, &record,
-                )
-                .await?
-            }
+            None => agent_sessions::default_agent_thread_name(ctx, &record).await?,
         };
         jobs.push(Job::agent_thread_title_refresh(
             source_job.id.clone(),
@@ -216,13 +214,9 @@ async fn agent_thread_title_prompt_context(
     ctx: &Ctx,
     payload: &AgentThreadTitleRefreshPayload,
 ) -> Result<AgentThreadTitlePromptContext> {
-    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
-        ctx,
-        &payload.guild_id,
-        &payload.voice_channel_id,
-        None,
-    )
-    .await?;
+    let room =
+        catalog::room_for_channel_ids(ctx, &payload.guild_id, &payload.voice_channel_id, None)
+            .await?;
     let record = ctx
         .store
         .get_agent_session_record(&payload.agent_session_id)
@@ -369,7 +363,7 @@ async fn complete_thread_title_refresh_for_unavailable_thread(
         discord_error_text_unavailable_channel_id(&rename_child.metadata.error),
         payload.discord_thread_id.clone(),
     ]);
-    crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(
+    session_threads::mark_agent_session_thread_unavailable(
         ctx,
         &payload.agent_session_id,
         &thread_id,

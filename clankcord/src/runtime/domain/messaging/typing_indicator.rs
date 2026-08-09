@@ -9,6 +9,8 @@ use crate::model::job::{
 use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
+use crate::runtime::domain::children;
+use crate::runtime::domain::messaging::session_threads;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_targets_unavailable_session_thread,
     discord_error_unavailable_channel_id,
@@ -40,13 +42,7 @@ pub(crate) async fn execute_discord_typing_indicator_job<A>(
 where
     A: DiscordApi,
 {
-    match crate::runtime::domain::children::await_children(
-        ctx,
-        &job.id,
-        "discord typing dependency",
-    )
-    .await?
-    {
+    match children::await_children(ctx, &job.id, "discord typing dependency").await? {
         crate::runtime::domain::children::ChildResolution::Pending => {
             return Ok(JobDecision::Wait);
         }
@@ -80,13 +76,14 @@ where
                     resolved.thread_id.clone(),
                     resolved.target.channel_id.clone(),
                 ]);
-                crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(ctx,
-                        &resolved.agent_session_id,
-                        &thread_id,
-                        &job.id,
-                        &error.to_string(),
-                    )
-                    .await?;
+                session_threads::mark_agent_session_thread_unavailable(
+                    ctx,
+                    &resolved.agent_session_id,
+                    &thread_id,
+                    &job.id,
+                    &error.to_string(),
+                )
+                .await?;
                 DiscordTypingIndicatorOutput {
                     action: payload.action,
                     target: resolved.target,
@@ -161,14 +158,13 @@ async fn resolve_typing_target(
             }))
         }
         TextTargetKind::AgentSession => {
-            let session =
-                crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
-                    ctx,
-                    job,
-                    &payload.source_job_id,
-                    "discord typing",
-                )
-                .await?;
+            let session = session_threads::agent_session_for_source_job(
+                ctx,
+                job,
+                &payload.source_job_id,
+                "discord typing",
+            )
+            .await?;
             resolve_agent_session_typing_target(ctx, job, payload, session).await
         }
     }

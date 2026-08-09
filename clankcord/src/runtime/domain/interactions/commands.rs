@@ -13,6 +13,12 @@ use crate::runtime::util::string_field;
 use crate::views::{ForgetRequest, MaterializeTranscriptRequest};
 
 use crate::runtime::Ctx;
+use crate::runtime::domain::interactions::agent_sessions;
+use crate::runtime::domain::interactions::confirmations;
+use crate::runtime::domain::voice::playback;
+use crate::runtime::rooms::catalog;
+use crate::runtime::rooms::control_state;
+use crate::views::history;
 
 pub async fn create_command_job(
     ctx: &Ctx,
@@ -30,10 +36,7 @@ pub async fn create_command_job(
     }
     if command.requires_confirmation {
         let confirmation_context =
-            crate::runtime::domain::interactions::confirmations::confirmation_context_for_command(
-                ctx, &command,
-            )
-            .await?;
+            confirmations::confirmation_context_for_command(ctx, &command).await?;
         let job = Job::confirmation_required(
             RuntimeScope::voice_channel(guild_id.clone(), channel_id.clone()),
             command.requested_by_user_id.clone(),
@@ -92,7 +95,7 @@ async fn prepare_command(
     match job_kind {
         "materialize_transcript" => {
             let (start, end) = command.window_times(None);
-            let materialized = crate::views::history::materialize_transcript(
+            let materialized = history::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -126,7 +129,7 @@ async fn prepare_command(
         "make_permanent" => {
             let end = utc_now();
             let start = end - chrono::Duration::minutes(30);
-            let materialized = crate::views::history::materialize_transcript(
+            let materialized = history::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -145,12 +148,8 @@ async fn prepare_command(
             )?))
         }
         "pause_listening" => {
-            let room = crate::runtime::rooms::catalog::room_for_identifier(
-                ctx,
-                Some(&target_room_identifier),
-            )
-            .await?;
-            crate::runtime::rooms::control_state::pause_room(
+            let room = catalog::room_for_identifier(ctx, Some(&target_room_identifier)).await?;
+            control_state::pause_room(
                 ctx,
                 &room,
                 command
@@ -165,18 +164,9 @@ async fn prepare_command(
             )?))
         }
         "resume_listening" => {
-            let room = crate::runtime::rooms::catalog::room_for_identifier(
-                ctx,
-                Some(&target_room_identifier),
-            )
-            .await?;
-            crate::runtime::rooms::control_state::resume_room(
-                ctx,
-                &room,
-                &command.requested_by_user_id,
-            )
-            .await?;
-            let _ = crate::runtime::domain::voice::playback::create_voice_deafen_job_for_room(
+            let room = catalog::room_for_identifier(ctx, Some(&target_room_identifier)).await?;
+            control_state::resume_room(ctx, &room, &command.requested_by_user_id).await?;
+            let _ = playback::create_voice_deafen_job_for_room(
                 ctx,
                 &room,
                 &command.requested_by_user_id,
@@ -185,7 +175,7 @@ async fn prepare_command(
                 &parent_job.id,
             )
             .await?;
-            let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_room(
+            let _ = playback::create_voice_playback_job_for_room(
                 ctx,
                 &room,
                 &command.requested_by_user_id,
@@ -199,12 +189,8 @@ async fn prepare_command(
             )?))
         }
         "deafen_listening" => {
-            let room = crate::runtime::rooms::catalog::room_for_identifier(
-                ctx,
-                Some(&target_room_identifier),
-            )
-            .await?;
-            let _ = crate::runtime::domain::voice::playback::create_voice_deafen_job_for_room(
+            let room = catalog::room_for_identifier(ctx, Some(&target_room_identifier)).await?;
+            let _ = playback::create_voice_deafen_job_for_room(
                 ctx,
                 &room,
                 &command.requested_by_user_id,
@@ -213,7 +199,7 @@ async fn prepare_command(
                 &parent_job.id,
             )
             .await?;
-            let _ = crate::runtime::domain::voice::playback::create_voice_playback_job_for_room(
+            let _ = playback::create_voice_playback_job_for_room(
                 ctx,
                 &room,
                 &command.requested_by_user_id,
@@ -222,7 +208,7 @@ async fn prepare_command(
                 &parent_job.id,
             )
             .await?;
-            crate::runtime::rooms::control_state::pause_room(
+            control_state::pause_room(
                 ctx,
                 &room,
                 pool.pause_release_seconds,
@@ -234,20 +220,13 @@ async fn prepare_command(
             )?))
         }
         "set_voice_mute" => {
-            let room = crate::runtime::rooms::catalog::room_for_identifier(
-                ctx,
-                Some(&target_room_identifier),
-            )
-            .await?;
-            let session = crate::runtime::domain::voice::playback::active_session_for_channel(
-                ctx,
-                &room.guild_id,
-                &room.channel_id,
-            )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("room {} has no active voice session to mute", room.room_id)
-            })?;
+            let room = catalog::room_for_identifier(ctx, Some(&target_room_identifier)).await?;
+            let session =
+                playback::active_session_for_channel(ctx, &room.guild_id, &room.channel_id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("room {} has no active voice session to mute", room.room_id)
+                    })?;
             let muted = command.arguments.muted.unwrap_or(false);
             Ok(JobDecision::WaitFor(vec![Job::discord_voice_mute(
                 room.guild_id,
@@ -262,23 +241,16 @@ async fn prepare_command(
             )]))
         }
         "play_voice_cue" => {
-            let room = crate::runtime::rooms::catalog::room_for_identifier(
-                ctx,
-                Some(&target_room_identifier),
-            )
-            .await?;
-            let session = crate::runtime::domain::voice::playback::active_session_for_channel(
-                ctx,
-                &room.guild_id,
-                &room.channel_id,
-            )
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "room {} has no active voice session for playback",
-                    room.room_id
-                )
-            })?;
+            let room = catalog::room_for_identifier(ctx, Some(&target_room_identifier)).await?;
+            let session =
+                playback::active_session_for_channel(ctx, &room.guild_id, &room.channel_id)
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "room {} has no active voice session for playback",
+                            room.room_id
+                        )
+                    })?;
             let cue: DiscordVoicePlaybackCue = command.arguments.cue.parse()?;
             Ok(JobDecision::WaitFor(vec![Job::discord_voice_play_audio(
                 room.guild_id,
@@ -333,7 +305,7 @@ async fn prepare_command(
         }
         "forget_window" => {
             let (start, end) = command.window_times(None);
-            let result = crate::views::history::forget(
+            let result = history::forget(
                 ctx,
                 ForgetRequest {
                     window_id: command.arguments.window_id.clone(),
@@ -365,13 +337,14 @@ async fn prepare_command(
                 anyhow::bail!("unsupported queued job kind: {job_kind}");
             }
             let requested_by_user_id = command.requested_by_user_id.clone();
-            let job = crate::runtime::domain::interactions::agent_sessions::agent_session_start_or_task_job(ctx,
-                        &guild_id,
-                        &channel_id,
-                        &requested_by_user_id,
-                        command,
-                    )
-                    .await?;
+            let job = agent_sessions::agent_session_start_or_task_job(
+                ctx,
+                &guild_id,
+                &channel_id,
+                &requested_by_user_id,
+                command,
+            )
+            .await?;
             Ok(JobDecision::WaitFor(vec![job]))
         }
     }
@@ -401,12 +374,8 @@ async fn command_scope(ctx: &Ctx, command: &CommandRequest) -> Result<(String, S
         }
     }
     if guild_id.is_empty() || channel_id.is_empty() {
-        let room = crate::runtime::rooms::catalog::resolve_room_scope(
-            ctx,
-            &guild_id,
-            Some(&target_room_identifier),
-        )
-        .await?;
+        let room =
+            catalog::resolve_room_scope(ctx, &guild_id, Some(&target_room_identifier)).await?;
         if guild_id.is_empty() {
             guild_id = room.guild_id;
         }

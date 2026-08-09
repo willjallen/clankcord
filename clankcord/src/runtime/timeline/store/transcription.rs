@@ -2,6 +2,7 @@ use super::*;
 
 use crate::config;
 use crate::model::job::AudioSegmentPayload;
+use crate::runtime::domain::voice_capture::segments;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -523,9 +524,7 @@ impl TimelineStore {
         for row in rows {
             let payload = json_value(&row, "payload_json")?;
             let error = first_value_string(&payload, &["error"]);
-            if !crate::runtime::domain::voice_capture::segments::is_retryable_audio_segment_error_text(
-                &error,
-            ) {
+            if !segments::is_retryable_audio_segment_error_text(&error) {
                 continue;
             }
             let slot_id: String = row.try_get("slot_id")?;

@@ -18,6 +18,8 @@ use crate::runtime::agents::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
     voice_route_key,
 };
+use crate::runtime::domain::voice::playback;
+use crate::runtime::rooms::catalog;
 use crate::runtime::timeline::{
     event_text, isoformat_z, new_id, parse_instant, resolve_time_reference, utc_now,
 };
@@ -66,14 +68,10 @@ pub(crate) async fn agent_session_start_or_task_job(
             isoformat_z(Some(max_active_until)),
         );
         record.voice_capture_session_id =
-            crate::runtime::domain::voice::playback::active_session_for_channel(
-                ctx,
-                guild_id,
-                voice_channel_id,
-            )
-            .await?
-            .map(|session| session.session_id)
-            .unwrap_or_default();
+            playback::active_session_for_channel(ctx, guild_id, voice_channel_id)
+                .await?
+                .map(|session| session.session_id)
+                .unwrap_or_default();
         ctx.store.create_agent_session_record(record).await?
     };
     Ok(Job::agent_session_start(
@@ -339,15 +337,14 @@ pub(crate) async fn prepare_agent_session_resume_job(
             record.route_key = route_key;
             record.scope_id = payload.voice_channel_id.clone();
             record.dm_user_id.clear();
-            record.voice_capture_session_id =
-                crate::runtime::domain::voice::playback::active_session_for_channel(
-                    ctx,
-                    &payload.guild_id,
-                    &payload.voice_channel_id,
-                )
-                .await?
-                .map(|session| session.session_id)
-                .unwrap_or_default();
+            record.voice_capture_session_id = playback::active_session_for_channel(
+                ctx,
+                &payload.guild_id,
+                &payload.voice_channel_id,
+            )
+            .await?
+            .map(|session| session.session_id)
+            .unwrap_or_default();
             record.text_target = TextTarget {
                 kind: TextTargetKind::Channel,
                 channel_id: record.discord_thread_id.clone(),
@@ -644,9 +641,7 @@ pub(crate) async fn agent_thread_content(
     requested_by_user_id: &str,
     agent_session_id: &str,
 ) -> Result<String> {
-    let room =
-        crate::runtime::rooms::catalog::room_for_channel_ids(ctx, guild_id, voice_channel_id, None)
-            .await?;
+    let room = catalog::room_for_channel_ids(ctx, guild_id, voice_channel_id, None).await?;
     let occupants = ctx.store.room_occupants(guild_id, voice_channel_id).await?;
     let mut seen = BTreeSet::new();
     let mut mentioned_user_ids = Vec::new();
@@ -674,13 +669,7 @@ pub(crate) async fn default_agent_thread_name(
     ctx: &Ctx,
     record: &AgentSessionRecord,
 ) -> Result<String> {
-    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
-        ctx,
-        &record.guild_id,
-        &record.scope_id,
-        None,
-    )
-    .await?;
+    let room = catalog::room_for_channel_ids(ctx, &record.guild_id, &record.scope_id, None).await?;
     let created_at = parse_instant(&record.created_at).with_context(|| {
         format!(
             "agent session {} has invalid created_at `{}`",

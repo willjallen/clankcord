@@ -5,7 +5,9 @@ use crate::engine::JobDecision;
 use crate::model::job::{CommandRequest, DiscordTextMessagePayload, Job, JobOutput};
 use crate::runtime::Ctx;
 use crate::runtime::agents::AgentSessionRecord;
+use crate::runtime::domain::interactions::agent_sessions;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
+use crate::runtime::util;
 
 pub(crate) async fn prepare(
     runtime: &Ctx,
@@ -19,11 +21,7 @@ pub(crate) async fn prepare(
     }
 
     let session = if payload.guild_id.trim().is_empty() {
-        crate::runtime::domain::interactions::agent_sessions::ensure_dm_agent_session(
-            runtime,
-            &payload.author_user_id,
-        )
-        .await?
+        agent_sessions::ensure_dm_agent_session(runtime, &payload.author_user_id).await?
     } else if let Some(session) = runtime
         .store
         .agent_session_for_thread(&payload.channel_id)
@@ -48,11 +46,7 @@ pub(crate) async fn prepare(
     };
 
     let event_id = append_thread_message_event(runtime, &session, payload).await?;
-    crate::runtime::domain::interactions::agent_sessions::touch_agent_session(
-        runtime,
-        &session.agent_session_id,
-    )
-    .await?;
+    agent_sessions::touch_agent_session(runtime, &session.agent_session_id).await?;
 
     let agent_job = agent_task_for_thread_message(session, payload, event_id)?;
     Ok(JobDecision::WaitFor(vec![agent_job]))
@@ -154,7 +148,7 @@ fn agent_session_is_current(session: &AgentSessionRecord) -> bool {
 }
 
 fn text_author_label(payload: &DiscordTextMessagePayload) -> String {
-    crate::runtime::util::first_non_empty([
+    util::first_non_empty([
         payload.author_display_name.clone(),
         payload.author_username.clone(),
         payload.author_user_id.clone(),

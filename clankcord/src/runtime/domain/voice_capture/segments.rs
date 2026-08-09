@@ -12,11 +12,13 @@ use crate::model::job::{
 };
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
 use crate::runtime::Ctx;
+use crate::runtime::domain::transcription::mux;
 use crate::runtime::domain::transcription::{
     should_drop_low_confidence_transcription, stt_drop_decision,
 };
 use crate::runtime::timeline::store::TranscriptionSlotRecord;
 use crate::runtime::timeline::{SpeechEventInput, read_wav_mono, sha256_file};
+use crate::runtime::util;
 
 pub(crate) struct AudioSegmentRetryPlan {
     pub delay_for_attempt: fn(i64) -> chrono::Duration,
@@ -158,13 +160,12 @@ pub(crate) async fn execute_segment_job(
     } else {
         crate::config::transcription_mux_batch_delay_ms()
     };
-    let planner_job =
-        crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
-            runtime,
-            &crate::config::active_transcription_source_id(),
-            planner_delay_ms,
-        )
-        .await?;
+    let planner_job = mux::ensure_transcription_mux_plan_job(
+        runtime,
+        &crate::config::active_transcription_source_id(),
+        planner_delay_ms,
+    )
+    .await?;
     Ok(json!({
         "kind": "audio_segment",
         "status": "queued_for_transcription",
@@ -191,11 +192,7 @@ pub(crate) async fn execute_transcription_mux_plan_job(
     payload: &TranscriptionMuxPlanPayload,
 ) -> Result<Value> {
     crate::config::transcription_source(&payload.transcription_source_id)?;
-    crate::runtime::domain::transcription::mux::plan_transcription_mux_jobs(
-        runtime,
-        &payload.transcription_source_id,
-    )
-    .await
+    mux::plan_transcription_mux_jobs(runtime, &payload.transcription_source_id).await
 }
 
 pub(crate) async fn execute_transcription_mux_job(
@@ -260,10 +257,7 @@ pub(crate) async fn execute_transcription_mux_job(
                     );
                 }
                 let next_plan_job =
-                    crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
-                        runtime, &source.id, 0,
-                    )
-                    .await?;
+                    mux::ensure_transcription_mux_plan_job(runtime, &source.id, 0).await?;
                 return Ok(json!({
                     "kind": "transcription_mux",
                     "status": "replanned_as_single_slot_muxes",
@@ -347,8 +341,7 @@ pub(crate) async fn execute_transcription_mux_job(
             )
             .await?
         {
-            let event_id =
-                crate::runtime::util::first_value_string(&event, &["event_id", "eventId"]);
+            let event_id = util::first_value_string(&event, &["event_id", "eventId"]);
             runtime
                 .store
                 .complete_transcription_slot(&slot.slot_id, &event_id, &text)
@@ -389,7 +382,7 @@ pub(crate) async fn execute_transcription_mux_job(
                 ..Default::default()
             })
             .await?;
-        let event_id = crate::runtime::util::first_value_string(&event, &["event_id", "eventId"]);
+        let event_id = util::first_value_string(&event, &["event_id", "eventId"]);
         runtime
             .store
             .complete_transcription_slot(&slot.slot_id, &event_id, &text)
@@ -409,11 +402,7 @@ pub(crate) async fn execute_transcription_mux_job(
             "event": event,
         }));
     }
-    let next_plan_job =
-        crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
-            runtime, &source.id, 0,
-        )
-        .await?;
+    let next_plan_job = mux::ensure_transcription_mux_plan_job(runtime, &source.id, 0).await?;
     Ok(json!({
         "kind": "transcription_mux",
         "status": "transcribed",

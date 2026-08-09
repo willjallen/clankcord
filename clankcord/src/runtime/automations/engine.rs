@@ -19,9 +19,12 @@ use crate::runtime::automations::{
     AutomationTrigger,
 };
 use crate::runtime::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::runtime::rooms::catalog;
+use crate::runtime::rooms::control_state;
 use crate::runtime::rooms::{RoomConfig, RoomControl};
 use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
+use crate::views::status;
 
 pub(crate) trait Automation: Send + Sync {
     fn name(&self) -> &'static str;
@@ -84,11 +87,7 @@ impl<'a> AutomationContext<'a> {
     }
 
     pub(crate) fn room_control_datetime_active(&self, channel_id: &str, key: &str) -> bool {
-        crate::runtime::rooms::control_state::room_control_datetime_active_from_map(
-            self.room_controls,
-            channel_id,
-            key,
-        )
+        control_state::room_control_datetime_active_from_map(self.room_controls, channel_id, key)
     }
 }
 
@@ -156,7 +155,7 @@ impl AutomationRunner {
     }
 
     async fn run(&self, runtime: &Ctx) -> Result<AutomationRun> {
-        crate::runtime::rooms::control_state::prune_expired_room_controls(runtime).await?;
+        control_state::prune_expired_room_controls(runtime).await?;
         let pool_config = runtime
             .store
             .runtime_pool_config()
@@ -595,7 +594,7 @@ async fn base_context(
     event: Option<Value>,
     job: Option<Value>,
 ) -> Result<Value> {
-    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
+    let room = catalog::room_for_channel_ids(
         runtime,
         &record.spec.scope.guild_id,
         &record.spec.scope.scope_id,
@@ -607,7 +606,7 @@ async fn base_context(
         .room_occupants(&record.spec.scope.guild_id, &record.spec.scope.scope_id)
         .await?;
     let participants = room_participants(&occupants);
-    let mut room_status = crate::views::status::status_for_room(runtime, &room).await?;
+    let mut room_status = status::status_for_room(runtime, &room).await?;
     if let Value::Object(object) = &mut room_status {
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));

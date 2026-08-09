@@ -14,6 +14,7 @@ use crate::adapters::codex::{
     codex_linear_mcp_config_args, codex_response_text, extract_codex_usage,
 };
 use crate::config;
+use crate::engine::dispatcher;
 use crate::model::job::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     AgentTaskOutcome, AgentTaskPhase, BinaryPayload,
@@ -28,6 +29,7 @@ use crate::runtime::agents::AgentSessionRouteKind;
 use crate::runtime::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
+use crate::runtime::domain::interactions::agent_sessions;
 use crate::runtime::timeline::{
     JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now,
 };
@@ -183,8 +185,7 @@ async fn resolve_agent_task_delivery(
         }));
     }
     if deliveries.iter().any(|child| !child.state.is_terminal()) {
-        return crate::engine::dispatcher::wait_dispatched_job(ctx, &job_id, latest, Vec::new())
-            .await;
+        return dispatcher::wait_dispatched_job(ctx, &job_id, latest, Vec::new()).await;
     }
     let deadline = parse_instant(&task.await_delivery_until);
     if deadline.is_some_and(|deadline| utc_now() < deadline) {
@@ -418,20 +419,19 @@ async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> 
     }
 
     let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
-    let completed_session =
-        crate::runtime::domain::interactions::agent_sessions::set_agent_session_codex_session(
-            ctx,
-            &agent_session_id,
-            non_empty(
-                invocation
-                    .session
-                    .as_ref()
-                    .map(|session| session.session_id.clone())
-                    .unwrap_or_default(),
-                invocation.session_id.clone(),
-            ),
-        )
-        .await?;
+    let completed_session = agent_sessions::set_agent_session_codex_session(
+        ctx,
+        &agent_session_id,
+        non_empty(
+            invocation
+                .session
+                .as_ref()
+                .map(|session| session.session_id.clone())
+                .unwrap_or_default(),
+            invocation.session_id.clone(),
+        ),
+    )
+    .await?;
     Ok(AgentTaskMetadata {
         workdir_path: workdir.display().to_string(),
         prompt_path: prompt_path.display().to_string(),

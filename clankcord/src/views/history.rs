@@ -9,6 +9,8 @@ use crate::runtime::timeline::{
 };
 
 use crate::runtime::Ctx;
+use crate::runtime::domain::transcripts::publication;
+use crate::runtime::rooms::catalog;
 use crate::runtime::util::{first_non_empty, first_value_string, non_empty, string_field};
 
 #[derive(Debug, Clone, Default)]
@@ -145,7 +147,7 @@ pub async fn timeline_tail(ctx: &Ctx, request: TimelineTailRequest) -> Result<Va
     let guild_id = request.guild_id;
     let channel_id = request.channel_id;
     let room = if guild_id.is_empty() || channel_id.is_empty() {
-        crate::runtime::rooms::catalog::room_for_identifier(
+        catalog::room_for_identifier(
             ctx,
             if channel_id.is_empty() {
                 None
@@ -155,8 +157,7 @@ pub async fn timeline_tail(ctx: &Ctx, request: TimelineTailRequest) -> Result<Va
         )
         .await?
     } else {
-        crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
-            .await?
+        catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?
     };
     let now = utc_now();
     let start = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
@@ -240,13 +241,11 @@ pub async fn materialize_transcript(
     let mut guild_id = request.guild_id;
     let mut channel_id = request.channel_id;
     if !guild_id.is_empty() && !channel_id.is_empty() {
-        let room =
-            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
-                .await?;
+        let room = catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?;
         guild_id = room.guild_id;
         channel_id = room.channel_id;
     } else {
-        let room = crate::runtime::rooms::catalog::room_for_identifier(
+        let room = catalog::room_for_identifier(
             ctx,
             if channel_id.is_empty() {
                 None
@@ -289,12 +288,7 @@ pub async fn materialize_transcript(
         )
         .await?;
     if publish == "discord" {
-        crate::runtime::domain::transcripts::publication::publish_materialized_transcript(
-            ctx,
-            &mut result,
-            request.live,
-        )
-        .await?;
+        publication::publish_materialized_transcript(ctx, &mut result, request.live).await?;
     }
     Ok(result)
 }
@@ -312,9 +306,7 @@ pub async fn render_transcript(ctx: &Ctx, request: RenderTranscriptRequest) -> R
     } else {
         let guild_id = request.guild_id;
         let channel_id = request.channel_id;
-        let room =
-            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
-                .await?;
+        let room = catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?;
         let now = utc_now();
         let start = resolve_time_reference(
             &first_non_empty([request.since, request.from, "-1h".to_string()]),
@@ -361,8 +353,7 @@ pub async fn search_transcripts(ctx: &Ctx, request: SearchTranscriptsRequest) ->
     let mut channel_id = request.channel_id;
     let all_channels = request.all_channels;
     if guild_id.is_empty() && !channel_id.is_empty() {
-        let room =
-            crate::runtime::rooms::catalog::resolve_room_scope(ctx, "", Some(&channel_id)).await?;
+        let room = catalog::resolve_room_scope(ctx, "", Some(&channel_id)).await?;
         guild_id = room.guild_id;
         channel_id = room.channel_id;
     }
@@ -370,9 +361,7 @@ pub async fn search_transcripts(ctx: &Ctx, request: SearchTranscriptsRequest) ->
         return Err(discord_tool_error("guild is required"));
     }
     if !channel_id.is_empty() && !all_channels {
-        let room =
-            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
-                .await?;
+        let room = catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?;
         guild_id = room.guild_id;
         channel_id = room.channel_id;
     }
@@ -401,8 +390,7 @@ pub async fn list_conversations(ctx: &Ctx, request: ListConversationsRequest) ->
     let mut channel_id = request.channel_id;
     let all_channels = request.all_channels;
     if guild_id.is_empty() && !channel_id.is_empty() {
-        let room =
-            crate::runtime::rooms::catalog::room_for_identifier(ctx, Some(&channel_id)).await?;
+        let room = catalog::room_for_identifier(ctx, Some(&channel_id)).await?;
         guild_id = room.guild_id;
         channel_id = room.channel_id;
     }
@@ -456,9 +444,7 @@ pub async fn context_resolve(ctx: &Ctx, request: ContextResolveRequest) -> Resul
             "guild, channel, and reference are required",
         ));
     }
-    let room =
-        crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
-            .await?;
+    let room = catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?;
     let now = utc_now();
     let lowered = reference.to_lowercase();
     if lowered.contains("just said") || lowered.contains("last thing") {

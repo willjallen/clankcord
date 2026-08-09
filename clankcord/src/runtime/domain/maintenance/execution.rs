@@ -7,7 +7,12 @@ use crate::model::job::{
     Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
 };
 use crate::runtime::Ctx;
+use crate::runtime::automations::engine;
+use crate::runtime::domain::children;
+use crate::runtime::domain::interactions::thread_titles;
 use crate::runtime::domain::maintenance::STALE_RUNNING_JOB_TIMEOUT_MINUTES;
+use crate::runtime::domain::maintenance::voice_status;
+use crate::runtime::domain::transcription::mux;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
 
 pub(crate) async fn prepare_runtime_maintenance_job(
@@ -16,12 +21,7 @@ pub(crate) async fn prepare_runtime_maintenance_job(
     _payload: &RuntimeMaintenancePayload,
 ) -> Result<JobDecision> {
     let mut submitted = Vec::new();
-    for definition_job in
-        crate::runtime::domain::interactions::thread_titles::agent_thread_title_refresh_jobs(
-            ctx, job,
-        )
-        .await?
-    {
+    for definition_job in thread_titles::agent_thread_title_refresh_jobs(ctx, job).await? {
         let created = ctx.store.create_job(definition_job).await?;
         submitted.push(json!({
             "definition": "agent_thread_title_refresh",
@@ -40,10 +40,11 @@ pub(crate) async fn prepare_runtime_maintenance_job(
             config::failed_audio_segment_retry_batch_limit(),
         )
         .await?;
-    let transcription_mux_plan_jobs = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_jobs_for_queued_slots(ctx,
-            config::transcription_mux_batch_delay_ms(),
-        )
-        .await?;
+    let transcription_mux_plan_jobs = mux::ensure_transcription_mux_plan_jobs_for_queued_slots(
+        ctx,
+        config::transcription_mux_batch_delay_ms(),
+    )
+    .await?;
     Ok(JobDecision::Complete(JobOutput::from_boundary_json(
         &json!({
             "kind": "runtime_maintenance",
@@ -60,21 +61,16 @@ pub(crate) async fn prepare_runtime_maintenance_job(
 }
 
 pub(crate) async fn prepare_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
-    let children = match crate::runtime::domain::children::await_children(
-        ctx,
-        &job.id,
-        "voice status snapshot dependency",
-    )
-    .await?
-    {
-        crate::runtime::domain::children::ChildResolution::Pending => {
-            return Ok(JobDecision::Wait);
-        }
-        crate::runtime::domain::children::ChildResolution::Failed { message, .. } => {
-            return Ok(JobDecision::fail(message));
-        }
-        crate::runtime::domain::children::ChildResolution::Settled(children) => children,
-    };
+    let children =
+        match children::await_children(ctx, &job.id, "voice status snapshot dependency").await? {
+            crate::runtime::domain::children::ChildResolution::Pending => {
+                return Ok(JobDecision::Wait);
+            }
+            crate::runtime::domain::children::ChildResolution::Failed { message, .. } => {
+                return Ok(JobDecision::fail(message));
+            }
+            crate::runtime::domain::children::ChildResolution::Settled(children) => children,
+        };
     if let Some(snapshot_job) = children
         .iter()
         .find(|child| child.kind == JobKind::DiscordVoiceStatusSnapshot)
@@ -96,7 +92,7 @@ pub(crate) async fn prepare_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Resul
             .collect::<Vec<_>>();
         let voice_state_count = voice_states.len();
         let voice_state_guild_count = output.voice_state_guild_ids.len();
-        crate::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+        voice_status::sync_voice_adapter_status(
             ctx,
             output.bots,
             output.sessions,
@@ -124,7 +120,7 @@ pub(crate) async fn prepare_automation_evaluation_job(
     ctx: &Ctx,
     _job: &Job,
 ) -> Result<JobDecision> {
-    let run = crate::runtime::automations::engine::run_automations(ctx).await?;
+    let run = engine::run_automations(ctx).await?;
     Ok(JobDecision::Complete(JobOutput::from_boundary_json(
         &json!({
             "kind": "automation_evaluation",

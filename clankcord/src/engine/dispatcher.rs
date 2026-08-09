@@ -8,6 +8,10 @@ use crate::runtime::Ctx;
 use crate::runtime::domain::voice_capture::segments;
 
 use crate::engine::routes;
+use crate::runtime::domain::interactions::tasks;
+use crate::runtime::domain::interactions::thread_titles;
+use crate::runtime::timeline;
+use crate::runtime::util;
 
 pub async fn dispatch_claimed_runtime_job<A>(
     ctx: &Ctx,
@@ -63,24 +67,19 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
             }
             Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
         },
-        JobKind::AgentTask => {
-            crate::runtime::domain::interactions::tasks::dispatch_claimed_agent_task_job(
-                ctx, running,
-            )
-            .await
-        }
+        JobKind::AgentTask => tasks::dispatch_claimed_agent_task_job(ctx, running).await,
         JobKind::AgentThreadTitleRefresh => {
             let decision = match &running.payload {
-                    crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
-                        crate::runtime::domain::interactions::thread_titles::prepare_agent_thread_title_refresh_job(ctx, &running, payload)
-                            .await
-                    }
-                    payload => anyhow::bail!(
-                        "job kind {} has unexpected payload {}",
-                        running.kind,
-                        payload.kind()
-                    ),
-                };
+                crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
+                    thread_titles::prepare_agent_thread_title_refresh_job(ctx, &running, payload)
+                        .await
+                }
+                payload => anyhow::bail!(
+                    "job kind {} has unexpected payload {}",
+                    running.kind,
+                    payload.kind()
+                ),
+            };
             match decision {
                 Ok(decision) => apply_job_decision(ctx, &job_id, running, decision).await,
                 Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
@@ -171,7 +170,7 @@ pub(crate) async fn fail_dispatched_job(
     latest.set_state(JobState::Failed);
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
-    crate::runtime::util::log(&format!("job dispatch failed {job_id}: {error_text}"));
+    util::log(&format!("job dispatch failed {job_id}: {error_text}"));
     Ok(json!({"dispatched": false, "job": latest.to_value(), "error": error_text}))
 }
 
@@ -192,12 +191,10 @@ pub(crate) async fn requeue_dispatched_job(
     latest.started_at = None;
     latest.completed_at = None;
     let delay = delay_for_attempt(latest.attempts);
-    latest.next_run_at = Some(crate::runtime::timeline::isoformat_z(Some(
-        crate::runtime::timeline::utc_now() + delay,
-    )));
+    latest.next_run_at = Some(timeline::isoformat_z(Some(timeline::utc_now() + delay)));
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
-    crate::runtime::util::log(&format!(
+    util::log(&format!(
         "{log_prefix} {job_id}: attempt {} next_run_at {} error: {error_text}",
         latest.attempts,
         latest.next_run_at.clone().unwrap_or_default()

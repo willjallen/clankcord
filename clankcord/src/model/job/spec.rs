@@ -9,6 +9,7 @@
 //! in Postgres, so a queued row can never sit unschedulable in silence.
 
 use crate::model::job::{Job, JobKind, JobPayload};
+use crate::runtime::agents;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobExecutor {
@@ -355,7 +356,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
             if payload.guild_id.trim().is_empty() {
                 format!(
                     "agent:route:{}",
-                    crate::runtime::agents::dm_route_key(&payload.author_user_id)
+                    agents::dm_route_key(&payload.author_user_id)
                 )
             } else {
                 format!("discord:text:{}", normalize_key_part(&payload.channel_id))
@@ -458,10 +459,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
         }
         JobPayload::AgentSessionResume(payload) => {
             if payload.route_kind == "dm" {
-                format!(
-                    "agent:route:{}",
-                    crate::runtime::agents::dm_route_key(&payload.dm_user_id)
-                )
+                format!("agent:route:{}", agents::dm_route_key(&payload.dm_user_id))
             } else {
                 voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
             }
@@ -522,7 +520,7 @@ pub(crate) fn ordering_key(job: &Job) -> String {
 fn voice_agent_route_ordering_key(guild_id: &str, voice_channel_id: &str) -> String {
     format!(
         "agent:route:{}",
-        crate::runtime::agents::voice_route_key(guild_id, voice_channel_id)
+        agents::voice_route_key(guild_id, voice_channel_id)
     )
 }
 

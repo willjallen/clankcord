@@ -13,6 +13,8 @@ use crate::model::job::{
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::runtime::Ctx;
 use crate::runtime::agents::{AgentSessionRecord, AgentSessionRouteKind};
+use crate::runtime::domain::interactions::agent_sessions;
+use crate::runtime::domain::messaging::session_threads;
 use crate::runtime::domain::messaging::session_threads::{
     discord_error_text_targets_unavailable_session_thread,
     discord_error_text_unavailable_channel_id,
@@ -192,14 +194,13 @@ async fn resolve_text_delivery_target(
             .map(TextDeliveryTarget::Ready)
         }
         TextTargetKind::AgentSession => {
-            let session =
-                crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
-                    ctx,
-                    job,
-                    &payload.source_job_id,
-                    "text delivery",
-                )
-                .await?;
+            let session = session_threads::agent_session_for_source_job(
+                ctx,
+                job,
+                &payload.source_job_id,
+                "text delivery",
+            )
+            .await?;
             resolve_agent_session_target(ctx, job, payload, children, session).await
         }
     }
@@ -215,7 +216,7 @@ async fn repair_text_delivery_unavailable_thread_failures(
     if payload.target.kind != TextTargetKind::AgentSession {
         return Ok(ignored);
     }
-    let session = crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
+    let session = session_threads::agent_session_for_source_job(
         ctx,
         job,
         &payload.source_job_id,
@@ -236,7 +237,7 @@ async fn repair_text_delivery_unavailable_thread_failures(
             discord_error_text_unavailable_channel_id(&child.metadata.error),
             target.channel_id.clone(),
         ]);
-        crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(
+        session_threads::mark_agent_session_thread_unavailable(
             ctx,
             &session.agent_session_id,
             &thread_id,
@@ -307,27 +308,28 @@ async fn resolve_agent_session_target(
                     );
                 }
                 Ok(TextDeliveryTarget::WaitFor(
-                        Job::discord_forum_thread_create(
-                            RuntimeScope::voice_channel(
-                                session.guild_id.clone(),
-                                session.scope_id.clone(),
-                            ),
-                            payload.requested_by_user_id.clone(),
-                            DiscordForumThreadCreatePayload {
-                                parent_channel_id: session.discord_parent_channel_id.clone(),
-                                name: crate::runtime::domain::interactions::agent_sessions::default_agent_thread_name(ctx, &session).await?,
-                                content: crate::runtime::domain::interactions::agent_sessions::agent_thread_content(ctx,
-                                        &session.guild_id,
-                                        &session.scope_id,
-                                        &payload.requested_by_user_id,
-                                        &session.agent_session_id,
-                                    )
-                                    .await?,
-                                auto_archive_minutes: config::agent_thread_auto_archive_minutes(),
-                                source_job_id: job.id.clone(),
-                            },
+                    Job::discord_forum_thread_create(
+                        RuntimeScope::voice_channel(
+                            session.guild_id.clone(),
+                            session.scope_id.clone(),
                         ),
-                    ))
+                        payload.requested_by_user_id.clone(),
+                        DiscordForumThreadCreatePayload {
+                            parent_channel_id: session.discord_parent_channel_id.clone(),
+                            name: agent_sessions::default_agent_thread_name(ctx, &session).await?,
+                            content: agent_sessions::agent_thread_content(
+                                ctx,
+                                &session.guild_id,
+                                &session.scope_id,
+                                &payload.requested_by_user_id,
+                                &session.agent_session_id,
+                            )
+                            .await?,
+                            auto_archive_minutes: config::agent_thread_auto_archive_minutes(),
+                            source_job_id: job.id.clone(),
+                        },
+                    ),
+                ))
             }
         }
         kind => anyhow::bail!(

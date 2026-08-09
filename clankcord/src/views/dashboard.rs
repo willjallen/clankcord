@@ -18,6 +18,8 @@ use crate::runtime::timeline::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference, utc_now,
 };
 use crate::runtime::util::{first_non_empty, preview};
+use crate::views::jobs;
+use crate::views::operations;
 
 const DEFAULT_FROM: &str = "-1h";
 const DEFAULT_LIMIT: usize = 120;
@@ -466,7 +468,7 @@ pub async fn dashboard_transcript(ctx: &Ctx, request: DashboardTranscriptRequest
                 .ok_or_else(|| anyhow::anyhow!("invalid dashboard transcript since: {raw}"))?,
         )
     };
-    let mut events = crate::views::operations::recent_transcript_events(
+    let mut events = operations::recent_transcript_events(
         ctx,
         since,
         request.limit.clamp(1, 5000),
@@ -486,7 +488,7 @@ pub async fn dashboard_transcript(ctx: &Ctx, request: DashboardTranscriptRequest
 }
 
 pub async fn dashboard_agent_detail(ctx: &Ctx, job_id: &str) -> Result<Value> {
-    let mut detail = crate::views::operations::dashboard_agent_job(ctx, job_id).await?;
+    let mut detail = operations::dashboard_agent_job(ctx, job_id).await?;
     if let Some(job_value) = detail.get_mut("job") {
         let job = ctx.store.get_job(job_id).await?;
         enrich_job_values(
@@ -1992,7 +1994,7 @@ fn apply_automation_target_labels(
 }
 
 fn dashboard_agent_list_entry(job: &Job) -> Value {
-    let mut job_value = crate::views::jobs::public_interaction_job_context(job);
+    let mut job_value = jobs::public_interaction_job_context(job);
     let task = job.metadata.agent_task();
     let result_excerpt = task
         .map(|task| preview(&task.response_text, 1200))
@@ -2741,7 +2743,7 @@ fn dashboard_job_payload(
     requested_by_label: &str,
     category: &str,
 ) -> Value {
-    let mut payload = crate::views::jobs::public_interaction_job_context(job);
+    let mut payload = jobs::public_interaction_job_context(job);
     let object = payload.as_object_mut().unwrap();
     object.insert("scopeLabel".to_string(), Value::String(label.to_string()));
     object.insert("category".to_string(), Value::String(category.to_string()));

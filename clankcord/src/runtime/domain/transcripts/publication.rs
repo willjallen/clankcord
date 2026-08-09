@@ -12,8 +12,10 @@ use crate::model::job::{
 };
 use crate::model::scope::RuntimeScope;
 use crate::runtime::Ctx;
+use crate::runtime::domain::children;
 use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
 use crate::runtime::rooms::RoomConfig;
+use crate::runtime::rooms::catalog;
 use crate::runtime::timeline::isoformat_z;
 use crate::runtime::util::{first_non_empty, preview, string_field};
 
@@ -75,13 +77,7 @@ pub(crate) async fn prepare_transcript_publication_job(
     payload: &TranscriptPublicationPayload,
 ) -> Result<JobDecision> {
     let mut publication = ctx.store.get_publication(&payload.publication_id).await?;
-    let children = match crate::runtime::domain::children::await_children(
-        ctx,
-        &job.id,
-        "publication dependency",
-    )
-    .await?
-    {
+    let children = match children::await_children(ctx, &job.id, "publication dependency").await? {
         crate::runtime::domain::children::ChildResolution::Pending => {
             return Ok(JobDecision::Wait);
         }
@@ -236,9 +232,7 @@ async fn publication_thread_request(
 ) -> Result<(RoomConfig, String, String, i64)> {
     let guild_id = string_field(publication, "guild_id");
     let channel_id = string_field(publication, "voice_channel_id");
-    let room =
-        crate::runtime::rooms::catalog::room_for_channel_ids(ctx, &guild_id, &channel_id, None)
-            .await?;
+    let room = catalog::room_for_channel_ids(ctx, &guild_id, &channel_id, None).await?;
     let window = ctx
         .store
         .get_window(&string_field(publication, "window_id"))

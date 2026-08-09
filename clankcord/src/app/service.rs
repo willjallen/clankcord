@@ -13,8 +13,11 @@ use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::engine::JobBus;
 use crate::engine::RuntimeExecutor;
+use crate::engine::schedules;
 use crate::model::job::{CommandRequest, Job, RuntimeControlAction};
 use crate::runtime::Ctx;
+use crate::runtime::domain::interactions::commands;
+use crate::runtime::domain::interactions::tasks;
 use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::util::log;
 
@@ -47,8 +50,7 @@ impl RuntimeHandle {
 
     pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
         let runtime = self.runtime_context();
-        crate::runtime::domain::interactions::commands::create_command_job(&runtime, command, None)
-            .await
+        commands::create_command_job(&runtime, command, None).await
     }
 
     pub async fn submit_job(&self, job: Job) -> Result<Value> {
@@ -141,9 +143,7 @@ impl RuntimeService {
             .await
             .context("writing runtime config snapshot")?;
         let runtime = Ctx::new(timeline_store.clone());
-        match crate::runtime::domain::interactions::tasks::recover_interrupted_agent_tasks(&runtime)
-            .await
-        {
+        match tasks::recover_interrupted_agent_tasks(&runtime).await {
             Ok(recovered) if !recovered.is_empty() => {
                 log(&format!(
                     "recovered {} interrupted agent task(s)",
@@ -159,7 +159,7 @@ impl RuntimeService {
             DiscordRuntimeApi::new(live_voice.clone()),
             timeline_store.clone(),
         );
-        crate::engine::schedules::ensure_default_schedules(&timeline_store)
+        schedules::ensure_default_schedules(&timeline_store)
             .await
             .context("declaring default job schedules")?;
         Ok(Self {

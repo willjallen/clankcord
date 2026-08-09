@@ -13,6 +13,8 @@ use crate::runtime::domain::interactions::requires_confirmation;
 use crate::runtime::timeline::isoformat_z;
 
 use crate::runtime::Ctx;
+use crate::runtime::domain::interactions::commands;
+use crate::runtime::rooms::catalog;
 use crate::runtime::util::{first_non_empty, preview, string_field};
 
 pub async fn confirmation_context_for_command(
@@ -215,13 +217,8 @@ pub async fn confirmation_card_content(
     command: &CommandRequest,
 ) -> Result<String> {
     let (start, end) = command.window_times(None);
-    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
-        ctx,
-        &command.guild_id,
-        &command.scope_id,
-        None,
-    )
-    .await?;
+    let room =
+        catalog::room_for_channel_ids(ctx, &command.guild_id, &command.scope_id, None).await?;
     let requester = first_non_empty([
         command.requested_by_speaker_label.clone(),
         command.requested_by_user_id.clone(),
@@ -281,12 +278,7 @@ pub async fn approve_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String
         confirmation.approved_at = isoformat_z(None);
     }
     ctx.store.update_job(&job).await?;
-    let dispatch_result = match crate::runtime::domain::interactions::commands::create_command_job(
-        ctx,
-        command.clone(),
-        Some(&job),
-    )
-    .await
+    let dispatch_result = match commands::create_command_job(ctx, command.clone(), Some(&job)).await
     {
         Ok(result) => result,
         Err(error) => {

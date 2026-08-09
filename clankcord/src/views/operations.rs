@@ -14,6 +14,7 @@ use crate::runtime::Ctx;
 use crate::runtime::agents::AgentRuntime;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
+use crate::runtime::domain::voice_capture::wake_circuit;
 use crate::runtime::timeline::store::{
     OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY,
 };
@@ -22,6 +23,8 @@ use crate::runtime::timeline::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
+use crate::views::dashboard;
+use crate::views::status;
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
@@ -70,9 +73,7 @@ pub async fn dashboard_summary_payload(ctx: &Ctx) -> Result<Value> {
     )?;
     apply_active_health_facts(&mut health_facts, &active_jobs, now);
     let (configured_room_count, automation_count) = inventory;
-    let wake_provider =
-        crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(&ctx.store)
-            .await?;
+    let wake_provider = wake_circuit::wake_provider_health(&ctx.store).await?;
     Ok(json!({
         "generatedAt": isoformat_z(Some(now)),
         "health": runtime_health_from_facts(
@@ -117,16 +118,14 @@ async fn dashboard_health_bundle(ctx: &Ctx) -> Result<(Value, Value)> {
         ));
     }
 
-    let mut status = crate::views::status::status_payload(ctx, None).await?;
+    let mut status = status::status_payload(ctx, None).await?;
     let voice = apply_voice_observation_freshness(ctx, &mut status, now).await?;
     let operations = operational_diagnostics(ctx, now).await?;
     let configured_room_count = ctx.store.list_room_configs().await?.len();
     let automation_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM automations")
         .fetch_one(&ctx.store.pool)
         .await?;
-    let wake_provider =
-        crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(&ctx.store)
-            .await?;
+    let wake_provider = wake_circuit::wake_provider_health(&ctx.store).await?;
     let health = runtime_health(
         &database,
         &operations.job_rows,
@@ -175,7 +174,7 @@ pub async fn dashboard_health_payload(
 
 pub async fn dashboard_rooms_payload(ctx: &Ctx) -> Result<Value> {
     let now = utc_now();
-    let mut status = crate::views::status::status_payload(ctx, None).await?;
+    let mut status = status::status_payload(ctx, None).await?;
     if let Value::Object(object) = &mut status {
         object.insert(
             "liveOccupancy".to_string(),
@@ -2390,8 +2389,7 @@ async fn recent_failure_rows(
             )
         })
         .collect::<Vec<_>>();
-    let scope_labels =
-        crate::views::dashboard::dashboard_scope_label_batch(runtime, &scope_keys).await?;
+    let scope_labels = dashboard::dashboard_scope_label_batch(runtime, &scope_keys).await?;
     for failure in &mut failures {
         failure.scope_label = scope_labels
             .get(&(

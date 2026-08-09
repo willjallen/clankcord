@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::domain::voice_capture::segments;
 
 pub(crate) const OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS: i64 = 6 * 60 * 60;
 
@@ -559,9 +560,7 @@ impl TimelineStore {
             let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
             let mut job = Job::decode(&payload_blob)?;
             let retryable = job.state == crate::model::job::JobState::FailedTimeout
-                || crate::runtime::domain::voice_capture::segments::is_retryable_audio_segment_error_text(
-                    &job.metadata.error,
-                );
+                || segments::is_retryable_audio_segment_error_text(&job.metadata.error);
             if !retryable {
                 continue;
             }
@@ -570,12 +569,7 @@ impl TimelineStore {
             job.started_at = None;
             job.completed_at = None;
             job.next_run_at = Some(isoformat_z(Some(
-                utc_now()
-                    + chrono::Duration::seconds(
-                        crate::runtime::domain::voice_capture::segments::retry_delay_seconds(
-                            job.attempts,
-                        ),
-                    ),
+                utc_now() + chrono::Duration::seconds(segments::retry_delay_seconds(job.attempts)),
             )));
             self.update_job(&job).await?;
             requeued.push(job.to_value());

@@ -10,7 +10,18 @@ use crate::ports::discord::DiscordApi;
 use crate::runtime::Ctx;
 use crate::runtime::domain::ingress::discord_slash;
 use crate::runtime::domain::ingress::discord_text;
+use crate::runtime::domain::interactions::agent_sessions;
+use crate::runtime::domain::interactions::confirmations;
+use crate::runtime::domain::maintenance::execution;
+use crate::runtime::domain::maintenance::member_sync;
+use crate::runtime::domain::messaging::text_delivery;
+use crate::runtime::domain::messaging::typing_indicator;
+use crate::runtime::domain::transcripts::publication;
+use crate::runtime::domain::voice::playback;
+use crate::runtime::domain::voice::room_placement;
 use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
+use crate::runtime::rooms::catalog;
+use crate::views::jobs;
 
 pub(crate) async fn execute<A>(runtime: &Ctx, job: &Job, external_api: &A) -> Result<JobDecision>
 where
@@ -18,68 +29,110 @@ where
 {
     match &job.payload {
         JobPayload::DiscordTextSend(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_text_send_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::messaging::discord_io::execute_discord_text_send_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordForumThreadCreate(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_create_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_create_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordForumThreadRename(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordTypingIndicator(payload) => {
-            crate::runtime::domain::messaging::typing_indicator::execute_discord_typing_indicator_job(runtime, job, payload, external_api)
-                .await
+            typing_indicator::execute_discord_typing_indicator_job(
+                runtime,
+                job,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordVoiceJoin(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_join_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_join_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordVoiceLeave(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_leave_job(runtime, job, payload, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_leave_job(
+                runtime,
+                job,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordVoiceMute(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_mute_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_mute_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordVoiceDeafen(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_deafen_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_deafen_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::DiscordVoicePlayAudio(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(runtime, payload, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(
+                runtime,
+                payload,
+                external_api,
+            )
+            .await
         }
         JobPayload::MemberSync(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-                &crate::runtime::domain::maintenance::member_sync::execute(runtime, payload, external_api)
-                    .await?,
+                &member_sync::execute(runtime, payload, external_api).await?,
             )?))
         }
         JobPayload::DiscordVoiceStatusSnapshot(_) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(runtime, external_api)
-                .await
+            crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(
+                runtime,
+                external_api,
+            )
+            .await
         }
 
         JobPayload::RuntimeControl(payload) => runtime_control::prepare(runtime, payload).await,
         JobPayload::RuntimeMaintenance(payload) => {
-            crate::runtime::domain::maintenance::execution::prepare_runtime_maintenance_job(runtime, job, payload).await
+            execution::prepare_runtime_maintenance_job(runtime, job, payload).await
         }
-        JobPayload::VoiceStatusSync(_) => crate::runtime::domain::maintenance::execution::prepare_voice_status_sync_job(runtime, job).await,
-        JobPayload::AutomationEvaluation(_) => crate::runtime::domain::maintenance::execution::prepare_automation_evaluation_job(runtime, job).await,
+        JobPayload::VoiceStatusSync(_) => {
+            execution::prepare_voice_status_sync_job(runtime, job).await
+        }
+        JobPayload::AutomationEvaluation(_) => {
+            execution::prepare_automation_evaluation_job(runtime, job).await
+        }
         JobPayload::AgentSessionRetirement(_) => {
-            crate::runtime::domain::interactions::agent_sessions::prepare_agent_session_retirement_job(runtime).await
+            agent_sessions::prepare_agent_session_retirement_job(runtime).await
         }
         JobPayload::StaleWakeProbeSweep(payload) => {
-            crate::runtime::domain::maintenance::execution::prepare_stale_wake_probe_sweep_job(runtime, payload.max_age_seconds)
-                .await
+            execution::prepare_stale_wake_probe_sweep_job(runtime, payload.max_age_seconds).await
         }
         JobPayload::EphemeralJobGc(payload) => {
-            crate::runtime::domain::maintenance::execution::prepare_ephemeral_job_gc_job(runtime, payload.batch_limit)
-                .await
+            execution::prepare_ephemeral_job_gc_job(runtime, payload.batch_limit).await
         }
         JobPayload::WakeActivation(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
@@ -91,33 +144,38 @@ where
                 &segments::execute_transcription_mux_plan_job(runtime, job, payload).await?,
             )?))
         }
-        JobPayload::Command(_) => commands::prepare(runtime, job).await,
+        JobPayload::Command(_) => {
+            crate::runtime::domain::interactions::commands::prepare_command_job(runtime, job).await
+        }
         JobPayload::DiscordTextMessage(payload) => {
             discord_text::prepare(runtime, job, payload).await
         }
         JobPayload::DiscordSlashCommand(payload) => {
             discord_slash::prepare(runtime, job, payload).await
         }
-        JobPayload::TextDelivery(payload) => crate::runtime::domain::messaging::text_delivery::prepare_text_delivery_job(runtime, job, payload).await,
-        JobPayload::ConfirmationRequired(_) => crate::runtime::domain::interactions::confirmations::prepare_confirmation_required_job(runtime, job).await,
+        JobPayload::TextDelivery(payload) => {
+            text_delivery::prepare_text_delivery_job(runtime, job, payload).await
+        }
+        JobPayload::ConfirmationRequired(_) => {
+            confirmations::prepare_confirmation_required_job(runtime, job).await
+        }
         JobPayload::AgentSessionStart(payload) => {
-            crate::runtime::domain::interactions::agent_sessions::prepare_agent_session_start_job(runtime, job, payload).await
+            agent_sessions::prepare_agent_session_start_job(runtime, job, payload).await
         }
         JobPayload::AgentSessionSunset(payload) => {
-            crate::runtime::domain::interactions::agent_sessions::prepare_agent_session_sunset_job(runtime, payload).await
+            agent_sessions::prepare_agent_session_sunset_job(runtime, payload).await
         }
         JobPayload::AgentSessionResume(payload) => {
-            crate::runtime::domain::interactions::agent_sessions::prepare_agent_session_resume_job(runtime, job, payload).await
+            agent_sessions::prepare_agent_session_resume_job(runtime, job, payload).await
         }
         JobPayload::TranscriptPublication(payload) => {
-            crate::runtime::domain::transcripts::publication::prepare_transcript_publication_job(runtime, job, payload)
-                .await
+            publication::prepare_transcript_publication_job(runtime, job, payload).await
         }
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::prepare(runtime, job, payload).await
         }
         JobPayload::DiscordVoicePlayback(payload) => {
-            crate::runtime::domain::voice::playback::prepare_voice_playback_job(runtime, job, payload).await
+            playback::prepare_voice_playback_job(runtime, job, payload).await
         }
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
@@ -171,46 +229,35 @@ mod runtime_control {
     ) -> Result<JobDecision> {
         let output = match payload.action {
             RuntimeControlAction::RetryJob => {
-                let target =
-                    crate::views::jobs::retry_job_payload(runtime, &payload.target_job_id).await?;
+                let target = jobs::retry_job_payload(runtime, &payload.target_job_id).await?;
                 JobOutput::from_boundary_json(
                     &json!({"kind": "runtime_control", "action": "retry_job", "target": target}),
                 )?
             }
             RuntimeControlAction::ApproveConfirmation => {
-                let result =
-                    crate::runtime::domain::interactions::confirmations::approve_confirmation(
-                        runtime,
-                        &payload.target_job_id,
-                        payload.actor_user_id.clone(),
-                    )
-                    .await?;
+                let result = confirmations::approve_confirmation(
+                    runtime,
+                    &payload.target_job_id,
+                    payload.actor_user_id.clone(),
+                )
+                .await?;
                 JobOutput::from_boundary_json(
                     &json!({"kind": "runtime_control", "action": "approve_confirmation", "result": result}),
                 )?
             }
             RuntimeControlAction::CancelConfirmation => {
-                let result =
-                    crate::runtime::domain::interactions::confirmations::cancel_confirmation(
-                        runtime,
-                        &payload.target_job_id,
-                        payload.actor_user_id.clone(),
-                    )
-                    .await?;
+                let result = confirmations::cancel_confirmation(
+                    runtime,
+                    &payload.target_job_id,
+                    payload.actor_user_id.clone(),
+                )
+                .await?;
                 JobOutput::from_boundary_json(
                     &json!({"kind": "runtime_control", "action": "cancel_confirmation", "result": result}),
                 )?
             }
         };
         Ok(JobDecision::Complete(output))
-    }
-}
-
-mod commands {
-    use super::*;
-
-    pub(super) async fn prepare(runtime: &Ctx, job: &Job) -> Result<JobDecision> {
-        crate::runtime::domain::interactions::commands::prepare_command_job(runtime, job).await
     }
 }
 
@@ -223,10 +270,7 @@ mod room_agents {
         payload: &RoomAgentPlacementPayload,
     ) -> Result<JobDecision> {
         if runtime.store.has_child_jobs(&job.id).await? {
-            return crate::runtime::domain::voice::room_placement::resume_room_agent_placement_job(
-                runtime, job, payload,
-            )
-            .await;
+            return room_placement::resume_room_agent_placement_job(runtime, job, payload).await;
         }
         let target_room_identifier = if payload.room_id.trim().is_empty() {
             job.scope_id.as_str()
@@ -236,18 +280,13 @@ mod room_agents {
         match payload.action {
             RoomAgentPlacementAction::Join => {
                 let room = if !target_room_identifier.trim().is_empty() {
-                    crate::runtime::rooms::catalog::room_for_identifier(
-                        runtime,
-                        Some(target_room_identifier),
-                    )
-                    .await?
+                    catalog::room_for_identifier(runtime, Some(target_room_identifier)).await?
                 } else if !job.guild_id.trim().is_empty() {
-                    crate::runtime::rooms::catalog::resolve_room_scope(runtime, &job.guild_id, None)
-                        .await?
+                    catalog::resolve_room_scope(runtime, &job.guild_id, None).await?
                 } else {
-                    crate::runtime::rooms::catalog::room_for_identifier(runtime, None).await?
+                    catalog::room_for_identifier(runtime, None).await?
                 };
-                crate::runtime::domain::voice::room_placement::prepare_join_room_jobs(
+                room_placement::prepare_join_room_jobs(
                     runtime,
                     room,
                     &job.requested_by_user_id,
@@ -260,7 +299,7 @@ mod room_agents {
                 let cooldown_seconds = payload
                     .cooldown_seconds
                     .unwrap_or(pool.manual_override_seconds);
-                crate::runtime::domain::voice::room_placement::prepare_leave_room_jobs(
+                room_placement::prepare_leave_room_jobs(
                     runtime,
                     Some(target_room_identifier),
                     cooldown_seconds,
