@@ -9,9 +9,8 @@ use crate::runtime::domain::messaging::session_threads::{
 };
 use crate::runtime::util::first_non_empty;
 use crate::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, Ctx,
-    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, TextTarget,
-    TextTargetKind,
+    AgentSessionRecord, AgentSessionRouteKind, Ctx, DiscordTypingIndicatorOutput,
+    DiscordTypingIndicatorPayload, Job, JobOutput, TextTarget, TextTargetKind,
 };
 
 const NO_SESSION_THREAD_TYPING_STATUS: &str = "skipped_no_session_thread";
@@ -160,52 +159,17 @@ async fn resolve_typing_target(
             }))
         }
         TextTargetKind::AgentSession => {
-            let session = session_for_typing_indicator(ctx, job, payload).await?;
+            let session =
+                crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
+                    ctx,
+                    job,
+                    &payload.source_job_id,
+                    "discord typing",
+                )
+                .await?;
             resolve_agent_session_typing_target(ctx, job, payload, session).await
         }
     }
-}
-
-async fn session_for_typing_indicator(
-    ctx: &Ctx,
-    job: &Job,
-    payload: &DiscordTypingIndicatorPayload,
-) -> Result<AgentSessionRecord> {
-    let source_job_id = payload.source_job_id.trim();
-    if source_job_id.is_empty() {
-        anyhow::bail!(
-            "discord typing job {} uses session target without source job",
-            job.id
-        );
-    }
-    let source = ctx.store.get_job(source_job_id).await?;
-    let crate::runtime::JobPayload::AgentTask(agent_task) = &source.payload else {
-        anyhow::bail!(
-            "discord typing job {} uses session target but source job {} is not an agent task",
-            job.id,
-            source_job_id
-        );
-    };
-    let session = ctx
-        .store
-        .get_agent_session_record(&agent_task.agent_session_id)
-        .await?;
-    if session.state == AgentSessionRecordState::Retired
-        && session.retirement_reason == "agent_session_resume_route_takeover"
-    {
-        return ctx
-                .store
-                .active_agent_session_for_route(&session.route_key)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "agent session {} was retired by resume takeover but route {} has no active session",
-                        session.agent_session_id,
-                        session.route_key
-                    )
-                });
-    }
-    Ok(session)
 }
 
 async fn resolve_agent_session_typing_target(

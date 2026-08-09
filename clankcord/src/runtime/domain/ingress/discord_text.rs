@@ -4,8 +4,7 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, CommandRequest, Ctx, DiscordTextMessagePayload, Job,
-    JobOutput, RuntimeScope,
+    AgentSessionRecord, CommandRequest, Ctx, DiscordTextMessagePayload, Job, JobOutput,
 };
 
 pub(crate) async fn prepare(
@@ -92,7 +91,7 @@ async fn append_thread_message_event(
     let event = runtime
         .store
         .append_scope_event(
-            &agent_session_scope(session),
+            &session.scope(),
             json!({
                 "event_kind": "discord_text_message",
                 "kind": "discord_text_message",
@@ -141,7 +140,7 @@ fn agent_task_for_thread_message(
 
     Ok(Job::agent_task_for_session(
         session.agent_session_id.clone(),
-        agent_session_scope(&session),
+        session.scope(),
         payload.author_user_id.clone(),
         command,
     ))
@@ -152,14 +151,6 @@ fn agent_session_is_current(session: &AgentSessionRecord) -> bool {
         && parse_instant(&session.max_active_until)
             .map(|max_active_until| max_active_until > utc_now())
             .unwrap_or(false)
-}
-
-fn agent_session_scope(session: &AgentSessionRecord) -> RuntimeScope {
-    if session.route_kind == AgentSessionRouteKind::Dm {
-        RuntimeScope::dm(session.dm_user_id.clone())
-    } else {
-        RuntimeScope::voice_channel(session.guild_id.clone(), session.scope_id.clone())
-    }
 }
 
 fn text_author_label(payload: &DiscordTextMessagePayload) -> String {

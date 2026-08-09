@@ -28,13 +28,16 @@ impl AgentRuntime {
     pub fn task_session_key(guild_id: &str, voice_channel_id: &str) -> String {
         format!(
             "task:{}:{}",
-            normalize_key_part(guild_id),
-            normalize_key_part(voice_channel_id)
+            sanitize_route_key_part(guild_id),
+            sanitize_route_key_part(voice_channel_id)
         )
     }
 
     pub fn agent_session_key(agent_session_id: &str) -> String {
-        format!("agent:session:{}", normalize_key_part(agent_session_id))
+        format!(
+            "agent:session:{}",
+            sanitize_route_key_part(agent_session_id)
+        )
     }
 }
 
@@ -378,20 +381,20 @@ impl AgentSessionRecord {
 pub fn voice_route_key(guild_id: &str, voice_channel_id: &str) -> String {
     format!(
         "voice:{}:{}",
-        normalize_key_part(guild_id),
-        normalize_key_part(voice_channel_id)
+        sanitize_route_key_part(guild_id),
+        sanitize_route_key_part(voice_channel_id)
     )
 }
 
 pub fn dm_route_key(user_id: &str) -> String {
-    format!("dm:{}", normalize_key_part(user_id))
+    format!("dm:{}", sanitize_route_key_part(user_id))
 }
 
 pub fn thread_route_key(guild_id: &str, thread_id: &str) -> String {
     format!(
         "thread:{}:{}",
-        normalize_key_part(guild_id),
-        normalize_key_part(thread_id)
+        sanitize_route_key_part(guild_id),
+        sanitize_route_key_part(thread_id)
     )
 }
 
@@ -491,7 +494,11 @@ impl AgentSessionStatus {
     }
 }
 
-fn normalize_key_part(value: &str) -> String {
+/// Route-key sanitizer: strips non-alphanumerics entirely. This behavior is
+/// load-bearing — route keys derived from it are persisted on
+/// agent_sessions rows — and deliberately differs from the ordering-key
+/// normalizer in `jobs::spec`, which maps punctuation to underscores.
+fn sanitize_route_key_part(value: &str) -> String {
     value
         .chars()
         .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))

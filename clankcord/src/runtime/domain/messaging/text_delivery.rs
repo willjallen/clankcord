@@ -12,10 +12,9 @@ use crate::runtime::domain::messaging::session_threads::{
 use crate::runtime::timeline::sha256_file;
 use crate::runtime::util::{first_non_empty, string_field};
 use crate::runtime::{
-    AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, BinaryPayload, Ctx,
-    DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobState,
-    RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload,
-    TextTarget, TextTargetKind,
+    AgentSessionRecord, AgentSessionRouteKind, BinaryPayload, Ctx, DiscordForumThreadCreatePayload,
+    DiscordTextSendPayload, Job, JobKind, JobOutput, JobState, RuntimeScope, RuntimeScopeKind,
+    TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
 enum TextDeliveryTarget {
@@ -190,7 +189,14 @@ async fn resolve_text_delivery_target(
             .map(TextDeliveryTarget::Ready)
         }
         TextTargetKind::AgentSession => {
-            let session = session_for_text_delivery(ctx, job, payload).await?;
+            let session =
+                crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
+                    ctx,
+                    job,
+                    &payload.source_job_id,
+                    "text delivery",
+                )
+                .await?;
             resolve_agent_session_target(ctx, job, payload, children, session).await
         }
     }
@@ -206,7 +212,13 @@ async fn repair_text_delivery_unavailable_thread_failures(
     if payload.target.kind != TextTargetKind::AgentSession {
         return Ok(ignored);
     }
-    let session = session_for_text_delivery(ctx, job, payload).await?;
+    let session = crate::runtime::domain::messaging::session_threads::agent_session_for_source_job(
+        ctx,
+        job,
+        &payload.source_job_id,
+        "text delivery",
+    )
+    .await?;
     for child in children {
         if child.kind != JobKind::DiscordTextSend || child.state == JobState::Complete {
             continue;
@@ -232,48 +244,6 @@ async fn repair_text_delivery_unavailable_thread_failures(
         ignored.insert(child.id.clone());
     }
     Ok(ignored)
-}
-
-async fn session_for_text_delivery(
-    ctx: &Ctx,
-    job: &Job,
-    payload: &TextDeliveryPayload,
-) -> Result<AgentSessionRecord> {
-    let source_job_id = payload.source_job_id.trim();
-    if source_job_id.is_empty() {
-        anyhow::bail!(
-            "text delivery job {} uses session target without source job",
-            job.id
-        );
-    }
-    let source = ctx.store.get_job(source_job_id).await?;
-    let crate::runtime::JobPayload::AgentTask(agent_task) = &source.payload else {
-        anyhow::bail!(
-            "text delivery job {} uses session target but source job {} is not an agent task",
-            job.id,
-            source_job_id
-        );
-    };
-    let session = ctx
-        .store
-        .get_agent_session_record(&agent_task.agent_session_id)
-        .await?;
-    if session.state == AgentSessionRecordState::Retired
-        && session.retirement_reason == "agent_session_resume_route_takeover"
-    {
-        return ctx
-                .store
-                .active_agent_session_for_route(&session.route_key)
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "agent session {} was retired by resume takeover but route {} has no active session",
-                        session.agent_session_id,
-                        session.route_key
-                    )
-                });
-    }
-    Ok(session)
 }
 
 async fn resolve_agent_session_target(

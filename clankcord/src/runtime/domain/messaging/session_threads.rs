@@ -6,7 +6,9 @@ use crate::errors::{
     discord_error_text_is_unavailable_channel,
 };
 use crate::runtime::util::{first_non_empty, preview};
-use crate::runtime::{AgentSessionRecord, Ctx, TextTarget, TextTargetKind};
+use crate::runtime::{
+    AgentSessionRecord, AgentSessionRecordState, Ctx, Job, TextTarget, TextTargetKind,
+};
 
 pub(crate) const UNAVAILABLE_SESSION_THREAD_STATUS: &str = "skipped_unavailable_session_thread";
 
@@ -85,5 +87,51 @@ pub(crate) async fn mark_agent_session_thread_unavailable(
     ctx.store
         .append_scope_event(&session.scope(), event)
         .await?;
+    Ok(session)
+}
+
+/// Resolves the agent session behind a `source_job_id`, following resume
+/// takeovers to the active session on the same route. Shared by every
+/// surface whose target kind is AgentSession.
+pub(crate) async fn agent_session_for_source_job(
+    ctx: &Ctx,
+    job: &Job,
+    source_job_id: &str,
+    surface: &str,
+) -> Result<AgentSessionRecord> {
+    let source_job_id = source_job_id.trim();
+    if source_job_id.is_empty() {
+        anyhow::bail!(
+            "{surface} job {} uses session target without source job",
+            job.id
+        );
+    }
+    let source = ctx.store.get_job(source_job_id).await?;
+    let crate::runtime::JobPayload::AgentTask(agent_task) = &source.payload else {
+        anyhow::bail!(
+            "{surface} job {} uses session target but source job {} is not an agent task",
+            job.id,
+            source_job_id
+        );
+    };
+    let session = ctx
+        .store
+        .get_agent_session_record(&agent_task.agent_session_id)
+        .await?;
+    if session.state == AgentSessionRecordState::Retired
+        && session.retirement_reason == "agent_session_resume_route_takeover"
+    {
+        return ctx
+            .store
+            .active_agent_session_for_route(&session.route_key)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "agent session {} was retired by resume takeover but route {} has no active session",
+                    session.agent_session_id,
+                    session.route_key
+                )
+            });
+    }
     Ok(session)
 }
