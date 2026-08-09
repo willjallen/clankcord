@@ -12,7 +12,7 @@ use crate::config;
 use crate::domain::Ctx;
 use crate::domain::agents::AgentRuntime;
 use crate::domain::automations::{AutomationRecord, AutomationTrigger};
-use crate::domain::voice_capture::wake_circuit;
+use crate::domain::voice::capture::wake_circuit;
 use crate::model::job::{Job, JobKind, JobState};
 use crate::store::util::timeline_event_payload;
 use crate::store::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY};

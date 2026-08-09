@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::domain::Ctx;
 use crate::domain::interactions::commands;
-use crate::domain::voice_capture::wake_activations;
+use crate::domain::voice::capture::wake_activations;
 use crate::engine::JobDecision;
 use crate::model::job::{CommandKind, CommandRequest, DiscordSlashCommandPayload, Job, JobOutput};
 

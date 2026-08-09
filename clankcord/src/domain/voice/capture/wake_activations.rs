@@ -6,8 +6,8 @@ use crate::config;
 use crate::domain::Ctx;
 use crate::domain::interactions::agent_sessions;
 use crate::domain::transcription::mux;
+use crate::domain::voice::capture::segments;
 use crate::domain::voice::playback;
-use crate::domain::voice_capture::segments;
 use crate::model::job::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
 };

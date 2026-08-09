@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::domain::Ctx;
-use crate::domain::voice_capture::segments;
+use crate::domain::voice::capture::segments;
 use crate::engine::JobDecision;
 use crate::model::job::{Job, JobKind, JobOutput, JobState};
 use crate::ports::discord::DiscordApi;

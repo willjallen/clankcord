@@ -7,10 +7,10 @@ mod common;
 
 use clankcord::domain::Ctx;
 use clankcord::domain::agents::AgentSessionRecord;
+use clankcord::domain::voice::capture::wake_activations::{execute, schedule_from_wake_event};
 use clankcord::domain::voice::{
     SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
 };
-use clankcord::domain::voice_capture::wake_activations::{execute, schedule_from_wake_event};
 use clankcord::model::job::{
     AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobPayload, JobState,
 };

@@ -6,8 +6,8 @@ use crate::Result;
 use crate::adapters::wakeword::detect_wake_file_sync;
 use crate::config;
 use crate::domain::Ctx;
-use crate::domain::voice_capture::wake_activations::schedule_from_wake_event;
-use crate::domain::voice_capture::wake_circuit::{
+use crate::domain::voice::capture::wake_activations::schedule_from_wake_event;
+use crate::domain::voice::capture::wake_circuit::{
     acquire_wake_probe_admission, record_wake_provider_failure, record_wake_provider_success,
     wake_provider_health,
 };

@@ -1,5 +1,5 @@
 use super::*;
-use crate::domain::voice_capture::segments;
+use crate::domain::voice::capture::segments;
 
 pub(crate) const OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS: i64 = 6 * 60 * 60;
 

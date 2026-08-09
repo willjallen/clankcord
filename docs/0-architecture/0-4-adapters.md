@@ -19,7 +19,7 @@ adapter
 
 The runtime executor routes every claimed job to a domain handler. When a handler needs Discord IO, it calls the typed Discord runtime API. In the live service, `DiscordRuntimeApi` delegates voice operations and status snapshots to `LiveVoiceAdapter`, and delegates Discord text and forum operations to the gateway API modules.
 
-Discord IO jobs remain ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work. Their execution semantics live in `runtime/domain/**`; the adapter API performs the external operation requested by that domain handler.
+Discord IO jobs remain ordinary durable jobs. Their payloads, states, dependencies, outputs, and failures are stored like any other work. Their execution semantics live in `domain/**`; the adapter API performs the external operation requested by that domain handler.
 
 ```text
 discord_voice_join

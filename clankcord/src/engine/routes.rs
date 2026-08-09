@@ -12,9 +12,9 @@ use crate::domain::messaging::text_delivery;
 use crate::domain::messaging::typing_indicator;
 use crate::domain::rooms::catalog;
 use crate::domain::transcripts::publication;
+use crate::domain::voice::capture::{segments, wake_activations, wake_probes};
 use crate::domain::voice::playback;
 use crate::domain::voice::room_placement;
-use crate::domain::voice_capture::{segments, wake_activations, wake_probes};
 use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,

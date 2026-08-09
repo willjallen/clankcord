@@ -7,7 +7,7 @@ use serde_json::json;
 use clankcord::config;
 use clankcord::domain::Ctx;
 use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice_capture::wake_activations::schedule_from_wake_event;
+use clankcord::domain::voice::capture::wake_activations::schedule_from_wake_event;
 use clankcord::model::job::DiscordPostMetadata;
 use clankcord::model::job::JobMetadata;
 use clankcord::model::job::{

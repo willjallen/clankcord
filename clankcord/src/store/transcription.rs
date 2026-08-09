@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::config;
-use crate::domain::voice_capture::segments;
+use crate::domain::voice::capture::segments;
 use crate::model::job::AudioSegmentPayload;
 
 #[derive(Debug, Clone)]
