@@ -2,6 +2,7 @@ mod kind;
 mod output;
 mod payload;
 mod record;
+pub(crate) mod spec;
 mod util;
 
 pub use kind::{JobKind, JobState};

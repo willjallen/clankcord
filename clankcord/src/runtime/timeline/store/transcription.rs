@@ -1119,24 +1119,6 @@ fn estimated_transcription_provider_processing_ms(audio_ms: i64) -> i64 {
 }
 
 fn transcription_mux_plan_ordering_key(source_id: &str) -> String {
-    format!("transcription:mux_plan:{}", normalize_key_part(source_id))
+    format!("transcription:mux_plan:{}", crate::runtime::jobs::spec::normalize_key_part(source_id))
 }
 
-fn normalize_key_part(value: &str) -> String {
-    let normalized = value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if normalized.is_empty() {
-        "unknown".to_string()
-    } else {
-        normalized
-    }
-}

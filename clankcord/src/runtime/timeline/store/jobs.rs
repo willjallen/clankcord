@@ -121,8 +121,8 @@ impl TimelineStore {
         upsert_job_rows(&mut transaction, &child).await?;
         sqlx::query(
             r#"
-            INSERT INTO job_dependencies(parent_job_id, child_job_id, dependency_kind, created_at_ms, resolution_policy)
-            VALUES ($1, $2, 'required', $3, 'parent_resumes')
+            INSERT INTO job_dependencies(parent_job_id, child_job_id, dependency_kind, created_at_ms)
+            VALUES ($1, $2, 'required', $3)
             ON CONFLICT(parent_job_id, child_job_id) DO NOTHING
             "#,
         )
@@ -1220,20 +1220,9 @@ impl TimelineStore {
                 continue;
             }
             let mut parent = self.get_job(&parent_summary.id).await?;
-            if matches!(
-                parent_summary.kind,
-                crate::runtime::JobKind::RoomAgentPlacement
-                    | crate::runtime::JobKind::DiscordVoicePlayback
-                    | crate::runtime::JobKind::TextDelivery
-                    | crate::runtime::JobKind::ConfirmationRequired
-                    | crate::runtime::JobKind::AgentSessionStart
-                    | crate::runtime::JobKind::AgentSessionResume
-                    | crate::runtime::JobKind::AgentThreadTitleRefresh
-                    | crate::runtime::JobKind::AgentTask
-                    | crate::runtime::JobKind::TranscriptPublication
-                    | crate::runtime::JobKind::VoiceStatusSync
-                    | crate::runtime::JobKind::DiscordTypingIndicator
-            ) {
+            if crate::runtime::jobs::spec::spec(parent_summary.kind).resume
+                == crate::runtime::jobs::spec::ResumePolicy::Resume
+            {
                 parent.set_state(crate::runtime::JobState::Queued);
                 parent.next_run_at = None;
             } else if children
@@ -1622,8 +1611,8 @@ fn project_job(job: &Job) -> JobProjection {
         failed,
         ephemeral,
         cancellable: job.state.is_cancellable(),
-        lane: job_lane(job.kind),
-        ordering_key: job_ordering_key(job),
+        lane: crate::runtime::jobs::spec::spec(job.kind).lane.as_str(),
+        ordering_key: crate::runtime::jobs::spec::ordering_key(job),
         command_kind: job.command_kind(),
         source_job_id: source_job_id(job),
         stream_id: wake_probe_stream_id(job).unwrap_or_default().to_string(),
@@ -1671,263 +1660,16 @@ fn ephemeral_gc_after_ms(
     terminal: bool,
     failed: bool,
 ) -> Option<i64> {
-    if !job.kind.is_ephemeral() || !terminal {
+    let spec = crate::runtime::jobs::spec::spec(job.kind);
+    if !spec.ephemeral || !terminal {
         return None;
     }
-    let seconds = match (job.kind, failed) {
-        (crate::runtime::JobKind::WakeProbe, false) => 60,
-        (crate::runtime::JobKind::WakeProbe, true) => 300,
-        (crate::runtime::JobKind::AudioSegment, false) => 300,
-        (crate::runtime::JobKind::AudioSegment, true) => 1800,
-        (crate::runtime::JobKind::TranscriptionMux, false) => 300,
-        (crate::runtime::JobKind::TranscriptionMux, true) => 1800,
-        (crate::runtime::JobKind::TranscriptionMuxPlan, false) => 300,
-        (crate::runtime::JobKind::TranscriptionMuxPlan, true) => 1800,
-        _ => 300,
+    let seconds = if failed {
+        spec.gc_failed_seconds
+    } else {
+        spec.gc_ok_seconds
     };
     Some(updated_at_ms.saturating_add(seconds * 1000))
-}
-
-fn job_lane(kind: crate::runtime::JobKind) -> &'static str {
-    match kind {
-        crate::runtime::JobKind::WakeProbe => "wake",
-        crate::runtime::JobKind::AudioSegment => "audio_segment",
-        crate::runtime::JobKind::TranscriptionMux => "transcription_mux",
-        crate::runtime::JobKind::TranscriptionMuxPlan => "general_async",
-        crate::runtime::JobKind::DiscordVoiceJoin
-        | crate::runtime::JobKind::DiscordVoiceLeave
-        | crate::runtime::JobKind::DiscordVoicePlayback
-        | crate::runtime::JobKind::DiscordVoiceMute
-        | crate::runtime::JobKind::DiscordVoiceDeafen
-        | crate::runtime::JobKind::DiscordVoicePlayAudio => "voice_control",
-        crate::runtime::JobKind::TextDelivery
-        | crate::runtime::JobKind::ConfirmationRequired
-        | crate::runtime::JobKind::AgentSessionStart
-        | crate::runtime::JobKind::AgentSessionSunset
-        | crate::runtime::JobKind::AgentSessionResume
-        | crate::runtime::JobKind::TranscriptPublication => "general_async",
-        crate::runtime::JobKind::DiscordTextSend
-        | crate::runtime::JobKind::DiscordForumThreadCreate
-        | crate::runtime::JobKind::DiscordForumThreadRename
-        | crate::runtime::JobKind::DiscordTypingIndicator => "discord_text",
-        crate::runtime::JobKind::AgentTask | crate::runtime::JobKind::AgentThreadTitleRefresh => {
-            "agent"
-        }
-        crate::runtime::JobKind::DiscordTextMessage => "general_async",
-        crate::runtime::JobKind::DiscordSlashCommand => "general_async",
-        crate::runtime::JobKind::RuntimeMaintenance
-        | crate::runtime::JobKind::VoiceStatusSync
-        | crate::runtime::JobKind::DiscordVoiceStatusSnapshot
-        | crate::runtime::JobKind::AutomationEvaluation
-        | crate::runtime::JobKind::AgentSessionRetirement
-        | crate::runtime::JobKind::StaleWakeProbeSweep
-        | crate::runtime::JobKind::StaleRunningJobSweep
-        | crate::runtime::JobKind::EphemeralJobGc => "maintenance",
-        _ => "general_async",
-    }
-}
-
-fn job_ordering_key(job: &Job) -> String {
-    match &job.payload {
-        crate::runtime::JobPayload::WakeProbe(payload) => {
-            format!("wake:stream:{}", payload.stream_id)
-        }
-        crate::runtime::JobPayload::TranscriptionMuxPlan(payload) => {
-            format!(
-                "transcription:mux_plan:{}",
-                normalize_key_part(&payload.transcription_source_id)
-            )
-        }
-        crate::runtime::JobPayload::AgentTask(payload) => {
-            format!(
-                "agent:session:{}",
-                normalize_key_part(&payload.agent_session_id)
-            )
-        }
-        crate::runtime::JobPayload::WakeActivation(payload) => {
-            voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
-        }
-        crate::runtime::JobPayload::Command(payload)
-            if payload.command.command_kind == crate::runtime::CommandKind::AgentTask =>
-        {
-            voice_agent_route_ordering_key(&payload.command.guild_id, &payload.command.scope_id)
-        }
-        crate::runtime::JobPayload::DiscordTextMessage(payload) => {
-            if payload.guild_id.trim().is_empty() {
-                format!(
-                    "agent:route:{}",
-                    crate::runtime::dm_route_key(&payload.author_user_id)
-                )
-            } else {
-                format!("discord:text:{}", normalize_key_part(&payload.channel_id))
-            }
-        }
-        crate::runtime::JobPayload::DiscordSlashCommand(payload) => {
-            if payload.guild_id.trim().is_empty() {
-                format!("discord:slash:dm:{}", normalize_key_part(&payload.user_id))
-            } else {
-                format!(
-                    "discord:slash:{}:{}",
-                    normalize_key_part(&payload.guild_id),
-                    normalize_key_part(&payload.channel_id)
-                )
-            }
-        }
-        crate::runtime::JobPayload::TextDelivery(payload) => {
-            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
-                return format!(
-                    "text:session_route:{}:{}",
-                    normalize_key_part(&job.guild_id),
-                    normalize_key_part(&job.scope_id)
-                );
-            }
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
-                payload.target.user_id.as_str()
-            } else {
-                payload.target.channel_id.as_str()
-            };
-            if payload.source_job_id.trim().is_empty() {
-                format!(
-                    "text:target:{}:{}",
-                    payload.target.kind.as_str(),
-                    normalize_key_part(target_id),
-                )
-            } else {
-                format!("text:source:{}", normalize_key_part(&payload.source_job_id))
-            }
-        }
-        crate::runtime::JobPayload::DiscordTextSend(payload) => {
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
-                payload.target.user_id.as_str()
-            } else {
-                payload.target.channel_id.as_str()
-            };
-            format!(
-                "discord:text:{}:{}",
-                payload.target.kind.as_str(),
-                normalize_key_part(target_id)
-            )
-        }
-        crate::runtime::JobPayload::DiscordForumThreadCreate(payload) => {
-            format!(
-                "discord:forum_thread:{}",
-                normalize_key_part(&payload.parent_channel_id)
-            )
-        }
-        crate::runtime::JobPayload::DiscordForumThreadRename(payload) => {
-            format!("discord:thread:{}", normalize_key_part(&payload.thread_id))
-        }
-        crate::runtime::JobPayload::DiscordTypingIndicator(payload) => {
-            if payload.target.kind == crate::runtime::TextTargetKind::AgentSession {
-                return format!(
-                    "discord:typing:source:{}",
-                    normalize_key_part(&payload.source_job_id)
-                );
-            }
-            let target_id = if payload.target.kind == crate::runtime::TextTargetKind::Dm {
-                payload.target.user_id.as_str()
-            } else {
-                payload.target.channel_id.as_str()
-            };
-            format!(
-                "discord:typing:{}:{}",
-                payload.target.kind.as_str(),
-                normalize_key_part(target_id)
-            )
-        }
-        crate::runtime::JobPayload::ConfirmationRequired(payload) => {
-            if payload.confirmation.delivery == "dm" {
-                format!(
-                    "discord:confirmation:dm:{}",
-                    normalize_key_part(&payload.command.requested_by_user_id)
-                )
-            } else {
-                format!(
-                    "discord:confirmation:channel:{}",
-                    normalize_key_part(&job.scope_id)
-                )
-            }
-        }
-        crate::runtime::JobPayload::AgentSessionStart(payload) => {
-            voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
-        }
-        crate::runtime::JobPayload::AgentSessionSunset(payload) => {
-            format!(
-                "agent:session:{}",
-                normalize_key_part(&payload.agent_session_id)
-            )
-        }
-        crate::runtime::JobPayload::AgentSessionResume(payload) => {
-            if payload.route_kind == "dm" {
-                format!(
-                    "agent:route:{}",
-                    crate::runtime::dm_route_key(&payload.dm_user_id)
-                )
-            } else {
-                voice_agent_route_ordering_key(&payload.guild_id, &payload.voice_channel_id)
-            }
-        }
-        crate::runtime::JobPayload::AgentThreadTitleRefresh(payload) => {
-            format!(
-                "agent:session:{}",
-                normalize_key_part(&payload.agent_session_id)
-            )
-        }
-        crate::runtime::JobPayload::TranscriptPublication(payload) => {
-            format!(
-                "publication:{}",
-                normalize_key_part(&payload.publication_id)
-            )
-        }
-        crate::runtime::JobPayload::RoomAgentPlacement(payload) => {
-            let room_key = if payload.room_id.trim().is_empty() {
-                job.scope_id.as_str()
-            } else {
-                payload.room_id.as_str()
-            };
-            format!(
-                "room:placement:{}:{}",
-                normalize_key_part(&job.guild_id),
-                normalize_key_part(room_key)
-            )
-        }
-        crate::runtime::JobPayload::DiscordVoiceJoin(payload) => {
-            format!("voice:bot:{}", payload.bot_id)
-        }
-        crate::runtime::JobPayload::DiscordVoiceLeave(payload) => {
-            format!("voice:session:{}", payload.session_id)
-        }
-        crate::runtime::JobPayload::DiscordVoicePlayback(payload) => {
-            format!("voice:session:{}", payload.session_id)
-        }
-        crate::runtime::JobPayload::DiscordVoiceMute(payload) => {
-            format!("voice:session:{}", payload.session_id)
-        }
-        crate::runtime::JobPayload::DiscordVoiceDeafen(payload) => {
-            format!("voice:session:{}", payload.session_id)
-        }
-        crate::runtime::JobPayload::DiscordVoicePlayAudio(payload) => {
-            format!("voice:session:{}", payload.session_id)
-        }
-        crate::runtime::JobPayload::RuntimeMaintenance(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::VoiceStatusSync(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::DiscordVoiceStatusSnapshot(_) => {
-            "runtime:maintenance".to_string()
-        }
-        crate::runtime::JobPayload::AutomationEvaluation(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::AgentSessionRetirement(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::StaleWakeProbeSweep(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::StaleRunningJobSweep(_) => "runtime:maintenance".to_string(),
-        crate::runtime::JobPayload::EphemeralJobGc(_) => "runtime:maintenance".to_string(),
-        _ => String::new(),
-    }
-}
-
-fn voice_agent_route_ordering_key(guild_id: &str, voice_channel_id: &str) -> String {
-    format!(
-        "agent:route:{}",
-        crate::runtime::voice_route_key(guild_id, voice_channel_id)
-    )
 }
 
 fn source_job_id(job: &Job) -> String {
@@ -2065,21 +1807,3 @@ fn audio_segment_payload_overlaps_wake_window(
     segment.segment_start_time <= window_end && segment.segment_end_time >= window_start
 }
 
-fn normalize_key_part(value: &str) -> String {
-    let normalized = value
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
-                ch
-            } else {
-                '_'
-            }
-        })
-        .collect::<String>();
-    if normalized.is_empty() {
-        "unknown".to_string()
-    } else {
-        normalized
-    }
-}

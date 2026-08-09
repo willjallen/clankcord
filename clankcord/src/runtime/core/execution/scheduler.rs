@@ -8,258 +8,9 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 use crate::Result;
 use crate::config;
 use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::runtime::jobs::spec::{JobExecutor, JobLane, spec};
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
-
-const JOB_EXECUTION_POLICIES: [JobExecutionPolicy; 36] = [
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::RuntimeControl,
-        JobLane::GeneralAsync,
-        JobOrdering::None,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::RuntimeMaintenance,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::VoiceStatusSync,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoiceStatusSnapshot,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::AutomationEvaluation,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::AgentSessionRetirement,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::StaleWakeProbeSweep,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::StaleRunningJobSweep,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::EphemeralJobGc,
-        JobLane::Maintenance,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoiceMute,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoiceDeafen,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoicePlayAudio,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoicePlayback,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
-        JobKind::WakeProbe,
-        JobLane::Wake,
-        JobOrdering::WakeStream,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
-        JobKind::AudioSegment,
-        JobLane::AudioSegment,
-        JobOrdering::None,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::TranscriptionMuxPlan,
-        JobLane::GeneralAsync,
-        JobOrdering::RuntimeMaintenance,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
-        JobKind::TranscriptionMux,
-        JobLane::TranscriptionMux,
-        JobOrdering::None,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::WakeActivation,
-        JobLane::GeneralAsync,
-        JobOrdering::IngressRoute,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::RoomAgentPlacement,
-        JobLane::GeneralAsync,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoiceJoin,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordVoiceLeave,
-        JobLane::VoiceControl,
-        JobOrdering::VoiceTarget,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::Command,
-        JobLane::GeneralAsync,
-        JobOrdering::IngressRoute,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::DiscordTextMessage,
-        JobLane::GeneralAsync,
-        JobOrdering::IngressRoute,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::DiscordSlashCommand,
-        JobLane::GeneralAsync,
-        JobOrdering::IngressRoute,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::TextDelivery,
-        JobLane::GeneralAsync,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::ConfirmationRequired,
-        JobLane::GeneralAsync,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::AgentSessionStart,
-        JobLane::GeneralAsync,
-        JobOrdering::AgentSession,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::AgentSessionSunset,
-        JobLane::GeneralAsync,
-        JobOrdering::AgentSession,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::AgentSessionResume,
-        JobLane::GeneralAsync,
-        JobOrdering::AgentSession,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::TranscriptPublication,
-        JobLane::GeneralAsync,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordTextSend,
-        JobLane::DiscordText,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordForumThreadCreate,
-        JobLane::DiscordText,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_snapshot(
-        JobKind::DiscordForumThreadRename,
-        JobLane::DiscordText,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::runtime_exclusive(
-        JobKind::DiscordTypingIndicator,
-        JobLane::DiscordText,
-        JobOrdering::TextTarget,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
-        JobKind::AgentTask,
-        JobLane::Agent,
-        JobOrdering::AgentSession,
-    ),
-    JobExecutionPolicy::blocking_snapshot(
-        JobKind::AgentThreadTitleRefresh,
-        JobLane::Agent,
-        JobOrdering::AgentSession,
-    ),
-];
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct JobExecutionPolicy {
-    kind: JobKind,
-    executor: JobExecutor,
-    lane: JobLane,
-    ordering: JobOrdering,
-}
-
-impl JobExecutionPolicy {
-    const fn runtime_exclusive(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
-        Self {
-            kind,
-            executor: JobExecutor::RuntimeExclusive,
-            lane,
-            ordering,
-        }
-    }
-
-    const fn runtime_snapshot(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
-        Self {
-            kind,
-            executor: JobExecutor::RuntimeSnapshot,
-            lane,
-            ordering,
-        }
-    }
-
-    const fn blocking_snapshot(kind: JobKind, lane: JobLane, ordering: JobOrdering) -> Self {
-        Self {
-            kind,
-            executor: JobExecutor::BlockingSnapshot,
-            lane,
-            ordering,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobExecutor {
-    RuntimeExclusive,
-    RuntimeSnapshot,
-    BlockingSnapshot,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobLane {
-    GeneralAsync,
-    VoiceControl,
-    DiscordText,
-    Wake,
-    AudioSegment,
-    TranscriptionMux,
-    Agent,
-    Maintenance,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JobOrdering {
-    None,
-    VoiceTarget,
-    WakeStream,
-    IngressRoute,
-    TextTarget,
-    AgentSession,
-    RuntimeMaintenance,
-}
 
 #[derive(Clone)]
 pub(crate) struct RuntimeExecutor<E>
@@ -304,18 +55,14 @@ where
         self.notify.notify_one();
     }
 
+    /// Schedules every kind with a due queued row. Iterating kinds reported
+    /// by Postgres (instead of a hardcoded table) means a queued job of any
+    /// kind is always considered — a kind cannot be silently unschedulable.
     pub(crate) async fn schedule_due_jobs(&self) -> Result<Value> {
         let mut scheduled = Map::new();
         let due_kinds = self.timeline_store.due_job_kinds().await?;
-        for policy in JOB_EXECUTION_POLICIES {
-            if !due_kinds.contains(&policy.kind) {
-                scheduled.insert(policy.kind.as_str().to_string(), idle_policy_report(policy));
-                continue;
-            }
-            scheduled.insert(
-                policy.kind.as_str().to_string(),
-                self.schedule_policy(policy).await?,
-            );
+        for kind in due_kinds {
+            scheduled.insert(kind.as_str().to_string(), self.schedule_kind(kind).await?);
         }
         let total_scheduled = scheduled
             .values()
@@ -463,32 +210,32 @@ where
         })
     }
 
-    async fn schedule_policy(&self, policy: JobExecutionPolicy) -> Result<Value> {
-        let lane = self.lanes.semaphore(policy.lane);
-        let permits = take_permits(&lane, dispatch_batch_limit(policy));
+    async fn schedule_kind(&self, kind: JobKind) -> Result<Value> {
+        let job_spec = spec(kind);
+        let lane = self.lanes.semaphore(job_spec.lane);
+        let permits = take_permits(&lane, dispatch_batch_limit(job_spec.lane));
         let permit_count = permits.len();
         let mut blocked_keys = self.timeline_store.active_ordering_keys().await?;
         let jobs = self
             .timeline_store
-            .claim_due_jobs(policy.kind, permit_count, &mut blocked_keys)
+            .claim_due_jobs(kind, permit_count, &mut blocked_keys)
             .await?;
         let count = jobs.len();
         for (permit, job) in permits.into_iter().zip(jobs) {
-            match policy.executor {
-                JobExecutor::RuntimeExclusive => self.spawn_runtime_exclusive_job(job, permit),
-                JobExecutor::RuntimeSnapshot => self.spawn_runtime_snapshot_job(job, permit),
-                JobExecutor::BlockingSnapshot => self.spawn_blocking_snapshot_job(job, permit),
+            match job_spec.executor {
+                JobExecutor::Runtime => self.spawn_runtime_job(job, permit),
+                JobExecutor::Blocking => self.spawn_blocking_job(job, permit),
             }
         }
         Ok(json!({
             "scheduled": count,
             "availablePermits": lane.available_permits(),
             "activeOrderingKeys": blocked_keys.len(),
-            "ordering": format!("{:?}", policy.ordering),
+            "lane": job_spec.lane.as_str(),
         }))
     }
 
-    fn spawn_runtime_exclusive_job(&self, job: Job, permit: OwnedSemaphorePermit) {
+    fn spawn_runtime_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
         let external_api = self.external_api.clone();
         let notify = self.notify.clone();
@@ -507,7 +254,7 @@ where
             };
             if let Err(error) = result {
                 log(&format!(
-                    "runtime-exclusive job worker failed {job_id} ({kind}): {}",
+                    "runtime job worker failed {job_id} ({kind}): {}",
                     error_chain(&error)
                 ));
             }
@@ -516,35 +263,7 @@ where
         });
     }
 
-    fn spawn_runtime_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
-        let timeline_store = self.timeline_store.clone();
-        let external_api = self.external_api.clone();
-        let notify = self.notify.clone();
-        tokio::spawn(async move {
-            let job_id = job.id.clone();
-            let kind = job.kind;
-            let result = {
-                match Runtime::from_store(timeline_store) {
-                    Ok(mut runtime) => {
-                        runtime
-                            .dispatch_claimed_runtime_job_with_external_api(job, &external_api)
-                            .await
-                    }
-                    Err(error) => Err(error),
-                }
-            };
-            if let Err(error) = result {
-                log(&format!(
-                    "runtime-snapshot job worker failed {job_id} ({kind}): {}",
-                    error_chain(&error)
-                ));
-            }
-            drop(permit);
-            notify.notify_one();
-        });
-    }
-
-    fn spawn_blocking_snapshot_job(&self, job: Job, permit: OwnedSemaphorePermit) {
+    fn spawn_blocking_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
         let notify = self.notify.clone();
         let runtime_handle = tokio::runtime::Handle::current();
@@ -650,9 +369,9 @@ fn take_permits(semaphore: &Arc<Semaphore>, max: usize) -> Vec<OwnedSemaphorePer
     permits
 }
 
-fn dispatch_batch_limit(policy: JobExecutionPolicy) -> usize {
+fn dispatch_batch_limit(lane: JobLane) -> usize {
     let batch = config::job_batch_limits();
-    match policy.lane {
+    match lane {
         JobLane::Wake => batch.wake.clamp(1, 64),
         JobLane::AudioSegment => batch.audio_segment.clamp(1, 128),
         JobLane::TranscriptionMux => config::transcription_mux_provider_streams(),
@@ -687,16 +406,6 @@ fn scheduled_count_for_kind(value: &Value) -> usize {
         .and_then(Value::as_u64)
         .map(|value| value as usize)
         .unwrap_or(0)
-}
-
-fn idle_policy_report(policy: JobExecutionPolicy) -> Value {
-    json!({
-        "scheduled": 0,
-        "availablePermits": 0,
-        "activeOrderingKeys": 0,
-        "skipped": "no_due_jobs",
-        "lane": format!("{:?}", policy.lane),
-    })
 }
 
 fn error_chain(error: &anyhow::Error) -> String {

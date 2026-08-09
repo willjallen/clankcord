@@ -5,164 +5,91 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum JobKind {
-    AudioSegment,
-    WakeActivation,
-    AgentTask,
-    DiscordTextMessage,
-    DiscordSlashCommand,
-    TextDelivery,
-    DiscordTextSend,
-    DiscordForumThreadCreate,
-    DiscordForumThreadRename,
-    AgentSessionStart,
-    AgentSessionSunset,
-    AgentSessionResume,
-    AgentSessionRetirement,
-    AgentThreadTitleRefresh,
-    TranscriptPublication,
-    RefineTranscript,
-    ConfirmationRequired,
-    Command,
-    RoomAgentPlacement,
-    DiscordVoiceJoin,
-    DiscordVoiceLeave,
-    DiscordVoicePlayback,
-    DiscordVoiceMute,
-    DiscordVoicePlayAudio,
-    RuntimeControl,
-    WakeProbe,
-    RuntimeMaintenance,
-    VoiceStatusSync,
-    DiscordVoiceStatusSnapshot,
-    AutomationEvaluation,
-    StaleWakeProbeSweep,
-    StaleRunningJobSweep,
-    EphemeralJobGc,
-    DiscordVoiceDeafen,
-    DiscordTypingIndicator,
-    TranscriptionMux,
-    TranscriptionMuxPlan,
+/// One declaration per kind. The macro generates the enum, the string
+/// mirrors, and `ALL` together so they cannot drift; per-kind policy lives in
+/// the exhaustive match in [`super::spec::spec`].
+macro_rules! job_kinds {
+    ($(($variant:ident, $name:literal)),* $(,)?) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        pub enum JobKind {
+            $($variant),*
+        }
+
+        impl JobKind {
+            pub const ALL: &'static [JobKind] = &[$(JobKind::$variant),*];
+
+            pub fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name),*
+                }
+            }
+        }
+
+        impl FromStr for JobKind {
+            type Err = anyhow::Error;
+
+            fn from_str(raw: &str) -> Result<Self> {
+                match raw.trim() {
+                    $($name => Ok(Self::$variant),)*
+                    value => anyhow::bail!("unknown job kind: {value}"),
+                }
+            }
+        }
+    };
+}
+
+job_kinds! {
+    (AudioSegment, "audio_segment"),
+    (WakeActivation, "wake_activation"),
+    (AgentTask, "agent_task"),
+    (DiscordTextMessage, "discord_text_message"),
+    (DiscordSlashCommand, "discord_slash_command"),
+    (TextDelivery, "text_delivery"),
+    (DiscordTextSend, "discord_text_send"),
+    (DiscordForumThreadCreate, "discord_forum_thread_create"),
+    (DiscordForumThreadRename, "discord_forum_thread_rename"),
+    (AgentSessionStart, "agent_session_start"),
+    (AgentSessionSunset, "agent_session_sunset"),
+    (AgentSessionResume, "agent_session_resume"),
+    (AgentSessionRetirement, "agent_session_retirement"),
+    (AgentThreadTitleRefresh, "agent_thread_title_refresh"),
+    (TranscriptPublication, "transcript_publication"),
+    (ConfirmationRequired, "confirmation_required"),
+    (Command, "command"),
+    (RoomAgentPlacement, "room_agent_placement"),
+    (DiscordVoiceJoin, "discord_voice_join"),
+    (DiscordVoiceLeave, "discord_voice_leave"),
+    (DiscordVoicePlayback, "discord_voice_playback"),
+    (DiscordVoiceMute, "discord_voice_mute"),
+    (DiscordVoicePlayAudio, "discord_voice_play_audio"),
+    (RuntimeControl, "runtime_control"),
+    (WakeProbe, "wake_probe"),
+    (RuntimeMaintenance, "runtime_maintenance"),
+    (VoiceStatusSync, "voice_status_sync"),
+    (DiscordVoiceStatusSnapshot, "discord_voice_status_snapshot"),
+    (AutomationEvaluation, "automation_evaluation"),
+    (StaleWakeProbeSweep, "stale_wake_probe_sweep"),
+    (StaleRunningJobSweep, "stale_running_job_sweep"),
+    (EphemeralJobGc, "ephemeral_job_gc"),
+    (DiscordVoiceDeafen, "discord_voice_deafen"),
+    (DiscordTypingIndicator, "discord_typing_indicator"),
+    (TranscriptionMux, "transcription_mux"),
+    (TranscriptionMuxPlan, "transcription_mux_plan"),
 }
 
 impl JobKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::AudioSegment => "audio_segment",
-            Self::WakeActivation => "wake_activation",
-            Self::AgentTask => "agent_task",
-            Self::DiscordTextMessage => "discord_text_message",
-            Self::DiscordSlashCommand => "discord_slash_command",
-            Self::TextDelivery => "text_delivery",
-            Self::DiscordTextSend => "discord_text_send",
-            Self::DiscordForumThreadCreate => "discord_forum_thread_create",
-            Self::DiscordForumThreadRename => "discord_forum_thread_rename",
-            Self::AgentSessionStart => "agent_session_start",
-            Self::AgentSessionSunset => "agent_session_sunset",
-            Self::AgentSessionResume => "agent_session_resume",
-            Self::AgentSessionRetirement => "agent_session_retirement",
-            Self::AgentThreadTitleRefresh => "agent_thread_title_refresh",
-            Self::TranscriptPublication => "transcript_publication",
-            Self::RefineTranscript => "refine_transcript",
-            Self::ConfirmationRequired => "confirmation_required",
-            Self::Command => "command",
-            Self::RoomAgentPlacement => "room_agent_placement",
-            Self::DiscordVoiceJoin => "discord_voice_join",
-            Self::DiscordVoiceLeave => "discord_voice_leave",
-            Self::DiscordVoicePlayback => "discord_voice_playback",
-            Self::DiscordVoiceMute => "discord_voice_mute",
-            Self::DiscordVoicePlayAudio => "discord_voice_play_audio",
-            Self::RuntimeControl => "runtime_control",
-            Self::WakeProbe => "wake_probe",
-            Self::RuntimeMaintenance => "runtime_maintenance",
-            Self::VoiceStatusSync => "voice_status_sync",
-            Self::DiscordVoiceStatusSnapshot => "discord_voice_status_snapshot",
-            Self::AutomationEvaluation => "automation_evaluation",
-            Self::StaleWakeProbeSweep => "stale_wake_probe_sweep",
-            Self::StaleRunningJobSweep => "stale_running_job_sweep",
-            Self::EphemeralJobGc => "ephemeral_job_gc",
-            Self::DiscordVoiceDeafen => "discord_voice_deafen",
-            Self::DiscordTypingIndicator => "discord_typing_indicator",
-            Self::TranscriptionMux => "transcription_mux",
-            Self::TranscriptionMuxPlan => "transcription_mux_plan",
-        }
-    }
-
     pub fn is_agent_task(self) -> bool {
         matches!(self, Self::AgentTask)
     }
 
     pub fn is_ephemeral(self) -> bool {
-        matches!(
-            self,
-            Self::AudioSegment
-                | Self::WakeProbe
-                | Self::RuntimeMaintenance
-                | Self::VoiceStatusSync
-                | Self::DiscordVoiceStatusSnapshot
-                | Self::AutomationEvaluation
-                | Self::AgentSessionRetirement
-                | Self::AgentThreadTitleRefresh
-                | Self::StaleWakeProbeSweep
-                | Self::StaleRunningJobSweep
-                | Self::EphemeralJobGc
-                | Self::TranscriptionMux
-                | Self::TranscriptionMuxPlan
-        )
+        super::spec::spec(self).ephemeral
     }
 }
 
 impl fmt::Display for JobKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
-    }
-}
-
-impl FromStr for JobKind {
-    type Err = anyhow::Error;
-
-    fn from_str(raw: &str) -> Result<Self> {
-        match raw.trim() {
-            "audio_segment" => Ok(Self::AudioSegment),
-            "wake_activation" => Ok(Self::WakeActivation),
-            "agent_task" => Ok(Self::AgentTask),
-            "discord_text_message" => Ok(Self::DiscordTextMessage),
-            "discord_slash_command" => Ok(Self::DiscordSlashCommand),
-            "text_delivery" => Ok(Self::TextDelivery),
-            "discord_text_send" => Ok(Self::DiscordTextSend),
-            "discord_forum_thread_create" => Ok(Self::DiscordForumThreadCreate),
-            "discord_forum_thread_rename" => Ok(Self::DiscordForumThreadRename),
-            "agent_session_start" => Ok(Self::AgentSessionStart),
-            "agent_session_sunset" => Ok(Self::AgentSessionSunset),
-            "agent_session_resume" => Ok(Self::AgentSessionResume),
-            "agent_session_retirement" => Ok(Self::AgentSessionRetirement),
-            "agent_thread_title_refresh" => Ok(Self::AgentThreadTitleRefresh),
-            "transcript_publication" => Ok(Self::TranscriptPublication),
-            "refine_transcript" => Ok(Self::RefineTranscript),
-            "confirmation_required" => Ok(Self::ConfirmationRequired),
-            "command" => Ok(Self::Command),
-            "room_agent_placement" => Ok(Self::RoomAgentPlacement),
-            "discord_voice_join" => Ok(Self::DiscordVoiceJoin),
-            "discord_voice_leave" => Ok(Self::DiscordVoiceLeave),
-            "discord_voice_playback" => Ok(Self::DiscordVoicePlayback),
-            "discord_voice_mute" => Ok(Self::DiscordVoiceMute),
-            "discord_voice_play_audio" => Ok(Self::DiscordVoicePlayAudio),
-            "runtime_control" => Ok(Self::RuntimeControl),
-            "wake_probe" => Ok(Self::WakeProbe),
-            "runtime_maintenance" => Ok(Self::RuntimeMaintenance),
-            "voice_status_sync" => Ok(Self::VoiceStatusSync),
-            "discord_voice_status_snapshot" => Ok(Self::DiscordVoiceStatusSnapshot),
-            "automation_evaluation" => Ok(Self::AutomationEvaluation),
-            "stale_wake_probe_sweep" => Ok(Self::StaleWakeProbeSweep),
-            "stale_running_job_sweep" => Ok(Self::StaleRunningJobSweep),
-            "ephemeral_job_gc" => Ok(Self::EphemeralJobGc),
-            "discord_voice_deafen" => Ok(Self::DiscordVoiceDeafen),
-            "discord_typing_indicator" => Ok(Self::DiscordTypingIndicator),
-            "transcription_mux" => Ok(Self::TranscriptionMux),
-            "transcription_mux_plan" => Ok(Self::TranscriptionMuxPlan),
-            value => anyhow::bail!("unknown job kind: {value}"),
-        }
     }
 }
 

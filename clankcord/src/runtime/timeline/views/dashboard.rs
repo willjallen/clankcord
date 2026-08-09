@@ -35,54 +35,6 @@ const DASHBOARD_CATEGORIES: &[(&str, &str, bool)] = &[
     ("background", "Background", false),
 ];
 
-const CONVERSATION_JOB_KINDS: &[&str] = &[
-    "wake_activation",
-    "transcript_publication",
-    "refine_transcript",
-];
-const VOICE_DETAIL_JOB_KINDS: &[&str] = &["audio_segment"];
-const AGENT_JOB_KINDS: &[&str] = &[
-    "agent_task",
-    "agent_session_start",
-    "agent_session_sunset",
-    "agent_session_resume",
-];
-const MESSAGING_CONTROL_JOB_KINDS: &[&str] = &[
-    "discord_text_message",
-    "discord_slash_command",
-    "text_delivery",
-    "discord_text_send",
-    "discord_forum_thread_create",
-    "discord_forum_thread_rename",
-    "confirmation_required",
-    "command",
-    "room_agent_placement",
-    "discord_voice_join",
-    "discord_voice_leave",
-    "discord_voice_playback",
-    "discord_voice_mute",
-    "discord_voice_play_audio",
-    "discord_voice_deafen",
-    "runtime_control",
-];
-const AUTOMATION_JOB_KINDS: &[&str] = &[];
-const OPERATIONS_JOB_KINDS: &[&str] = &[];
-const BACKGROUND_JOB_KINDS: &[&str] = &[
-    "agent_session_retirement",
-    "agent_thread_title_refresh",
-    "wake_probe",
-    "runtime_maintenance",
-    "voice_status_sync",
-    "discord_voice_status_snapshot",
-    "automation_evaluation",
-    "stale_wake_probe_sweep",
-    "stale_running_job_sweep",
-    "ephemeral_job_gc",
-    "discord_typing_indicator",
-    "transcription_mux",
-    "transcription_mux_plan",
-];
-
 const CONVERSATION_EVENT_KINDS: &[&str] = &[
     "transcript",
     "conversation_started",
@@ -2105,20 +2057,9 @@ pub(super) fn dashboard_job_duration_ms(job: &Job) -> i64 {
 }
 
 pub(super) fn dashboard_job_category(kind: &str) -> &'static str {
-    if BACKGROUND_JOB_KINDS.contains(&kind) {
-        "background"
-    } else if VOICE_DETAIL_JOB_KINDS.contains(&kind) {
-        "voice_detail"
-    } else if CONVERSATION_JOB_KINDS.contains(&kind) {
-        "conversation"
-    } else if AGENT_JOB_KINDS.contains(&kind) {
-        "agent"
-    } else if MESSAGING_CONTROL_JOB_KINDS.contains(&kind) {
-        "messaging_control"
-    } else if AUTOMATION_JOB_KINDS.contains(&kind) {
-        "automation"
-    } else {
-        "other"
+    match kind.parse::<crate::runtime::JobKind>() {
+        Ok(kind) => crate::runtime::jobs::spec::spec(kind).dashboard.as_str(),
+        Err(_) => "other",
     }
 }
 
@@ -2168,18 +2109,12 @@ fn validate_categories(filter: &DashboardFilter) -> Result<()> {
     Ok(())
 }
 
-fn job_kinds_for_category(category: &str) -> &'static [&'static str] {
-    match category {
-        "conversation" => CONVERSATION_JOB_KINDS,
-        "agent" => AGENT_JOB_KINDS,
-        "messaging_control" => MESSAGING_CONTROL_JOB_KINDS,
-        "automation" => AUTOMATION_JOB_KINDS,
-        "operations" => OPERATIONS_JOB_KINDS,
-        "voice_detail" => VOICE_DETAIL_JOB_KINDS,
-        "background" => BACKGROUND_JOB_KINDS,
-        "other" => &[],
-        _ => unreachable!("dashboard categories are validated before SQL construction"),
-    }
+fn job_kinds_for_category(category: &str) -> Vec<&'static str> {
+    crate::runtime::JobKind::ALL
+        .iter()
+        .filter(|kind| crate::runtime::jobs::spec::spec(**kind).dashboard.as_str() == category)
+        .map(|kind| kind.as_str())
+        .collect()
 }
 
 fn event_kinds_for_category(category: &str) -> &'static [&'static str] {
@@ -2224,7 +2159,7 @@ fn push_job_category_expression(query: &mut QueryBuilder<'_, Postgres>) {
         "automation",
     ] {
         query.push(" WHEN ");
-        push_string_set_predicate(query, "j.kind", job_kinds_for_category(category));
+        push_string_set_predicate(query, "j.kind", &job_kinds_for_category(category));
         query.push(" THEN '").push(category).push("'");
     }
     query.push(" ELSE 'other' END");
@@ -2252,7 +2187,7 @@ fn push_related_job_category_predicate(query: &mut QueryBuilder<'_, Postgres>, c
     push_string_set_predicate(
         query,
         "COALESCE(e.payload_json->>'job_kind', '')",
-        job_kinds_for_category(category),
+        &job_kinds_for_category(category),
     );
 }
 
