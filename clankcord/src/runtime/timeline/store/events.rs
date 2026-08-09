@@ -746,6 +746,7 @@ impl TimelineStore {
         Ok(json!({"rooms": rooms}))
     }
 
+    #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
     pub async fn load_events(
         &self,
         guild_id: &str,
@@ -769,6 +770,7 @@ impl TimelineStore {
         .await
     }
 
+    #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
     pub async fn load_scope_events(
         &self,
         scope_kind: crate::model::scope::RuntimeScopeKind,
@@ -1280,6 +1282,7 @@ impl TimelineStore {
 }
 
 impl TimelineStore {
+    #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
     pub async fn conversation_for_speech(
         &self,
         guild_id: &str,

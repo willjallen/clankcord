@@ -123,6 +123,7 @@ struct PreV0_8_0ConfirmationJobMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum PreV0_8_0JobMetadataDetail {
     AgentTask(AgentTaskMetadata),
     Confirmation(PreV0_8_0ConfirmationJobMetadata),

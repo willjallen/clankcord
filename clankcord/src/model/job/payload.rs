@@ -103,8 +103,9 @@ impl BinaryPayload {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CommandAction {
+    #[default]
     DispatchNow,
     WaitForMore,
     Ignore,
@@ -126,12 +127,6 @@ impl CommandAction {
     }
 }
 
-impl Default for CommandAction {
-    fn default() -> Self {
-        Self::DispatchNow
-    }
-}
-
 impl FromStr for CommandAction {
     type Err = anyhow::Error;
 
@@ -148,8 +143,9 @@ impl FromStr for CommandAction {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum CommandKind {
+    #[default]
     AgentTask,
     StartLiveTranscript,
     StartDraftTranscript,
@@ -213,12 +209,6 @@ impl CommandKind {
                 | Self::SetVoiceMute
                 | Self::PlayVoiceCue
         )
-    }
-}
-
-impl Default for CommandKind {
-    fn default() -> Self {
-        Self::AgentTask
     }
 }
 
@@ -651,8 +641,9 @@ pub struct WakeActivationPayload {
     pub replacement_of_job_ids: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TextDeliveryKind {
+    #[default]
     Message,
     Question,
 }
@@ -678,14 +669,9 @@ impl FromStr for TextDeliveryKind {
     }
 }
 
-impl Default for TextDeliveryKind {
-    fn default() -> Self {
-        Self::Message
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TextTargetKind {
+    #[default]
     AgentSession,
     AgentChat,
     Channel,
@@ -716,12 +702,6 @@ impl FromStr for TextTargetKind {
             value if value.starts_with("channel:") => Ok(Self::Channel),
             value => anyhow::bail!("unknown text target: {value}"),
         }
-    }
-}
-
-impl Default for TextTargetKind {
-    fn default() -> Self {
-        Self::AgentSession
     }
 }
 

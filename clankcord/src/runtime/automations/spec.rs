@@ -87,7 +87,7 @@ impl AutomationSpec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum AutomationOwner {
     Agent {
         #[serde(default, alias = "userId")]
@@ -99,13 +99,8 @@ pub enum AutomationOwner {
         #[serde(default, alias = "userId")]
         user_id: String,
     },
+    #[default]
     System,
-}
-
-impl Default for AutomationOwner {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 impl AutomationOwner {
@@ -201,8 +196,9 @@ impl AutomationTrigger {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum AutomationCondition {
+    #[default]
     True,
     All {
         #[serde(default)]
@@ -221,12 +217,6 @@ pub enum AutomationCondition {
         #[serde(default)]
         value: Option<AutomationScalar>,
     },
-}
-
-impl Default for AutomationCondition {
-    fn default() -> Self {
-        Self::True
-    }
 }
 
 impl AutomationCondition {
@@ -297,10 +287,10 @@ impl AutomationExpiry {
         if self.max_fires == Some(0) {
             anyhow::bail!("automation expiry max_fires must be greater than 0");
         }
-        if let Some(expires_at) = self.expires_at.as_deref() {
-            if parse_instant(expires_at).is_none() {
-                anyhow::bail!("automation expiry expires_at must be an RFC3339 timestamp");
-            }
+        if let Some(expires_at) = self.expires_at.as_deref()
+            && parse_instant(expires_at).is_none()
+        {
+            anyhow::bail!("automation expiry expires_at must be an RFC3339 timestamp");
         }
         Ok(())
     }
@@ -1086,10 +1076,9 @@ fn validate_expiry_boundary(value: &Value) -> Result<()> {
         .get("expires_at")
         .or_else(|| object.get("expiresAt"))
         .and_then(Value::as_str)
+        && parse_instant(expires_at).is_none()
     {
-        if parse_instant(expires_at).is_none() {
-            anyhow::bail!("$.expiry.expires_at must be an RFC3339 timestamp");
-        }
+        anyhow::bail!("$.expiry.expires_at must be an RFC3339 timestamp");
     }
     Ok(())
 }
@@ -1402,10 +1391,7 @@ where
         .collect()
 }
 
-fn serialize_job_kinds<S>(
-    values: &Vec<JobKind>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
+fn serialize_job_kinds<S>(values: &[JobKind], serializer: S) -> std::result::Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -1427,7 +1413,7 @@ where
 }
 
 fn serialize_job_states<S>(
-    values: &Vec<JobState>,
+    values: &[JobState],
     serializer: S,
 ) -> std::result::Result<S::Ok, S::Error>
 where

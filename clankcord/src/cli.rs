@@ -1821,16 +1821,15 @@ fn payload_window(payload: &Value) -> Option<(String, String)> {
 }
 
 fn emit(payload: Value, json_output: bool, text_field: Option<&str>) -> i32 {
-    if !json_output {
-        if let Some(text_field) = text_field
-            && let Some(text) = payload
-                .get(text_field)
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-        {
-            println!("{text}");
-            return 0;
-        }
+    if !json_output
+        && let Some(text_field) = text_field
+        && let Some(text) = payload
+            .get(text_field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+    {
+        println!("{text}");
+        return 0;
     }
     println!(
         "{}",

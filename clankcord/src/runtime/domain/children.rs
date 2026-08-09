@@ -5,6 +5,7 @@ use crate::runtime::Ctx;
 /// The children of a waiting parent, resolved into the three cases every
 /// multi-child handler cares about. Consume-the-output specifics stay with
 /// each handler; the scan and the failure message live here once.
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 pub(crate) enum ChildResolution {
     /// At least one child is still running: the parent keeps waiting.
     Pending,

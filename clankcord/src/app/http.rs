@@ -221,7 +221,7 @@ fn route_metrics_payload(route: &str, metrics: &HttpRouteMetrics) -> Value {
 }
 
 fn average_u64(total: u64, count: u64) -> u64 {
-    if count == 0 { 0 } else { total / count }
+    total.checked_div(count).unwrap_or(0)
 }
 
 fn json_u64(value: &Value, key: &str) -> u64 {

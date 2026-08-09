@@ -304,7 +304,7 @@ pub fn render_text(
     } else {
         format!(
             "Found {total_matches} Discord message(s) {query_summary}. Showing the first {} after scanning {targets_scanned} target(s) and {messages_scanned} message(s).",
-            display_limit.unwrap()
+            display_limit.unwrap_or_default()
         )
     };
     let mut lines = vec![summary, String::new()];

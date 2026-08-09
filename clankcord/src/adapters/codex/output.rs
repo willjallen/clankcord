@@ -30,7 +30,7 @@ pub fn codex_response_text(stdout: &str, last_message: &str) -> String {
     if let Some(text) = values
         .iter()
         .filter_map(codex_assistant_message_text)
-        .last()
+        .next_back()
     {
         return text;
     }
@@ -155,7 +155,7 @@ pub fn extract_codex_usage(stdout: &str) -> Value {
     let latest = json_values_from_stdout(stdout)
         .into_iter()
         .filter_map(codex_usage_payload)
-        .last()
+        .next_back()
         .unwrap_or_else(|| json!({}));
     if latest.is_object() {
         latest

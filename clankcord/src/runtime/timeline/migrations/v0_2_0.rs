@@ -47,6 +47,7 @@ struct PreV0_2_0Job<State, Payload> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum PreV0_2_0SlashPayloadNoVoiceChannel {
     AudioSegment,
     WakeActivation,
@@ -71,6 +72,7 @@ struct PreV0_2_0DiscordSlashCommandPayloadNoVoiceChannel {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum PreV0_2_0SlashPayloadNoInteractionId {
     AudioSegment,
     WakeActivation,

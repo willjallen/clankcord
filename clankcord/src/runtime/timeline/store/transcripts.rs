@@ -1,6 +1,7 @@
 use super::*;
 
 impl TimelineStore {
+    #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
     pub async fn create_window(
         &self,
         guild_id: &str,
@@ -121,6 +122,7 @@ impl TimelineStore {
         })
     }
 
+    #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
     pub async fn materialize(
         &self,
         guild_id: &str,

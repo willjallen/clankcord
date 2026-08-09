@@ -767,7 +767,7 @@ fn amend_payload(
 
 async fn cancel_job_tree(runtime: &Ctx, root: &Job) -> Result<Vec<String>> {
     let mut jobs = descendant_jobs(runtime, &root.id).await?;
-    jobs.sort_by(|left, right| right.lineage_depth.cmp(&left.lineage_depth));
+    jobs.sort_by_key(|job| std::cmp::Reverse(job.lineage_depth));
     jobs.push(root.clone());
     let mut cancelled = Vec::new();
     for mut job in jobs {

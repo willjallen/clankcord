@@ -323,7 +323,6 @@ async fn prepare_command(
                     },
                     requested_by_user_id: command.requested_by_user_id.clone(),
                     unpublished_only: command.arguments.unpublished_only.unwrap_or(true),
-                    ..ForgetRequest::default()
                 },
             )
             .await?;

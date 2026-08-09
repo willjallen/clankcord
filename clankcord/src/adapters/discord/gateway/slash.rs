@@ -22,7 +22,7 @@ pub async fn handle_slash_command(bus: JobBus, ctx: Context, command: CommandInt
         if let Err(error) = command
             .edit_response(
                 &ctx.http,
-                EditInteractionResponse::new().content(clipped_text(&content, 1900)),
+                EditInteractionResponse::new().content(clipped_text(content, 1900)),
             )
             .await
         {

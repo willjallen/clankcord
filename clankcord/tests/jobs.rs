@@ -107,6 +107,7 @@ struct PreV0_6_0ConfirmationJobMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum PreV0_6_0JobMetadataDetail {
     AgentTask(PreV0_6_0AgentTaskMetadata),
     Confirmation(PreV0_6_0ConfirmationJobMetadata),
@@ -3975,7 +3976,7 @@ async fn create_audio_segment_slot(
         .await
         .unwrap();
     clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
-        &runtime,
+        runtime,
         claimed.into_iter().next().unwrap(),
     )
     .await

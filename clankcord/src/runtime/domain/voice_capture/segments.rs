@@ -486,14 +486,14 @@ async fn build_mux_audio(
             );
         }
         if !mixed.is_empty() && guard_samples > 0 {
-            mixed.extend(std::iter::repeat(0).take(guard_samples));
+            mixed.extend(std::iter::repeat_n(0, guard_samples));
         }
         let mux_start_ms = ms_for_samples(sample_rate, mixed.len());
         let samples = read_wav_mono(&slot.source_audio_path, sample_rate)?;
         mixed.extend(samples);
         let mux_end_ms = ms_for_samples(sample_rate, mixed.len());
         if guard_samples > 0 {
-            mixed.extend(std::iter::repeat(0).take(guard_samples));
+            mixed.extend(std::iter::repeat_n(0, guard_samples));
         }
         runtime
             .store
@@ -715,9 +715,7 @@ fn retryable_stt_error_class(error: &anyhow::Error) -> Option<RetryableSttErrorC
             if let Some(error) = cause.downcast_ref::<SttHttpStatusError>() {
                 return retryable_stt_status_class(error.status());
             }
-            let Some(error) = cause.downcast_ref::<reqwest::Error>() else {
-                return None;
-            };
+            let error = cause.downcast_ref::<reqwest::Error>()?;
             if error.is_timeout() {
                 return Some(RetryableSttErrorClass::Timeout);
             }

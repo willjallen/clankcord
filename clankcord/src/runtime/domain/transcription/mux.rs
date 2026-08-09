@@ -174,6 +174,7 @@ fn stream_from_row(row: &ActiveMuxStreamRow, now_ms: i64, guard_ms: i64) -> Acti
     }
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 fn predicted_mux_lateness_ms(
     queued: &[TranscriptionSlotRecord],
     active_streams: &[ActiveMuxStream],

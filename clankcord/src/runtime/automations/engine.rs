@@ -180,8 +180,8 @@ impl AutomationRunner {
                         room.guild_id, room.channel_id
                     )
                 })?;
-            if occupants.is_empty() {
-                if let Some(empty_since) = runtime
+            if occupants.is_empty()
+                && let Some(empty_since) = runtime
                     .store
                     .room_empty_since(&room.guild_id, &room.channel_id)
                     .await
@@ -191,9 +191,8 @@ impl AutomationRunner {
                             room.guild_id, room.channel_id
                         )
                     })?
-                {
-                    room_empty_since.insert(room.channel_id.clone(), empty_since);
-                }
+            {
+                room_empty_since.insert(room.channel_id.clone(), empty_since);
             }
             room_occupants.insert(room.channel_id.clone(), occupants);
         }

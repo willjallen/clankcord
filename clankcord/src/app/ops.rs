@@ -48,10 +48,10 @@ fn proc_status_fields() -> BTreeMap<String, u64> {
             }
             continue;
         }
-        if key.starts_with("Vm") {
-            if let Some(bytes) = parse_kb_value(value) {
-                fields.insert(key.to_string(), bytes);
-            }
+        if key.starts_with("Vm")
+            && let Some(bytes) = parse_kb_value(value)
+        {
+            fields.insert(key.to_string(), bytes);
         }
     }
     fields
@@ -66,10 +66,10 @@ fn proc_meminfo_fields() -> BTreeMap<String, u64> {
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
-        if matches!(key, "MemTotal" | "MemAvailable") {
-            if let Some(bytes) = parse_kb_value(value) {
-                fields.insert(key.to_string(), bytes);
-            }
+        if matches!(key, "MemTotal" | "MemAvailable")
+            && let Some(bytes) = parse_kb_value(value)
+        {
+            fields.insert(key.to_string(), bytes);
         }
     }
     fields

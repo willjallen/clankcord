@@ -868,7 +868,7 @@ async fn room_placement_builtin_automation_skips_rooms_without_auto_join() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let room = banned_meetings_room();
-    write_test_runtime_config(&store, &[room.clone()]).await;
+    write_test_runtime_config(&store, std::slice::from_ref(&room)).await;
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     store
         .record_voice_state_update(None, voice_state(&room.channel_id, "user-a", "User A"))
@@ -1123,7 +1123,7 @@ async fn room_placement_builtin_automation_manual_hold_joins_with_one_participan
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let mut room = code_room();
     room.auto_join = false;
-    write_test_runtime_config(&store, &[room.clone()]).await;
+    write_test_runtime_config(&store, std::slice::from_ref(&room)).await;
     let runtime = test_runtime(store.clone());
     clankcord::runtime::rooms::control_state::set_room_manual_hold(
         &runtime,
@@ -1200,7 +1200,7 @@ async fn room_placement_builtin_automation_waits_for_configured_empty_release_se
     let room = code_room();
     let mut pool = test_pool_config();
     pool.auto_leave_empty_seconds = 7 * 60;
-    write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
+    write_test_runtime_config_with_pool(&store, std::slice::from_ref(&room), &pool).await;
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")
         .await
@@ -1235,7 +1235,7 @@ async fn room_placement_builtin_automation_uses_configured_rejoin_cooldown() {
     let room = code_room();
     let mut pool = test_pool_config();
     pool.auto_rejoin_cooldown_seconds = 777;
-    write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
+    write_test_runtime_config_with_pool(&store, std::slice::from_ref(&room), &pool).await;
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")
         .await
@@ -1310,7 +1310,7 @@ async fn room_placement_builtin_automation_waits_for_configured_deafened_release
     let room = code_room();
     let mut pool = test_pool_config();
     pool.auto_leave_single_deafened_seconds = 7 * 60;
-    write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
+    write_test_runtime_config_with_pool(&store, std::slice::from_ref(&room), &pool).await;
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")
         .await
@@ -1341,7 +1341,7 @@ async fn room_placement_builtin_automation_disables_single_deafened_release_at_z
     let room = code_room();
     let mut pool = test_pool_config();
     pool.auto_leave_single_deafened_seconds = 0;
-    write_test_runtime_config_with_pool(&store, &[room.clone()], &pool).await;
+    write_test_runtime_config_with_pool(&store, std::slice::from_ref(&room), &pool).await;
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")
         .await

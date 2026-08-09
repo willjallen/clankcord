@@ -31,21 +31,21 @@ impl Automation for RoomAgentPlacementAutomation {
             }
         }
         for room in context.room_configs() {
-            for duplicate in duplicate_voice_bot_sessions_for_room(voice_state, &room) {
+            for duplicate in duplicate_voice_bot_sessions_for_room(voice_state, room) {
                 if !has_active_session_leave_job(context, &duplicate) {
                     output.emit(duplicate_session_leave_job(&duplicate));
                 }
             }
             let decision = RoomAgentPlacementDecision::evaluate(context, room, available_bot);
-            if let Some(action) = decision.action {
-                if !has_active_placement_job(context, room, action) {
-                    output.emit(placement_job(
-                        room,
-                        action,
-                        decision.reason,
-                        decision.cooldown_seconds,
-                    ));
-                }
+            if let Some(action) = decision.action
+                && !has_active_placement_job(context, room, action)
+            {
+                output.emit(placement_job(
+                    room,
+                    action,
+                    decision.reason,
+                    decision.cooldown_seconds,
+                ));
             }
         }
         Ok(output)

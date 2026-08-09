@@ -346,6 +346,7 @@ impl ConfirmationJobMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 pub(crate) enum JobMetadataDetail {
     AgentTask(AgentTaskMetadata),
     Confirmation(ConfirmationJobMetadata),
@@ -476,9 +477,11 @@ impl JobMetadata {
                 ])
             })
             .unwrap_or_default();
-        let timeout_reason = (!self.timed_out_at.trim().is_empty())
-            .then(|| format!("job timed out at {}", self.timed_out_at.trim()))
-            .unwrap_or_default();
+        let timeout_reason = if !self.timed_out_at.trim().is_empty() {
+            format!("job timed out at {}", self.timed_out_at.trim())
+        } else {
+            Default::default()
+        };
         first_non_empty([
             self.error.clone(),
             agent_reason,
@@ -526,7 +529,6 @@ impl Job {
         payload: JobPayload,
     ) -> Self {
         let now = now_string();
-        let payload = payload;
         let id = format!("job_{}", Uuid::new_v4().simple());
         Self {
             id: id.clone(),

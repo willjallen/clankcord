@@ -395,21 +395,20 @@ pub(crate) async fn resume_room_agent_placement_job(
             match child.metadata.output.clone() {
                 Some(JobOutput::DiscordVoiceJoin(output)) => {
                     let placement_output = commit_join_room_job(ctx, request, output).await?;
-                    if !has_playback_child(&children, DiscordVoicePlaybackCue::Join) {
-                        if let JobOutput::RoomAgentPlacement(output) = &placement_output {
-                            if let Some(session) = &output.session {
-                                return Ok(JobDecision::WaitFor(vec![
-                                    playback::voice_playback_job_for_session(
-                                        ctx,
-                                        session,
-                                        &request.requested_by_user_id,
-                                        DiscordVoicePlaybackCue::Join,
-                                        "room_join",
-                                        &job.id,
-                                    ),
-                                ]));
-                            }
-                        }
+                    if !has_playback_child(&children, DiscordVoicePlaybackCue::Join)
+                        && let JobOutput::RoomAgentPlacement(output) = &placement_output
+                        && let Some(session) = &output.session
+                    {
+                        return Ok(JobDecision::WaitFor(vec![
+                            playback::voice_playback_job_for_session(
+                                ctx,
+                                session,
+                                &request.requested_by_user_id,
+                                DiscordVoicePlaybackCue::Join,
+                                "room_join",
+                                &job.id,
+                            ),
+                        ]));
                     }
                     Ok(JobDecision::Complete(placement_output))
                 }

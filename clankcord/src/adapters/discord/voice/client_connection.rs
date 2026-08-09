@@ -574,9 +574,7 @@ struct VoiceReceiveHandler {
 #[async_trait]
 impl VoiceEventHandler for VoiceReceiveHandler {
     async fn act(&self, ctx: &EventContext<'_>) -> Option<Event> {
-        let Some(adapter) = self.adapter.upgrade() else {
-            return None;
-        };
+        let adapter = self.adapter.upgrade()?;
         match ctx {
             EventContext::SpeakingStateUpdate(speaking) => {
                 if let Some(user_id) = speaking.user_id {

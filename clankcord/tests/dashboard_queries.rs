@@ -743,7 +743,7 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         .unwrap();
     for index in 0..3 {
         let mut job = Job::agent_task_for_session(
-            &format!("session-{index}"),
+            format!("session-{index}"),
             RuntimeScope::voice_channel("guild", "code"),
             "operator",
             CommandRequest::agent_task("guild", "code", "operator", format!("task {index}")),

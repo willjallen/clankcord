@@ -422,6 +422,7 @@ impl V8JobPayload {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum V8JobMetadataDetail {
     AgentTask(V8AgentTaskMetadata),
     Confirmation(ConfirmationJobMetadata),

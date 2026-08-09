@@ -480,6 +480,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
     }));
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 async fn append_dashboard_speech(
     store: &clankcord::runtime::timeline::TimelineStore,
     raw_root: &std::path::Path,

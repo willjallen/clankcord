@@ -81,6 +81,7 @@ pub struct SessionAudioPipeline {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 pub enum AudioPipelineOutcome {
     NoSession,
     Paused,
@@ -93,6 +94,12 @@ pub enum AudioPipelineOutcome {
         payload: AudioSegmentPayload,
         segment: SessionAudioSegment,
     },
+}
+
+impl Default for SessionAudioPipeline {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionAudioPipeline {
@@ -802,6 +809,7 @@ fn reset_stt_gate_state(speaker: &mut SpeakerBuffer) {
     speaker.stt_soft_break_ms = 0;
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 fn segment_post_processing(
     base: &str,
     stt_input_ms: i64,

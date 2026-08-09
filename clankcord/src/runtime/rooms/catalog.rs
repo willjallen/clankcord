@@ -184,12 +184,11 @@ pub async fn resolve_room_scope(
     channel: Option<&str>,
 ) -> Result<RoomConfig> {
     let raw_channel = normalize_room_identifier(channel);
-    if !raw_channel.is_empty() {
-        if let Ok(room) = room_for_identifier(ctx, Some(&raw_channel)).await {
-            if guild_id.is_empty() || room.guild_id == guild_id {
-                return Ok(room);
-            }
-        }
+    if !raw_channel.is_empty()
+        && let Ok(room) = room_for_identifier(ctx, Some(&raw_channel)).await
+        && (guild_id.is_empty() || room.guild_id == guild_id)
+    {
+        return Ok(room);
     }
     if !guild_id.is_empty() && !raw_channel.is_empty() {
         return room_for_channel_ids(ctx, guild_id, &raw_channel, None).await;

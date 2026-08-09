@@ -94,10 +94,10 @@ pub fn compact_token_logprobs(entries: Option<&Value>, limit: Option<usize>) -> 
                 ),
             );
             token_entry.insert("logprob".to_string(), number_or_null(logprob));
-            if let Some(raw_bytes) = entry_map.get("bytes").and_then(Value::as_array) {
-                if raw_bytes.len() <= 16 {
-                    token_entry.insert("bytes".to_string(), Value::Array(raw_bytes.clone()));
-                }
+            if let Some(raw_bytes) = entry_map.get("bytes").and_then(Value::as_array)
+                && raw_bytes.len() <= 16
+            {
+                token_entry.insert("bytes".to_string(), Value::Array(raw_bytes.clone()));
             }
             compact.push(Value::Object(token_entry));
         }

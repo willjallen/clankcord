@@ -4,12 +4,13 @@ use std::str::FromStr;
 
 use crate::Result;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum RuntimeScopeKind {
     VoiceChannel,
     Dm,
     TextChannel,
     Thread,
+    #[default]
     Ctx,
 }
 
@@ -37,12 +38,6 @@ impl FromStr for RuntimeScopeKind {
             "runtime" => Ok(Self::Ctx),
             value => anyhow::bail!("unknown runtime scope kind: {value}"),
         }
-    }
-}
-
-impl Default for RuntimeScopeKind {
-    fn default() -> Self {
-        Self::Ctx
     }
 }
 

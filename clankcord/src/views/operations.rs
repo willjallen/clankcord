@@ -939,6 +939,7 @@ fn add_observation_metadata(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 fn runtime_health(
     database: &Value,
     jobs: &[JobDiagnosticRow],
@@ -962,6 +963,7 @@ fn runtime_health(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 fn runtime_health_from_facts(
     database: &Value,
     facts: &RuntimeHealthFacts,
@@ -1180,7 +1182,7 @@ fn runtime_health_from_facts(
         .get("available")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    let wake_status = string_field(&wake_provider, "status");
+    let wake_status = string_field(wake_provider, "status");
     let wake_failures = wake_provider
         .get("consecutiveFailures")
         .and_then(Value::as_u64)
@@ -1231,6 +1233,7 @@ fn runtime_health_from_facts(
     })
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 fn health_component(
     component: &str,
     status: &str,
@@ -1776,14 +1779,22 @@ async fn lean_voice_observation_summary(
     Ok(VoiceObservationSummary {
         snapshot_at_ms,
         fresh_for_seconds,
-        observed_bots: snapshot_fresh.then_some(fresh_bot_count).unwrap_or(0),
-        ready_bots: snapshot_fresh
-            .then_some(row.try_get::<i64, _>("ready_bot_count")? as usize)
-            .unwrap_or(0),
-        gateway_bots: snapshot_fresh
-            .then_some(row.try_get::<i64, _>("gateway_bot_count")? as usize)
-            .unwrap_or(0),
-        active_sessions: snapshot_fresh.then_some(fresh_session_count).unwrap_or(0),
+        observed_bots: if snapshot_fresh { fresh_bot_count } else { 0 },
+        ready_bots: if snapshot_fresh {
+            row.try_get::<i64, _>("ready_bot_count")? as usize
+        } else {
+            0
+        },
+        gateway_bots: if snapshot_fresh {
+            row.try_get::<i64, _>("gateway_bot_count")? as usize
+        } else {
+            0
+        },
+        active_sessions: if snapshot_fresh {
+            fresh_session_count
+        } else {
+            0
+        },
         stale_bots: if snapshot_fresh {
             bot_count.saturating_sub(fresh_bot_count)
         } else {
@@ -2558,10 +2569,7 @@ fn operational_windows(
                 .collect::<Vec<_>>();
             let speakers = window_events
                 .iter()
-                .filter_map(|event| {
-                    (!event.speaker_user_id.trim().is_empty())
-                        .then(|| event.speaker_user_id.clone())
-                })
+                .filter(|&event| !event.speaker_user_id.trim().is_empty() ).map(|event| event.speaker_user_id.clone())
                 .collect::<BTreeSet<_>>();
             let speech_audio_ms = window_events
                 .iter()
@@ -3175,7 +3183,7 @@ async fn agent_session_payload(
     let scope_job_count = jobs.len();
     let mut rows = jobs
         .iter()
-        .filter(|job| agent_job_matches_selected_session(*job, selected, &selected_session_id))
+        .filter(|job| agent_job_matches_selected_session(job, selected, &selected_session_id))
         .map(agent_session_job_payload)
         .collect::<Vec<_>>();
     let total_job_count = rows.len();
@@ -3290,15 +3298,16 @@ fn workspace_artifact(path: &str) -> Value {
             );
             object.insert("is_dir".to_string(), json!(metadata.is_dir()));
             object.insert("bytes".to_string(), json!(metadata.len()));
-            if metadata.is_file() && metadata.len() <= 4096 {
-                if let Ok(text) = fs::read_to_string(entry.path()) {
-                    object.insert("preview".to_string(), json!(preview(&text, 1200)));
-                }
+            if metadata.is_file()
+                && metadata.len() <= 4096
+                && let Ok(text) = fs::read_to_string(entry.path())
+            {
+                object.insert("preview".to_string(), json!(preview(&text, 1200)));
             }
             Some(Value::Object(object))
         })
         .collect::<Vec<_>>();
-    files.sort_by(|left, right| string_field(left, "name").cmp(&string_field(right, "name")));
+    files.sort_by_key(|left| string_field(left, "name"));
     json!({"path": path, "exists": true, "files": files})
 }
 

@@ -103,10 +103,10 @@ pub fn compact_recv_diagnostics(diagnostics: Value) -> Value {
         "voice_ws_recent_events",
         "dave_ws_recent_events",
     ] {
-        if let Some(Value::Array(values)) = compact.get_mut(key) {
-            if values.len() > 10 {
-                *values = values[values.len() - 10..].to_vec();
-            }
+        if let Some(Value::Array(values)) = compact.get_mut(key)
+            && values.len() > 10
+        {
+            *values = values[values.len() - 10..].to_vec();
         }
     }
     Value::Object(compact)

@@ -393,23 +393,23 @@ pub(crate) fn timeline_event_payload(row: &PgRow) -> Result<Value> {
             payload.remove(key);
         }
     }
-    if let Ok(value) = row.try_get::<String, _>("room_guild_slug") {
-        if !value.is_empty() {
-            set_default_string(&mut payload, "guild_slug", &value);
-            set_default_string(&mut payload, "guildSlug", &value);
-        }
+    if let Ok(value) = row.try_get::<String, _>("room_guild_slug")
+        && !value.is_empty()
+    {
+        set_default_string(&mut payload, "guild_slug", &value);
+        set_default_string(&mut payload, "guildSlug", &value);
     }
-    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_name") {
-        if !value.is_empty() {
-            set_default_string(&mut payload, "voice_channel_name", &value);
-            set_default_string(&mut payload, "channelName", &value);
-        }
+    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_name")
+        && !value.is_empty()
+    {
+        set_default_string(&mut payload, "voice_channel_name", &value);
+        set_default_string(&mut payload, "channelName", &value);
     }
-    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_slug") {
-        if !value.is_empty() {
-            set_default_string(&mut payload, "voice_channel_slug", &value);
-            set_default_string(&mut payload, "channelSlug", &value);
-        }
+    if let Ok(value) = row.try_get::<String, _>("room_voice_channel_slug")
+        && !value.is_empty()
+    {
+        set_default_string(&mut payload, "voice_channel_slug", &value);
+        set_default_string(&mut payload, "channelSlug", &value);
     }
     if !capture_run_id.is_empty() {
         set_default_string(&mut payload, "capture_run_id", &capture_run_id);

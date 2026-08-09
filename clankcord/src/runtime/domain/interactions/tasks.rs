@@ -602,8 +602,7 @@ fn agent_task_no_response_reason(response_text: &str) -> Option<&'static str> {
         .trim_matches('`')
         .trim()
         .trim_end_matches('.')
-        .replace(' ', "_")
-        .replace('-', "_")
+        .replace([' ', '-'], "_")
         .to_ascii_uppercase();
     (normalized == "NO_RESPONSE_NEEDED").then_some("agent chose not to produce a visible response")
 }

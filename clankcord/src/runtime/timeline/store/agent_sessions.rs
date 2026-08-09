@@ -145,7 +145,7 @@ impl TimelineStore {
             query.push(" AND state = ").push_bind(state);
         }
         query.push(" ORDER BY created_at_ms DESC, agent_session_id DESC LIMIT ");
-        query.push_bind(limit.max(1).min(500) as i64);
+        query.push_bind(limit.clamp(1, 500) as i64);
         let rows = query.build().fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {

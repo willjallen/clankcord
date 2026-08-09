@@ -66,7 +66,7 @@ async fn wake_activation_uses_long_default_max_window() {
 async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let prior = append_event(
@@ -121,9 +121,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
         .wake_activation_payload()
         .cloned()
         .unwrap_or_else(|| panic!("missing wake activation payload"));
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let command_job_id = string_field(&result["created"]["job"], "job_id");
@@ -167,7 +165,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
 async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = runtime
@@ -205,9 +203,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let command_job_id = string_field(&result["created"]["job"], "job_id");
@@ -223,7 +219,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
 async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
@@ -242,9 +238,7 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("no_request_captured"));
     assert_eq!(result["reason"], json!("empty_request_text"));
@@ -256,7 +250,7 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
 async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
@@ -297,9 +291,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let agent_job_id = string_field(&result["created"]["job"], "job_id");
@@ -330,7 +322,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
 async fn wake_activation_treats_resume_text_as_agent_request() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
         &runtime.store,
@@ -359,9 +351,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let start_job_id = string_field(&result["created"]["job"], "job_id");
@@ -386,7 +376,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
 async fn wake_activation_reuses_active_session_without_thread() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     let created_at = dt(2026, 5, 12, 15, 0, 0);
     runtime
         .store
@@ -429,9 +419,7 @@ async fn wake_activation_reuses_active_session_without_thread() {
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let task_job_id = string_field(&result["created"]["job"], "job_id");
@@ -561,7 +549,7 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
 async fn wake_activation_waits_for_live_activating_speaker_audio() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
@@ -611,9 +599,7 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
         .await
         .unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_live_speaker_audio"));
@@ -623,7 +609,7 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
 async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
@@ -672,9 +658,7 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
         .await
         .unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
@@ -684,7 +668,7 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
 async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
@@ -734,9 +718,7 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
             .to_string();
     runtime.store.create_job(audio).await.unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
@@ -746,7 +728,7 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
 async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(10);
@@ -796,9 +778,7 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
         .await
         .unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
@@ -808,7 +788,7 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
 async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(10);
@@ -858,9 +838,7 @@ async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
         .await
         .unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
     assert_eq!(result["reason"], json!("waiting_for_room_transcription"));
@@ -870,7 +848,7 @@ async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
 async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(300);
@@ -919,7 +897,7 @@ async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline(
         .await
         .unwrap();
 
-    let error = execute(&mut runtime, &activation_job, &payload)
+    let error = execute(&runtime, &activation_job, &payload)
         .await
         .unwrap_err()
         .to_string();
@@ -951,7 +929,7 @@ async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline(
 async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
@@ -1008,9 +986,7 @@ async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     let omissions = result["transcription_context_omissions"]
@@ -1029,7 +1005,7 @@ async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted
 async fn wake_activation_fails_immediately_for_terminal_requester_transcription() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
@@ -1074,7 +1050,7 @@ async fn wake_activation_fails_immediately_for_terminal_requester_transcription(
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
 
-    let error = execute(&mut runtime, &activation_job, &payload)
+    let error = execute(&runtime, &activation_job, &payload)
         .await
         .unwrap_err()
         .to_string();
@@ -1095,7 +1071,7 @@ async fn wake_activation_fails_immediately_for_terminal_requester_transcription(
 async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
@@ -1151,9 +1127,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
 
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("dispatched"));
     assert_eq!(result["transcription_context_omissions"], json!([]));
@@ -1163,7 +1137,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
 async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dispatch() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
@@ -1224,9 +1198,7 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
     let activation_job_id = string_field(&scheduled["job"], "job_id");
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let result = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let result = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(result["status"], json!("deferred"));
 }
@@ -1235,7 +1207,7 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
 async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     runtime
         .store
@@ -1309,9 +1281,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
         .await
         .unwrap();
 
-    let deferred = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let deferred = execute(&runtime, &activation_job, &payload).await.unwrap();
     assert_eq!(deferred["status"], json!("deferred"));
     assert_eq!(deferred["reason"], json!("waiting_for_room_transcription"));
     let progress = sqlx::query(
@@ -1354,9 +1324,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     runtime.store.update_job(&completed_audio).await.unwrap();
 
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
-    let dispatched = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let dispatched = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(dispatched["status"], json!("dispatched"));
     let agent_job_id = string_field(&dispatched["created"]["job"], "job_id");
@@ -1378,7 +1346,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
 async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
@@ -1460,9 +1428,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
         .await
         .unwrap();
 
-    let deferred = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let deferred = execute(&runtime, &activation_job, &payload).await.unwrap();
     assert_eq!(deferred["status"], json!("deferred"));
 
     append_event(
@@ -1482,9 +1448,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
 
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let still_deferred = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let still_deferred = execute(&runtime, &activation_job, &payload).await.unwrap();
     assert_eq!(still_deferred["status"], json!("deferred"));
     assert_eq!(
         still_deferred["reason"],
@@ -1508,9 +1472,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
 
     let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
-    let dispatched = execute(&mut runtime, &activation_job, &payload)
-        .await
-        .unwrap();
+    let dispatched = execute(&runtime, &activation_job, &payload).await.unwrap();
 
     assert_eq!(dispatched["status"], json!("dispatched"));
 }
@@ -1519,7 +1481,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
 async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
     insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
@@ -1555,7 +1517,7 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
         .wake_activation_payload()
         .cloned()
         .unwrap();
-    let dispatched = execute(&mut runtime, &original_activation, &payload)
+    let dispatched = execute(&runtime, &original_activation, &payload)
         .await
         .unwrap();
     let command_job_id = string_field(&dispatched["created"]["job"], "job_id");
@@ -1660,6 +1622,7 @@ async fn insert_agent_session(store: &TimelineStore) {
     store.create_agent_session_record(record).await.unwrap();
 }
 
+#[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 async fn append_event(
     store: &TimelineStore,
     start: chrono::DateTime<chrono::Utc>,
@@ -1746,7 +1709,7 @@ async fn create_transcription_slot_for_wake_test(
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
-    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(&runtime, claimed.pop().unwrap())
+    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(runtime, claimed.pop().unwrap())
         .await
         .unwrap();
     job.id

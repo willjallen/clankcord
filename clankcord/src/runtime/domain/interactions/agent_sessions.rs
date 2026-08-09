@@ -582,7 +582,7 @@ pub async fn agent_session_search(
             "snippet": agent_session_search_snippet(&document, &needle),
             "resume_command": agent_session_resume_command(&record),
         }));
-        if hits.len() >= limit.max(1).min(100) {
+        if hits.len() >= limit.clamp(1, 100) {
             break;
         }
     }

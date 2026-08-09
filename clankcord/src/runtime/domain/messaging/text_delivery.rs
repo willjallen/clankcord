@@ -22,6 +22,7 @@ use crate::runtime::domain::messaging::session_threads::{
 use crate::runtime::timeline::sha256_file;
 use crate::runtime::util::{first_non_empty, string_field};
 
+#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 enum TextDeliveryTarget {
     Ready(TextTarget),
     WaitFor(Job),
@@ -186,12 +187,11 @@ async fn resolve_text_delivery_target(
             if channel_id.is_empty() {
                 anyhow::bail!("botsChannelId is not configured");
             }
-            Ok(TextTarget {
+            Ok(TextDeliveryTarget::Ready(TextTarget {
                 kind: TextTargetKind::Channel,
                 channel_id: channel_id.to_string(),
                 user_id: String::new(),
-            })
-            .map(TextDeliveryTarget::Ready)
+            }))
         }
         TextTargetKind::AgentSession => {
             let session = session_threads::agent_session_for_source_job(

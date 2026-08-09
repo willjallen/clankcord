@@ -47,22 +47,20 @@ pub async fn members_resolve(ctx: &Ctx, request: MemberResolveRequest) -> Result
         .query
         .chars()
         .all(|character| character.is_ascii_digit())
-    {
-        if let Some(user) = ctx
+        && let Some(user) = ctx
             .store
             .get_discord_member(&guild_id, &request.query)
             .await?
-        {
-            return Ok(json!({
-                "guildId": guild_id,
-                "query": request.query,
-                "resolved": true,
-                "confidence": "high",
-                "user": user,
-                "candidates": [],
-                "cache": refresh,
-            }));
-        }
+    {
+        return Ok(json!({
+            "guildId": guild_id,
+            "query": request.query,
+            "resolved": true,
+            "confidence": "high",
+            "user": user,
+            "candidates": [],
+            "cache": refresh,
+        }));
     }
     let candidates = ctx
         .store

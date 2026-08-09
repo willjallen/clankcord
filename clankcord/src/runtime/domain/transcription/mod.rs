@@ -19,10 +19,10 @@ pub fn stt_no_speech_probability(metadata: Option<&Value>) -> Option<f64> {
     if let Some(value) = finite_number(map.get("no_speech_prob")) {
         probabilities.push(value);
     }
-    if let Some(local) = map.get("local").and_then(Value::as_object) {
-        if let Some(value) = finite_number(local.get("estimated_no_speech_prob")) {
-            probabilities.push(value);
-        }
+    if let Some(local) = map.get("local").and_then(Value::as_object)
+        && let Some(value) = finite_number(local.get("estimated_no_speech_prob"))
+    {
+        probabilities.push(value);
     }
     probabilities.into_iter().reduce(f64::max)
 }

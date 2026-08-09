@@ -1725,9 +1725,11 @@ async fn enrich_event_values(ctx: &Ctx, events: &mut [Value]) -> Result<()> {
                 (guild_id.clone(), value_string(event, "speaker_user_id")),
                 (
                     String::new(),
-                    (value_string(event, "scope_kind") == "dm")
-                        .then(|| value_string(event, "scope_id"))
-                        .unwrap_or_default(),
+                    if value_string(event, "scope_kind") == "dm" {
+                        value_string(event, "scope_id")
+                    } else {
+                        Default::default()
+                    },
                 ),
             ]
         })
@@ -2962,11 +2964,7 @@ fn facet_payload(mut facets: FacetAccumulator) -> Value {
     let kinds = facets.kinds.into_keys().collect::<Vec<_>>();
     let event_kinds = facets.event_kinds.into_keys().collect::<Vec<_>>();
     let job_kinds = facets.job_kinds.into_keys().collect::<Vec<_>>();
-    let states = facets
-        .states
-        .into_iter()
-        .map(|(value, _)| value)
-        .collect::<Vec<_>>();
+    let states = facets.states.into_keys().collect::<Vec<_>>();
     let scopes = facets
         .scopes
         .into_iter()

@@ -247,7 +247,6 @@ fn parse_version_part(raw: Option<&str>, version: &str, label: &str) -> Result<u
     let Some(raw) = raw else {
         anyhow::bail!("invalid clankcord schema version {version}: missing {label}");
     };
-    Ok(raw
-        .parse::<u64>()
-        .map_err(|_| anyhow::anyhow!("invalid clankcord schema version {version}: bad {label}"))?)
+    raw.parse::<u64>()
+        .map_err(|_| anyhow::anyhow!("invalid clankcord schema version {version}: bad {label}"))
 }
