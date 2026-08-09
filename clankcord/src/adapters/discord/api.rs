@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::Result;
 use crate::config::{discord_api_base, load_discord_bot_token};
 use crate::errors::discord_api_error;
-use crate::runtime::util::string_field;
+use crate::util::string_field;
 
 pub const GUILD_TEXT_CHANNEL_TYPES: &[i64] = &[0, 5];
 pub const THREAD_CHANNEL_TYPES: &[i64] = &[10, 11, 12];

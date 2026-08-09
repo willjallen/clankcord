@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::model::job::{Job, RuntimeControlAction};
-use crate::runtime::timeline::TimelineStore;
-use crate::runtime::util::log;
+use crate::store::TimelineStore;
+use crate::util::log;
 
 /// Narrow job-submission capability handed to adapters and ingress surfaces.
 ///

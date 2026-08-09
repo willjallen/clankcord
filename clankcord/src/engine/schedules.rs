@@ -14,13 +14,13 @@ use crate::Result;
 use crate::config;
 use crate::engine::JobBus;
 use crate::model::job::{Job, JobKind};
-use crate::runtime::timeline::{TimelineStore, instant_ms_dt, utc_now};
-use crate::runtime::util::log;
+use crate::store::{TimelineStore, instant_ms_dt, utc_now};
+use crate::util::log;
 
 /// Builds the job a schedule row mints. Only kinds that make sense on a
 /// clock are constructible here; asking for anything else is a declaration
 /// error and fails loudly.
-pub fn schedule_job(schedule: &crate::runtime::timeline::store::JobScheduleRow) -> Result<Job> {
+pub fn schedule_job(schedule: &crate::store::JobScheduleRow) -> Result<Job> {
     let kind: JobKind = schedule.kind.parse()?;
     let payload = &schedule.payload_json;
     let job = match kind {
@@ -142,6 +142,6 @@ pub async fn ensure_default_schedules(store: &TimelineStore) -> Result<()> {
     Ok(())
 }
 
-fn schedule_source(schedule: &crate::runtime::timeline::store::JobScheduleRow) -> String {
+fn schedule_source(schedule: &crate::store::JobScheduleRow) -> String {
     format!("schedule:{}", schedule.schedule_id)
 }

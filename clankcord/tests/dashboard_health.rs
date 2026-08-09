@@ -3,11 +3,11 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::domain::Ctx;
+use clankcord::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use clankcord::model::job::{CommandRequest, Job, JobState};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::runtime::Ctx;
-use clankcord::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
-use clankcord::runtime::timeline::{SpeechEventInput, isoformat_z};
+use clankcord::store::{SpeechEventInput, isoformat_z};
 use clankcord::views::{
     DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest,
 };
@@ -482,7 +482,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
 
 #[allow(clippy::too_many_arguments)] // parameter-struct cleanup tracked in WORKING_PLAN
 async fn append_dashboard_speech(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     raw_root: &std::path::Path,
     voice_channel_id: &str,
     voice_channel_name: &str,

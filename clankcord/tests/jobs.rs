@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use clankcord::config;
+use clankcord::domain::Ctx;
+use clankcord::domain::rooms::RoomConfig;
+use clankcord::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use clankcord::model::job::DiscordPostMetadata;
 use clankcord::model::job::JobMetadata;
 use clankcord::model::job::{
@@ -20,10 +23,7 @@ use clankcord::model::job::{
     TranscriptPublicationPayload, WakeActivationPayload, WakeProbePayload,
 };
 use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
-use clankcord::runtime::Ctx;
-use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
-use clankcord::runtime::rooms::RoomConfig;
-use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
+use clankcord::store::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::views::JobsRequest;
 
 mod common;
@@ -2140,7 +2140,7 @@ async fn runtime_maintenance_times_out_stale_running_jobs() {
     let runtime = Ctx::new(store.clone());
 
     let timed_out_jobs =
-        clankcord::runtime::domain::maintenance::execution::recover_stale_running_jobs_for_maintenance_pass(
+        clankcord::domain::maintenance::execution::recover_stale_running_jobs_for_maintenance_pass(
             &runtime,
         )
         .await
@@ -3949,7 +3949,7 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
 }
 
 async fn create_audio_segment_slot(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     runtime: &Ctx,
     root: &std::path::Path,
     speaker_user_id: &str,
@@ -3985,7 +3985,7 @@ async fn create_audio_segment_slot(
 }
 
 async fn run_transcription_mux_planner(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
 ) -> serde_json::Value {
     store
         .create_job(Job::transcription_mux_plan("local-granite", 0))
@@ -4006,7 +4006,7 @@ async fn run_transcription_mux_planner(
 }
 
 async fn transcription_slot_priority(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     source_job_id: &str,
 ) -> i64 {
     let row = sqlx::query("SELECT priority FROM transcription_slots WHERE source_job_id = $1")

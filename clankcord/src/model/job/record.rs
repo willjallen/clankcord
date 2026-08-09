@@ -4,7 +4,7 @@ use serde_json::{Map, Number, Value, json};
 use uuid::Uuid;
 
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
-use crate::runtime::util::first_non_empty;
+use crate::util::first_non_empty;
 
 use super::util::{insert_i64_if_nonzero, insert_non_empty, insert_optional_string};
 use super::{

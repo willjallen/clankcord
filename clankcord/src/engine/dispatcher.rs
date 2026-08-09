@@ -1,17 +1,17 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::domain::Ctx;
+use crate::domain::voice_capture::segments;
 use crate::engine::JobDecision;
 use crate::model::job::{Job, JobKind, JobOutput, JobState};
 use crate::ports::discord::DiscordApi;
-use crate::runtime::Ctx;
-use crate::runtime::domain::voice_capture::segments;
 
+use crate::domain::interactions::tasks;
+use crate::domain::interactions::thread_titles;
 use crate::engine::routes;
-use crate::runtime::domain::interactions::tasks;
-use crate::runtime::domain::interactions::thread_titles;
-use crate::runtime::timeline;
-use crate::runtime::util;
+use crate::store;
+use crate::util;
 
 pub async fn dispatch_claimed_runtime_job<A>(
     ctx: &Ctx,
@@ -191,7 +191,9 @@ pub(crate) async fn requeue_dispatched_job(
     latest.started_at = None;
     latest.completed_at = None;
     let delay = delay_for_attempt(latest.attempts);
-    latest.next_run_at = Some(timeline::isoformat_z(Some(timeline::utc_now() + delay)));
+    latest.next_run_at = Some(crate::store::isoformat_z(Some(
+        crate::store::utc_now() + delay,
+    )));
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
     util::log(&format!(

@@ -2,5 +2,6 @@
 //! wires the process together.
 
 pub mod http;
+pub mod manuals;
 pub mod ops;
 pub mod service;

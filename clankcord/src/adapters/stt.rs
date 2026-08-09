@@ -8,7 +8,7 @@ use serde_json::{Map, Number, Value};
 use crate::Result;
 use crate::config::{self, NamedTranscriptionSourceConfig, TranscriptionProvider};
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
-use crate::runtime::util::{finite_number, number_or_null};
+use crate::util::{finite_number, number_or_null};
 
 #[derive(Debug, Clone)]
 pub struct SttHttpStatusError {

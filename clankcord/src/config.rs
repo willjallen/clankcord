@@ -10,8 +10,8 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
+use crate::domain::rooms::RoomConfig;
 use crate::errors::discord_tool_error;
-use crate::runtime::rooms::RoomConfig;
 
 pub const CONFIG_PATH: &str = "config.toml";
 

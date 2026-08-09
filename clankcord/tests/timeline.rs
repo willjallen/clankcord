@@ -6,7 +6,7 @@ mod common;
 
 use clankcord::model::job::{CommandRequest, Job, JobState};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::runtime::timeline::{CaptureRunInput, SpeechEventInput};
+use clankcord::store::{CaptureRunInput, SpeechEventInput};
 
 use common::{append_speech, dt, test_store};
 

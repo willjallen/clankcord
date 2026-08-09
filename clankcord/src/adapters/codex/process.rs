@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 
 use crate::Result;
 use crate::config::{self, CodexReasoningEffort};
-use crate::runtime::util::non_empty;
+use crate::util::non_empty;
 
 use super::output::{extract_codex_model, extract_codex_session_id};
 

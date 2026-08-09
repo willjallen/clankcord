@@ -11,15 +11,15 @@ use crate::adapters::discord::gateway::text::DiscordTextAdapter;
 use crate::adapters::discord::runtime_api::DiscordRuntimeApi;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
+use crate::domain::Ctx;
+use crate::domain::interactions::commands;
+use crate::domain::interactions::tasks;
 use crate::engine::JobBus;
 use crate::engine::RuntimeExecutor;
 use crate::engine::schedules;
 use crate::model::job::{CommandRequest, Job, RuntimeControlAction};
-use crate::runtime::Ctx;
-use crate::runtime::domain::interactions::commands;
-use crate::runtime::domain::interactions::tasks;
-use crate::runtime::timeline::{TimelineStore, utc_now};
-use crate::runtime::util::log;
+use crate::store::{TimelineStore, utc_now};
+use crate::util::log;
 
 type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;
 /// A job can be due but unclaimable while its ordering key is held by a
@@ -361,7 +361,7 @@ async fn next_wake_instant(
         .timeline_store
         .next_due_job_schedule_at_ms()
         .await?
-        .and_then(crate::runtime::timeline::ms_to_datetime);
+        .and_then(crate::store::ms_to_datetime);
     Ok(match (job_ready, schedule_due) {
         (Some(job), Some(schedule)) => Some(job.min(schedule)),
         (value, None) | (None, value) => value,

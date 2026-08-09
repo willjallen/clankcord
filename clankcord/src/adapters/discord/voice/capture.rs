@@ -10,9 +10,9 @@ use crate::adapters::discord::voice::session::{
     WakeProbeConfig, monotonic_seconds,
 };
 use crate::adapters::discord::voice::types::LiveVoiceSession;
+use crate::domain::voice::VoiceCaptureSessionStatus;
 use crate::model::job::Job;
-use crate::runtime::domain::voice::VoiceCaptureSessionStatus;
-use crate::runtime::util::log;
+use crate::util::log;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaptureUser {

@@ -7,8 +7,8 @@ use crate::Result;
 use crate::adapters::discord::api::{create_dm_channel, discord_request};
 use crate::model::job::TextTargetKind;
 use crate::model::job::{DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload};
-use crate::runtime::util::log;
-use crate::runtime::util::string_field;
+use crate::util::log;
+use crate::util::string_field;
 
 const TYPING_HEARTBEAT_SECONDS: u64 = 8;
 

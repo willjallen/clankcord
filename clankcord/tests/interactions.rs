@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use clankcord::model::job::TextTargetKind;
-use clankcord::runtime::agents::AgentSessionRouteKind;
-use clankcord::runtime::domain::interactions::{
+use clankcord::domain::agents::AgentSessionRouteKind;
+use clankcord::domain::interactions::{
     AgentPromptRequestOrigin, AgentTaskPromptContext, build_agent_task_message_from_template_dir,
 };
+use clankcord::model::job::TextTargetKind;
 
 #[test]
 fn agent_task_message_uses_compact_invocation_context() {

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::Result;
-use crate::runtime::util::number_or_null;
+use crate::util::number_or_null;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WakeDetectionResult {

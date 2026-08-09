@@ -5,11 +5,11 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::domain::Ctx;
+use clankcord::domain::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::runtime::Ctx;
-use clankcord::runtime::automations::AutomationSpec;
-use clankcord::runtime::timeline::{instant_ms_dt, isoformat_z};
+use clankcord::store::{instant_ms_dt, isoformat_z};
 use clankcord::views::{
     DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest, DashboardOverviewRequest,
     DashboardTimelineRequest, DashboardTranscriptRequest, default_dashboard_categories,
@@ -981,7 +981,7 @@ fn values<const N: usize>(items: [&str; N]) -> DashboardFilter {
 
 #[allow(clippy::too_many_arguments)]
 async fn insert_event(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     event_id: &str,
     scope_kind: &str,
     guild_id: &str,
@@ -1035,7 +1035,7 @@ async fn insert_event(
 }
 
 async fn insert_taxonomy_event(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     event_id: &str,
     event_kind: &str,
     started_at: chrono::DateTime<Utc>,
@@ -1060,7 +1060,7 @@ async fn insert_taxonomy_event(
 }
 
 async fn insert_voice_room(
-    store: &clankcord::runtime::timeline::TimelineStore,
+    store: &clankcord::store::TimelineStore,
     guild_id: &str,
     channel_id: &str,
     channel_name: &str,

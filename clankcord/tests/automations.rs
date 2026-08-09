@@ -2,20 +2,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
+use clankcord::domain::Ctx;
+use clankcord::domain::automations::{
+    AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
+    AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState,
+    AutomationTextTargetKind, AutomationTrigger,
+};
+use clankcord::domain::rooms::RoomConfig;
+use clankcord::domain::voice::VoiceBotStatus;
 use clankcord::model::job::{
     CommandRequest, Job, JobKind, JobState, RoomAgentPlacementAction, TextDeliveryKind,
     TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 use clankcord::model::scope::RuntimeScope;
-use clankcord::runtime::Ctx;
-use clankcord::runtime::automations::{
-    AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
-    AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState,
-    AutomationTextTargetKind, AutomationTrigger,
-};
-use clankcord::runtime::domain::voice::VoiceBotStatus;
-use clankcord::runtime::rooms::RoomConfig;
-use clankcord::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
+use clankcord::store::{TimelineStore, isoformat_z, utc_now};
 
 mod common;
 use common::test_store;
@@ -601,7 +601,7 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
     .await;
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -640,7 +640,7 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -654,7 +654,7 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
     assert_eq!(payload.reason, "auto_join");
     assert_eq!(payload.cooldown_seconds, None);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -680,7 +680,7 @@ async fn room_placement_builtin_automation_releases_orphan_bot_outside_configure
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -715,7 +715,7 @@ async fn room_placement_builtin_automation_releases_orphan_voice_bot_presence() 
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -748,7 +748,7 @@ async fn room_placement_builtin_automation_groups_orphan_voice_bot_presence_by_c
     store.upsert_voice_bot_state(&second_bot).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -782,7 +782,7 @@ async fn room_placement_builtin_automation_uses_only_direct_leave_for_empty_orph
     store.record_voice_state_update(None, left).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -817,7 +817,7 @@ async fn room_placement_builtin_automation_waits_for_pending_orphan_disconnect()
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -843,7 +843,7 @@ async fn room_placement_builtin_automation_uses_configured_join_threshold() {
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -855,7 +855,7 @@ async fn room_placement_builtin_automation_uses_configured_join_threshold() {
         .await
         .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -880,7 +880,7 @@ async fn room_placement_builtin_automation_skips_rooms_without_auto_join() {
         .unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -895,7 +895,7 @@ async fn room_placement_builtin_automation_respects_active_auto_join_suppression
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let room = code_room();
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+    clankcord::domain::rooms::control_state::suppress_room_auto_join(
         &runtime,
         &room,
         5 * 60,
@@ -914,7 +914,7 @@ async fn room_placement_builtin_automation_respects_active_auto_join_suppression
         .await
         .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -949,7 +949,7 @@ async fn room_placement_restart_sync_prevents_stale_voice_rows_from_triggering_a
     stale_parent.set_state(JobState::FailedTimeout);
     store.update_job(&stale_parent).await.unwrap();
     let restarted = test_runtime(store.clone());
-    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+    clankcord::domain::maintenance::voice_status::sync_voice_adapter_status(
         &restarted,
         vec![ready_bot()],
         Vec::new(),
@@ -959,7 +959,7 @@ async fn room_placement_restart_sync_prevents_stale_voice_rows_from_triggering_a
     .await
     .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+    let result = clankcord::domain::automations::engine::run_automations(&restarted)
         .await
         .unwrap()
         .to_json();
@@ -1017,7 +1017,7 @@ async fn room_placement_restart_with_recorded_empty_room_does_not_rejoin_after_p
         .unwrap();
     let restarted = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+    let result = clankcord::domain::automations::engine::run_automations(&restarted)
         .await
         .unwrap()
         .to_json();
@@ -1039,7 +1039,7 @@ async fn room_placement_builtin_automation_manual_leave_suppresses_auto_join() {
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let room = code_room();
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+    clankcord::domain::rooms::control_state::suppress_room_auto_join(
         &runtime,
         &room,
         60 * 60,
@@ -1058,7 +1058,7 @@ async fn room_placement_builtin_automation_manual_leave_suppresses_auto_join() {
         .await
         .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1090,7 +1090,7 @@ async fn room_placement_builtin_automation_manual_leave_releases_present_bot() {
         .await
         .unwrap();
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+    clankcord::domain::rooms::control_state::suppress_room_auto_join(
         &runtime,
         &room,
         60 * 60,
@@ -1101,7 +1101,7 @@ async fn room_placement_builtin_automation_manual_leave_releases_present_bot() {
     .await
     .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1125,7 +1125,7 @@ async fn room_placement_builtin_automation_manual_hold_joins_with_one_participan
     room.auto_join = false;
     write_test_runtime_config(&store, std::slice::from_ref(&room)).await;
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+    clankcord::domain::rooms::control_state::set_room_manual_hold(
         &runtime,
         &room,
         60 * 60,
@@ -1139,7 +1139,7 @@ async fn room_placement_builtin_automation_manual_hold_joins_with_one_participan
         .await
         .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1177,7 +1177,7 @@ async fn room_placement_builtin_automation_leaves_empty_rooms_after_grace() {
     store.record_voice_state_update(None, left).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1219,7 +1219,7 @@ async fn room_placement_builtin_automation_waits_for_configured_empty_release_se
     store.record_voice_state_update(None, left).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1254,7 +1254,7 @@ async fn room_placement_builtin_automation_uses_configured_rejoin_cooldown() {
     store.record_voice_state_update(None, left).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1287,7 +1287,7 @@ async fn room_placement_builtin_automation_leaves_single_deafened_participant_af
     store.record_voice_state_update(None, state).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1325,7 +1325,7 @@ async fn room_placement_builtin_automation_waits_for_configured_deafened_release
     store.record_voice_state_update(None, state).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1356,7 +1356,7 @@ async fn room_placement_builtin_automation_disables_single_deafened_release_at_z
     store.record_voice_state_update(None, state).await.unwrap();
     let runtime = test_runtime(store.clone());
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1383,7 +1383,7 @@ async fn room_placement_builtin_automation_keeps_manual_join_hold_with_deafened_
     state["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, state).await.unwrap();
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+    clankcord::domain::rooms::control_state::set_room_manual_hold(
         &runtime,
         &room,
         60 * 60,
@@ -1393,7 +1393,7 @@ async fn room_placement_builtin_automation_keeps_manual_join_hold_with_deafened_
     .await
     .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1424,7 +1424,7 @@ async fn room_placement_builtin_automation_empty_room_overrides_manual_hold() {
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
     let runtime = test_runtime(store.clone());
-    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+    clankcord::domain::rooms::control_state::set_room_manual_hold(
         &runtime,
         &room,
         60 * 60,
@@ -1434,7 +1434,7 @@ async fn room_placement_builtin_automation_empty_room_overrides_manual_hold() {
     .await
     .unwrap();
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1490,7 +1490,7 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
     );
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1602,7 +1602,7 @@ async fn overlap_automation_can_match_current_room_participants() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1665,7 +1665,7 @@ async fn room_participants_exposes_voice_state_flags_for_conditions() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1726,7 +1726,7 @@ async fn event_room_participants_exposes_voice_state_flags_for_transition_condit
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1796,7 +1796,7 @@ async fn room_state_changed_trigger_fires_for_participant_deafen_changes() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1866,7 +1866,7 @@ async fn room_state_changed_trigger_fires_for_participant_mute_changes() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1931,7 +1931,7 @@ async fn recurring_event_automation_processes_all_matching_events_seen_in_one_pa
     .await;
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -1980,7 +1980,7 @@ async fn recurring_job_automation_processes_all_matching_jobs_seen_in_one_pass()
     create_completed_text_delivery(&store, "source-delivery-2", "second").await;
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2039,7 +2039,7 @@ async fn event_room_snapshot_matches_presence_at_transition_time() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2093,7 +2093,7 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
     append_speech(&store, "room.member_joined", "vince", "Vince joined", 1).await;
     let runtime = test_runtime(store);
 
-    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let first = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2116,7 +2116,7 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
         2,
     )
     .await;
-    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let second = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2138,11 +2138,11 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let runtime = test_runtime(store);
 
-    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let first = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
-    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let second = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2167,7 +2167,7 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
         2,
     )
     .await;
-    let third = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let third = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2229,7 +2229,7 @@ async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let first = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2245,7 +2245,7 @@ async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let second = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2285,7 +2285,7 @@ async fn delayed_recheck_does_not_duplicate_work_before_due() {
         .unwrap();
     let runtime = test_runtime(store);
 
-    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let first = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2296,7 +2296,7 @@ async fn delayed_recheck_does_not_duplicate_work_before_due() {
         .unwrap()
         .pending_recheck
         .expect("first evaluation stores delayed recheck");
-    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let second = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2343,7 +2343,7 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
         .unwrap();
     let runtime = test_runtime(store);
 
-    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let first = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2353,7 +2353,7 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let second = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2374,7 +2374,7 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let third = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let third = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2389,7 +2389,7 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
             .is_some()
     );
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let fourth = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let fourth = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2424,7 +2424,7 @@ async fn delayed_recheck_survives_fresh_runtime_context() {
         .await
         .unwrap();
     let first_runtime = test_runtime(store);
-    clankcord::runtime::automations::engine::run_automations(&first_runtime)
+    clankcord::domain::automations::engine::run_automations(&first_runtime)
         .await
         .unwrap();
     let store = first_runtime.store.clone();
@@ -2432,7 +2432,7 @@ async fn delayed_recheck_survives_fresh_runtime_context() {
 
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
     let restarted = test_runtime(store);
-    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+    let result = clankcord::domain::automations::engine::run_automations(&restarted)
         .await
         .unwrap()
         .to_json();
@@ -2486,7 +2486,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     store.update_job(&completed_delivery).await.unwrap();
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();
@@ -2520,7 +2520,7 @@ async fn automation_action_failures_are_audited_without_crashing_runner() {
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
     let runtime = test_runtime(store);
 
-    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+    let result = clankcord::domain::automations::engine::run_automations(&runtime)
         .await
         .unwrap()
         .to_json();

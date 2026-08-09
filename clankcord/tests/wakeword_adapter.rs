@@ -3,7 +3,7 @@ mod common;
 use serde_json::json;
 
 use clankcord::adapters::wakeword::parse_wake_payload;
-use clankcord::runtime::timeline::store::WakeCircuitAdmission;
+use clankcord::store::WakeCircuitAdmission;
 
 #[tokio::test(flavor = "current_thread")]
 async fn wakeword_payload_parser_preserves_detector_metadata() {
@@ -138,7 +138,7 @@ async fn wake_circuit_state_survives_a_new_store_and_releases_stale_half_open_le
         .fetch_one(&store.pool)
         .await
         .unwrap();
-    let restarted = clankcord::runtime::timeline::TimelineStore::new_with_database(
+    let restarted = clankcord::store::TimelineStore::new_with_database(
         Some(root.path().to_path_buf()),
         store.database_url.clone(),
         schema,

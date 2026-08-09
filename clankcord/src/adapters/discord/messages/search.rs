@@ -10,7 +10,7 @@ use crate::adapters::discord::api::{
     list_public_archived_threads,
 };
 use crate::errors::discord_tool_error;
-use crate::runtime::util::{non_empty, string_field};
+use crate::util::{non_empty, string_field};
 
 #[derive(Debug, clap::Args)]
 pub struct Args {

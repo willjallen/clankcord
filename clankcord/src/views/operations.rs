@@ -9,19 +9,15 @@ use super::dashboard::{dashboard_job_category, dashboard_job_duration_ms};
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
 use crate::config;
+use crate::domain::Ctx;
+use crate::domain::agents::AgentRuntime;
+use crate::domain::automations::{AutomationRecord, AutomationTrigger};
+use crate::domain::voice_capture::wake_circuit;
 use crate::model::job::{Job, JobKind, JobState};
-use crate::runtime::Ctx;
-use crate::runtime::agents::AgentRuntime;
-use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
-use crate::runtime::domain::voice_capture::wake_circuit;
-use crate::runtime::timeline::store::{
-    OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY,
-};
-use crate::runtime::timeline::util::timeline_event_payload;
-use crate::runtime::timeline::{
-    instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now,
-};
-use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
+use crate::store::util::timeline_event_payload;
+use crate::store::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY};
+use crate::store::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now};
+use crate::util::{first_non_empty, non_empty, preview, string_field};
 use crate::views::dashboard;
 use crate::views::status;
 
@@ -157,7 +153,7 @@ pub async fn dashboard_health_payload(
                 JobState::CancelRequested,
                 JobState::ConfirmationPending,
             ],
-            crate::runtime::timeline::JobVisibility::IncludeEphemeral,
+            crate::store::JobVisibility::IncludeEphemeral,
         )
         .await?;
     Ok(json!({

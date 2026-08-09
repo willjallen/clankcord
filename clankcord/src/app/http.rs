@@ -20,14 +20,14 @@ use crate::dashboard::{
     ALPINE_JS, APP_JS, CHARTS_JS, ECHARTS_JS, EXPLORER_JS, INDEX_HTML, JSON_JS, STYLES_CSS,
     TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
 };
+use crate::domain::automations::AutomationState;
+use crate::domain::automations::spec;
+use crate::domain::interactions::agent_sessions;
+use crate::domain::messaging::text_delivery;
+use crate::domain::rooms::catalog;
 use crate::model::job::CommandRequest;
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
-use crate::runtime::automations::AutomationState;
-use crate::runtime::automations::spec;
-use crate::runtime::domain::interactions::agent_sessions;
-use crate::runtime::domain::messaging::text_delivery;
-use crate::runtime::rooms::catalog;
-use crate::runtime::util::first_value_string;
+use crate::util::first_value_string;
 use crate::views::dashboard;
 use crate::views::history;
 use crate::views::jobs;
@@ -278,7 +278,7 @@ struct AgentSessionResumeBody {
 }
 
 impl AppState {
-    fn runtime_context(&self) -> crate::runtime::Ctx {
+    fn runtime_context(&self) -> crate::domain::Ctx {
         self.handle.runtime_context()
     }
 }
@@ -509,7 +509,7 @@ async fn feedback_submit(State(state): State<AppState>, Json(payload): Json<Valu
     result(submit_feedback_event(&runtime, &payload).await)
 }
 
-async fn submit_feedback_event(runtime: &crate::runtime::Ctx, payload: &Value) -> Result<Value> {
+async fn submit_feedback_event(runtime: &crate::domain::Ctx, payload: &Value) -> Result<Value> {
     let message = first_value_string(payload, &["content", "message", "feedback_message"]);
     if message.trim().is_empty() {
         anyhow::bail!("feedback requires content");

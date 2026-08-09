@@ -5,9 +5,9 @@ use serde_json::json;
 use clankcord::adapters::discord::gateway::slash::{
     slash_missing_voice_channel_response_content, slash_success_response_content,
 };
+use clankcord::domain::Ctx;
 use clankcord::model::job::{BinaryPayload, CommandKind, DiscordSlashCommandPayload, Job, JobKind};
 use clankcord::model::scope::RuntimeScopeKind;
-use clankcord::runtime::Ctx;
 use clankcord::views::{DashboardFilter, DashboardTimelineRequest};
 
 mod common;
@@ -322,6 +322,6 @@ fn slash_payload(
     }
 }
 
-fn test_runtime(timeline_store: clankcord::runtime::timeline::TimelineStore) -> Ctx {
+fn test_runtime(timeline_store: clankcord::store::TimelineStore) -> Ctx {
     Ctx::new(timeline_store)
 }

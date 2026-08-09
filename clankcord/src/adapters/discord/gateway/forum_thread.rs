@@ -4,7 +4,7 @@ use crate::model::job::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload,
 };
-use crate::runtime::util::string_field;
+use crate::util::string_field;
 
 pub async fn create(
     payload: DiscordForumThreadCreatePayload,

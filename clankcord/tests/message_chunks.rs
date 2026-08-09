@@ -1,4 +1,4 @@
-use clankcord::runtime::message_chunks::split_message_chunks;
+use clankcord::domain::messaging::chunks::split_message_chunks;
 
 #[test]
 fn markdown_chunks_balance_split_code_fences() {

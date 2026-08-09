@@ -1,11 +1,11 @@
 use serde_json::json;
 
+use clankcord::domain::Ctx;
+use clankcord::domain::rooms::RoomConfig;
+use clankcord::domain::voice::VoiceCaptureSessionStatus;
 use clankcord::model::job::{CommandKind, CommandRequest, Job, JobKind};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::runtime::Ctx;
-use clankcord::runtime::domain::voice::VoiceCaptureSessionStatus;
-use clankcord::runtime::rooms::RoomConfig;
-use clankcord::runtime::timeline::TimelineStore;
+use clankcord::store::TimelineStore;
 
 mod common;
 use common::{initialize_test_config, test_store};
@@ -18,7 +18,7 @@ async fn pause_and_resume_room_controls_are_timeline_store_state() {
     let room = test_room();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    clankcord::runtime::rooms::control_state::pause_room(&runtime, &room, 60, "user-a")
+    clankcord::domain::rooms::control_state::pause_room(&runtime, &room, 60, "user-a")
         .await
         .unwrap();
 
@@ -40,18 +40,18 @@ async fn pause_and_resume_room_controls_are_timeline_store_state() {
 
     let fresh_runtime = test_runtime(store.clone(), room.clone());
     let status =
-        clankcord::runtime::rooms::control_state::room_control_status(&fresh_runtime, &room)
+        clankcord::domain::rooms::control_state::room_control_status(&fresh_runtime, &room)
             .await
             .unwrap();
     assert_eq!(status["listeningPaused"], json!(true));
     assert!(
-        clankcord::runtime::rooms::control_state::room_controls_json(&fresh_runtime)
+        clankcord::domain::rooms::control_state::room_controls_json(&fresh_runtime)
             .await
             .unwrap()
             .contains_key(&room.channel_id)
     );
 
-    clankcord::runtime::rooms::control_state::resume_room(&runtime, &room, "user-a")
+    clankcord::domain::rooms::control_state::resume_room(&runtime, &room, "user-a")
         .await
         .unwrap();
 
@@ -64,7 +64,7 @@ async fn pause_and_resume_room_controls_are_timeline_store_state() {
     );
     let fresh_runtime = test_runtime(store, room.clone());
     let status =
-        clankcord::runtime::rooms::control_state::room_control_status(&fresh_runtime, &room)
+        clankcord::domain::rooms::control_state::room_control_status(&fresh_runtime, &room)
             .await
             .unwrap();
     assert_eq!(status["listeningPaused"], json!(false));
@@ -173,12 +173,11 @@ async fn room_mutating_command_rejects_missing_explicit_target() {
     }))
     .unwrap();
 
-    let error = clankcord::runtime::domain::interactions::commands::create_command_job(
-        &runtime, command, None,
-    )
-    .await
-    .unwrap_err()
-    .to_string();
+    let error =
+        clankcord::domain::interactions::commands::create_command_job(&runtime, command, None)
+            .await
+            .unwrap_err()
+            .to_string();
 
     assert!(error.contains("requires explicit room/channel target"));
     let jobs = store
@@ -205,11 +204,10 @@ async fn room_mutating_command_uses_explicit_scope_instead_of_default_room() {
     }))
     .unwrap();
 
-    let result = clankcord::runtime::domain::interactions::commands::create_command_job(
-        &runtime, command, None,
-    )
-    .await
-    .unwrap();
+    let result =
+        clankcord::domain::interactions::commands::create_command_job(&runtime, command, None)
+            .await
+            .unwrap();
     let job_id = result["job_ids"][0].as_str().unwrap();
     let job = store.get_job(job_id).await.unwrap();
 

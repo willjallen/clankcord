@@ -3,7 +3,7 @@ use serde_json::json;
 use crate::Result;
 use crate::adapters::discord::api::discord_request;
 use crate::config;
-use crate::runtime::util::string_field;
+use crate::util::string_field;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SlashCommandRegistration {

@@ -10,7 +10,7 @@ use clankcord::model::job::{
     JobKind, JobOutput, JobPayload, JobState, TextTarget, TextTargetKind,
 };
 use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
-use clankcord::runtime::timeline::JobVisibility;
+use clankcord::store::JobVisibility;
 
 use common::{initialize_test_config, test_store};
 
@@ -220,11 +220,7 @@ fn v8_job_shell(
     }
 }
 
-async fn overwrite_blob(
-    store: &clankcord::runtime::timeline::TimelineStore,
-    job_id: &str,
-    blob: Vec<u8>,
-) {
+async fn overwrite_blob(store: &clankcord::store::TimelineStore, job_id: &str, blob: Vec<u8>) {
     sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
         .bind(blob)
         .bind(job_id)

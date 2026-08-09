@@ -7,9 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 
 use crate::Result;
-use crate::runtime::rooms::RoomConfig;
-use crate::runtime::timeline::parse_duration;
-use crate::runtime::util::{first_non_empty, string_array, string_field};
+use crate::domain::rooms::RoomConfig;
+use crate::store::parse_duration;
+use crate::util::{first_non_empty, string_array, string_field};
 
 use super::JobKind;
 use super::util::{insert_non_empty, truthy};

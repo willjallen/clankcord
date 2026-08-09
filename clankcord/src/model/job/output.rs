@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::Result;
-use crate::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
-use crate::runtime::rooms::RoomConfig;
+use crate::domain::rooms::RoomConfig;
+use crate::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 
 use super::payload::{
     BinaryPayload, DiscordTypingAction, DiscordVoicePlaybackCue, OpaqueValue,

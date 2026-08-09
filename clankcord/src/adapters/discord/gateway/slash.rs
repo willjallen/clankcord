@@ -6,7 +6,7 @@ use serenity::model::application::CommandInteraction;
 
 use crate::engine::JobBus;
 use crate::model::job::{BinaryPayload, DiscordSlashCommandPayload, Job};
-use crate::runtime::util::log;
+use crate::util::log;
 
 pub async fn handle_slash_command(bus: JobBus, ctx: Context, command: CommandInteraction) {
     if !is_supported_slash_command(&command.data.name) {

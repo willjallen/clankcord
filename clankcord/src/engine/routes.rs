@@ -1,26 +1,26 @@
 use serde_json::json;
 
 use crate::Result;
+use crate::domain::Ctx;
+use crate::domain::ingress::discord_slash;
+use crate::domain::ingress::discord_text;
+use crate::domain::interactions::agent_sessions;
+use crate::domain::interactions::confirmations;
+use crate::domain::maintenance::execution;
+use crate::domain::maintenance::member_sync;
+use crate::domain::messaging::text_delivery;
+use crate::domain::messaging::typing_indicator;
+use crate::domain::rooms::catalog;
+use crate::domain::transcripts::publication;
+use crate::domain::voice::playback;
+use crate::domain::voice::room_placement;
+use crate::domain::voice_capture::{segments, wake_activations, wake_probes};
 use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload,
 };
 use crate::ports::discord::DiscordApi;
-use crate::runtime::Ctx;
-use crate::runtime::domain::ingress::discord_slash;
-use crate::runtime::domain::ingress::discord_text;
-use crate::runtime::domain::interactions::agent_sessions;
-use crate::runtime::domain::interactions::confirmations;
-use crate::runtime::domain::maintenance::execution;
-use crate::runtime::domain::maintenance::member_sync;
-use crate::runtime::domain::messaging::text_delivery;
-use crate::runtime::domain::messaging::typing_indicator;
-use crate::runtime::domain::transcripts::publication;
-use crate::runtime::domain::voice::playback;
-use crate::runtime::domain::voice::room_placement;
-use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
-use crate::runtime::rooms::catalog;
 use crate::views::jobs;
 
 pub(crate) async fn execute<A>(runtime: &Ctx, job: &Job, external_api: &A) -> Result<JobDecision>
@@ -29,7 +29,7 @@ where
 {
     match &job.payload {
         JobPayload::DiscordTextSend(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_text_send_job(
+            crate::domain::messaging::discord_io::execute_discord_text_send_job(
                 runtime,
                 payload,
                 external_api,
@@ -37,7 +37,7 @@ where
             .await
         }
         JobPayload::DiscordForumThreadCreate(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_create_job(
+            crate::domain::messaging::discord_io::execute_discord_forum_thread_create_job(
                 runtime,
                 payload,
                 external_api,
@@ -45,7 +45,7 @@ where
             .await
         }
         JobPayload::DiscordForumThreadRename(payload) => {
-            crate::runtime::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(
+            crate::domain::messaging::discord_io::execute_discord_forum_thread_rename_job(
                 runtime,
                 payload,
                 external_api,
@@ -62,7 +62,7 @@ where
             .await
         }
         JobPayload::DiscordVoiceJoin(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_join_job(
+            crate::domain::voice::discord_io::execute_discord_voice_join_job(
                 runtime,
                 payload,
                 external_api,
@@ -70,7 +70,7 @@ where
             .await
         }
         JobPayload::DiscordVoiceLeave(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_leave_job(
+            crate::domain::voice::discord_io::execute_discord_voice_leave_job(
                 runtime,
                 job,
                 payload,
@@ -79,7 +79,7 @@ where
             .await
         }
         JobPayload::DiscordVoiceMute(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_mute_job(
+            crate::domain::voice::discord_io::execute_discord_voice_mute_job(
                 runtime,
                 payload,
                 external_api,
@@ -87,7 +87,7 @@ where
             .await
         }
         JobPayload::DiscordVoiceDeafen(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_deafen_job(
+            crate::domain::voice::discord_io::execute_discord_voice_deafen_job(
                 runtime,
                 payload,
                 external_api,
@@ -95,7 +95,7 @@ where
             .await
         }
         JobPayload::DiscordVoicePlayAudio(payload) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(
+            crate::domain::voice::discord_io::execute_discord_voice_play_audio_job(
                 runtime,
                 payload,
                 external_api,
@@ -108,7 +108,7 @@ where
             )?))
         }
         JobPayload::DiscordVoiceStatusSnapshot(_) => {
-            crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(
+            crate::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(
                 runtime,
                 external_api,
             )
@@ -145,7 +145,7 @@ where
             )?))
         }
         JobPayload::Command(_) => {
-            crate::runtime::domain::interactions::commands::prepare_command_job(runtime, job).await
+            crate::domain::interactions::commands::prepare_command_job(runtime, job).await
         }
         JobPayload::DiscordTextMessage(payload) => {
             discord_text::prepare(runtime, job, payload).await

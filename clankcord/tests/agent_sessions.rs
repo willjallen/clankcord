@@ -3,6 +3,10 @@ use serde_json::json;
 
 mod common;
 
+use clankcord::domain::Ctx;
+use clankcord::domain::agents::{
+    AgentSessionRecord, AgentSessionRecordState, dm_route_key, voice_route_key,
+};
 use clankcord::model::job::{
     AgentSessionStartOutput, AgentSessionStartPayload, BinaryPayload, CommandRequest,
     DiscordForumThreadCreateOutput, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
@@ -10,11 +14,7 @@ use clankcord::model::job::{
     TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 use clankcord::model::scope::{RuntimeScope, RuntimeScopeKind};
-use clankcord::runtime::Ctx;
-use clankcord::runtime::agents::{
-    AgentSessionRecord, AgentSessionRecordState, dm_route_key, voice_route_key,
-};
-use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
+use clankcord::store::{JobVisibility, TimelineStore};
 
 #[tokio::test(flavor = "current_thread")]
 async fn agent_session_records_route_by_voice_and_thread() {
@@ -400,7 +400,7 @@ fn agent_session_runtime_scope_covers_voice_dm_and_thread_routes() {
     assert_eq!(dm.scope(), RuntimeScope::dm("user-a"));
 
     let mut thread = voice;
-    thread.route_kind = clankcord::runtime::agents::AgentSessionRouteKind::Thread;
+    thread.route_kind = clankcord::domain::agents::AgentSessionRouteKind::Thread;
     thread.discord_thread_id = "thread-a".to_string();
     assert_eq!(thread.scope(), RuntimeScope::thread("guild-a", "thread-a"));
 }
@@ -785,7 +785,7 @@ async fn search_returns_retired_sessions_with_resume_command() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let result = clankcord::runtime::domain::interactions::agent_sessions::agent_session_search(
+    let result = clankcord::domain::interactions::agent_sessions::agent_session_search(
         &runtime,
         "guild",
         "code",

@@ -1,11 +1,11 @@
+use clankcord::domain::Ctx;
+use clankcord::domain::rooms::RoomConfig;
+use clankcord::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use clankcord::model::job::{
     DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
     JobOutput, JobState, RoomAgentPlacementAction,
 };
-use clankcord::runtime::Ctx;
-use clankcord::runtime::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
-use clankcord::runtime::rooms::RoomConfig;
-use clankcord::runtime::timeline::utc_now;
+use clankcord::store::utc_now;
 
 mod common;
 use common::{initialize_test_config, test_state_dir, test_store};
@@ -339,7 +339,7 @@ async fn voice_status_sync_releases_capturing_assignment_when_bot_is_absent() {
     store.upsert_voice_bot_state(&stale_bot).await.unwrap();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+    clankcord::domain::maintenance::voice_status::sync_voice_adapter_status(
         &runtime,
         vec![ready_bot()],
         Vec::new(),
@@ -399,7 +399,7 @@ async fn voice_status_sync_keeps_joining_assignment_while_presence_is_pending() 
         .unwrap();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+    clankcord::domain::maintenance::voice_status::sync_voice_adapter_status(
         &runtime,
         vec![ready_bot()],
         Vec::new(),
@@ -440,7 +440,7 @@ async fn voice_status_sync_keeps_capturing_assignment_with_matching_bot_and_sess
     bot.current_channel_id = room.channel_id.clone();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+    clankcord::domain::maintenance::voice_status::sync_voice_adapter_status(
         &runtime,
         vec![bot],
         vec![session],
@@ -498,10 +498,7 @@ async fn voice_assignment_claim_skips_pending_disconnect_bot() {
     assert!(assignment.is_none());
 }
 
-fn test_runtime(
-    timeline_store: clankcord::runtime::timeline::TimelineStore,
-    _room: RoomConfig,
-) -> Ctx {
+fn test_runtime(timeline_store: clankcord::store::TimelineStore, _room: RoomConfig) -> Ctx {
     Ctx::new(timeline_store)
 }
 
@@ -533,7 +530,7 @@ fn ready_bot_with(bot_id: &str, user_id: &str) -> VoiceBotStatus {
 
 fn capture_session_for_assignment(
     room: &RoomConfig,
-    assignment: &clankcord::runtime::domain::voice::VoiceAssignment,
+    assignment: &clankcord::domain::voice::VoiceAssignment,
 ) -> VoiceCaptureSessionStatus {
     VoiceCaptureSessionStatus {
         session_id: assignment.capture_run_id.clone(),

@@ -19,6 +19,7 @@ use crate::adapters::discord::voice::client_connection::{
 use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig};
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
+use crate::domain::voice::VoiceBotStatus;
 use crate::engine::JobBus;
 use crate::errors::discord_tool_error;
 use crate::model::job::{
@@ -28,9 +29,8 @@ use crate::model::job::{
     DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue,
 };
 use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
-use crate::runtime::domain::voice::VoiceBotStatus;
-use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
-use crate::runtime::util::log;
+use crate::store::{TimelineStore, isoformat_z, utc_now};
+use crate::util::log;
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;
 
@@ -752,9 +752,7 @@ impl LiveVoiceAdapter {
         })
     }
 
-    pub async fn session_statuses(
-        &self,
-    ) -> Vec<crate::runtime::domain::voice::VoiceCaptureSessionStatus> {
+    pub async fn session_statuses(&self) -> Vec<crate::domain::voice::VoiceCaptureSessionStatus> {
         let sessions = {
             let sessions = self.capture_sessions_lock.lock().await;
             sessions.values().cloned().collect::<Vec<_>>()
@@ -798,7 +796,7 @@ impl LiveVoiceAdapter {
 
     async fn persist_capture_session_status(
         &self,
-        status: &crate::runtime::domain::voice::VoiceCaptureSessionStatus,
+        status: &crate::domain::voice::VoiceCaptureSessionStatus,
     ) {
         if let Err(error) = self
             .timeline_store

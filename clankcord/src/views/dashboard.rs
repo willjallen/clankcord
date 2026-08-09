@@ -9,15 +9,15 @@ use super::operations::{
     dashboard_latency_by_kind_payload,
 };
 use crate::Result;
+use crate::domain::Ctx;
+use crate::domain::agents::AgentRuntime;
 use crate::model::job::Job;
-use crate::runtime::Ctx;
-use crate::runtime::agents::AgentRuntime;
-use crate::runtime::timeline::JobVisibility;
-use crate::runtime::timeline::util::timeline_event_payload;
-use crate::runtime::timeline::{
+use crate::store::JobVisibility;
+use crate::store::util::timeline_event_payload;
+use crate::store::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference, utc_now,
 };
-use crate::runtime::util::{first_non_empty, preview};
+use crate::util::{first_non_empty, preview};
 use crate::views::jobs;
 use crate::views::operations;
 

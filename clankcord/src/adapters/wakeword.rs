@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::Result;
 use crate::adapters::stt::content_type_for_path;
 use crate::config;
-use crate::runtime::util::{finite_number, string_field};
+use crate::util::{finite_number, string_field};
 
 pub fn wake_url() -> Result<String> {
     config::wake_url()

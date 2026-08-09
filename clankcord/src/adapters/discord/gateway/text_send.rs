@@ -6,12 +6,12 @@ use crate::Result;
 use crate::adapters::discord::api::{
     create_dm_channel, discord_multipart_request, discord_request,
 };
+use crate::domain::messaging::chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
 use crate::model::job::{DiscordPostMetadata, DiscordPostedMessageMetadata};
 use crate::model::job::{
     DiscordTextSendOutput, DiscordTextSendPayload, TextDeliveryKind, TextTargetKind,
 };
-use crate::runtime::message_chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
-use crate::runtime::util::string_field;
+use crate::util::string_field;
 
 pub async fn send(payload: DiscordTextSendPayload) -> Result<DiscordTextSendOutput> {
     tokio::task::spawn_blocking(move || send_blocking(payload)).await?

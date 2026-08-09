@@ -958,7 +958,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
         },
         Command::Automations { command } => match command {
             AutomationsCommand::Spec => {
-                print!("{}", crate::runtime::automations::AUTOMATION_SPEC_MANUAL);
+                print!("{}", crate::domain::automations::AUTOMATION_SPEC_MANUAL);
                 Ok(0)
             }
             AutomationsCommand::Create(args) => automation_spec(args, "/v1/automations"),
@@ -980,7 +980,7 @@ fn run_cli(cli: Cli) -> Result<i32> {
         },
         Command::Coding { command } => match command {
             CodingCommand::Spec => {
-                print!("{}", crate::runtime::coding::CODING_SPEC_MANUAL);
+                print!("{}", crate::app::manuals::CODING_SPEC_MANUAL);
                 Ok(0)
             }
         },

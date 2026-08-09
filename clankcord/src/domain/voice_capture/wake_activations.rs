@@ -1,0 +1,1229 @@
+use chrono::{DateTime, SecondsFormat, Utc};
+use serde_json::{Value, json};
+
+use crate::Result;
+use crate::config;
+use crate::domain::Ctx;
+use crate::domain::interactions::agent_sessions;
+use crate::domain::transcription::mux;
+use crate::domain::voice::playback;
+use crate::domain::voice_capture::segments;
+use crate::model::job::{
+    CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
+};
+use crate::store::{
+    event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
+};
+use crate::util::{first_value_string, non_empty};
+
+#[derive(Debug, Clone, Copy)]
+struct CaptureHold {
+    reason: &'static str,
+    next_run_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct TranscriptionSettlement {
+    requester_pending: Vec<String>,
+    requester_failed: Vec<String>,
+    context_pending: Vec<String>,
+    context_failed: Vec<String>,
+}
+
+impl TranscriptionSettlement {
+    fn normalize(&mut self) {
+        for values in [
+            &mut self.requester_pending,
+            &mut self.requester_failed,
+            &mut self.context_pending,
+            &mut self.context_failed,
+        ] {
+            values.sort();
+            values.dedup();
+        }
+    }
+
+    fn context_omissions(&self, deadline_expired: bool) -> Vec<String> {
+        let mut omissions = self.context_failed.clone();
+        if deadline_expired {
+            omissions.extend(self.context_pending.iter().cloned());
+        }
+        omissions.sort();
+        omissions.dedup();
+        omissions
+    }
+
+    fn to_json(&self) -> Value {
+        json!({
+            "requester_pending": self.requester_pending,
+            "requester_failed": self.requester_failed,
+            "context_pending": self.context_pending,
+            "context_failed": self.context_failed,
+        })
+    }
+}
+
+pub fn event_has_wake(event: &Value) -> bool {
+    event
+        .get("wake")
+        .and_then(|wake| wake.get("wake"))
+        .and_then(Value::as_bool)
+        == Some(true)
+        || event.get("wake_detected").and_then(Value::as_bool) == Some(true)
+}
+
+pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Value> {
+    if !event_has_wake(event) {
+        return Ok(Value::Null);
+    }
+    let guild_id = first_value_string(event, &["guild_id", "guildId"]);
+    let voice_channel_id = first_value_string(event, &["voice_channel_id", "channelId"]);
+    if guild_id.is_empty() || voice_channel_id.is_empty() {
+        anyhow::bail!("wake event is missing guild/channel identity");
+    }
+    let wake_started_at = event_start(event).unwrap_or_else(utc_now);
+    let wake_ended_at = event_end(event).unwrap_or(wake_started_at);
+    let wake_event_id = first_value_string(event, &["event_id", "eventId"]);
+    if wake_event_id.is_empty() {
+        anyhow::bail!("wake event is missing event_id");
+    }
+    if let Some(existing) =
+        activation_for_wake_event(runtime, &guild_id, &voice_channel_id, &wake_event_id).await?
+    {
+        return Ok(json!({
+            "status": "duplicate",
+            "job": existing.to_value(),
+        }));
+    }
+    let speaker_user_id = first_value_string(event, &["speaker_user_id", "speakerId", "user_id"]);
+    let speaker_label = non_empty(
+        first_value_string(event, &["speaker_label", "speakerLabel"]),
+        event_speaker(event),
+    );
+
+    if let Some(existing) =
+        activation_followup_target(runtime, &guild_id, &voice_channel_id, wake_started_at).await?
+    {
+        let descendants = descendant_jobs(runtime, &existing.id).await?;
+        if descendants.is_empty() {
+            let existing = amend_activation_job(
+                runtime,
+                existing,
+                &wake_event_id,
+                wake_started_at,
+                wake_ended_at,
+                speaker_user_id,
+                speaker_label,
+            )
+            .await?;
+            let promotion = promote_wake_transcription_slots(
+                runtime,
+                existing
+                    .wake_activation_payload()
+                    .expect("wake activation job payload"),
+            )
+            .await?;
+            let _ = playback::create_voice_playback_job_for_channel(
+                runtime,
+                &guild_id,
+                &voice_channel_id,
+                &existing.requested_by_user_id,
+                DiscordVoicePlaybackCue::Preempt,
+                "wake_activation_amended",
+                &existing.id,
+            )
+            .await?;
+            return Ok(json!({
+                "status": "amended",
+                "job": existing.to_value(),
+                "transcription_slot_promotion": promotion,
+            }));
+        }
+        let cancelled = cancel_job_tree(runtime, &existing).await?;
+        let replacement = replacement_activation_job(
+            runtime,
+            &existing,
+            &wake_event_id,
+            wake_started_at,
+            wake_ended_at,
+            speaker_user_id,
+            speaker_label,
+        )
+        .await?;
+        let promotion = promote_wake_transcription_slots(
+            runtime,
+            replacement
+                .wake_activation_payload()
+                .expect("wake activation job payload"),
+        )
+        .await?;
+        let _ = playback::create_voice_playback_job_for_channel(
+            runtime,
+            &guild_id,
+            &voice_channel_id,
+            &replacement.requested_by_user_id,
+            DiscordVoicePlaybackCue::Preempt,
+            "wake_activation_replaced",
+            &replacement.id,
+        )
+        .await?;
+        runtime.store.append_event(
+            &guild_id,
+            &voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_replaced",
+                "kind": "wake_activation_replaced",
+                "activation_id": replacement.wake_activation_payload().map(|payload| payload.activation_id.clone()).unwrap_or_default(),
+                "replaced_job_id": existing.id.clone(),
+                "replacement_job_id": replacement.id.clone(),
+                "wake_event_id": wake_event_id,
+                "cancelled_job_ids": cancelled,
+            }),
+        )
+        .await?;
+        return Ok(json!({
+            "status": "replaced",
+            "job": replacement.to_value(),
+            "replaced_job_id": existing.id.clone(),
+            "cancelled_job_ids": cancelled,
+            "transcription_slot_promotion": promotion,
+        }));
+    }
+
+    let activation = config::wake_activation_config();
+    let payload = WakeActivationPayload {
+        activation_id: new_id("act"),
+        guild_id: guild_id.clone(),
+        voice_channel_id: voice_channel_id.clone(),
+        voice_channel_name: first_value_string(event, &["voice_channel_name", "channelName"]),
+        speaker_user_id,
+        speaker_label,
+        wake_event_id: wake_event_id.clone(),
+        wake_started_at: isoformat_z(Some(wake_started_at)),
+        wake_ended_at: isoformat_z(Some(wake_ended_at)),
+        latest_wake_event_id: wake_event_id,
+        latest_wake_at: isoformat_z(Some(wake_started_at)),
+        lookback_seconds: activation.lookback_seconds.max(0),
+        min_post_seconds: activation.min_post_seconds.max(0),
+        speaker_idle_seconds: activation.speaker_idle_seconds.max(0),
+        stt_flush_grace_seconds: activation.stt_flush_grace_seconds.max(0),
+        max_window_seconds: activation.max_window_seconds.max(0),
+        additive_preempt_seconds: activation.additive_preempt_seconds.max(0),
+        independent_after_seconds: activation.independent_after_seconds.max(0),
+        amended_wake_event_ids: Vec::new(),
+        replacement_of_job_ids: Vec::new(),
+    };
+    let mut job = Job::wake_activation(payload.clone());
+    job.next_run_at = Some(ready_at_string(
+        wake_started_at,
+        wake_ended_at,
+        payload.min_post_seconds,
+        payload.speaker_idle_seconds,
+        payload.stt_flush_grace_seconds,
+    ));
+    let job = runtime.store.create_job(job).await?;
+    let promotion = promote_wake_transcription_slots(runtime, &payload).await?;
+    let _ = playback::create_voice_playback_job_for_channel(
+        runtime,
+        &guild_id,
+        &voice_channel_id,
+        &job.requested_by_user_id,
+        DiscordVoicePlaybackCue::Wake,
+        "wake_detected",
+        &job.id,
+    )
+    .await?;
+    Ok(json!({
+        "status": "scheduled",
+        "job": job.to_value(),
+        "transcription_slot_promotion": promotion,
+    }))
+}
+
+async fn promote_wake_transcription_slots(
+    runtime: &Ctx,
+    payload: &WakeActivationPayload,
+) -> Result<Value> {
+    let source_ids = runtime
+        .store
+        .promote_transcription_slots_for_wake_activation(payload)
+        .await?;
+    let mut planner_jobs = Vec::new();
+    for source_id in &source_ids {
+        if let Some(job) = mux::ensure_transcription_mux_plan_job(runtime, source_id, 0).await? {
+            planner_jobs.push(job.to_value());
+        }
+    }
+    Ok(json!({
+        "promoted_source_ids": source_ids,
+        "planner_jobs": planner_jobs,
+    }))
+}
+
+pub async fn execute(runtime: &Ctx, job: &Job, payload: &WakeActivationPayload) -> Result<Value> {
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    let window_start = original_wake_at - chrono::Duration::seconds(payload.lookback_seconds);
+    let hard_cap = original_wake_at + chrono::Duration::seconds(payload.max_window_seconds);
+    let now = utc_now();
+    if let Some(progress) = runtime.store.wake_activation_progress(&job.id).await? {
+        return dispatch_after_request_audio(
+            runtime,
+            job,
+            payload,
+            window_start,
+            progress.request_audio_closed_at,
+            progress.transcription_wait_deadline_at,
+            now,
+        )
+        .await;
+    }
+    let window_end = if now < hard_cap { now } else { hard_cap };
+    let events = runtime
+        .store
+        .load_events(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            Some(window_start),
+            Some(window_end + chrono::Duration::milliseconds(1)),
+            None,
+            None,
+            false,
+        )
+        .await?;
+
+    if let Some(closed_at) = activation_window_closed_at(payload, &events) {
+        let deadline_at = transcription_settlement_deadline(closed_at);
+        runtime
+            .store
+            .record_wake_activation_progress(&job.id, closed_at, deadline_at)
+            .await?;
+        return dispatch_after_request_audio(
+            runtime,
+            job,
+            payload,
+            window_start,
+            closed_at,
+            deadline_at,
+            now,
+        )
+        .await;
+    }
+
+    let due_at = std::cmp::min(
+        activation_due_at(payload, &events, latest_wake_at),
+        hard_cap,
+    );
+    if now < due_at {
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(due_at)));
+        runtime.store.update_job(&deferred).await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "deferred",
+            "next_run_at": deferred.next_run_at,
+        }));
+    }
+
+    if let Some(hold) = activation_voice_capture_hold(runtime, payload, latest_wake_at, now).await?
+        && now < hard_cap
+    {
+        let next_run_at = std::cmp::min(hold.next_run_at, hard_cap);
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
+        runtime.store.update_job(&deferred).await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "deferred",
+            "reason": hold.reason,
+            "next_run_at": deferred.next_run_at,
+        }));
+    }
+
+    let closed_at = if now >= hard_cap { hard_cap } else { due_at };
+    record_activation_window_closed(runtime, job, payload, closed_at).await?;
+    let deadline_at = transcription_settlement_deadline(closed_at);
+    runtime
+        .store
+        .record_wake_activation_progress(&job.id, closed_at, deadline_at)
+        .await?;
+
+    dispatch_after_request_audio(
+        runtime,
+        job,
+        payload,
+        window_start,
+        closed_at,
+        deadline_at,
+        now,
+    )
+    .await
+}
+
+async fn dispatch_after_request_audio(
+    runtime: &Ctx,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    window_start: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Value> {
+    let settlement =
+        room_transcription_settlement(runtime, payload, window_start, closed_at).await?;
+    if !settlement.requester_failed.is_empty() {
+        return fail_activation_transcription(
+            runtime,
+            job,
+            payload,
+            closed_at,
+            deadline_at,
+            "requester_transcription_failed",
+            &settlement,
+        )
+        .await;
+    }
+    let deadline_expired = now >= deadline_at;
+    if deadline_expired && !settlement.requester_pending.is_empty() {
+        return fail_activation_transcription(
+            runtime,
+            job,
+            payload,
+            closed_at,
+            deadline_at,
+            "requester_transcription_deadline_exceeded",
+            &settlement,
+        )
+        .await;
+    }
+    if !deadline_expired
+        && (!settlement.requester_pending.is_empty() || !settlement.context_pending.is_empty())
+    {
+        let mut deferred = job.clone();
+        deferred.state = JobState::Queued;
+        deferred.next_run_at = Some(isoformat_z(Some(
+            now + chrono::Duration::milliseconds(transcription_poll_ms()),
+        )));
+        runtime.store.update_job(&deferred).await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "deferred",
+            "reason": "waiting_for_room_transcription",
+            "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+            "transcription_settlement": settlement.to_json(),
+            "next_run_at": deferred.next_run_at,
+        }));
+    }
+
+    let context_omissions = settlement.context_omissions(deadline_expired);
+
+    let request_events = runtime
+        .store
+        .load_events(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            Some(window_start),
+            Some(closed_at + chrono::Duration::milliseconds(1)),
+            None,
+            None,
+            false,
+        )
+        .await?;
+    let request = activation_request_text(payload, &request_events, closed_at);
+    if request.trim().is_empty() {
+        record_activation_no_request(runtime, job, payload, closed_at, "empty_request_text")
+            .await?;
+        return Ok(json!({
+            "kind": "wake_activation",
+            "status": "no_request_captured",
+            "reason": "empty_request_text",
+            "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "transcription_context_omissions": context_omissions,
+        }));
+    }
+
+    let command = activation_agent_task_command(payload, &request_events, closed_at)?;
+    let agent_job = agent_sessions::agent_session_start_or_task_job(
+        runtime,
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        &payload.speaker_user_id,
+        command,
+    )
+    .await?;
+    let created_job = runtime.store.create_child_job(job, agent_job).await?;
+    let created = json!({
+        "kind": format!("{}_created", created_job.kind.as_str()),
+        "job_ids": [created_job.id.clone()],
+        "job": created_job.to_value(),
+    });
+    runtime
+        .store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_dispatched",
+                "kind": "wake_activation_dispatched",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "transcription_context_omissions": context_omissions.clone(),
+                "created": created.clone(),
+            }),
+        )
+        .await?;
+    Ok(json!({
+        "kind": "wake_activation",
+        "status": "dispatched",
+        "request_audio_closed_at": isoformat_z(Some(closed_at)),
+        "transcription_context_omissions": context_omissions,
+        "created": created,
+    }))
+}
+
+async fn record_activation_window_closed(
+    runtime: &Ctx,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+) -> Result<()> {
+    runtime
+        .store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_window_closed",
+                "kind": "wake_activation_window_closed",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "wake_event_id": payload.wake_event_id,
+                "latest_wake_event_id": payload.latest_wake_event_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "startedAt": isoformat_z(Some(closed_at)),
+                "endedAt": isoformat_z(Some(closed_at)),
+            }),
+        )
+        .await?;
+    let _ = playback::create_voice_playback_job_for_channel(
+        runtime,
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        &payload.speaker_user_id,
+        DiscordVoicePlaybackCue::Ack,
+        "wake_activation_window_closed",
+        &job.id,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn record_activation_no_request(
+    runtime: &Ctx,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+    reason: &str,
+) -> Result<()> {
+    runtime
+        .store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_no_request",
+                "kind": "wake_activation_no_request",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "reason": reason,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            }),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn fail_activation_transcription(
+    runtime: &Ctx,
+    job: &Job,
+    payload: &WakeActivationPayload,
+    closed_at: DateTime<Utc>,
+    deadline_at: DateTime<Utc>,
+    reason: &str,
+    settlement: &TranscriptionSettlement,
+) -> Result<Value> {
+    runtime
+        .store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "wake_activation_transcription_failed",
+                "kind": "wake_activation_transcription_failed",
+                "job_id": job.id,
+                "activation_id": payload.activation_id,
+                "wake_event_id": payload.wake_event_id,
+                "latest_wake_event_id": payload.latest_wake_event_id,
+                "speaker_user_id": payload.speaker_user_id,
+                "speaker_label": payload.speaker_label,
+                "reason": reason,
+                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+                "transcription_settlement": settlement.to_json(),
+                "startedAt": isoformat_z(None),
+                "endedAt": isoformat_z(None),
+            }),
+        )
+        .await?;
+    anyhow::bail!("wake activation transcription_failed: {reason}")
+}
+
+async fn activation_followup_target(
+    runtime: &Ctx,
+    guild_id: &str,
+    voice_channel_id: &str,
+    wake_started_at: DateTime<Utc>,
+) -> Result<Option<Job>> {
+    let jobs = runtime
+        .store
+        .list_active_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
+        .await?;
+    let mut candidates = Vec::new();
+    for job in jobs {
+        let Some(payload) = job.wake_activation_payload() else {
+            continue;
+        };
+        let latest_wake_at = payload.latest_wake_at.clone();
+        let additive_preempt_seconds = payload.additive_preempt_seconds;
+        let independent_after_seconds = payload.independent_after_seconds;
+        let latest = parse_instant(&latest_wake_at).unwrap_or(wake_started_at);
+        let seconds_since_latest = (wake_started_at - latest).num_seconds().abs();
+        if seconds_since_latest <= additive_preempt_seconds {
+            candidates.push(job);
+            continue;
+        }
+        if seconds_since_latest <= independent_after_seconds
+            && activation_can_be_rewritten(runtime, &job).await?
+        {
+            candidates.push(job);
+        }
+    }
+    Ok(candidates
+        .into_iter()
+        .min_by(|left, right| right.created_at.cmp(&left.created_at)))
+}
+
+async fn activation_can_be_rewritten(runtime: &Ctx, activation: &Job) -> Result<bool> {
+    if activation.state == JobState::Queued {
+        return Ok(true);
+    }
+    let descendants = descendant_jobs(runtime, &activation.id).await?;
+    Ok(descendants.is_empty())
+}
+
+async fn activation_for_wake_event(
+    runtime: &Ctx,
+    guild_id: &str,
+    voice_channel_id: &str,
+    wake_event_id: &str,
+) -> Result<Option<Job>> {
+    Ok(runtime
+        .store
+        .list_jobs_by_scope_kind(guild_id, voice_channel_id, JobKind::WakeActivation)
+        .await?
+        .into_iter()
+        .find(|job| {
+            let Some(payload) = job.wake_activation_payload() else {
+                return false;
+            };
+            payload.wake_event_id == wake_event_id
+                || payload.latest_wake_event_id == wake_event_id
+                || payload
+                    .amended_wake_event_ids
+                    .iter()
+                    .any(|id| id == wake_event_id)
+        }))
+}
+
+async fn amend_activation_job(
+    runtime: &Ctx,
+    mut activation: Job,
+    wake_event_id: &str,
+    wake_started_at: DateTime<Utc>,
+    wake_ended_at: DateTime<Utc>,
+    speaker_user_id: String,
+    speaker_label: String,
+) -> Result<Job> {
+    let (activation_id, min_post_seconds, idle_seconds, flush_grace_seconds) = {
+        let payload = activation
+            .wake_activation_payload_mut()
+            .ok_or_else(|| anyhow::anyhow!("wake activation job has wrong payload"))?;
+        amend_payload(
+            payload,
+            wake_event_id,
+            wake_started_at,
+            speaker_user_id,
+            speaker_label,
+        );
+        (
+            payload.activation_id.clone(),
+            payload.min_post_seconds,
+            payload.speaker_idle_seconds,
+            payload.stt_flush_grace_seconds,
+        )
+    };
+    activation.state = JobState::Queued;
+    activation.next_run_at = Some(ready_at_string(
+        wake_started_at,
+        wake_ended_at,
+        min_post_seconds,
+        idle_seconds,
+        flush_grace_seconds,
+    ));
+    runtime
+        .store
+        .clear_wake_activation_progress(&activation.id)
+        .await?;
+    runtime.store.update_job(&activation).await?;
+    runtime
+        .store
+        .append_event(
+            &activation.guild_id,
+            &activation.scope_id,
+            json!({
+                "event_kind": "wake_activation_amended",
+                "kind": "wake_activation_amended",
+                "activation_id": activation_id,
+                "job_id": activation.id.clone(),
+                "wake_event_id": wake_event_id,
+            }),
+        )
+        .await?;
+    Ok(activation)
+}
+
+async fn replacement_activation_job(
+    runtime: &Ctx,
+    replaced: &Job,
+    wake_event_id: &str,
+    wake_started_at: DateTime<Utc>,
+    wake_ended_at: DateTime<Utc>,
+    speaker_user_id: String,
+    speaker_label: String,
+) -> Result<Job> {
+    let mut payload = replaced
+        .wake_activation_payload()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("wake activation job has wrong payload"))?;
+    amend_payload(
+        &mut payload,
+        wake_event_id,
+        wake_started_at,
+        speaker_user_id,
+        speaker_label,
+    );
+    if !payload.replacement_of_job_ids.contains(&replaced.id) {
+        payload.replacement_of_job_ids.push(replaced.id.clone());
+    }
+    let mut job = Job::wake_activation(payload.clone());
+    job.next_run_at = Some(ready_at_string(
+        wake_started_at,
+        wake_ended_at,
+        payload.min_post_seconds,
+        payload.speaker_idle_seconds,
+        payload.stt_flush_grace_seconds,
+    ));
+    runtime.store.create_job(job).await
+}
+
+fn amend_payload(
+    payload: &mut WakeActivationPayload,
+    wake_event_id: &str,
+    wake_started_at: DateTime<Utc>,
+    speaker_user_id: String,
+    speaker_label: String,
+) {
+    payload.latest_wake_event_id = wake_event_id.to_string();
+    payload.latest_wake_at = isoformat_z(Some(wake_started_at));
+    payload.speaker_user_id = speaker_user_id;
+    payload.speaker_label = speaker_label;
+    if payload.wake_event_id != wake_event_id
+        && !payload
+            .amended_wake_event_ids
+            .iter()
+            .any(|id| id == wake_event_id)
+    {
+        payload
+            .amended_wake_event_ids
+            .push(wake_event_id.to_string());
+    }
+}
+
+async fn cancel_job_tree(runtime: &Ctx, root: &Job) -> Result<Vec<String>> {
+    let mut jobs = descendant_jobs(runtime, &root.id).await?;
+    jobs.sort_by_key(|job| std::cmp::Reverse(job.lineage_depth));
+    jobs.push(root.clone());
+    let mut cancelled = Vec::new();
+    for mut job in jobs {
+        if !job.state.is_cancellable() {
+            continue;
+        }
+        if job.state == JobState::Running {
+            job.mark_cancel_requested();
+        } else {
+            job.mark_cancelled();
+        }
+        cancelled.push(job.id.clone());
+        runtime.store.update_job(&job).await?;
+    }
+    Ok(cancelled)
+}
+
+async fn descendant_jobs(runtime: &Ctx, root_job_id: &str) -> Result<Vec<Job>> {
+    let mut descendants = Vec::new();
+    let children = runtime.store.list_child_jobs(root_job_id).await?;
+    for child in children {
+        descendants.extend(runtime.store.list_child_jobs(&child.id).await?);
+        descendants.push(child);
+    }
+    Ok(descendants)
+}
+
+fn activation_due_at(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    latest_wake_at: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let latest_speaker_end =
+        latest_speaker_event_end(payload, events, latest_wake_at).unwrap_or(latest_wake_at);
+    let min_post_at = latest_wake_at + chrono::Duration::seconds(payload.min_post_seconds);
+    let idle_at = latest_speaker_end + chrono::Duration::seconds(payload.speaker_idle_seconds);
+    std::cmp::max(min_post_at, idle_at)
+}
+
+fn latest_speaker_event_end(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    latest_wake_at: DateTime<Utc>,
+) -> Option<DateTime<Utc>> {
+    events
+        .iter()
+        .filter(|event| same_speaker(event, &payload.speaker_user_id))
+        .filter(|event| event_overlaps_or_follows(event, latest_wake_at))
+        .filter_map(event_end)
+        .max()
+}
+
+fn activation_window_closed_at(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+) -> Option<DateTime<Utc>> {
+    events
+        .iter()
+        .filter(|event| {
+            first_value_string(event, &["event_kind", "kind"]) == "wake_activation_window_closed"
+                && first_value_string(event, &["activation_id"]) == payload.activation_id
+                && first_value_string(event, &["latest_wake_event_id"])
+                    == payload.latest_wake_event_id
+        })
+        .filter_map(|event| {
+            parse_instant(&first_value_string(event, &["request_audio_closed_at"]))
+                .or_else(|| event_start(event))
+        })
+        .max()
+}
+
+async fn activation_voice_capture_hold(
+    runtime: &Ctx,
+    payload: &WakeActivationPayload,
+    latest_wake_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Option<CaptureHold>> {
+    live_speaker_capture_hold(runtime, payload, latest_wake_at, now).await
+}
+
+async fn live_speaker_capture_hold(
+    runtime: &Ctx,
+    payload: &WakeActivationPayload,
+    latest_wake_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Option<CaptureHold>> {
+    let session =
+        playback::active_session_for_channel(runtime, &payload.guild_id, &payload.voice_channel_id)
+            .await?;
+    let Some(session) = session else {
+        return Ok(None);
+    };
+    let Some(speaker) = session.capture_stats.speakers.get(&payload.speaker_user_id) else {
+        return Ok(None);
+    };
+    let last_pcm_at = parse_instant(&speaker.last_pcm_at);
+    if last_pcm_at.is_some_and(|last_pcm_at| last_pcm_at < latest_wake_at) {
+        return Ok(None);
+    }
+    let settled_at = last_pcm_at
+        .map(|last_pcm_at| last_pcm_at + chrono::Duration::seconds(payload.speaker_idle_seconds))
+        .unwrap_or(now + chrono::Duration::milliseconds(active_capture_poll_ms()));
+    let has_live_audio =
+        speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
+    let waiting_for_idle = settled_at > now;
+    if !has_live_audio && !waiting_for_idle {
+        return Ok(None);
+    }
+    let next_run_at = if waiting_for_idle {
+        settled_at
+    } else {
+        now + chrono::Duration::milliseconds(active_capture_poll_ms())
+    };
+    Ok(Some(CaptureHold {
+        reason: "waiting_for_live_speaker_audio",
+        next_run_at,
+    }))
+}
+
+async fn room_transcription_settlement(
+    runtime: &Ctx,
+    payload: &WakeActivationPayload,
+    window_start: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+) -> Result<TranscriptionSettlement> {
+    let mut settlement = TranscriptionSettlement::default();
+    if let Some(session) =
+        playback::active_session_for_channel(runtime, &payload.guild_id, &payload.voice_channel_id)
+            .await?
+    {
+        for speaker in session.capture_stats.speakers.values() {
+            let Some((start, end)) = live_capture_interval(speaker) else {
+                continue;
+            };
+            if !time_intervals_overlap(start, end, window_start, closed_at) {
+                continue;
+            }
+            let id = format!("live_capture:{}", speaker.user_id);
+            if is_requester_audio(payload, &speaker.user_id, start, end, closed_at) {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        }
+    }
+
+    for slot in runtime
+        .store
+        .transcription_slots_for_room_window(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            window_start,
+            closed_at,
+        )
+        .await?
+    {
+        let id = format!("transcription_slot:{}", slot.slot_id);
+        let requester = is_requester_audio(
+            payload,
+            &slot.speaker_user_id,
+            slot.segment_start_time,
+            slot.segment_end_time,
+            closed_at,
+        );
+        let pending = matches!(slot.state.as_str(), "queued" | "planned" | "muxing")
+            || (slot.state == "failed"
+                && segments::is_retryable_audio_segment_error_text(&slot.error));
+        if pending {
+            if requester {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        } else if slot.state == "failed" {
+            if requester {
+                settlement.requester_failed.push(id);
+            } else {
+                settlement.context_failed.push(id);
+            }
+        }
+    }
+
+    for job in runtime
+        .store
+        .list_incomplete_or_failed_audio_segment_jobs_overlapping(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            window_start,
+        )
+        .await?
+    {
+        let Some(segment) = job.audio_segment_payload() else {
+            continue;
+        };
+        if !time_intervals_overlap(
+            segment.segment_start_time,
+            segment.segment_end_time,
+            window_start,
+            closed_at,
+        ) {
+            continue;
+        }
+        let id = format!("audio_segment:{}", job.id);
+        let requester = is_requester_audio(
+            payload,
+            &segment.speaker_user_id,
+            segment.segment_start_time,
+            segment.segment_end_time,
+            closed_at,
+        );
+        let retryable_failure = job.state == JobState::FailedTimeout
+            || segments::is_retryable_audio_segment_error_text(&job.metadata.error);
+        if !job.state.is_terminal() || retryable_failure {
+            if requester {
+                settlement.requester_pending.push(id);
+            } else {
+                settlement.context_pending.push(id);
+            }
+        } else if requester {
+            settlement.requester_failed.push(id);
+        } else {
+            settlement.context_failed.push(id);
+        }
+    }
+    settlement.normalize();
+    Ok(settlement)
+}
+
+fn live_capture_interval(
+    speaker: &crate::domain::voice::SessionSpeakerCaptureStats,
+) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
+    let has_live_audio =
+        speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;
+    if !has_live_audio {
+        return None;
+    }
+    let segment_started_at = parse_instant(&speaker.segment_started_at);
+    let last_pcm_at = parse_instant(&speaker.last_pcm_at);
+    let start = segment_started_at.or(last_pcm_at)?;
+    let end = last_pcm_at.unwrap_or(start);
+    Some((std::cmp::min(start, end), std::cmp::max(start, end)))
+}
+
+fn is_requester_audio(
+    payload: &WakeActivationPayload,
+    speaker_user_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+) -> bool {
+    if speaker_user_id != payload.speaker_user_id {
+        return false;
+    }
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or(closed_at);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    time_intervals_overlap(start, end, latest_wake_at, closed_at)
+}
+
+fn time_intervals_overlap(
+    left_start: DateTime<Utc>,
+    left_end: DateTime<Utc>,
+    right_start: DateTime<Utc>,
+    right_end: DateTime<Utc>,
+) -> bool {
+    left_start <= right_end && left_end >= right_start
+}
+
+fn activation_agent_task_command(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    closed_at: DateTime<Utc>,
+) -> Result<CommandRequest> {
+    let request = activation_request_text(payload, events, closed_at);
+    let source_event_ids = activation_source_event_ids(payload, events, closed_at);
+    let activation = activation_summary(payload, &source_event_ids);
+    CommandRequest::from_json(&json!({
+        "action": "dispatch_now",
+        "command_kind": "agent_task",
+        "guild_id": payload.guild_id,
+        "voice_channel_id": payload.voice_channel_id,
+        "requested_by_user_id": payload.speaker_user_id,
+        "requested_by_speaker_label": payload.speaker_label,
+        "acknowledgement_text": "Working on that for you.",
+        "requires_confirmation": false,
+        "arguments": {
+            "request": request,
+            "instruction_text": request,
+            "source_event_ids": source_event_ids,
+            "activation": activation,
+        },
+    }))
+}
+
+fn activation_summary(payload: &WakeActivationPayload, source_event_ids: &[String]) -> Value {
+    json!({
+        "activation_id": payload.activation_id,
+        "wake_event_id": payload.wake_event_id,
+        "latest_wake_event_id": payload.latest_wake_event_id,
+        "amended_wake_event_ids": payload.amended_wake_event_ids,
+        "wake_started_at": payload.wake_started_at,
+        "wake_ended_at": payload.wake_ended_at,
+        "latest_wake_at": payload.latest_wake_at,
+        "voice_channel_name": payload.voice_channel_name,
+        "speaker_user_id": payload.speaker_user_id,
+        "speaker_label": payload.speaker_label,
+        "source_event_ids": source_event_ids,
+    })
+}
+
+fn activation_request_text(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    closed_at: DateTime<Utc>,
+) -> String {
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    let collapsed = collapse_ws(
+        &events
+            .iter()
+            .filter(|event| same_speaker(event, &payload.speaker_user_id))
+            .filter(|event| event_is_in_request_window(event, latest_wake_at, closed_at))
+            .map(event_text)
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
+    strip_leading_wake_phrase(&collapsed).to_string()
+}
+
+fn activation_source_event_ids(
+    payload: &WakeActivationPayload,
+    events: &[Value],
+    closed_at: DateTime<Utc>,
+) -> Vec<String> {
+    let original_wake_at = parse_instant(&payload.wake_started_at).unwrap_or_else(utc_now);
+    let latest_wake_at = parse_instant(&payload.latest_wake_at).unwrap_or(original_wake_at);
+    let mut ids = Vec::new();
+    for id in [
+        payload.wake_event_id.as_str(),
+        payload.latest_wake_event_id.as_str(),
+    ]
+    .into_iter()
+    .chain(payload.amended_wake_event_ids.iter().map(String::as_str))
+    {
+        if !id.trim().is_empty() && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+    }
+    for event in events
+        .iter()
+        .filter(|event| event_is_in_request_window(event, latest_wake_at, closed_at))
+        .filter(|event| !event_text(event).is_empty() || event_has_wake(event))
+    {
+        let id = first_value_string(event, &["event_id", "eventId"]);
+        if !id.is_empty() && !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+fn collapse_ws(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn ready_at_string(
+    started_at: DateTime<Utc>,
+    ended_at: DateTime<Utc>,
+    min_post_seconds: i64,
+    idle_seconds: i64,
+    _flush_grace_seconds: i64,
+) -> String {
+    let due_at = std::cmp::max(
+        started_at + chrono::Duration::seconds(min_post_seconds),
+        ended_at + chrono::Duration::seconds(idle_seconds),
+    );
+    due_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn same_speaker(event: &Value, speaker_user_id: &str) -> bool {
+    first_value_string(event, &["speaker_user_id", "speakerId", "user_id"]) == speaker_user_id
+}
+
+fn event_overlaps_or_follows(event: &Value, instant: DateTime<Utc>) -> bool {
+    event_end(event)
+        .or_else(|| event_start(event))
+        .is_some_and(|ended| ended >= instant)
+}
+
+fn event_is_in_request_window(
+    event: &Value,
+    latest_wake_at: DateTime<Utc>,
+    closed_at: DateTime<Utc>,
+) -> bool {
+    event_end(event)
+        .or_else(|| event_start(event))
+        .is_some_and(|ended| ended >= latest_wake_at)
+        && event_start(event)
+            .or_else(|| event_end(event))
+            .is_some_and(|started| started <= closed_at)
+}
+
+fn strip_leading_wake_phrase(text: &str) -> &str {
+    let value = text.trim();
+    let Some(after_hey) = strip_ascii_word(value, "hey") else {
+        return strip_activation_separator(strip_ascii_word(value, "clanky").unwrap_or(value));
+    };
+    let after_hey = strip_activation_separator(after_hey);
+    strip_activation_separator(strip_ascii_word(after_hey, "clanky").unwrap_or(value))
+}
+
+fn strip_ascii_word<'a>(value: &'a str, word: &str) -> Option<&'a str> {
+    let trimmed = value.trim_start();
+    if trimmed.len() < word.len() {
+        return None;
+    }
+    let prefix = trimmed.get(..word.len())?;
+    if !prefix.eq_ignore_ascii_case(word) {
+        return None;
+    }
+    let rest = &trimmed[word.len()..];
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        return None;
+    }
+    Some(rest)
+}
+
+fn strip_activation_separator(value: &str) -> &str {
+    value
+        .trim_start_matches(|ch: char| {
+            ch.is_ascii_whitespace() || matches!(ch, ',' | '.' | ':' | ';' | '-' | '!' | '?')
+        })
+        .trim()
+}
+
+fn active_capture_poll_ms() -> i64 {
+    config::wake_activation_config()
+        .active_capture_poll_ms
+        .max(1)
+}
+
+fn transcription_settlement_deadline(closed_at: DateTime<Utc>) -> DateTime<Utc> {
+    closed_at
+        + chrono::Duration::seconds(
+            config::wake_activation_config()
+                .transcription_settlement_seconds
+                .max(1),
+        )
+}
+
+fn transcription_poll_ms() -> i64 {
+    config::wake_activation_config()
+        .transcription_poll_ms
+        .max(100)
+}

@@ -1,11 +1,11 @@
 use serde_json::json;
 
 use clankcord::adapters::stt::parse_stt_payload;
-use clankcord::runtime::domain::transcription::{
+use clankcord::domain::transcription::{
     should_drop_low_confidence_transcription, stt_avg_token_logprob, stt_drop_decision,
     stt_no_speech_probability,
 };
-use clankcord::runtime::domain::voice_capture::{
+use clankcord::domain::voice_capture::{
     UntimestampedMuxDisposition, untimestamped_mux_disposition,
 };
 

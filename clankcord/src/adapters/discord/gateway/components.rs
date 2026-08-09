@@ -4,7 +4,7 @@ use serenity::model::application::ComponentInteraction;
 
 use crate::engine::JobBus;
 use crate::model::job::RuntimeControlAction;
-use crate::runtime::util::log;
+use crate::util::log;
 
 pub async fn handle_component_interaction(
     bus: JobBus,

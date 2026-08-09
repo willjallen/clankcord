@@ -4,14 +4,14 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::errors::discord_tool_error;
-use crate::runtime::timeline::{
+use crate::store::{
     TimelineStore, event_text, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
 
-use crate::runtime::Ctx;
-use crate::runtime::domain::transcripts::publication;
-use crate::runtime::rooms::catalog;
-use crate::runtime::util::{first_non_empty, first_value_string, non_empty, string_field};
+use crate::domain::Ctx;
+use crate::domain::rooms::catalog;
+use crate::domain::transcripts::publication;
+use crate::util::{first_non_empty, first_value_string, non_empty, string_field};
 
 #[derive(Debug, Clone, Default)]
 pub struct TimelineTailRequest {

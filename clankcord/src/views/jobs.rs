@@ -6,9 +6,9 @@ use crate::Result;
 use crate::model::job::{Job, JobState};
 use crate::model::scope::RuntimeScopeKind;
 
-use crate::runtime::Ctx;
-use crate::runtime::timeline::JobVisibility;
-use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
+use crate::domain::Ctx;
+use crate::store::JobVisibility;
+use crate::util::{first_non_empty, non_empty, preview, string_field};
 
 #[derive(Debug, Clone, Default)]
 pub struct JobsRequest {
