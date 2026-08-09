@@ -15,5 +15,6 @@ mod discord_slash;
 mod members;
 mod room_controls;
 mod room_join;
+mod transcripts;
 mod voice_capture;
 mod wake_activations;

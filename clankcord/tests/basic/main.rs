@@ -9,3 +9,4 @@ mod config;
 mod discord_errors;
 mod prompts;
 mod stt;
+mod wake_parsing;
