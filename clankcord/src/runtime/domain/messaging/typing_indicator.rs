@@ -77,7 +77,7 @@ where
                     resolved.thread_id.clone(),
                     resolved.target.channel_id.clone(),
                 ]);
-                crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(ctx, 
+                crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(ctx,
                         &resolved.agent_session_id,
                         &thread_id,
                         &job.id,

@@ -364,7 +364,7 @@ async fn prepare_command(
                 anyhow::bail!("unsupported queued job kind: {job_kind}");
             }
             let requested_by_user_id = command.requested_by_user_id.clone();
-            let job = crate::runtime::domain::interactions::agent_sessions::agent_session_start_or_task_job(ctx, 
+            let job = crate::runtime::domain::interactions::agent_sessions::agent_session_start_or_task_job(ctx,
                         &guild_id,
                         &channel_id,
                         &requested_by_user_id,
