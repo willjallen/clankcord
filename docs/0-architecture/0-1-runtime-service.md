@@ -31,7 +31,7 @@ Startup begins with the timeline store. The store initializes the Postgres schem
 
 Agent recovery happens during startup because Codex execution crosses a process boundary. A restart can leave an `agent_task` marked `running`. The service inspects interrupted tasks and looks for a text-delivery job submitted by the same source task. A task that already submitted response work can be completed. The remaining interrupted tasks are marked `failed`, with the restart interruption recorded in agent task dispatch metadata.
 
-Once the runtime is constructed, the service creates two handles into the same intake path. `RuntimeHandle` is used by HTTP and direct service callers. `RuntimeJobSink` is used by adapters that submit detached work, such as Discord gateway ingress and live voice capture output. Both handles feed the same channel, and every successful intake wake notifies the dispatcher.
+Once the runtime is constructed, the service hands out two capability surfaces over the same submission mechanism. `RuntimeHandle` serves HTTP and direct service callers. `engine::JobBus` is the narrow handle adapters hold — Discord gateway ingress and live voice capture output submit through it. Submission is a durable insert: `TimelineStore::create_job` commits the row and wakes the dispatcher in the same call, so no creation path can leave a runnable job unnoticed.
 
 ## Intake
 
