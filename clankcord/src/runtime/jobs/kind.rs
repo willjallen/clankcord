@@ -69,7 +69,6 @@ job_kinds! {
     (DiscordVoiceStatusSnapshot, "discord_voice_status_snapshot"),
     (AutomationEvaluation, "automation_evaluation"),
     (StaleWakeProbeSweep, "stale_wake_probe_sweep"),
-    (StaleRunningJobSweep, "stale_running_job_sweep"),
     (EphemeralJobGc, "ephemeral_job_gc"),
     (DiscordVoiceDeafen, "discord_voice_deafen"),
     (DiscordTypingIndicator, "discord_typing_indicator"),

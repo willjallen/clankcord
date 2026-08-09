@@ -26,10 +26,6 @@ pub(crate) async fn execute_runtime_async(runtime: &Ctx, job: &Job) -> Result<Jo
             crate::runtime::domain::maintenance::execution::prepare_stale_wake_probe_sweep_job(runtime, payload.max_age_seconds)
                 .await
         }
-        JobPayload::StaleRunningJobSweep(payload) => {
-            crate::runtime::domain::maintenance::execution::prepare_stale_running_job_sweep_job(runtime, payload.timeout_minutes)
-                .await
-        }
         JobPayload::EphemeralJobGc(payload) => {
             crate::runtime::domain::maintenance::execution::prepare_ephemeral_job_gc_job(runtime, payload.batch_limit)
                 .await

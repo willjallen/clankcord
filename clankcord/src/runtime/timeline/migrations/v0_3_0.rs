@@ -503,7 +503,6 @@ fn legacy_scope_for_job(
         | JobPayload::DiscordVoiceStatusSnapshot(_)
         | JobPayload::AutomationEvaluation(_)
         | JobPayload::StaleWakeProbeSweep(_)
-        | JobPayload::StaleRunningJobSweep(_)
         | JobPayload::EphemeralJobGc(_)
         | JobPayload::AgentSessionSunset(_)
         | JobPayload::AgentSessionRetirement(_) => RuntimeScope::runtime(),

@@ -5,6 +5,7 @@ mod maintenance;
 mod members;
 mod room_controls;
 mod runtime_config;
+mod schedules;
 mod transcription;
 mod transcripts;
 mod voice_state;
@@ -19,6 +20,7 @@ use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
 pub(crate) use jobs::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, upsert_job_rows};
+pub use schedules::JobScheduleRow;
 pub(crate) use transcription::{ActiveMuxStreamRow, TranscriptionSlotRecord};
 pub(crate) use voice_state::VOICE_ADAPTER_SNAPSHOT_STATUS_KEY;
 pub use wake_circuit::WakeCircuitAdmission;

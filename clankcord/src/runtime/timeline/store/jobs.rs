@@ -538,21 +538,6 @@ impl TimelineStore {
         )
     }
 
-    pub async fn replace_runtime_maintenance_job(&self, job: Job) -> Result<Job> {
-        sqlx::query(
-            r#"
-            DELETE FROM jobs
-            WHERE kind = $1
-              AND terminal = FALSE
-              AND ephemeral = TRUE
-            "#,
-        )
-        .bind(crate::runtime::JobKind::RuntimeMaintenance.as_str())
-        .execute(&self.pool)
-        .await?;
-        self.create_job(job).await
-    }
-
     pub async fn requeue_failed_audio_segment_jobs(&self, limit: usize) -> Result<Vec<Value>> {
         let limit = limit.clamp(1, 1000) as i64;
         let rows = sqlx::query(
@@ -1722,7 +1707,6 @@ fn source_job_id(job: &Job) -> String {
             payload.source_job_id.clone()
         }
         crate::runtime::JobPayload::StaleWakeProbeSweep(payload) => payload.source_job_id.clone(),
-        crate::runtime::JobPayload::StaleRunningJobSweep(payload) => payload.source_job_id.clone(),
         crate::runtime::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),
         _ => String::new(),
     }

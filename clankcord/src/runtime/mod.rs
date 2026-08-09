@@ -47,10 +47,10 @@ pub use jobs::{
     Job, JobCreatedOutput, JobFailure, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
     RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlOutput, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextAttachmentPayload,
-    TextDeliveryKind, TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind,
-    TranscriptPublicationOutput, TranscriptPublicationPayload, TranscriptionMuxPayload,
-    TranscriptionMuxPlanPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    StaleWakeProbeSweepPayload, TextAttachmentPayload, TextDeliveryKind, TextDeliveryOutput,
+    TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationOutput,
+    TranscriptPublicationPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
+    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 pub use message_chunks::split_message_chunks;
 pub use rooms::{RoomConfig, RoomControl};

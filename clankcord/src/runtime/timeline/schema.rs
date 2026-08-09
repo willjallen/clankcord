@@ -73,6 +73,21 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "job_schedules",
+        &[
+            column("schedule_id", "text", false),
+            column("kind", "text", false),
+            column("payload_json", "jsonb", false),
+            column("interval_ms", "bigint", false),
+            column("enabled", "boolean", false),
+            column("next_due_at_ms", "bigint", false),
+            column("last_submitted_at_ms", "bigint", true),
+            column("last_job_id", "text", false),
+            column("created_at_ms", "bigint", false),
+            column("updated_at_ms", "bigint", false),
+        ],
+    ),
+    table(
         "wake_circuit",
         &[
             column("circuit_id", "text", false),
@@ -528,6 +543,7 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
     ("runtime_metadata", &["runtime_metadata_pkey"]),
     ("runtime_config", &["runtime_config_pkey"]),
     ("runtime_status", &["runtime_status_pkey"]),
+    ("job_schedules", &["job_schedules_pkey"]),
     ("wake_circuit", &["wake_circuit_pkey"]),
     (
         "capture_sessions",
@@ -601,6 +617,19 @@ impl TimelineStore {
               status_key TEXT PRIMARY KEY,
               updated_at_ms BIGINT NOT NULL,
               payload_json JSONB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS job_schedules (
+              schedule_id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              payload_json JSONB NOT NULL,
+              interval_ms BIGINT NOT NULL,
+              enabled BOOLEAN NOT NULL DEFAULT TRUE,
+              next_due_at_ms BIGINT NOT NULL,
+              last_submitted_at_ms BIGINT,
+              last_job_id TEXT NOT NULL DEFAULT '',
+              created_at_ms BIGINT NOT NULL,
+              updated_at_ms BIGINT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS wake_circuit (

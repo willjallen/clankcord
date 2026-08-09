@@ -12,10 +12,18 @@ use crate::runtime::jobs::{
     DiscordVoiceLeavePayload, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload,
     RoomAgentPlacementPayload, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
-    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::runtime::{JobPayload, TextDeliveryKind, TextTarget};
+
+/// Frozen wire shape: stale_running_job_sweep payloads exist in pre-v1.0.0
+/// blobs; the kind is removed at v1.0.0 and its rows purged by migration.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct StaleRunningJobSweepPayload {
+    pub source_job_id: String,
+    pub timeout_minutes: i64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PreV0_7_0TextDeliveryPayload {
@@ -140,7 +148,9 @@ impl PreV0_7_0JobPayload {
             }
             Self::AutomationEvaluation(payload) => JobPayload::AutomationEvaluation(payload),
             Self::StaleWakeProbeSweep(payload) => JobPayload::StaleWakeProbeSweep(payload),
-            Self::StaleRunningJobSweep(payload) => JobPayload::StaleRunningJobSweep(payload),
+            Self::StaleRunningJobSweep(_) => anyhow::bail!(
+                "stale_running_job_sweep jobs are removed at v1.0.0; the v1_0_0 migration purges their rows before payload conversion"
+            ),
             Self::EphemeralJobGc(payload) => JobPayload::EphemeralJobGc(payload),
             Self::DiscordVoiceDeafen(payload) => JobPayload::DiscordVoiceDeafen(payload),
             Self::DiscordTypingIndicator(payload) => JobPayload::DiscordTypingIndicator(payload),

@@ -14,14 +14,21 @@ use crate::runtime::jobs::{
     DiscordVoicePlaybackPayload, DiscordVoiceStatusSnapshotOutput,
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobCreatedOutput, JobMetadata,
     JobOutput, RoomAgentPlacementOutput, RoomAgentPlacementPayload, RuntimeControlOutput,
-    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
-    StaleWakeProbeSweepPayload, TextDeliveryOutput, TextDeliveryPayload,
-    TranscriptPublicationOutput, TranscriptPublicationPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    RuntimeControlPayload, RuntimeMaintenancePayload, StaleWakeProbeSweepPayload,
+    TextDeliveryOutput, TextDeliveryPayload, TranscriptPublicationOutput,
+    TranscriptPublicationPayload, VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::runtime::{Job, JobKind, JobPayload, JobState, RuntimeScopeKind};
 use crate::runtime::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use serde::{Deserialize, Serialize};
+
+/// Frozen wire shape: stale_running_job_sweep payloads exist in pre-v1.0.0
+/// blobs; the kind is removed at v1.0.0 and its rows purged by migration.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) struct StaleRunningJobSweepPayload {
+    pub source_job_id: String,
+    pub timeout_minutes: i64,
+}
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
 const PRE_V0_8_0_JOB_PAYLOAD_BLOB_VERSION: u16 = 5;
@@ -527,7 +534,9 @@ impl PreV0_8_0JobPayload {
             }
             Self::AutomationEvaluation(payload) => JobPayload::AutomationEvaluation(payload),
             Self::StaleWakeProbeSweep(payload) => JobPayload::StaleWakeProbeSweep(payload),
-            Self::StaleRunningJobSweep(payload) => JobPayload::StaleRunningJobSweep(payload),
+            Self::StaleRunningJobSweep(_) => anyhow::bail!(
+                "stale_running_job_sweep jobs are removed at v1.0.0; the v1_0_0 migration purges their rows before payload conversion"
+            ),
             Self::EphemeralJobGc(payload) => JobPayload::EphemeralJobGc(payload),
             Self::DiscordVoiceDeafen(payload) => JobPayload::DiscordVoiceDeafen(payload),
             Self::DiscordTypingIndicator(payload) => JobPayload::DiscordTypingIndicator(payload),

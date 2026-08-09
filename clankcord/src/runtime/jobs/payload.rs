@@ -1273,12 +1273,6 @@ pub struct StaleWakeProbeSweepPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StaleRunningJobSweepPayload {
-    pub source_job_id: String,
-    pub timeout_minutes: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EphemeralJobGcPayload {
     pub source_job_id: String,
     pub batch_limit: usize,
@@ -1322,7 +1316,6 @@ pub enum JobPayload {
     DiscordVoiceStatusSnapshot(DiscordVoiceStatusSnapshotPayload),
     AutomationEvaluation(AutomationEvaluationPayload),
     StaleWakeProbeSweep(StaleWakeProbeSweepPayload),
-    StaleRunningJobSweep(StaleRunningJobSweepPayload),
     EphemeralJobGc(EphemeralJobGcPayload),
     DiscordVoiceDeafen(DiscordVoiceDeafenPayload),
     DiscordTypingIndicator(DiscordTypingIndicatorPayload),
@@ -1364,7 +1357,6 @@ impl JobPayload {
             Self::DiscordVoiceStatusSnapshot(_) => JobKind::DiscordVoiceStatusSnapshot,
             Self::AutomationEvaluation(_) => JobKind::AutomationEvaluation,
             Self::StaleWakeProbeSweep(_) => JobKind::StaleWakeProbeSweep,
-            Self::StaleRunningJobSweep(_) => JobKind::StaleRunningJobSweep,
             Self::EphemeralJobGc(_) => JobKind::EphemeralJobGc,
             Self::DiscordVoiceDeafen(_) => JobKind::DiscordVoiceDeafen,
             Self::DiscordTypingIndicator(_) => JobKind::DiscordTypingIndicator,
@@ -1386,7 +1378,6 @@ impl JobPayload {
             Self::AgentSessionRetirement(_) => None,
             Self::AgentThreadTitleRefresh(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
-            Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
             Self::DiscordTypingIndicator(_) => None,
@@ -1428,7 +1419,6 @@ impl JobPayload {
             Self::AgentSessionRetirement(_) => None,
             Self::AgentThreadTitleRefresh(_) => None,
             Self::StaleWakeProbeSweep(_) => None,
-            Self::StaleRunningJobSweep(_) => None,
             Self::EphemeralJobGc(_) => None,
             Self::DiscordVoiceDeafen(_) => None,
             Self::DiscordTypingIndicator(_) => None,
@@ -1713,10 +1703,6 @@ impl JobPayload {
             Self::StaleWakeProbeSweep(payload) => json!({
                 "source_job_id": payload.source_job_id,
                 "max_age_seconds": payload.max_age_seconds,
-            }),
-            Self::StaleRunningJobSweep(payload) => json!({
-                "source_job_id": payload.source_job_id,
-                "timeout_minutes": payload.timeout_minutes,
             }),
             Self::EphemeralJobGc(payload) => json!({
                 "source_job_id": payload.source_job_id,

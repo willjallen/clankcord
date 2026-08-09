@@ -183,14 +183,6 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             300,
             Cat::Background,
         ),
-        JobKind::StaleRunningJobSweep => ephemeral(
-            Exec::Async,
-            Lane::Maintenance,
-            Resume::Settle,
-            300,
-            300,
-            Cat::Background,
-        ),
         JobKind::EphemeralJobGc => ephemeral(
             Exec::Async,
             Lane::Maintenance,
@@ -522,7 +514,6 @@ pub(crate) fn ordering_key(job: &Job) -> String {
         | JobPayload::AutomationEvaluation(_)
         | JobPayload::AgentSessionRetirement(_)
         | JobPayload::StaleWakeProbeSweep(_)
-        | JobPayload::StaleRunningJobSweep(_)
         | JobPayload::EphemeralJobGc(_) => "runtime:maintenance".to_string(),
         _ => String::new(),
     }

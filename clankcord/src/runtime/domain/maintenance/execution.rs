@@ -4,7 +4,6 @@ use crate::Result;
 use crate::config;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::maintenance::STALE_RUNNING_JOB_TIMEOUT_MINUTES;
-use crate::runtime::domain::maintenance::definitions::evaluate_maintenance_job_definitions;
 use crate::runtime::timeline::{JobVisibility, isoformat_z, parse_instant, utc_now};
 use crate::runtime::{
     Ctx, Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
@@ -13,19 +12,9 @@ use crate::runtime::{
 pub(crate) async fn prepare_runtime_maintenance_job(
     ctx: &Ctx,
     job: &Job,
-    payload: &RuntimeMaintenancePayload,
+    _payload: &RuntimeMaintenancePayload,
 ) -> Result<JobDecision> {
-    let next = schedule_next_runtime_maintenance(ctx, payload).await?;
-    let timed_out_running_jobs = recover_stale_running_jobs_for_maintenance_pass(ctx).await?;
     let mut submitted = Vec::new();
-    for (definition_name, definition_job) in evaluate_maintenance_job_definitions(job) {
-        let created = ctx.store.create_job(definition_job).await?;
-        submitted.push(json!({
-            "definition": definition_name,
-            "job_id": created.id,
-            "job_kind": created.kind.as_str(),
-        }));
-    }
     for definition_job in
         crate::runtime::domain::interactions::thread_titles::agent_thread_title_refresh_jobs(
             ctx, job,
@@ -50,16 +39,13 @@ pub(crate) async fn prepare_runtime_maintenance_job(
             config::failed_audio_segment_retry_batch_limit(),
         )
         .await?;
-    let transcription_mux_plan_jobs = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_jobs_for_queued_slots(ctx, 
+    let transcription_mux_plan_jobs = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_jobs_for_queued_slots(ctx,
             config::transcription_mux_batch_delay_ms(),
         )
         .await?;
     Ok(JobDecision::Complete(JobOutput::from_boundary_json(
         &json!({
             "kind": "runtime_maintenance",
-            "next_job_id": next.id,
-            "next_run_at": next.next_run_at,
-            "timed_out_running_jobs": timed_out_running_jobs,
             "submitted_jobs": submitted,
             "requeued_audio_segments": requeued_audio_segments,
             "recovered_transcription_slots": recovered_transcription_slots,
@@ -161,20 +147,6 @@ pub(crate) async fn prepare_stale_wake_probe_sweep_job(
     )?))
 }
 
-pub(crate) async fn prepare_stale_running_job_sweep_job(
-    ctx: &Ctx,
-    timeout_minutes: i64,
-) -> Result<JobDecision> {
-    let timed_out = fail_stale_running_jobs(ctx, timeout_minutes).await?;
-    Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-        &json!({
-            "kind": "stale_running_job_sweep",
-            "timeout_minutes": timeout_minutes,
-            "jobs": timed_out,
-        }),
-    )?))
-}
-
 pub(crate) async fn prepare_ephemeral_job_gc_job(
     ctx: &Ctx,
     batch_limit: usize,
@@ -191,20 +163,8 @@ pub(crate) async fn prepare_ephemeral_job_gc_job(
     )?))
 }
 
-pub(crate) async fn recover_stale_running_jobs_for_maintenance_pass(
-    ctx: &Ctx,
-) -> Result<Vec<Value>> {
+pub async fn recover_stale_running_jobs_for_maintenance_pass(ctx: &Ctx) -> Result<Vec<Value>> {
     fail_stale_running_jobs(ctx, STALE_RUNNING_JOB_TIMEOUT_MINUTES).await
-}
-
-async fn schedule_next_runtime_maintenance(
-    ctx: &Ctx,
-    payload: &RuntimeMaintenancePayload,
-) -> Result<Job> {
-    let next_run_at = utc_now() + chrono::Duration::milliseconds(payload.interval_ms);
-    let mut next = Job::runtime_maintenance(payload.interval_ms);
-    next.next_run_at = Some(isoformat_z(Some(next_run_at)));
-    ctx.store.create_job(next).await
 }
 
 async fn fail_stale_running_jobs(ctx: &Ctx, timeout_minutes: i64) -> Result<Vec<Value>> {

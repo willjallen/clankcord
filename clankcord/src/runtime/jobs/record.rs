@@ -19,9 +19,9 @@ use super::{
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind, JobOutput, JobPayload,
     JobState, MemberSyncPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
-    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
-    TranscriptPublicationPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
-    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
+    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
+    TranscriptionMuxPayload, TranscriptionMuxPlanPayload, VoiceStatusSyncPayload,
+    WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -916,18 +916,6 @@ impl Job {
             JobPayload::StaleWakeProbeSweep(StaleWakeProbeSweepPayload {
                 source_job_id: source_job_id.into(),
                 max_age_seconds,
-            }),
-        )
-    }
-
-    pub fn stale_running_job_sweep(source_job_id: impl Into<String>, timeout_minutes: i64) -> Self {
-        Self::new(
-            RuntimeScope::runtime(),
-            "runtime",
-            JobState::Queued,
-            JobPayload::StaleRunningJobSweep(StaleRunningJobSweepPayload {
-                source_job_id: source_job_id.into(),
-                timeout_minutes,
             }),
         )
     }

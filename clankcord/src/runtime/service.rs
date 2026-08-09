@@ -157,12 +157,9 @@ impl RuntimeService {
             DiscordRuntimeApi::new(live_voice.clone()),
             timeline_store.clone(),
         );
-        timeline_store
-            .replace_runtime_maintenance_job(Job::runtime_maintenance(
-                config::runtime_maintenance_interval_ms(),
-            ))
+        crate::engine::schedules::ensure_default_schedules(&timeline_store)
             .await
-            .context("replacing runtime maintenance job")?;
+            .context("declaring default job schedules")?;
         Ok(Self {
             handle: RuntimeHandle {
                 live_voice,
@@ -311,7 +308,7 @@ fn spawn_dispatch_loop(
                     ));
                 }
             }
-            let next_ready_at = match handle.executor.next_queued_job_ready_at().await {
+            let next_ready_at = match next_wake_instant(&handle).await {
                 Ok(value) => value,
                 Err(error) => {
                     log(&format!(
@@ -349,6 +346,23 @@ fn spawn_dispatch_loop(
             }
         }
         log("runtime dispatch loop stopped");
+    })
+}
+
+/// The dispatch loop parks until the earlier of the next queued job's ready
+/// time and the next enabled schedule's due time.
+async fn next_wake_instant(
+    handle: &RuntimeHandle,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let job_ready = handle.executor.next_queued_job_ready_at().await?;
+    let schedule_due = handle
+        .timeline_store
+        .next_due_job_schedule_at_ms()
+        .await?
+        .and_then(crate::runtime::timeline::ms_to_datetime);
+    Ok(match (job_ready, schedule_due) {
+        (Some(job), Some(schedule)) => Some(job.min(schedule)),
+        (value, None) | (None, value) => value,
     })
 }
 

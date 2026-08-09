@@ -1975,42 +1975,81 @@ async fn runtime_maintenance_job_is_ephemeral_and_round_trips() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn runtime_maintenance_replacement_deletes_active_singleton_by_projection() {
+async fn job_schedules_fire_once_per_window_and_mint_typed_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let existing = store
-        .create_job(Job::runtime_maintenance(500))
+    clankcord::engine::schedules::ensure_default_schedules(&store)
         .await
         .unwrap();
-    sqlx::query("UPDATE job_payloads SET payload_blob = $1 WHERE job_id = $2")
-        .bind(vec![0_u8, 1, 2])
-        .bind(&existing.id)
-        .execute(&store.pool)
-        .await
-        .unwrap();
+    let declared = store.list_job_schedules().await.unwrap();
+    assert_eq!(declared.len(), 6);
+    assert!(declared.iter().all(|schedule| schedule.enabled));
 
-    let replacement = store
-        .replace_runtime_maintenance_job(Job::runtime_maintenance(1000))
+    let bus = clankcord::engine::JobBus::new(store.clone());
+    let submitted = clankcord::engine::schedules::run_due_schedules(&store, &bus)
         .await
         .unwrap();
+    assert_eq!(submitted.len(), 6, "all default schedules fire when due");
 
-    assert_ne!(replacement.id, existing.id);
-    assert!(store.get_job(&existing.id).await.is_err());
-    let active = store
-        .list_jobs_by_kind_with_visibility(
-            JobKind::RuntimeMaintenance,
-            10,
-            JobVisibility::OnlyEphemeral,
+    // The same window does not fire twice: every row advanced by interval.
+    let repeat = clankcord::engine::schedules::run_due_schedules(&store, &bus)
+        .await
+        .unwrap();
+    assert!(
+        repeat.is_empty(),
+        "claimed schedules advance their due time"
+    );
+
+    let jobs = store
+        .list_jobs_with_visibility(None, None, JobVisibility::IncludeEphemeral)
+        .await
+        .unwrap();
+    let kinds = jobs.iter().map(|job| job.kind).collect::<BTreeSet<_>>();
+    for kind in [
+        JobKind::RuntimeMaintenance,
+        JobKind::VoiceStatusSync,
+        JobKind::AutomationEvaluation,
+        JobKind::AgentSessionRetirement,
+        JobKind::StaleWakeProbeSweep,
+        JobKind::EphemeralJobGc,
+    ] {
+        assert!(kinds.contains(&kind), "schedule minted {kind}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_job_schedules_do_not_fire() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+    let store = test_store(&raw.path().join("voice")).await;
+    store
+        .upsert_job_schedule(
+            "member_refresh",
+            "member_sync",
+            &json!({"guild_id": "guild"}),
+            60_000,
+            false,
         )
         .await
         .unwrap();
-    assert_eq!(active.len(), 1);
-    assert_eq!(active[0].id, replacement.id);
-    assert_eq!(
-        active[0].runtime_maintenance_payload().unwrap().interval_ms,
-        1000
+    let bus = clankcord::engine::JobBus::new(store.clone());
+    let submitted = clankcord::engine::schedules::run_due_schedules(&store, &bus)
+        .await
+        .unwrap();
+    assert!(submitted.is_empty());
+
+    assert!(
+        store
+            .set_job_schedule_enabled("member_refresh", true)
+            .await
+            .unwrap()
     );
+    let submitted = clankcord::engine::schedules::run_due_schedules(&store, &bus)
+        .await
+        .unwrap();
+    assert_eq!(submitted.len(), 1);
+    assert_eq!(submitted[0]["kind"], json!("member_sync"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2039,26 +2078,15 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     assert_eq!(completed.state, JobState::Complete);
     let output = completed.metadata.output.unwrap().to_json();
     assert_eq!(output["kind"], json!("runtime_maintenance"));
+    // Recurring fan-out now belongs to job_schedules; a maintenance pass
+    // submits only evaluated work (no sessions here, so none).
     assert_eq!(
         output["submitted_jobs"]
             .as_array()
             .map(|values| values.len())
             .unwrap(),
-        5
+        0
     );
-
-    let jobs = store
-        .list_jobs_with_visibility(None, None, JobVisibility::IncludeEphemeral)
-        .await
-        .unwrap();
-    let kinds = jobs.iter().map(|job| job.kind).collect::<BTreeSet<_>>();
-    assert!(kinds.contains(&JobKind::RuntimeMaintenance));
-    assert!(kinds.contains(&JobKind::VoiceStatusSync));
-    assert!(kinds.contains(&JobKind::AutomationEvaluation));
-    assert!(kinds.contains(&JobKind::AgentSessionRetirement));
-    assert!(kinds.contains(&JobKind::StaleWakeProbeSweep));
-    assert!(kinds.contains(&JobKind::EphemeralJobGc));
-    assert!(!kinds.contains(&JobKind::StaleRunningJobSweep));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2074,26 +2102,16 @@ async fn runtime_maintenance_times_out_stale_running_jobs() {
     let stale = store.create_job(running_stale).await.unwrap();
     let mut running_maintenance = Job::runtime_maintenance(500);
     running_maintenance.mark_running();
-    let maintenance = store.create_job(running_maintenance.clone()).await.unwrap();
+    store.create_job(running_maintenance.clone()).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
-        &runtime,
-        &clankcord::ports::discord::DiscordApiUnavailable,
-        running_maintenance,
-    )
-    .await
-    .unwrap();
-
-    let completed = store.get_job(&maintenance.id).await.unwrap();
-    let output = completed.metadata.output.unwrap().to_json();
-    assert_eq!(
-        output["timed_out_running_jobs"]
-            .as_array()
-            .map(|values| values.len())
-            .unwrap(),
-        1
-    );
+    let timed_out_jobs =
+        clankcord::runtime::domain::maintenance::execution::recover_stale_running_jobs_for_maintenance_pass(
+            &runtime,
+        )
+        .await
+        .unwrap();
+    assert_eq!(timed_out_jobs.len(), 1);
     let timed_out = store.get_job(&stale.id).await.unwrap();
     assert_eq!(timed_out.state, JobState::FailedTimeout);
     assert_eq!(
@@ -2119,7 +2137,6 @@ async fn maintenance_work_jobs_are_typed_ephemeral_jobs() {
             2,
         ),
         Job::stale_wake_probe_sweep("job_source", 15),
-        Job::stale_running_job_sweep("job_source", 30),
         Job::ephemeral_job_gc("job_source", 500),
     ];
 

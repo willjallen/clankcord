@@ -1,4 +1,3 @@
-mod definitions;
 pub mod execution;
 pub mod member_sync;
 pub mod voice_status;

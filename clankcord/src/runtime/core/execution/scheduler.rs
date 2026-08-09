@@ -90,10 +90,16 @@ where
                     &Ctx::new(self.timeline_store.clone()),
                 )
                 .await?;
+            let schedule_submissions = crate::engine::schedules::run_due_schedules(
+                &self.timeline_store,
+                &crate::engine::JobBus::new(self.timeline_store.clone()),
+            )
+            .await?;
             let resolved_waiting = self.timeline_store.resolve_waiting_jobs().await?;
             let scheduled = self.schedule_due_jobs().await?;
             let scheduled_count = scheduled_job_count(&scheduled);
             let timed_out_count = timed_out_running_jobs.len();
+            let schedule_count = schedule_submissions.len();
             let resolved_count = resolved_waiting.len();
             total_timed_out_running += timed_out_count;
             total_resolved += resolved_count;
@@ -101,10 +107,15 @@ where
             passes.push(json!({
                 "pass": pass + 1,
                 "timedOutRunningJobs": timed_out_running_jobs,
+                "scheduleSubmissions": schedule_submissions,
                 "resolvedWaiting": resolved_waiting,
                 "scheduled": scheduled,
             }));
-            if timed_out_count == 0 && resolved_count == 0 && scheduled_count == 0 {
+            if timed_out_count == 0
+                && resolved_count == 0
+                && scheduled_count == 0
+                && schedule_count == 0
+            {
                 exhausted = true;
                 break;
             }
