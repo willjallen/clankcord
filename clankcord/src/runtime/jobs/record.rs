@@ -17,11 +17,11 @@ use super::{
     DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotPayload, EphemeralJobGcPayload, JobKind, JobOutput, JobPayload,
-    JobState, RoomAgentPlacementAction, RoomAgentPlacementPayload, RuntimeControlAction,
-    RuntimeControlPayload, RuntimeMaintenancePayload, StaleRunningJobSweepPayload,
-    StaleWakeProbeSweepPayload, TextDeliveryPayload, TranscriptPublicationPayload,
-    TranscriptionMuxPayload, TranscriptionMuxPlanPayload, VoiceStatusSyncPayload,
-    WakeActivationPayload, WakeProbePayload,
+    JobState, MemberSyncPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    RuntimeControlAction, RuntimeControlPayload, RuntimeMaintenancePayload,
+    StaleRunningJobSweepPayload, StaleWakeProbeSweepPayload, TextDeliveryPayload,
+    TranscriptPublicationPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
+    VoiceStatusSyncPayload, WakeActivationPayload, WakeProbePayload,
 };
 use crate::Result;
 
@@ -665,6 +665,19 @@ impl Job {
             JobState::Queued,
             JobPayload::TranscriptionMux(TranscriptionMuxPayload {
                 transcription_source_id: transcription_source_id.into(),
+            }),
+        )
+    }
+
+    pub fn member_sync(guild_id: impl Into<String>) -> Self {
+        let guild_id = guild_id.into();
+        Self::new(
+            RuntimeScope::runtime(),
+            "runtime",
+            JobState::Queued,
+            JobPayload::MemberSync(MemberSyncPayload {
+                guild_id,
+                source_job_id: String::new(),
             }),
         )
     }

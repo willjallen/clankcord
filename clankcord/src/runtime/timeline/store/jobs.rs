@@ -112,6 +112,27 @@ impl TimelineStore {
         Ok(cancelled)
     }
 
+    pub(crate) async fn has_pending_member_sync(&self, guild_id: &str) -> Result<bool> {
+        let row = sqlx::query(
+            r#"
+            SELECT 1
+            FROM jobs j
+            JOIN job_payloads p ON p.job_id = j.job_id
+            WHERE j.kind = 'member_sync'
+              AND j.terminal = FALSE
+              AND j.ordering_key = $1
+            LIMIT 1
+            "#,
+        )
+        .bind(format!(
+            "discord:members:{}",
+            crate::runtime::jobs::spec::normalize_key_part(guild_id)
+        ))
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn create_child_job(&self, parent: &Job, mut child: Job) -> Result<Job> {
         child.attach_to_parent(parent)?;
         self.ensure_dependency_is_acyclic(&parent.id, &child.id)

@@ -847,12 +847,9 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         .unwrap();
     assert_eq!(week["jobs"], json!(5));
 
-    let detail = clankcord::views::dashboard::dashboard_agent_detail(
-        &runtime,
-        &fresh_failed.id,
-    )
-    .await
-    .unwrap();
+    let detail = clankcord::views::dashboard::dashboard_agent_detail(&runtime, &fresh_failed.id)
+        .await
+        .unwrap();
     assert_eq!(detail["job"]["request"], json!(large_request));
     assert_eq!(detail["job"]["attempts"], json!(0));
     assert!(detail["job"]["durationMs"].is_i64());
@@ -937,10 +934,9 @@ async fn dashboard_automations_and_transcript_resolve_labels_without_rooms_view_
     .await;
     let runtime = Ctx::new(store);
 
-    let automations =
-        clankcord::views::dashboard::dashboard_automations(&runtime)
-            .await
-            .unwrap();
+    let automations = clankcord::views::dashboard::dashboard_automations(&runtime)
+        .await
+        .unwrap();
     let record = &automations["automations"]["records"][0];
     assert_eq!(record["spec"]["scope"]["scopeLabel"], json!("Code Lounge"));
     assert_eq!(

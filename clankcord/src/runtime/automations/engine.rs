@@ -604,8 +604,7 @@ async fn base_context(
         .room_occupants(&record.spec.scope.guild_id, &record.spec.scope.scope_id)
         .await?;
     let participants = room_participants(&occupants);
-    let mut room_status =
-        crate::views::status::status_for_room(runtime, &room).await?;
+    let mut room_status = crate::views::status::status_for_room(runtime, &room).await?;
     if let Value::Object(object) = &mut room_status {
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));

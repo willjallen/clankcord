@@ -1,7 +1,6 @@
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::adapters::discord::api::list_guild_members;
 use crate::config;
 use crate::errors::discord_tool_error;
 use crate::runtime::Ctx;
@@ -107,30 +106,28 @@ pub async fn members_get(ctx: &Ctx, request: MemberGetRequest) -> Result<Value> 
     }))
 }
 
+/// Reads never perform Discord I/O. When the members table is stale a
+/// member_sync job is submitted (deduplicated per guild) and the current
+/// table contents are served with the staleness stated.
 async fn ensure_member_cache(ctx: &Ctx, guild_id: &str) -> Result<Value> {
     let age = ctx.store.discord_member_cache_age_ms(guild_id).await?;
     let current_count = ctx.store.count_discord_members(guild_id).await?;
     if age.is_some_and(|age| age < config::discord_member_cache_max_age_ms()) && current_count > 0 {
-        return Ok(json!({"refreshed": false, "ageMs": age.unwrap_or(0), "count": current_count}));
+        return Ok(json!({"fresh": true, "ageMs": age.unwrap_or(0), "count": current_count}));
     }
-    let guild = guild_id.to_string();
-    let fetched = tokio::task::spawn_blocking(move || list_guild_members(&guild)).await?;
-    match fetched {
-        Ok(members) => {
-            let stored = ctx.store.upsert_discord_members(guild_id, &members).await?;
-            ctx.store
-                .mark_discord_member_cache_refreshed(guild_id)
-                .await?;
-            Ok(json!({"refreshed": true, "stored": stored, "count": stored}))
-        }
-        Err(error) if current_count > 0 => Ok(json!({
-            "refreshed": false,
-            "ageMs": age.unwrap_or(0),
-            "count": current_count,
-            "refreshError": error.to_string(),
-        })),
-        Err(error) => Err(error),
-    }
+    let sync_submitted = if ctx.store.has_pending_member_sync(guild_id).await? {
+        false
+    } else {
+        ctx.bus
+            .submit_detached(crate::runtime::Job::member_sync(guild_id));
+        true
+    };
+    Ok(json!({
+        "fresh": false,
+        "ageMs": age.unwrap_or(0),
+        "count": current_count,
+        "syncSubmitted": sync_submitted,
+    }))
 }
 
 fn require_guild(guild_id: String) -> Result<String> {

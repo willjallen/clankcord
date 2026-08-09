@@ -310,6 +310,14 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::AgentTask => durable(Exec::Blocking, Lane::Agent, Resume::Resume, Cat::Agent),
+        JobKind::MemberSync => ephemeral(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Settle,
+            300,
+            300,
+            Cat::Background,
+        ),
         JobKind::AgentThreadTitleRefresh => ephemeral(
             Exec::Blocking,
             Lane::Agent,
@@ -327,6 +335,9 @@ pub(crate) fn ordering_key(job: &Job) -> String {
     match &job.payload {
         JobPayload::WakeProbe(payload) => {
             format!("wake:stream:{}", payload.stream_id)
+        }
+        JobPayload::MemberSync(payload) => {
+            format!("discord:members:{}", normalize_key_part(&payload.guild_id))
         }
         JobPayload::TranscriptionMuxPlan(payload) => {
             format!(

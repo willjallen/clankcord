@@ -229,7 +229,7 @@ impl TimelineStore {
         Ok(sources)
     }
 
-                pub(crate) async fn start_transcription_slots_for_mux(
+    pub(crate) async fn start_transcription_slots_for_mux(
         &self,
         mux_job_id: &str,
         source_id: &str,
@@ -784,7 +784,6 @@ async fn mark_transcription_slots_planned(
     .await?;
     Ok(())
 }
-
 
 /// One planning session over locked queued slots. SQL mechanics only:
 /// what to batch and when to start streams is decided by

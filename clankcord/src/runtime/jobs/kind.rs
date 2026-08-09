@@ -75,6 +75,7 @@ job_kinds! {
     (DiscordTypingIndicator, "discord_typing_indicator"),
     (TranscriptionMux, "transcription_mux"),
     (TranscriptionMuxPlan, "transcription_mux_plan"),
+    (MemberSync, "member_sync"),
 }
 
 impl JobKind {

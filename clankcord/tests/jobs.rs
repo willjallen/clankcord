@@ -8,7 +8,6 @@ use clankcord::config;
 use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use clankcord::runtime::jobs::DiscordPostMetadata;
 use clankcord::runtime::jobs::JobMetadata;
-use clankcord::views::JobsRequest;
 use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest, Ctx,
@@ -23,6 +22,7 @@ use clankcord::runtime::{
     TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
     WakeActivationPayload, WakeProbePayload,
 };
+use clankcord::views::JobsRequest;
 
 mod common;
 use common::{initialize_test_config, test_store};
@@ -1026,12 +1026,10 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
     assert!(coverage_start.parse::<i64>().unwrap() > 0);
 
     let runtime = Ctx::new(store);
-    let overview = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let overview =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     let dashboard_failure = overview["health"]["failures"]["recent"]
         .as_array()
         .unwrap()
@@ -1262,10 +1260,9 @@ async fn jobs_public_view_uses_generic_scope_fields() {
     assert_eq!(job["scope_id"], "code");
     assert!(job.get("voice_channel_id").is_none());
 
-    let verbose =
-        clankcord::views::jobs::get_job_payload(&runtime, &created.id, true)
-            .await
-            .unwrap();
+    let verbose = clankcord::views::jobs::get_job_payload(&runtime, &created.id, true)
+        .await
+        .unwrap();
     assert_eq!(verbose["scope_kind"], "voice_channel");
     assert_eq!(verbose["scope_id"], "code");
     assert!(verbose.get("voice_channel_id").is_none());

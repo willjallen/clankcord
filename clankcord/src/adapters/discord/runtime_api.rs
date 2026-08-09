@@ -106,4 +106,16 @@ impl DiscordApi for DiscordRuntimeApi {
     ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
         Box::pin(async move { self.live_voice.voice_status_snapshot().await })
     }
+
+    fn discord_list_guild_members<'a>(
+        &'a self,
+        guild_id: String,
+    ) -> DiscordApiFuture<'a, Vec<serde_json::Value>> {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                crate::adapters::discord::api::list_guild_members(&guild_id)
+            })
+            .await?
+        })
+    }
 }

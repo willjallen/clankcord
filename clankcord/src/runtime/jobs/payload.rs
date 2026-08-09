@@ -1285,6 +1285,12 @@ pub struct EphemeralJobGcPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberSyncPayload {
+    pub guild_id: String,
+    pub source_job_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobPayload {
     AudioSegment(AudioSegmentPayload),
     WakeActivation(WakeActivationPayload),
@@ -1322,6 +1328,7 @@ pub enum JobPayload {
     DiscordTypingIndicator(DiscordTypingIndicatorPayload),
     TranscriptionMux(TranscriptionMuxPayload),
     TranscriptionMuxPlan(TranscriptionMuxPlanPayload),
+    MemberSync(MemberSyncPayload),
 }
 
 impl JobPayload {
@@ -1363,11 +1370,13 @@ impl JobPayload {
             Self::DiscordTypingIndicator(_) => JobKind::DiscordTypingIndicator,
             Self::TranscriptionMux(_) => JobKind::TranscriptionMux,
             Self::TranscriptionMuxPlan(_) => JobKind::TranscriptionMuxPlan,
+            Self::MemberSync(_) => JobKind::MemberSync,
         }
     }
 
     pub fn command(&self) -> Option<&CommandRequest> {
         match self {
+            Self::MemberSync(_) => None,
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
             Self::RuntimeMaintenance(_) => None,
@@ -1409,6 +1418,7 @@ impl JobPayload {
 
     pub fn command_mut(&mut self) -> Option<&mut CommandRequest> {
         match self {
+            Self::MemberSync(_) => None,
             Self::AudioSegment(_) => None,
             Self::WakeProbe(_) => None,
             Self::RuntimeMaintenance(_) => None,
@@ -1456,6 +1466,10 @@ impl JobPayload {
 
     pub fn to_json(&self) -> Value {
         match self {
+            Self::MemberSync(payload) => json!({
+                "guild_id": payload.guild_id,
+                "source_job_id": payload.source_job_id,
+            }),
             Self::AudioSegment(payload) => json!({
                 "guild_id": payload.guild_id,
                 "guild_slug": payload.guild_slug,

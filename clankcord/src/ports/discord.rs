@@ -65,6 +65,13 @@ pub trait DiscordApi: Send + Sync {
     fn discord_voice_status_snapshot<'a>(
         &'a self,
     ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput>;
+
+    /// Full member listing for a guild, used by the member_sync job to
+    /// refresh the members table.
+    fn discord_list_guild_members<'a>(
+        &'a self,
+        guild_id: String,
+    ) -> DiscordApiFuture<'a, Vec<serde_json::Value>>;
 }
 
 /// Explicit "no Discord wired" implementation for headless contexts (tests,
@@ -135,6 +142,13 @@ impl DiscordApi for DiscordApiUnavailable {
     fn discord_voice_status_snapshot<'a>(
         &'a self,
     ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
+        Box::pin(async { Err(anyhow::anyhow!("discord api is not wired in this context")) })
+    }
+
+    fn discord_list_guild_members<'a>(
+        &'a self,
+        _guild_id: String,
+    ) -> DiscordApiFuture<'a, Vec<serde_json::Value>> {
         Box::pin(async { Err(anyhow::anyhow!("discord api is not wired in this context")) })
     }
 }

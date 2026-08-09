@@ -157,7 +157,9 @@ pub(crate) async fn execute_segment_job(
     } else {
         crate::config::transcription_mux_batch_delay_ms()
     };
-    let planner_job = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(runtime, 
+    let planner_job =
+        crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
+            runtime,
             &crate::config::active_transcription_source_id(),
             planner_delay_ms,
         )
@@ -188,8 +190,11 @@ pub(crate) async fn execute_transcription_mux_plan_job(
     payload: &TranscriptionMuxPlanPayload,
 ) -> Result<Value> {
     crate::config::transcription_source(&payload.transcription_source_id)?;
-    crate::runtime::domain::transcription::mux::plan_transcription_mux_jobs(runtime, &payload.transcription_source_id)
-        .await
+    crate::runtime::domain::transcription::mux::plan_transcription_mux_jobs(
+        runtime,
+        &payload.transcription_source_id,
+    )
+    .await
 }
 
 pub(crate) async fn execute_transcription_mux_job(
@@ -253,7 +258,10 @@ pub(crate) async fn execute_transcription_mux_job(
                         job.id
                     );
                 }
-                let next_plan_job = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(runtime, &source.id, 0)
+                let next_plan_job =
+                    crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
+                        runtime, &source.id, 0,
+                    )
                     .await?;
                 return Ok(json!({
                     "kind": "transcription_mux",
@@ -400,7 +408,10 @@ pub(crate) async fn execute_transcription_mux_job(
             "event": event,
         }));
     }
-    let next_plan_job = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(runtime, &source.id, 0)
+    let next_plan_job =
+        crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(
+            runtime, &source.id, 0,
+        )
         .await?;
     Ok(json!({
         "kind": "transcription_mux",

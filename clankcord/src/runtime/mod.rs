@@ -13,6 +13,14 @@ pub mod timeline;
 pub(crate) mod util;
 
 pub use crate::config::{ControlConfig, GuildConfig};
+pub use crate::views::{
+    ContextResolveRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
+    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, ForgetRequest,
+    JobsRequest, ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest,
+    MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
+    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
+    default_dashboard_categories, parse_dashboard_filter,
+};
 pub use agents::{
     AgentRuntime, AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
     thread_route_key, voice_route_key,
@@ -48,12 +56,4 @@ pub use message_chunks::split_message_chunks;
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};
 pub use service::{RuntimeHandle, RuntimeService, start_blocking, start_persistent_process};
-pub use crate::views::{
-    ContextResolveRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
-    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, ForgetRequest,
-    JobsRequest, ListConversationsRequest, MaterializeTranscriptRequest, MemberGetRequest,
-    MemberResolveRequest, MemberSearchRequest, ParticipantTraceRequest, RenderTranscriptRequest,
-    SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
-    default_dashboard_categories, parse_dashboard_filter,
-};
 pub use util::log;

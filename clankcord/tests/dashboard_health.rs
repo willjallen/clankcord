@@ -19,12 +19,10 @@ async fn dashboard_health_reports_postgres_diagnostics() {
     let store = test_store(raw.path()).await;
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let overview =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     let database = &overview["database"];
 
     assert_eq!(database["ok"], json!(true));
@@ -94,10 +92,9 @@ async fn dashboard_health_reasons_are_terse_measured_operator_state() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let payload =
-        clankcord::views::operations::dashboard_summary_payload(&runtime)
-            .await
-            .unwrap();
+    let payload = clankcord::views::operations::dashboard_summary_payload(&runtime)
+        .await
+        .unwrap();
     let components = payload["health"]["components"].as_array().unwrap();
     let scheduler = components
         .iter()
@@ -171,6 +168,7 @@ async fn dashboard_health_includes_http_request_snapshot() {
     let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         requests.clone(),
+        serde_json::json!({}),
     )
     .await
     .unwrap();
@@ -206,10 +204,9 @@ async fn dashboard_summary_uses_active_projection_aggregates_and_bounded_failure
     .unwrap();
     let runtime = Ctx::new(store);
 
-    let summary =
-        clankcord::views::operations::dashboard_summary_payload(&runtime)
-            .await
-            .unwrap();
+    let summary = clankcord::views::operations::dashboard_summary_payload(&runtime)
+        .await
+        .unwrap();
 
     let keys = summary
         .as_object()
@@ -553,12 +550,10 @@ async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
     .unwrap();
 
     let runtime = Ctx::new(store);
-    let overview = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let overview =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     let latency_rows = overview["operations"]["latencies"]["byKind"]
         .as_array()
         .unwrap();
@@ -626,12 +621,10 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
     assert_eq!(remaining, 0);
 
     let runtime = Ctx::new(store.clone());
-    let overview = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let overview =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     let windows = overview["operations"]["windows"].as_array().unwrap();
     let five_minutes = windows.iter().find(|row| row["label"] == "5m").unwrap();
     let fifteen_minutes = windows.iter().find(|row| row["label"] == "15m").unwrap();
@@ -698,12 +691,10 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
     .unwrap();
     let runtime = Ctx::new(store.clone());
 
-    let overview = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let overview =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     assert_eq!(overview["health"]["failures"]["count"], json!(1));
     let recent = overview["health"]["failures"]["recent"].as_array().unwrap();
     assert_eq!(recent.len(), 1);
@@ -717,12 +708,10 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
         .execute(&store.pool)
         .await
         .unwrap();
-    let cleared = clankcord::views::operations::dashboard_health_payload(
-        &runtime,
-        json!({}),
-    )
-    .await
-    .unwrap();
+    let cleared =
+        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+            .await
+            .unwrap();
     assert_eq!(cleared["health"]["failures"]["count"], json!(0));
     assert!(
         cleared["health"]["failures"]["recent"]
@@ -887,10 +876,9 @@ async fn stale_voice_rows_are_separated_from_current_dashboard_status() {
     let rooms = clankcord::views::operations::dashboard_rooms_payload(&runtime)
         .await
         .unwrap();
-    let overview =
-        clankcord::views::operations::dashboard_summary_payload(&runtime)
-            .await
-            .unwrap();
+    let overview = clankcord::views::operations::dashboard_summary_payload(&runtime)
+        .await
+        .unwrap();
 
     assert!(rooms["status"]["bots"].as_array().unwrap().is_empty());
     assert!(rooms["status"]["sessions"].as_array().unwrap().is_empty());

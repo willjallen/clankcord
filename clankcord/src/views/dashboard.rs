@@ -485,8 +485,7 @@ pub async fn dashboard_transcript(ctx: &Ctx, request: DashboardTranscriptRequest
 }
 
 pub async fn dashboard_agent_detail(ctx: &Ctx, job_id: &str) -> Result<Value> {
-    let mut detail =
-        crate::views::operations::dashboard_agent_job(ctx, job_id).await?;
+    let mut detail = crate::views::operations::dashboard_agent_job(ctx, job_id).await?;
     if let Some(job_value) = detail.get_mut("job") {
         let job = ctx.store.get_job(job_id).await?;
         enrich_job_values(

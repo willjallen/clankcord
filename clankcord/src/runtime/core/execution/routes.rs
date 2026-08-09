@@ -124,6 +124,12 @@ where
             crate::runtime::domain::voice::discord_io::execute_discord_voice_play_audio_job(runtime, payload, external_api)
                 .await
         }
+        JobPayload::MemberSync(payload) => {
+            Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+                &crate::runtime::domain::maintenance::member_sync::execute(runtime, payload, external_api)
+                    .await?,
+            )?))
+        }
         JobPayload::DiscordVoiceStatusSnapshot(_) => {
             crate::runtime::domain::voice::discord_io::execute_discord_voice_status_snapshot_job(runtime, external_api)
                 .await
@@ -177,11 +183,8 @@ mod runtime_control {
     ) -> Result<JobDecision> {
         let output = match payload.action {
             RuntimeControlAction::RetryJob => {
-                let target = crate::views::jobs::retry_job_payload(
-                    runtime,
-                    &payload.target_job_id,
-                )
-                .await?;
+                let target =
+                    crate::views::jobs::retry_job_payload(runtime, &payload.target_job_id).await?;
                 JobOutput::from_boundary_json(
                     &json!({"kind": "runtime_control", "action": "retry_job", "target": target}),
                 )?

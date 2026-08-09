@@ -407,13 +407,11 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
             .await
         {
             Ok(room) => {
-                let mut payload =
-                    match crate::views::status::status_for_room(&runtime, &room)
-                        .await
-                    {
-                        Ok(payload) => payload,
-                        Err(error) => return err(error),
-                    };
+                let mut payload = match crate::views::status::status_for_room(&runtime, &room).await
+                {
+                    Ok(payload) => payload,
+                    Err(error) => return err(error),
+                };
                 if let Value::Object(object) = &mut payload {
                     let occupants = match state
                         .handle
@@ -1076,6 +1074,7 @@ async fn dashboard_health(State(state): State<AppState>) -> Response {
         crate::views::operations::dashboard_health_payload(
             &runtime,
             http_request_metrics_snapshot(),
+            crate::app::ops::process_load_payload(),
         )
         .await,
     )
@@ -1134,9 +1133,7 @@ async fn dashboard_agent_detail(
     Path(job_id): Path<String>,
 ) -> Response {
     let runtime = runtime_context!(state);
-    result(
-        crate::views::dashboard::dashboard_agent_detail(&runtime, &job_id).await,
-    )
+    result(crate::views::dashboard::dashboard_agent_detail(&runtime, &job_id).await)
 }
 
 async fn dashboard_index() -> Html<&'static str> {

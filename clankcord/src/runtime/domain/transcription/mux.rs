@@ -27,12 +27,7 @@ pub async fn ensure_transcription_mux_plan_job(
     delay_ms: i64,
 ) -> Result<Option<Job>> {
     let source_id = source_id.trim();
-    if source_id.is_empty()
-        || !ctx
-            .store
-            .has_queued_transcription_slots(source_id)
-            .await?
-    {
+    if source_id.is_empty() || !ctx.store.has_queued_transcription_slots(source_id).await? {
         return Ok(None);
     }
     let ordering_key = transcription_mux_plan_ordering_key(source_id);
@@ -142,8 +137,9 @@ pub async fn plan_transcription_mux_jobs(ctx: &Ctx, source_id: &str) -> Result<V
         let batch_audio_ms = mux_audio_ms_for_slots(&batch, guard_ms);
         queued.retain(|slot| !selected_ids.contains(&slot.slot_id));
         active_streams.push(ActiveMuxStream {
-            available_at_ms: now_ms
-                .saturating_add(estimated_transcription_provider_processing_ms(batch_audio_ms)),
+            available_at_ms: now_ms.saturating_add(estimated_transcription_provider_processing_ms(
+                batch_audio_ms,
+            )),
         });
         active_streams.sort_by_key(|stream| stream.available_at_ms);
         mux_jobs.push(serde_json::json!({
@@ -225,7 +221,6 @@ fn predicted_mux_lateness_ms(
     max_lateness
 }
 
-
 fn select_fair_mux_batch(
     queued: &[TranscriptionSlotRecord],
     max_slots: usize,
@@ -278,7 +273,6 @@ fn select_fair_mux_batch(
     single_slot_compatible_batch(selected)
 }
 
-
 fn single_slot_compatible_batch(
     mut selected: Vec<TranscriptionSlotRecord>,
 ) -> Vec<TranscriptionSlotRecord> {
@@ -292,7 +286,6 @@ fn single_slot_compatible_batch(
     }
     selected
 }
-
 
 fn fair_slot_flows(
     queued: &[TranscriptionSlotRecord],
@@ -324,14 +317,12 @@ fn fair_slot_flows(
         .collect()
 }
 
-
 fn slot_flow_key(slot: &TranscriptionSlotRecord) -> String {
     format!(
         "{}:{}:{}",
         slot.guild_id, slot.voice_channel_id, slot.speaker_user_id
     )
 }
-
 
 fn mux_audio_ms_for_slots(slots: &[TranscriptionSlotRecord], guard_ms: i64) -> i64 {
     let speech_ms = slots
@@ -340,7 +331,6 @@ fn mux_audio_ms_for_slots(slots: &[TranscriptionSlotRecord], guard_ms: i64) -> i
         .sum::<i64>();
     mux_audio_ms_for_counts(speech_ms, slots.len(), guard_ms)
 }
-
 
 fn mux_audio_ms_for_counts(speech_ms: i64, slot_count: usize, guard_ms: i64) -> i64 {
     if slot_count == 0 {
@@ -351,11 +341,9 @@ fn mux_audio_ms_for_counts(speech_ms: i64, slot_count: usize, guard_ms: i64) -> 
         .saturating_add(guard_ms.max(0).saturating_mul((slot_count * 2 - 1) as i64))
 }
 
-
 fn estimated_transcription_provider_processing_ms(audio_ms: i64) -> i64 {
     ((audio_ms.max(0) as f64 * 0.3) + 2_500.0).ceil() as i64
 }
-
 
 fn transcription_mux_plan_ordering_key(source_id: &str) -> String {
     format!(
