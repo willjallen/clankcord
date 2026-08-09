@@ -22,13 +22,14 @@ use crate::adapters::discord::voice::client_connection::{
 use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig};
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
+use crate::engine::JobBus;
 use crate::errors::discord_tool_error;
 use crate::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
 use crate::runtime::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue, RuntimeJobSink,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue,
     VoiceBotStatus, log,
 };
 
@@ -40,7 +41,7 @@ struct VoiceStateSnapshot {
 }
 
 pub struct LiveVoiceAdapter {
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
     timeline_store: TimelineStore,
     voice_clients_lock: Mutex<BTreeMap<String, DiscordVoiceClient>>,
     capture_sessions_lock: Mutex<BTreeMap<String, LiveCaptureSessionLock>>,
@@ -69,7 +70,7 @@ impl fmt::Debug for LiveVoiceAdapter {
 }
 
 impl LiveVoiceAdapter {
-    pub fn new(job_sink: RuntimeJobSink, timeline_store: TimelineStore) -> Self {
+    pub fn new(bus: JobBus, timeline_store: TimelineStore) -> Self {
         let transcription = transcription_config();
         let wake = crate::config::app_config().wake.clone();
         let wake_probe = WakeProbeConfig {
@@ -78,7 +79,7 @@ impl LiveVoiceAdapter {
             interval_ms: wake.probe_interval_ms.max(0),
         };
         Self {
-            job_sink,
+            bus,
             timeline_store,
             voice_clients_lock: Mutex::new(BTreeMap::new()),
             capture_sessions_lock: Mutex::new(BTreeMap::new()),
@@ -106,8 +107,8 @@ impl LiveVoiceAdapter {
         self.flush_interval
     }
 
-    pub(super) fn job_sink(&self) -> RuntimeJobSink {
-        self.job_sink.clone()
+    pub(super) fn bus(&self) -> JobBus {
+        self.bus.clone()
     }
 
     pub async fn start_missing_clients(self: &Arc<Self>) -> Result<()> {
@@ -159,8 +160,8 @@ impl LiveVoiceAdapter {
                 live_session.finish("runtime_shutdown".to_string(), local_tz())
             };
             for job in &finished.audio_jobs {
-                let created = self.timeline_store.create_job(job.clone()).await?;
-                created_audio_jobs.push(created.id);
+                self.bus.submit(job.clone()).await?;
+                created_audio_jobs.push(job.id.clone());
             }
             self.persist_capture_session_status(&finished.metadata)
                 .await;
@@ -847,7 +848,7 @@ impl LiveVoiceAdapter {
 
     async fn submit_capture_job(&self, job: crate::runtime::Job) {
         let job_id = job.id.clone();
-        if let Err(error) = self.job_sink.submit(job).await {
+        if let Err(error) = self.bus.submit(job).await {
             log(&format!("capture job submission failed {job_id}: {error}"));
         }
     }
@@ -1319,7 +1320,7 @@ impl LiveVoiceAdapter {
         let jobs = live_session.write_voice_tick(speaking, silent);
         drop(live_session);
         for job in jobs {
-            self.job_sink.submit_detached(job);
+            self.bus.submit_detached(job);
         }
     }
 

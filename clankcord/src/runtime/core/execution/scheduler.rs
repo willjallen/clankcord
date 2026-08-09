@@ -290,9 +290,9 @@ where
     pub(crate) fn new(external_api: E, timeline_store: TimelineStore) -> Self {
         Self {
             external_api,
+            notify: timeline_store.dispatch_notify(),
             timeline_store,
             lanes: Arc::new(JobLanes::from_config()),
-            notify: Arc::new(Notify::new()),
         }
     }
 

@@ -4,10 +4,11 @@ use serenity::builder::EditInteractionResponse;
 use serenity::client::Context;
 use serenity::model::application::CommandInteraction;
 
-use crate::runtime::{BinaryPayload, DiscordSlashCommandPayload, Job, RuntimeJobSink, log};
+use crate::engine::JobBus;
+use crate::runtime::{BinaryPayload, DiscordSlashCommandPayload, Job, log};
 
 pub async fn handle_slash_command(
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
     ctx: Context,
     command: CommandInteraction,
 ) {
@@ -33,7 +34,7 @@ pub async fn handle_slash_command(
         return;
     }
     let success_content = slash_success_response_content(&payload);
-    let result = job_sink.submit(Job::discord_slash_command(payload)).await;
+    let result = bus.submit(Job::discord_slash_command(payload)).await;
     let content = match result {
         Ok(_) => success_content,
         Err(error) => format!("I couldn't start /{command_name}: {error}"),

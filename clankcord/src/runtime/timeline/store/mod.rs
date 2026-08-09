@@ -144,11 +144,22 @@ impl Default for CaptureRunInput {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TimelineStore {
     pub root: PathBuf,
     pub database_url: String,
     pub pool: PgPool,
+    dispatch: std::sync::Arc<tokio::sync::Notify>,
+}
+
+impl std::fmt::Debug for TimelineStore {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TimelineStore")
+            .field("root", &self.root)
+            .field("database_url", &self.database_url)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TimelineStore {
@@ -178,8 +189,20 @@ impl TimelineStore {
             root,
             database_url: database_url.clone(),
             pool: pool_options.connect_lazy(&database_url)?,
+            dispatch: std::sync::Arc::new(tokio::sync::Notify::new()),
         };
         Ok(store)
+    }
+
+    /// The dispatcher parks on this notify. Every durable write that makes a
+    /// job runnable (create, child create, requeue) signals it, so a created
+    /// job can never sit unnoticed until an unrelated wakeup.
+    pub fn dispatch_notify(&self) -> std::sync::Arc<tokio::sync::Notify> {
+        self.dispatch.clone()
+    }
+
+    pub(crate) fn wake_dispatcher(&self) {
+        self.dispatch.notify_one();
     }
 
     pub fn pool_dir(&self) -> PathBuf {

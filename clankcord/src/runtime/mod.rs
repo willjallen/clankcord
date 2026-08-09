@@ -46,9 +46,7 @@ pub use jobs::{
 pub use message_chunks::split_message_chunks;
 pub use rooms::{RoomConfig, RoomControl};
 pub use scope::{RuntimeScope, RuntimeScopeKind};
-pub use service::{
-    RuntimeHandle, RuntimeJobSink, RuntimeService, start_blocking, start_persistent_process,
-};
+pub use service::{RuntimeHandle, RuntimeService, start_blocking, start_persistent_process};
 pub use timeline::views::{
     ContextResolveRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
     DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, ForgetRequest,

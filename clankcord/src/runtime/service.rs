@@ -3,21 +3,25 @@ use std::time::Duration;
 
 use anyhow::Context;
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::Result;
 use crate::adapters::discord::gateway::text::DiscordTextAdapter;
 use crate::adapters::discord::runtime_api::DiscordRuntimeApi;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::adapters::wakeword::{wake_probe_submission_suppressed, wake_provider_health};
 use crate::config;
+use crate::engine::JobBus;
 use crate::runtime::core::execution::RuntimeExecutor;
 use crate::runtime::timeline::{TimelineStore, utc_now};
 use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
 
 type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;
-const DISPATCH_DUE_BACKLOG_RETRY_MS: u64 = 25;
+/// A job can be due but unclaimable while its ordering key is held by a
+/// running job. The holder's completion notify re-drains immediately; this
+/// poll interval is only the fallback that keeps the loop from spinning hot
+/// on a blocked backlog.
+const DISPATCH_BLOCKED_BACKLOG_POLL_MS: u64 = 25;
 const SERVICE_SHUTDOWN_TASK_TIMEOUT: Duration = Duration::from_secs(5);
 const SERVICE_SHUTDOWN_VOICE_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 const SERVICE_SHUTDOWN_WORKER_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -27,8 +31,7 @@ pub struct RuntimeHandle {
     live_voice: Arc<LiveVoiceAdapter>,
     timeline_store: TimelineStore,
     executor: ServiceRuntimeExecutor,
-    intake: mpsc::Sender<RuntimeSubmission>,
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
 }
 
 impl RuntimeHandle {
@@ -36,20 +39,17 @@ impl RuntimeHandle {
         Runtime::from_store(self.timeline_store.clone())
     }
 
+    pub fn bus(&self) -> JobBus {
+        self.bus.clone()
+    }
+
     pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
-        submit_to_intake(&self.intake, |reply| RuntimeSubmission::Command {
-            command,
-            reply,
-        })
-        .await
+        let mut runtime = self.runtime_context()?;
+        runtime.create_command_job(command, None).await
     }
 
     pub async fn submit_job(&self, job: Job) -> Result<Value> {
-        self.job_sink.submit(job).await
-    }
-
-    pub fn job_sink(&self) -> RuntimeJobSink {
-        self.job_sink.clone()
+        self.bus.submit(job).await
     }
 
     pub async fn retry_job(&self, job_id: String) -> Result<Value> {
@@ -89,9 +89,9 @@ impl RuntimeHandle {
         action: RuntimeControlAction,
         actor_user_id: String,
     ) -> Result<Value> {
-        let target = self.timeline_store.get_job(&target_job_id).await?;
-        let job = Job::runtime_control(target.scope(), actor_user_id, action, target_job_id);
-        self.submit_job(job).await
+        self.bus
+            .submit_runtime_control_for_target(&target_job_id, action, actor_user_id)
+            .await
     }
 
     pub async fn drain_ready_jobs(&self) -> Result<Value> {
@@ -109,53 +109,13 @@ impl RuntimeHandle {
     }
 }
 
-#[derive(Clone)]
-pub struct RuntimeJobSink {
-    intake: mpsc::Sender<RuntimeSubmission>,
-}
-
-impl RuntimeJobSink {
-    pub async fn submit(&self, job: Job) -> Result<Value> {
-        submit_to_intake(&self.intake, |reply| RuntimeSubmission::Job { job, reply }).await
-    }
-
-    pub async fn submit_runtime_control_for_target(
-        &self,
-        target_job_id: &str,
-        action: RuntimeControlAction,
-        actor_user_id: String,
-    ) -> Result<Value> {
-        submit_to_intake(&self.intake, |reply| {
-            RuntimeSubmission::RuntimeControlTarget {
-                target_job_id: target_job_id.to_string(),
-                action,
-                actor_user_id,
-                reply,
-            }
-        })
-        .await
-    }
-
-    pub fn submit_detached(&self, job: Job) {
-        let sink = self.clone();
-        tokio::spawn(async move {
-            let job_id = job.id.clone();
-            if let Err(error) = sink.submit(job).await {
-                log(&format!("detached job submission failed {job_id}: {error}"));
-            }
-        });
-    }
-}
-
 pub struct RuntimeService {
     handle: RuntimeHandle,
-    intake: mpsc::Receiver<RuntimeSubmission>,
 }
 
 pub struct RuntimeServiceRunner {
     handle: RuntimeHandle,
     shutdown: watch::Sender<bool>,
-    intake_task: JoinHandle<()>,
     discord_text_task: JoinHandle<()>,
     live_voice_task: JoinHandle<()>,
     dispatch_task: JoinHandle<()>,
@@ -163,8 +123,7 @@ pub struct RuntimeServiceRunner {
 
 impl RuntimeService {
     pub async fn new() -> Result<Self> {
-        let mut runtime = Runtime::new().context("constructing runtime")?;
-        let timeline_store = runtime.timeline_store.clone();
+        let timeline_store = TimelineStore::new(None).context("constructing timeline store")?;
         timeline_store
             .initialize()
             .await
@@ -178,7 +137,7 @@ impl RuntimeService {
             )
             .await
             .context("writing runtime config snapshot")?;
-        runtime.start().await.context("starting runtime domain")?;
+        let runtime = Runtime::from_store(timeline_store.clone())?;
         match runtime.recover_interrupted_agent_tasks().await {
             Ok(recovered) if !recovered.is_empty() => {
                 log(&format!(
@@ -189,14 +148,8 @@ impl RuntimeService {
             Ok(_) => {}
             Err(error) => log(&format!("agent task recovery failed: {error}")),
         }
-        let (intake, intake_receiver) = mpsc::channel(config::intake_queue_depth());
-        let job_sink = RuntimeJobSink {
-            intake: intake.clone(),
-        };
-        let live_voice = Arc::new(LiveVoiceAdapter::new(
-            job_sink.clone(),
-            timeline_store.clone(),
-        ));
+        let bus = JobBus::new(timeline_store.clone());
+        let live_voice = Arc::new(LiveVoiceAdapter::new(bus.clone(), timeline_store.clone()));
         let executor = RuntimeExecutor::new(
             DiscordRuntimeApi::new(live_voice.clone()),
             timeline_store.clone(),
@@ -212,10 +165,8 @@ impl RuntimeService {
                 live_voice,
                 timeline_store,
                 executor,
-                intake,
-                job_sink,
+                bus,
             },
-            intake: intake_receiver,
         })
     }
 
@@ -225,16 +176,13 @@ impl RuntimeService {
 
     pub fn spawn(self) -> RuntimeServiceRunner {
         let (shutdown, _) = watch::channel(false);
-        let intake_task = spawn_intake_loop(self.handle.clone(), self.intake, shutdown.subscribe());
-        let discord_text_task =
-            spawn_discord_text_loop(self.handle.job_sink(), shutdown.subscribe());
+        let discord_text_task = spawn_discord_text_loop(self.handle.bus(), shutdown.subscribe());
         let live_voice_task =
             spawn_live_voice_loop(self.handle.live_voice.clone(), shutdown.subscribe());
         let dispatch_task = spawn_dispatch_loop(self.handle.clone(), shutdown.subscribe());
         RuntimeServiceRunner {
             handle: self.handle,
             shutdown,
-            intake_task,
             discord_text_task,
             live_voice_task,
             dispatch_task,
@@ -277,8 +225,6 @@ impl RuntimeServiceRunner {
             .executor
             .wait_for_idle(SERVICE_SHUTDOWN_WORKER_IDLE_TIMEOUT)
             .await;
-        let intake =
-            join_service_task("intake", self.intake_task, SERVICE_SHUTDOWN_TASK_TIMEOUT).await;
         let discord_text = join_service_task(
             "discord_text",
             self.discord_text_task,
@@ -302,137 +248,10 @@ impl RuntimeServiceRunner {
             "voiceIdle": voice_idle,
             "liveVoice": live_voice,
             "workerIdle": worker_idle,
-            "tasks": [intake, discord_text, live_voice_loop, dispatch],
+            "tasks": [discord_text, live_voice_loop, dispatch],
         });
         log(&format!("runtime shutdown complete: {report}"));
         Ok(report)
-    }
-}
-
-enum RuntimeSubmission {
-    Command {
-        command: CommandRequest,
-        reply: oneshot::Sender<Result<Value>>,
-    },
-    Job {
-        job: Job,
-        reply: oneshot::Sender<Result<Value>>,
-    },
-    RuntimeControlTarget {
-        target_job_id: String,
-        action: RuntimeControlAction,
-        actor_user_id: String,
-        reply: oneshot::Sender<Result<Value>>,
-    },
-}
-
-async fn submit_to_intake(
-    intake: &mpsc::Sender<RuntimeSubmission>,
-    submission: impl FnOnce(oneshot::Sender<Result<Value>>) -> RuntimeSubmission,
-) -> Result<Value> {
-    let (reply, result) = oneshot::channel();
-    intake
-        .send(submission(reply))
-        .await
-        .map_err(|_| anyhow::anyhow!("runtime intake queue is closed"))?;
-    result
-        .await
-        .map_err(|_| anyhow::anyhow!("runtime intake loop stopped"))?
-}
-
-fn spawn_intake_loop(
-    handle: RuntimeHandle,
-    mut intake: mpsc::Receiver<RuntimeSubmission>,
-    mut shutdown: watch::Receiver<bool>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            tokio::select! {
-                _ = wait_for_shutdown(&mut shutdown) => {
-                    intake.close();
-                    while let Some(submission) = intake.recv().await {
-                        handle_runtime_submission(&handle, submission).await;
-                    }
-                    break;
-                }
-                submission = intake.recv() => {
-                    let Some(submission) = submission else {
-                        break;
-                    };
-                    handle_runtime_submission(&handle, submission).await;
-                }
-            }
-        }
-        log("runtime intake queue stopped");
-    })
-}
-
-async fn handle_runtime_submission(handle: &RuntimeHandle, submission: RuntimeSubmission) {
-    match submission {
-        RuntimeSubmission::Command { command, reply } => {
-            let result = match handle.runtime_context() {
-                Ok(mut runtime) => runtime.create_command_job(command, None).await,
-                Err(error) => Err(error),
-            };
-            if result.is_ok() {
-                handle.executor.wake();
-            }
-            let _ = reply.send(result);
-        }
-        RuntimeSubmission::Job { job, reply } => {
-            let (result, wake_executor) = if job.kind == crate::runtime::JobKind::WakeProbe
-                && wake_probe_submission_suppressed()
-            {
-                (Ok(suppressed_wake_probe_payload(&job)), false)
-            } else if job.kind == crate::runtime::JobKind::WakeProbe {
-                (
-                    handle
-                        .timeline_store
-                        .create_wake_probe_job(job)
-                        .await
-                        .map(job_created_payload),
-                    true,
-                )
-            } else {
-                (
-                    handle
-                        .timeline_store
-                        .create_job(job)
-                        .await
-                        .map(job_created_payload),
-                    true,
-                )
-            };
-            if result.is_ok() && wake_executor {
-                handle.executor.wake();
-            }
-            let _ = reply.send(result);
-        }
-        RuntimeSubmission::RuntimeControlTarget {
-            target_job_id,
-            action,
-            actor_user_id,
-            reply,
-        } => {
-            let result = match handle.timeline_store.get_job(&target_job_id).await {
-                Ok(target) => {
-                    Job::runtime_control(target.scope(), actor_user_id, action, target_job_id)
-                }
-                Err(error) => {
-                    let _ = reply.send(Err(error));
-                    return;
-                }
-            };
-            let result = handle
-                .timeline_store
-                .create_job(result)
-                .await
-                .map(job_created_payload);
-            if result.is_ok() {
-                handle.executor.wake();
-            }
-            let _ = reply.send(result);
-        }
     }
 }
 
@@ -458,11 +277,8 @@ fn spawn_live_voice_loop(
     })
 }
 
-fn spawn_discord_text_loop(
-    job_sink: RuntimeJobSink,
-    shutdown: watch::Receiver<bool>,
-) -> JoinHandle<()> {
-    DiscordTextAdapter::new(job_sink).spawn(shutdown)
+fn spawn_discord_text_loop(bus: JobBus, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
+    DiscordTextAdapter::new(bus).spawn(shutdown)
 }
 
 fn spawn_dispatch_loop(
@@ -507,15 +323,12 @@ fn spawn_dispatch_loop(
                 }
             };
             let now = utc_now();
-            let next_wake_at = match next_ready_at {
-                Some(ready_at) if ready_at <= now => {
-                    Some(now + chrono::Duration::milliseconds(DISPATCH_DUE_BACKLOG_RETRY_MS as i64))
-                }
-                value => value,
-            };
-            match next_wake_at {
+            match next_ready_at {
                 Some(ready_at) => {
-                    let sleep_ms = (ready_at - now).num_milliseconds().max(0) as u64;
+                    let sleep_ms = (ready_at - now)
+                        .num_milliseconds()
+                        .max(DISPATCH_BLOCKED_BACKLOG_POLL_MS as i64)
+                        as u64;
                     let sleep = tokio::time::sleep(Duration::from_millis(sleep_ms));
                     tokio::pin!(sleep);
                     tokio::select! {
@@ -625,31 +438,6 @@ fn error_chain(error: &anyhow::Error) -> String {
         .map(|cause| cause.to_string())
         .collect::<Vec<_>>()
         .join(": ")
-}
-
-fn job_created_payload(job: Job) -> Value {
-    json!({"kind": "job_created", "job_ids": [job.id.clone()], "job": job.to_value()})
-}
-
-fn suppressed_wake_probe_payload(job: &Job) -> Value {
-    let mut deleted_audio = false;
-    let mut deletion_error = String::new();
-    if let Some(payload) = job.wake_probe_payload()
-        && payload.source_audio_path.is_file()
-    {
-        match std::fs::remove_file(&payload.source_audio_path) {
-            Ok(()) => deleted_audio = true,
-            Err(error) => deletion_error = error.to_string(),
-        }
-    }
-    json!({
-        "kind": "wake_probe",
-        "status": "suppressed_while_wake_provider_unavailable",
-        "job_id": job.id,
-        "artifact_deleted": deleted_audio,
-        "artifact_deletion_error": deletion_error,
-        "wake_provider": wake_provider_health(),
-    })
 }
 
 pub async fn start_persistent_process() -> Result<()> {

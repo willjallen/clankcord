@@ -2,10 +2,11 @@ use serenity::builder::EditInteractionResponse;
 use serenity::client::Context;
 use serenity::model::application::ComponentInteraction;
 
-use crate::runtime::{RuntimeControlAction, RuntimeJobSink, log};
+use crate::engine::JobBus;
+use crate::runtime::{RuntimeControlAction, log};
 
 pub async fn handle_component_interaction(
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
     ctx: Context,
     component: ComponentInteraction,
 ) {
@@ -26,7 +27,7 @@ pub async fn handle_component_interaction(
     } else {
         RuntimeControlAction::CancelConfirmation
     };
-    let result = job_sink
+    let result = bus
         .submit_runtime_control_for_target(&action.1, control_action, actor_user_id)
         .await;
     let content = match result {

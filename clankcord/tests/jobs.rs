@@ -3138,10 +3138,10 @@ async fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
     let fourth = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 3));
     let fourth_id = fourth.id.clone();
 
-    store.create_wake_probe_job(first).await.unwrap();
-    store.create_wake_probe_job(second).await.unwrap();
-    store.create_wake_probe_job(third).await.unwrap();
-    store.create_wake_probe_job(fourth).await.unwrap();
+    store.create_job(first).await.unwrap();
+    store.create_job(second).await.unwrap();
+    store.create_job(third).await.unwrap();
+    store.create_job(fourth).await.unwrap();
 
     assert_eq!(
         store

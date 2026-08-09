@@ -542,7 +542,7 @@ impl EventHandler for DiscordGatewayHandler {
             return;
         };
         if let Some(adapter) = self.adapter.upgrade() {
-            components::handle_component_interaction(adapter.job_sink(), ctx, component).await;
+            components::handle_component_interaction(adapter.bus(), ctx, component).await;
         }
     }
 }

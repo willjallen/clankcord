@@ -173,9 +173,6 @@ fn wake_provider_circuit() -> &'static WakeCircuitBreaker {
     })
 }
 
-pub(crate) fn wake_probe_submission_suppressed() -> bool {
-    wake_provider_circuit().submission_suppressed(Utc::now())
-}
 
 pub(crate) fn acquire_wake_probe_admission() -> Option<WakeCircuitAdmission> {
     wake_provider_circuit().admit(Utc::now())

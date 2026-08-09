@@ -9,16 +9,17 @@ use tokio::task::JoinHandle;
 use crate::Result;
 use crate::adapters::discord::gateway::{components, registration, slash};
 use crate::config::load_discord_bot_token;
-use crate::runtime::{DiscordTextMessagePayload, Job, RuntimeJobSink, log};
+use crate::engine::JobBus;
+use crate::runtime::{DiscordTextMessagePayload, Job, log};
 
 #[derive(Clone)]
 pub struct DiscordTextAdapter {
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
 }
 
 impl DiscordTextAdapter {
-    pub fn new(job_sink: RuntimeJobSink) -> Self {
-        Self { job_sink }
+    pub fn new(bus: JobBus) -> Self {
+        Self { bus }
     }
 
     pub fn spawn(self, shutdown: watch::Receiver<bool>) -> JoinHandle<()> {
@@ -58,7 +59,7 @@ impl DiscordTextAdapter {
             | GatewayIntents::DIRECT_MESSAGES
             | GatewayIntents::MESSAGE_CONTENT;
         let handler = DiscordTextGatewayHandler {
-            job_sink: self.job_sink,
+            bus: self.bus,
         };
         let mut client = Client::builder(&token, intents)
             .event_handler(handler)
@@ -88,7 +89,7 @@ async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
 }
 
 struct DiscordTextGatewayHandler {
-    job_sink: RuntimeJobSink,
+    bus: JobBus,
 }
 
 #[async_trait]
@@ -96,10 +97,10 @@ impl EventHandler for DiscordTextGatewayHandler {
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         match interaction {
             Interaction::Command(command) => {
-                slash::handle_slash_command(self.job_sink.clone(), ctx, command).await;
+                slash::handle_slash_command(self.bus.clone(), ctx, command).await;
             }
             Interaction::Component(component) => {
-                components::handle_component_interaction(self.job_sink.clone(), ctx, component)
+                components::handle_component_interaction(self.bus.clone(), ctx, component)
                     .await;
             }
             _ => {}
@@ -128,7 +129,7 @@ impl EventHandler for DiscordTextGatewayHandler {
                 .map(|referenced| referenced.id.get().to_string())
                 .unwrap_or_default(),
         };
-        self.job_sink
+        self.bus
             .submit_detached(Job::discord_text_message(payload));
     }
 }

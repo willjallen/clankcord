@@ -53,6 +53,7 @@ impl TimelineStore {
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &job).await?;
         transaction.commit().await?;
+        self.wake_dispatcher();
         if !job.kind.is_ephemeral() {
             let scope = job.scope();
             self.append_scope_event(
@@ -68,10 +69,6 @@ impl TimelineStore {
             .await?;
         }
         Ok(job)
-    }
-
-    pub async fn create_wake_probe_job(&self, job: Job) -> Result<Job> {
-        self.create_job(job).await
     }
 
     pub async fn cancel_queued_wake_probes_for_stream(&self, stream_id: &str) -> Result<Vec<Job>> {
@@ -140,6 +137,7 @@ impl TimelineStore {
             upsert_job_rows(&mut transaction, &waiting_parent).await?;
         }
         transaction.commit().await?;
+        self.wake_dispatcher();
         if !child.kind.is_ephemeral() {
             let scope = child.scope();
             self.append_scope_event(
@@ -171,6 +169,9 @@ impl TimelineStore {
         let mut transaction = self.pool.begin().await?;
         upsert_job_rows(&mut transaction, &payload).await?;
         transaction.commit().await?;
+        if payload.state == crate::runtime::JobState::Queued {
+            self.wake_dispatcher();
+        }
         Ok(())
     }
 

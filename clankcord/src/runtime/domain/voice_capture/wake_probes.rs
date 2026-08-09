@@ -34,11 +34,22 @@ pub(crate) async fn execute_probe_job(
     let audio_bytes = wav_path.metadata()?.len();
     let detection_stream_id = payload.stream_id.clone();
     let Some(admission) = acquire_wake_probe_admission() else {
+        // The wake provider circuit is open. The probe still ran as a job so
+        // the timeline records that it existed; the audio artifact is removed
+        // because no probe will ever read it.
+        let mut artifact_deleted = false;
+        let mut artifact_deletion_error = String::new();
+        match std::fs::remove_file(&wav_path) {
+            Ok(()) => artifact_deleted = true,
+            Err(error) => artifact_deletion_error = error.to_string(),
+        }
         return Ok(json!({
             "kind": "wake_probe",
             "status": "wake_provider_circuit_open",
             "probe_index": payload.probe_index,
             "stream_id": payload.stream_id,
+            "artifact_deleted": artifact_deleted,
+            "artifact_deletion_error": artifact_deletion_error,
             "wake_provider": wake_provider_health(),
         }));
     };
