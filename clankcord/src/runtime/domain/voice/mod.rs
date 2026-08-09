@@ -1,6 +1,6 @@
-mod discord_io;
-mod playback;
-mod room_placement;
+pub(crate) mod discord_io;
+pub(crate) mod playback;
+pub(crate) mod room_placement;
 mod status;
 
 pub use status::{

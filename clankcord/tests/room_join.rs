@@ -1,7 +1,7 @@
 use clankcord::runtime::timeline::utc_now;
 use clankcord::runtime::{
-    DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
-    JobOutput, JobState, RoomAgentPlacementAction, RoomConfig, Runtime, VoiceBotStatus,
+    Ctx, DiscordVoiceJoinOutput, DiscordVoiceJoinPayload, DiscordVoicePlaybackCue, Job, JobKind,
+    JobOutput, JobState, RoomAgentPlacementAction, RoomConfig, VoiceBotStatus,
     VoiceCaptureSessionStatus,
 };
 
@@ -15,7 +15,7 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
-    let mut runtime = test_runtime(store.clone(), room.clone());
+    let runtime = test_runtime(store.clone(), room.clone());
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let mut placement = Job::room_agent_placement(
         &room.guild_id,
@@ -29,7 +29,13 @@ async fn join_room_placement_creates_discord_voice_join_child_job() {
     placement.requested_by_user_id = "user-a".to_string();
     let parent = store.create_job(placement).await.unwrap();
 
-    let result = runtime.dispatch_claimed_runtime_job(parent).await.unwrap();
+    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        parent,
+    )
+    .await
+    .unwrap();
 
     let child_ids = result["child_job_ids"].as_array().unwrap();
     assert_eq!(child_ids.len(), 1);
@@ -65,7 +71,7 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
         reason: "explicit_request".to_string(),
     });
     store.create_job(pending).await.unwrap();
-    let mut runtime = test_runtime(store.clone(), room.clone());
+    let runtime = test_runtime(store.clone(), room.clone());
     store
         .upsert_voice_bot_state(&ready_bot_with("clanky-vc2", "bot-user-2"))
         .await
@@ -83,10 +89,13 @@ async fn join_room_placement_treats_pending_voice_join_as_channel_reservation() 
         .await
         .unwrap();
 
-    runtime
-        .dispatch_claimed_runtime_job(parent.clone())
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        parent.clone(),
+    )
+    .await
+    .unwrap();
 
     let parent = store.get_job(&parent.id).await.unwrap();
     let Some(JobOutput::RoomAgentPlacement(output)) = parent.metadata.output else {
@@ -115,7 +124,7 @@ async fn leave_room_placement_disconnects_orphan_voice_bot_presence() {
     bot.current_guild_id = room.guild_id.clone();
     bot.current_channel_id = room.channel_id.clone();
     store.upsert_voice_bot_state(&bot).await.unwrap();
-    let mut runtime = test_runtime(store.clone(), room.clone());
+    let runtime = test_runtime(store.clone(), room.clone());
     let parent = store
         .create_job(Job::room_agent_placement(
             &room.guild_id,
@@ -129,7 +138,13 @@ async fn leave_room_placement_disconnects_orphan_voice_bot_presence() {
         .await
         .unwrap();
 
-    let result = runtime.dispatch_claimed_runtime_job(parent).await.unwrap();
+    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        parent,
+    )
+    .await
+    .unwrap();
 
     let child_ids = result["child_job_ids"].as_array().unwrap();
     assert_eq!(child_ids.len(), 1);
@@ -192,7 +207,7 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     let _state = test_state_dir(raw.path()).await;
     let store = test_store(raw.path()).await;
     let room = test_room();
-    let mut runtime = test_runtime(store.clone(), room.clone());
+    let runtime = test_runtime(store.clone(), room.clone());
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let assignment = store
         .claim_voice_assignment_for_room(&room, "auto_join")
@@ -251,10 +266,13 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     }));
     store.update_job(&completed_child).await.unwrap();
 
-    let result = runtime
-        .dispatch_claimed_runtime_job(parent.clone())
-        .await
-        .unwrap();
+    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        parent.clone(),
+    )
+    .await
+    .unwrap();
 
     let playback_ids = result["child_job_ids"].as_array().unwrap();
     assert_eq!(playback_ids.len(), 1);
@@ -272,10 +290,13 @@ async fn room_placement_resume_commits_discord_voice_join_output() {
     completed_playback.metadata.error = "missing cue asset".to_string();
     store.update_job(&completed_playback).await.unwrap();
 
-    runtime
-        .dispatch_claimed_runtime_job(parent.clone())
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        parent.clone(),
+    )
+    .await
+    .unwrap();
 
     let parent = store.get_job(&parent.id).await.unwrap();
     let Some(JobOutput::RoomAgentPlacement(output)) = parent.metadata.output else {
@@ -316,10 +337,15 @@ async fn voice_status_sync_releases_capturing_assignment_when_bot_is_absent() {
     store.upsert_voice_bot_state(&stale_bot).await.unwrap();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    runtime
-        .sync_voice_adapter_status(vec![ready_bot()], Vec::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
+    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+        &runtime,
+        vec![ready_bot()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     assert!(
         store
@@ -371,10 +397,15 @@ async fn voice_status_sync_keeps_joining_assignment_while_presence_is_pending() 
         .unwrap();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    runtime
-        .sync_voice_adapter_status(vec![ready_bot()], Vec::new(), Vec::new(), Vec::new())
-        .await
-        .unwrap();
+    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+        &runtime,
+        vec![ready_bot()],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     let assignments = store.list_active_voice_assignments().await.unwrap();
     assert_eq!(assignments.len(), 1);
@@ -407,10 +438,15 @@ async fn voice_status_sync_keeps_capturing_assignment_with_matching_bot_and_sess
     bot.current_channel_id = room.channel_id.clone();
     let runtime = test_runtime(store.clone(), room.clone());
 
-    runtime
-        .sync_voice_adapter_status(vec![bot], vec![session], Vec::new(), Vec::new())
-        .await
-        .unwrap();
+    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+        &runtime,
+        vec![bot],
+        vec![session],
+        Vec::new(),
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
     let assignments = store.list_active_voice_assignments().await.unwrap();
     assert_eq!(assignments.len(), 1);
@@ -463,8 +499,8 @@ async fn voice_assignment_claim_skips_pending_disconnect_bot() {
 fn test_runtime(
     timeline_store: clankcord::runtime::timeline::TimelineStore,
     _room: RoomConfig,
-) -> Runtime {
-    Runtime::from_store(timeline_store).unwrap()
+) -> Ctx {
+    Ctx::new(timeline_store)
 }
 
 fn test_room() -> RoomConfig {

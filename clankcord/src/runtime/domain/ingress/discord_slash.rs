@@ -4,16 +4,16 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::domain::voice_capture::wake_activations;
 use crate::runtime::{
-    CommandKind, CommandRequest, DiscordSlashCommandPayload, Job, JobOutput, Runtime,
+    CommandKind, CommandRequest, Ctx, DiscordSlashCommandPayload, Job, JobOutput,
 };
 
 pub(crate) async fn prepare(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     job: &Job,
     payload: &DiscordSlashCommandPayload,
 ) -> Result<JobDecision> {
     runtime
-        .timeline_store
+        .store
         .append_scope_event(
             &job.scope(),
             json!({
@@ -52,13 +52,13 @@ pub(crate) async fn prepare(
 }
 
 async fn record_feedback(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     job: &Job,
     payload: &DiscordSlashCommandPayload,
 ) -> Result<JobDecision> {
     let message = slash_option_string(payload, &["message"]);
     runtime
-        .timeline_store
+        .store
         .append_scope_event(
             &job.scope(),
             json!({
@@ -89,13 +89,13 @@ async fn record_feedback(
 }
 
 async fn schedule_manual_wake(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     job: &Job,
     payload: &DiscordSlashCommandPayload,
 ) -> Result<JobDecision> {
     let voice_channel_id = slash_voice_channel_id(payload)?;
     let event = runtime
-        .timeline_store
+        .store
         .append_event(
             &payload.guild_id,
             &voice_channel_id,
@@ -138,14 +138,17 @@ async fn schedule_manual_wake(
 }
 
 async fn queue_command_child(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     job: &Job,
     payload: &DiscordSlashCommandPayload,
     command_kind: CommandKind,
 ) -> Result<JobDecision> {
-    runtime
-        .create_command_job(command_request(payload, command_kind)?, Some(job))
-        .await?;
+    crate::runtime::domain::interactions::commands::create_command_job(
+        runtime,
+        command_request(payload, command_kind)?,
+        Some(job),
+    )
+    .await?;
     Ok(JobDecision::Wait)
 }
 

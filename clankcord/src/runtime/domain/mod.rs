@@ -1,6 +1,6 @@
 pub(crate) mod ingress;
 pub mod interactions;
-pub(crate) mod maintenance;
+pub mod maintenance;
 pub(crate) mod messaging;
 pub mod transcription;
 pub(crate) mod transcripts;

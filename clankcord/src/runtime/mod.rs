@@ -1,7 +1,8 @@
 pub mod agents;
 pub mod automations;
 pub mod coding;
-pub(crate) mod core;
+pub mod core;
+mod ctx;
 pub mod domain;
 pub mod jobs;
 pub(crate) mod message_chunks;
@@ -16,7 +17,7 @@ pub use agents::{
     AgentRuntime, AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, dm_route_key,
     thread_route_key, voice_route_key,
 };
-pub use core::Runtime;
+pub use ctx::Ctx;
 pub use domain::voice::{
     ArtifactStatus, SessionArtifacts, SessionCaptureStats, SessionSpeakerCaptureStats,
     VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,

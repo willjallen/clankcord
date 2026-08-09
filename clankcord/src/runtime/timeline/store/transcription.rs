@@ -1119,6 +1119,8 @@ fn estimated_transcription_provider_processing_ms(audio_ms: i64) -> i64 {
 }
 
 fn transcription_mux_plan_ordering_key(source_id: &str) -> String {
-    format!("transcription:mux_plan:{}", crate::runtime::jobs::spec::normalize_key_part(source_id))
+    format!(
+        "transcription:mux_plan:{}",
+        crate::runtime::jobs::spec::normalize_key_part(source_id)
+    )
 }
-

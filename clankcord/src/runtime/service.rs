@@ -14,7 +14,7 @@ use crate::config;
 use crate::engine::JobBus;
 use crate::runtime::core::execution::RuntimeExecutor;
 use crate::runtime::timeline::{TimelineStore, utc_now};
-use crate::runtime::{CommandRequest, Job, Runtime, RuntimeControlAction, log};
+use crate::runtime::{CommandRequest, Ctx, Job, RuntimeControlAction, log};
 
 type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;
 /// A job can be due but unclaimable while its ordering key is held by a
@@ -35,8 +35,8 @@ pub struct RuntimeHandle {
 }
 
 impl RuntimeHandle {
-    pub(crate) fn runtime_context(&self) -> Result<Runtime> {
-        Runtime::from_store(self.timeline_store.clone())
+    pub(crate) fn runtime_context(&self) -> Ctx {
+        Ctx::new(self.timeline_store.clone())
     }
 
     pub fn bus(&self) -> JobBus {
@@ -44,8 +44,9 @@ impl RuntimeHandle {
     }
 
     pub async fn submit_command(&self, command: CommandRequest) -> Result<Value> {
-        let mut runtime = self.runtime_context()?;
-        runtime.create_command_job(command, None).await
+        let runtime = self.runtime_context();
+        crate::runtime::domain::interactions::commands::create_command_job(&runtime, command, None)
+            .await
     }
 
     pub async fn submit_job(&self, job: Job) -> Result<Value> {
@@ -137,8 +138,10 @@ impl RuntimeService {
             )
             .await
             .context("writing runtime config snapshot")?;
-        let runtime = Runtime::from_store(timeline_store.clone())?;
-        match runtime.recover_interrupted_agent_tasks().await {
+        let runtime = Ctx::new(timeline_store.clone());
+        match crate::runtime::domain::interactions::tasks::recover_interrupted_agent_tasks(&runtime)
+            .await
+        {
             Ok(recovered) if !recovered.is_empty() => {
                 log(&format!(
                     "recovered {} interrupted agent task(s)",

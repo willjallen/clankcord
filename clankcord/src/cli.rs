@@ -709,7 +709,7 @@ struct ResponseSubmitArgs {
     sink: String,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
+    #[arg(long, help = "Ctx scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,
@@ -741,7 +741,7 @@ struct ResponseDmArgs {
     job: Option<String>,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
+    #[arg(long, help = "Ctx scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,
@@ -801,7 +801,7 @@ struct FeedbackSubmitArgs {
     job: Option<String>,
     #[arg(long, help = "Discord guild id. Defaults to CLANKCORD_AGENT_GUILD_ID.")]
     guild: Option<String>,
-    #[arg(long, help = "Runtime scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
+    #[arg(long, help = "Ctx scope id. Defaults to CLANKCORD_AGENT_SCOPE_ID.")]
     channel: Option<String>,
     #[arg(
         long,

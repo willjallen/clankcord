@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::adapters::discord::gateway::{forum_thread, text_send, typing};
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::ports::discord::{DiscordApiFuture, DiscordApi};
+use crate::ports::discord::{DiscordApi, DiscordApiFuture};
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,

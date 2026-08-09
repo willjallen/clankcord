@@ -1,1 +1,1 @@
-mod publication;
+pub(crate) mod publication;

@@ -10,7 +10,7 @@ use crate::config;
 use crate::ports::discord::DiscordApi;
 use crate::runtime::jobs::spec::{JobExecutor, JobLane, spec};
 use crate::runtime::timeline::TimelineStore;
-use crate::runtime::{Job, JobKind, Runtime, log};
+use crate::runtime::{Ctx, Job, JobKind, log};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeExecutor<E>
@@ -85,8 +85,10 @@ where
         let mut exhausted = false;
 
         for pass in 0..max_passes {
-            let timed_out_running_jobs = Runtime::from_store(self.timeline_store.clone())?
-                .recover_stale_running_jobs_for_maintenance_pass()
+            let timed_out_running_jobs =
+                crate::runtime::domain::maintenance::execution::recover_stale_running_jobs_for_maintenance_pass(
+                    &Ctx::new(self.timeline_store.clone()),
+                )
                 .await?;
             let resolved_waiting = self.timeline_store.resolve_waiting_jobs().await?;
             let scheduled = self.schedule_due_jobs().await?;
@@ -223,7 +225,7 @@ where
         let count = jobs.len();
         for (permit, job) in permits.into_iter().zip(jobs) {
             match job_spec.executor {
-                JobExecutor::Runtime => self.spawn_runtime_job(job, permit),
+                JobExecutor::Async => self.spawn_runtime_job(job, permit),
                 JobExecutor::Blocking => self.spawn_blocking_job(job, permit),
             }
         }
@@ -242,16 +244,13 @@ where
         tokio::spawn(async move {
             let job_id = job.id.clone();
             let kind = job.kind;
-            let result = {
-                match Runtime::from_store(timeline_store) {
-                    Ok(mut runtime) => {
-                        runtime
-                            .dispatch_claimed_runtime_job_with_external_api(job, &external_api)
-                            .await
-                    }
-                    Err(error) => Err(error),
-                }
-            };
+            let ctx = Ctx::new(timeline_store);
+            let result = crate::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+                &ctx,
+                &external_api,
+                job,
+            )
+            .await;
             if let Err(error) = result {
                 log(&format!(
                     "runtime job worker failed {job_id} ({kind}): {}",
@@ -271,10 +270,11 @@ where
             let job_id = job.id.clone();
             let kind = job.kind;
             let result = runtime_handle.block_on(async move {
-                match Runtime::from_store(timeline_store) {
-                    Ok(snapshot) => snapshot.dispatch_claimed_blocking_job(job).await,
-                    Err(error) => Err(error),
-                }
+                let ctx = Ctx::new(timeline_store);
+                crate::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+                    &ctx, job,
+                )
+                .await
             });
             match result {
                 Ok(_) => {}

@@ -14,7 +14,7 @@ use crate::runtime::domain::transcription::{
 use crate::runtime::timeline::store::TranscriptionSlotRecord;
 use crate::runtime::timeline::{SpeechEventInput, read_wav_mono, sha256_file};
 use crate::runtime::{
-    AudioSegmentPayload, Runtime, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
+    AudioSegmentPayload, Ctx, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
 };
 
 pub(crate) struct AudioSegmentRetryPlan {
@@ -107,12 +107,12 @@ fn retry_delay(attempts: i64) -> chrono::Duration {
 }
 
 pub(crate) async fn execute_segment_job(
-    runtime: &Runtime,
+    runtime: &Ctx,
     job: &crate::runtime::Job,
     payload: &AudioSegmentPayload,
 ) -> Result<Value> {
     if let Some(event) = runtime
-        .timeline_store
+        .store
         .speech_event_for_segment(
             &payload.guild_id,
             &payload.voice_channel_id,
@@ -145,11 +145,11 @@ pub(crate) async fn execute_segment_job(
     let audio_bytes = wav_path.metadata()?.len();
 
     let priority = runtime
-        .timeline_store
+        .store
         .audio_segment_transcription_priority(payload)
         .await?;
     let slot = runtime
-        .timeline_store
+        .store
         .create_transcription_slot_for_audio_segment(&job.id, payload, priority)
         .await?;
     let planner_delay_ms = if priority >= 1000 {
@@ -158,7 +158,7 @@ pub(crate) async fn execute_segment_job(
         crate::config::transcription_mux_batch_delay_ms()
     };
     let planner_job = runtime
-        .timeline_store
+        .store
         .ensure_transcription_mux_plan_job(
             &crate::config::active_transcription_source_id(),
             planner_delay_ms,
@@ -185,25 +185,25 @@ pub(crate) async fn execute_segment_job(
 }
 
 pub(crate) async fn execute_transcription_mux_plan_job(
-    runtime: &Runtime,
+    runtime: &Ctx,
     _job: &crate::runtime::Job,
     payload: &TranscriptionMuxPlanPayload,
 ) -> Result<Value> {
     crate::config::transcription_source(&payload.transcription_source_id)?;
     runtime
-        .timeline_store
+        .store
         .plan_transcription_mux_jobs(&payload.transcription_source_id)
         .await
 }
 
 pub(crate) async fn execute_transcription_mux_job(
-    runtime: &Runtime,
+    runtime: &Ctx,
     job: &crate::runtime::Job,
     payload: &TranscriptionMuxPayload,
 ) -> Result<Value> {
     let source = crate::config::transcription_source(&payload.transcription_source_id)?;
     let slots = runtime
-        .timeline_store
+        .store
         .start_transcription_slots_for_mux(&job.id, &source.id)
         .await?;
     if slots.is_empty() {
@@ -217,7 +217,7 @@ pub(crate) async fn execute_transcription_mux_job(
         Ok(mux) => mux,
         Err(error) => {
             runtime
-                .timeline_store
+                .store
                 .fail_transcription_slots_for_mux(&job.id, &error.to_string())
                 .await?;
             return Err(error);
@@ -228,7 +228,7 @@ pub(crate) async fn execute_transcription_mux_job(
         Err(error) => {
             let Some(class) = retryable_stt_error_class(&error) else {
                 runtime
-                    .timeline_store
+                    .store
                     .fail_transcription_slots_for_mux(&job.id, &error.to_string())
                     .await?;
                 return Err(error);
@@ -248,7 +248,7 @@ pub(crate) async fn execute_transcription_mux_job(
                 let reason =
                     "provider returned non-empty text without timestamps for a multi-slot mux";
                 let requeued_slot_ids = runtime
-                    .timeline_store
+                    .store
                     .requeue_transcription_slots_as_single_slot_muxes(&job.id, reason)
                     .await?;
                 if requeued_slot_ids.is_empty() {
@@ -258,7 +258,7 @@ pub(crate) async fn execute_transcription_mux_job(
                     );
                 }
                 let next_plan_job = runtime
-                    .timeline_store
+                    .store
                     .ensure_transcription_mux_plan_job(&source.id, 0)
                     .await?;
                 return Ok(json!({
@@ -275,7 +275,7 @@ pub(crate) async fn execute_transcription_mux_job(
                     "transcription provider repeatedly omitted timestamps for a constrained multi-slot mux"
                 );
                 runtime
-                    .timeline_store
+                    .store
                     .fail_transcription_slots_for_mux(&job.id, &error.to_string())
                     .await?;
                 return Err(error);
@@ -286,7 +286,7 @@ pub(crate) async fn execute_transcription_mux_job(
         Ok(assignments) => assignments,
         Err(error) => {
             runtime
-                .timeline_store
+                .store
                 .fail_transcription_slots_for_mux(&job.id, &error.to_string())
                 .await?;
             return Err(error);
@@ -314,7 +314,7 @@ pub(crate) async fn execute_transcription_mux_job(
         );
         if text.is_empty() {
             runtime
-                .timeline_store
+                .store
                 .complete_transcription_slot(&slot.slot_id, "", "")
                 .await?;
             continue;
@@ -322,7 +322,7 @@ pub(crate) async fn execute_transcription_mux_job(
         if should_drop_low_confidence_transcription(Some(&metadata), None, None) {
             let decision = stt_drop_decision(Some(&metadata), None, None);
             runtime
-                .timeline_store
+                .store
                 .complete_transcription_slot(&slot.slot_id, "", "")
                 .await?;
             events.push(json!({
@@ -334,7 +334,7 @@ pub(crate) async fn execute_transcription_mux_job(
             continue;
         }
         if let Some(event) = runtime
-            .timeline_store
+            .store
             .speech_event_for_segment(
                 &slot.guild_id,
                 &slot.voice_channel_id,
@@ -347,7 +347,7 @@ pub(crate) async fn execute_transcription_mux_job(
             let event_id =
                 crate::runtime::util::first_value_string(&event, &["event_id", "eventId"]);
             runtime
-                .timeline_store
+                .store
                 .complete_transcription_slot(&slot.slot_id, &event_id, &text)
                 .await?;
             events.push(json!({
@@ -359,7 +359,7 @@ pub(crate) async fn execute_transcription_mux_job(
         }
         let (start_time, end_time) = assigned_slot_times(slot, &assignment);
         let event = runtime
-            .timeline_store
+            .store
             .append_speech_event(SpeechEventInput {
                 guild_id: slot.guild_id.clone(),
                 guild_slug: slot.guild_slug.clone(),
@@ -388,11 +388,11 @@ pub(crate) async fn execute_transcription_mux_job(
             .await?;
         let event_id = crate::runtime::util::first_value_string(&event, &["event_id", "eventId"]);
         runtime
-            .timeline_store
+            .store
             .complete_transcription_slot(&slot.slot_id, &event_id, &text)
             .await?;
         let _ = runtime
-            .timeline_store
+            .store
             .set_occupancy(json!({
                 "guild_id": slot.guild_id,
                 "voice_channel_id": slot.voice_channel_id,
@@ -407,7 +407,7 @@ pub(crate) async fn execute_transcription_mux_job(
         }));
     }
     let next_plan_job = runtime
-        .timeline_store
+        .store
         .ensure_transcription_mux_plan_job(&source.id, 0)
         .await?;
     Ok(json!({
@@ -464,7 +464,7 @@ pub fn untimestamped_mux_disposition(
 }
 
 async fn build_mux_audio(
-    runtime: &Runtime,
+    runtime: &Ctx,
     job: &crate::runtime::Job,
     slots: &[TranscriptionSlotRecord],
 ) -> Result<BuiltMuxAudio> {
@@ -503,7 +503,7 @@ async fn build_mux_audio(
             mixed.extend(std::iter::repeat(0).take(guard_samples));
         }
         runtime
-            .timeline_store
+            .store
             .update_transcription_slot_mux_offsets(
                 &slot.slot_id,
                 &stream_id,
@@ -520,7 +520,7 @@ async fn build_mux_audio(
         updated_slots.push(updated);
     }
     let output_dir = runtime
-        .timeline_store
+        .store
         .channel_dir(&first.guild_id, &first.voice_channel_id)
         .join("jobs")
         .join(&job.id);

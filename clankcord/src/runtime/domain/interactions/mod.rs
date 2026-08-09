@@ -1,11 +1,11 @@
-mod agent_sessions;
-mod commands;
-mod confirmations;
+pub mod agent_sessions;
+pub mod commands;
+pub(crate) mod confirmations;
 mod linear_mcp;
 mod policy;
-mod prompts;
-mod tasks;
-mod thread_titles;
+pub(crate) mod prompts;
+pub(crate) mod tasks;
+pub(crate) mod thread_titles;
 
 pub use policy::requires_confirmation;
 pub use prompts::AgentPromptRequestOrigin;

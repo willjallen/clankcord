@@ -6,8 +6,8 @@ use clankcord::adapters::discord::gateway::slash::{
     slash_missing_voice_channel_response_content, slash_success_response_content,
 };
 use clankcord::runtime::{
-    BinaryPayload, CommandKind, DashboardFilter, DashboardTimelineRequest,
-    DiscordSlashCommandPayload, Job, JobKind, Runtime, RuntimeScopeKind,
+    BinaryPayload, CommandKind, Ctx, DashboardFilter, DashboardTimelineRequest,
+    DiscordSlashCommandPayload, Job, JobKind, RuntimeScopeKind,
 };
 
 mod common;
@@ -90,7 +90,7 @@ async fn feedback_slash_records_durable_timeline_event() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
     let job = store
         .create_job(Job::discord_slash_command(slash_payload(
             "interaction-feedback",
@@ -103,7 +103,13 @@ async fn feedback_slash_records_durable_timeline_event() {
         .unwrap();
 
     let job_id = job.id.clone();
-    runtime.dispatch_claimed_runtime_job(job).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        job,
+    )
+    .await
+    .unwrap();
 
     let mut kinds = BTreeSet::new();
     kinds.insert("discord_slash_command".to_string());
@@ -147,18 +153,19 @@ async fn feedback_slash_records_durable_timeline_event() {
         json!("2026-05-15T10:00:00.000Z")
     );
 
-    let page = Runtime::from_store(store)
-        .unwrap()
-        .dashboard_timeline(DashboardTimelineRequest {
+    let page = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &Ctx::new(store),
+        DashboardTimelineRequest {
             record_types: DashboardFilter::Values(BTreeSet::from(["event".to_string()])),
             job_kinds: DashboardFilter::None,
             from: "all".to_string(),
             search: "/feedback".to_string(),
             metadata: "none".to_string(),
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let dashboard_events = page["records"]
         .as_array()
         .unwrap()
@@ -186,7 +193,7 @@ async fn wake_slash_schedules_manual_activation_for_invoker_voice_room() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
     let job = store
         .create_job(Job::discord_slash_command(slash_payload(
             "interaction-wake",
@@ -199,7 +206,13 @@ async fn wake_slash_schedules_manual_activation_for_invoker_voice_room() {
         .unwrap();
 
     let job_id = job.id.clone();
-    runtime.dispatch_claimed_runtime_job(job).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        job,
+    )
+    .await
+    .unwrap();
 
     let mut kinds = BTreeSet::new();
     kinds.insert("wake_detected".to_string());
@@ -236,7 +249,7 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
     for (interaction_id, slash_name, expected_kind) in [
         ("interaction-join", "join", CommandKind::JoinRoom),
@@ -260,7 +273,13 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
             .unwrap();
 
         let job_id = job.id.clone();
-        runtime.dispatch_claimed_runtime_job(job).await.unwrap();
+        clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+            &runtime,
+            &clankcord::ports::discord::DiscordApiUnavailable,
+            job,
+        )
+        .await
+        .unwrap();
 
         let children = store.list_child_jobs(&job_id).await.unwrap();
         assert_eq!(children.len(), 1);
@@ -303,6 +322,6 @@ fn slash_payload(
     }
 }
 
-fn test_runtime(timeline_store: clankcord::runtime::timeline::TimelineStore) -> Runtime {
-    Runtime::from_store(timeline_store).unwrap()
+fn test_runtime(timeline_store: clankcord::runtime::timeline::TimelineStore) -> Ctx {
+    Ctx::new(timeline_store)
 }

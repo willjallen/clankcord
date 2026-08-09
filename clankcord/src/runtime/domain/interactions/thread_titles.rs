@@ -21,9 +21,9 @@ use crate::runtime::domain::messaging::session_threads::{
 use crate::runtime::timeline::JobVisibility;
 use crate::runtime::util::{first_non_empty, first_value_string, preview};
 use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload,
-    DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, Runtime,
-    RuntimeScope, TextTargetKind,
+    AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload, Ctx,
+    DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, RuntimeScope,
+    TextTargetKind,
 };
 
 use super::linear_mcp::insert_linear_mcp_env;
@@ -47,450 +47,451 @@ struct ThreadTitleInvocation {
     title: String,
 }
 
-impl Runtime {
-    pub(crate) async fn agent_thread_title_refresh_jobs(
-        &self,
-        source_job: &Job,
-    ) -> Result<Vec<Job>> {
-        let active_session_ids = self.active_agent_thread_title_refresh_session_ids().await?;
-        let records = self
-            .timeline_store
-            .list_agent_session_records("", "", "active", 500)
-            .await?;
-        let mut jobs = Vec::new();
-        for record in records {
-            if jobs.len() >= THREAD_TITLE_MAX_CANDIDATES_PER_RUN {
-                break;
-            }
-            if record.route_kind != AgentSessionRouteKind::Voice
-                || record.discord_thread_id.trim().is_empty()
-                || active_session_ids.contains(&record.agent_session_id)
-            {
-                continue;
-            }
-            let responses = self.agent_thread_response_summaries(&record).await?;
-            let response_count = responses.len();
-            if response_count < THREAD_TITLE_RESPONSE_INTERVAL {
-                continue;
-            }
-            let last_attempt_count = self
-                .last_agent_thread_title_refresh_attempt_count(&record)
-                .await?;
-            if response_count < last_attempt_count.saturating_add(THREAD_TITLE_RESPONSE_INTERVAL) {
-                continue;
-            }
-            let current_thread_name = match self.latest_agent_thread_title(&record).await? {
-                Some(title) => title,
-                None => self.default_agent_thread_name(&record).await?,
-            };
-            jobs.push(Job::agent_thread_title_refresh(
-                source_job.id.clone(),
-                record.agent_session_id,
-                record.guild_id,
-                record.scope_id,
-                record.discord_thread_id,
-                current_thread_name,
-                response_count,
-            ));
+pub(crate) async fn agent_thread_title_refresh_jobs(
+    ctx: &Ctx,
+    source_job: &Job,
+) -> Result<Vec<Job>> {
+    let active_session_ids = active_agent_thread_title_refresh_session_ids(ctx).await?;
+    let records = ctx
+        .store
+        .list_agent_session_records("", "", "active", 500)
+        .await?;
+    let mut jobs = Vec::new();
+    for record in records {
+        if jobs.len() >= THREAD_TITLE_MAX_CANDIDATES_PER_RUN {
+            break;
         }
-        Ok(jobs)
-    }
-
-    pub(crate) async fn prepare_agent_thread_title_refresh_job(
-        &self,
-        job: &Job,
-        payload: &AgentThreadTitleRefreshPayload,
-    ) -> Result<JobDecision> {
-        validate_thread_title_refresh_payload(job, payload)?;
-        let children = self.timeline_store.list_child_jobs(&job.id).await?;
-        if children.iter().any(|child| !child.state.is_terminal()) {
-            return Ok(JobDecision::Wait);
-        }
-        if let Some(decision) = self
-            .complete_thread_title_refresh_for_unavailable_thread(job, payload, &children)
-            .await?
+        if record.route_kind != AgentSessionRouteKind::Voice
+            || record.discord_thread_id.trim().is_empty()
+            || active_session_ids.contains(&record.agent_session_id)
         {
-            return Ok(decision);
+            continue;
         }
-        if let Some(failed) = children
-            .iter()
-            .find(|child| child.state != JobState::Complete)
-        {
-            return Ok(JobDecision::fail(format!(
-                "agent thread title dependency {} ended as {}: {}",
-                failed.id, failed.state, failed.metadata.error
-            )));
+        let responses = agent_thread_response_summaries(ctx, &record).await?;
+        let response_count = responses.len();
+        if response_count < THREAD_TITLE_RESPONSE_INTERVAL {
+            continue;
         }
-        if !children.is_empty() {
-            return self
-                .complete_agent_thread_title_refresh_job(job, payload, &children)
-                .await;
+        let last_attempt_count =
+            last_agent_thread_title_refresh_attempt_count(ctx, &record).await?;
+        if response_count < last_attempt_count.saturating_add(THREAD_TITLE_RESPONSE_INTERVAL) {
+            continue;
         }
-
-        self.record_agent_thread_title_refresh_attempt(job, payload)
-            .await?;
-        let context = self.agent_thread_title_prompt_context(payload).await?;
-        let prompt = build_agent_thread_title_prompt(&context)?;
-        let invocation = self.invoke_agent_thread_title(job, payload, prompt).await?;
-        let rename = Job::discord_forum_thread_rename(
-            RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
-            "runtime",
-            DiscordForumThreadRenamePayload {
-                thread_id: payload.discord_thread_id.clone(),
-                name: invocation.title.clone(),
-                source_job_id: job.id.clone(),
-            },
-        );
-        Ok(JobDecision::WaitFor(vec![rename]))
-    }
-
-    async fn active_agent_thread_title_refresh_session_ids(&self) -> Result<BTreeSet<String>> {
-        let jobs = self
-            .timeline_store
-            .list_jobs_by_states_with_visibility(
-                None,
-                &[
-                    JobState::Queued,
-                    JobState::Running,
-                    JobState::Waiting,
-                    JobState::CancelRequested,
-                ],
-                JobVisibility::IncludeEphemeral,
-            )
-            .await?;
-        Ok(jobs
-            .into_iter()
-            .filter_map(|job| match job.payload {
-                JobPayload::AgentThreadTitleRefresh(payload)
-                    if job.kind == JobKind::AgentThreadTitleRefresh =>
-                {
-                    Some(payload.agent_session_id)
-                }
-                _ => None,
-            })
-            .collect())
-    }
-
-    async fn agent_thread_response_summaries(
-        &self,
-        record: &AgentSessionRecord,
-    ) -> Result<Vec<String>> {
-        let mut agent_tasks = self
-            .timeline_store
-            .list_jobs_by_scope_kind(&record.guild_id, &record.scope_id, JobKind::AgentTask)
-            .await?;
-        agent_tasks.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        let mut responses = Vec::new();
-        for task in agent_tasks {
-            let JobPayload::AgentTask(task_payload) = &task.payload else {
-                continue;
-            };
-            if task_payload.agent_session_id != record.agent_session_id {
-                continue;
+        let current_thread_name = match latest_agent_thread_title(ctx, &record).await? {
+            Some(title) => title,
+            None => {
+                crate::runtime::domain::interactions::agent_sessions::default_agent_thread_name(
+                    ctx, &record,
+                )
+                .await?
             }
-            let deliveries = self
-                .timeline_store
-                .list_text_delivery_jobs_for_source(&task.id)
-                .await?;
-            let Some(delivery) = deliveries
-                .iter()
-                .find(|delivery| delivery_is_visible_agent_thread_response(delivery, record))
-            else {
-                continue;
-            };
-            responses.push(agent_thread_response_summary(
-                responses.len() + 1,
-                task_payload.command.arguments.request_text(),
-                text_delivery_content(delivery),
-            ));
-        }
-        Ok(responses)
-    }
-
-    async fn agent_thread_title_prompt_context(
-        &self,
-        payload: &AgentThreadTitleRefreshPayload,
-    ) -> Result<AgentThreadTitlePromptContext> {
-        let room = self
-            .room_for_channel_ids(&payload.guild_id, &payload.voice_channel_id, None)
-            .await?;
-        let record = self
-            .timeline_store
-            .get_agent_session_record(&payload.agent_session_id)
-            .await?;
-        let mut responses = self.agent_thread_response_summaries(&record).await?;
-        responses.truncate(payload.response_count);
-        Ok(AgentThreadTitlePromptContext {
-            agent_session_id: payload.agent_session_id.clone(),
-            current_thread_title: payload.current_thread_name.clone(),
-            voice_channel_name: room.channel_name,
-            response_count: responses.len(),
-            responses,
-        })
-    }
-
-    async fn invoke_agent_thread_title(
-        &self,
-        job: &Job,
-        payload: &AgentThreadTitleRefreshPayload,
-        prompt: String,
-    ) -> Result<ThreadTitleInvocation> {
-        let workdir = agent_thread_title_workdir(&payload.agent_session_id);
-        fs::create_dir_all(&workdir)?;
-        let job_dir = self
-            .timeline_store
-            .channel_dir(&payload.guild_id, &payload.voice_channel_id)
-            .join("jobs");
-        fs::create_dir_all(&job_dir)?;
-        let prompt_path = job_dir.join(format!("{}.agent-thread-title-prompt.txt", job.id));
-        let result_path = job_dir.join(format!("{}.agent-thread-title-result.txt", job.id));
-        let raw_result_path = job_dir.join(format!("{}.agent-thread-title.codex.jsonl", job.id));
-        fs::write(&prompt_path, &prompt)?;
-        let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
-            role: AgentRole::ThreadTitle,
-            session_key: format!("agent:thread-title:{}", payload.agent_session_id),
-            job_id: job.id.clone(),
-            guild_id: payload.guild_id.clone(),
-            scope_id: payload.voice_channel_id.clone(),
-            prior_session_id: String::new(),
-            prompt,
-            cwd: Some(workdir),
-            model: config::codex_model(),
-            reasoning_effort: config::codex_reasoning_effort(),
-            fast_mode: config::codex_fast_mode(),
-            env: agent_thread_title_env(job)?,
-            result_path: result_path.clone(),
-            raw_result_path: raw_result_path.clone(),
-        })?;
-        if !invocation.success {
-            let detail = first_non_empty([
-                invocation.stderr.trim().to_string(),
-                invocation.stdout.trim().to_string(),
-                format!(
-                    "codex exited {}",
-                    invocation
-                        .returncode
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "without a status code".to_string())
-                ),
-            ]);
-            if detail.contains("TokenRefreshFailed")
-                || detail.contains("invalid_grant")
-                || detail.contains("Auth(")
-            {
-                return Err(AgentInfrastructureError::new(detail).into());
-            }
-            anyhow::bail!("{detail}");
-        }
-        let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
-        Ok(ThreadTitleInvocation {
-            title: sanitize_agent_thread_title(&response_text)?,
-        })
-    }
-
-    async fn complete_agent_thread_title_refresh_job(
-        &self,
-        job: &Job,
-        payload: &AgentThreadTitleRefreshPayload,
-        children: &[Job],
-    ) -> Result<JobDecision> {
-        let rename_child = children
-            .iter()
-            .find(|child| child.kind == JobKind::DiscordForumThreadRename)
-            .ok_or_else(|| anyhow::anyhow!("agent thread title refresh has no rename child"))?;
-        let Some(JobOutput::DiscordForumThreadRename(output)) =
-            rename_child.metadata.output.clone()
-        else {
-            return Ok(JobDecision::fail(format!(
-                "agent thread title child {} completed without rename output",
-                rename_child.id
-            )));
         };
-        self.timeline_store
-            .append_event(
-                &payload.guild_id,
-                &payload.voice_channel_id,
-                json!({
-                    "event_kind": "agent_thread_titled",
-                    "kind": "agent_thread_titled",
-                    "agent_session_id": payload.agent_session_id,
-                    "discord_thread_id": payload.discord_thread_id,
-                    "title": output.name,
-                    "response_count": payload.response_count,
-                    "refresh_job_id": job.id,
-                    "rename_job_id": rename_child.id,
-                }),
-            )
+        jobs.push(Job::agent_thread_title_refresh(
+            source_job.id.clone(),
+            record.agent_session_id,
+            record.guild_id,
+            record.scope_id,
+            record.discord_thread_id,
+            current_thread_name,
+            response_count,
+        ));
+    }
+    Ok(jobs)
+}
+
+pub(crate) async fn prepare_agent_thread_title_refresh_job(
+    ctx: &Ctx,
+    job: &Job,
+    payload: &AgentThreadTitleRefreshPayload,
+) -> Result<JobDecision> {
+    validate_thread_title_refresh_payload(job, payload)?;
+    let children = ctx.store.list_child_jobs(&job.id).await?;
+    if children.iter().any(|child| !child.state.is_terminal()) {
+        return Ok(JobDecision::Wait);
+    }
+    if let Some(decision) =
+        complete_thread_title_refresh_for_unavailable_thread(ctx, job, payload, &children).await?
+    {
+        return Ok(decision);
+    }
+    if let Some(failed) = children
+        .iter()
+        .find(|child| child.state != JobState::Complete)
+    {
+        return Ok(JobDecision::fail(format!(
+            "agent thread title dependency {} ended as {}: {}",
+            failed.id, failed.state, failed.metadata.error
+        )));
+    }
+    if !children.is_empty() {
+        return complete_agent_thread_title_refresh_job(ctx, job, payload, &children).await;
+    }
+
+    record_agent_thread_title_refresh_attempt(ctx, job, payload).await?;
+    let context = agent_thread_title_prompt_context(ctx, payload).await?;
+    let prompt = build_agent_thread_title_prompt(&context)?;
+    let invocation = invoke_agent_thread_title(ctx, job, payload, prompt).await?;
+    let rename = Job::discord_forum_thread_rename(
+        RuntimeScope::voice_channel(payload.guild_id.clone(), payload.voice_channel_id.clone()),
+        "runtime",
+        DiscordForumThreadRenamePayload {
+            thread_id: payload.discord_thread_id.clone(),
+            name: invocation.title.clone(),
+            source_job_id: job.id.clone(),
+        },
+    );
+    Ok(JobDecision::WaitFor(vec![rename]))
+}
+
+async fn active_agent_thread_title_refresh_session_ids(ctx: &Ctx) -> Result<BTreeSet<String>> {
+    let jobs = ctx
+        .store
+        .list_jobs_by_states_with_visibility(
+            None,
+            &[
+                JobState::Queued,
+                JobState::Running,
+                JobState::Waiting,
+                JobState::CancelRequested,
+            ],
+            JobVisibility::IncludeEphemeral,
+        )
+        .await?;
+    Ok(jobs
+        .into_iter()
+        .filter_map(|job| match job.payload {
+            JobPayload::AgentThreadTitleRefresh(payload)
+                if job.kind == JobKind::AgentThreadTitleRefresh =>
+            {
+                Some(payload.agent_session_id)
+            }
+            _ => None,
+        })
+        .collect())
+}
+
+async fn agent_thread_response_summaries(
+    ctx: &Ctx,
+    record: &AgentSessionRecord,
+) -> Result<Vec<String>> {
+    let mut agent_tasks = ctx
+        .store
+        .list_jobs_by_scope_kind(&record.guild_id, &record.scope_id, JobKind::AgentTask)
+        .await?;
+    agent_tasks.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut responses = Vec::new();
+    for task in agent_tasks {
+        let JobPayload::AgentTask(task_payload) = &task.payload else {
+            continue;
+        };
+        if task_payload.agent_session_id != record.agent_session_id {
+            continue;
+        }
+        let deliveries = ctx
+            .store
+            .list_text_delivery_jobs_for_source(&task.id)
             .await?;
-        Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-            &json!({
-                "kind": "agent_thread_title_refresh",
+        let Some(delivery) = deliveries
+            .iter()
+            .find(|delivery| delivery_is_visible_agent_thread_response(delivery, record))
+        else {
+            continue;
+        };
+        responses.push(agent_thread_response_summary(
+            responses.len() + 1,
+            task_payload.command.arguments.request_text(),
+            text_delivery_content(delivery),
+        ));
+    }
+    Ok(responses)
+}
+
+async fn agent_thread_title_prompt_context(
+    ctx: &Ctx,
+    payload: &AgentThreadTitleRefreshPayload,
+) -> Result<AgentThreadTitlePromptContext> {
+    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
+        ctx,
+        &payload.guild_id,
+        &payload.voice_channel_id,
+        None,
+    )
+    .await?;
+    let record = ctx
+        .store
+        .get_agent_session_record(&payload.agent_session_id)
+        .await?;
+    let mut responses = agent_thread_response_summaries(ctx, &record).await?;
+    responses.truncate(payload.response_count);
+    Ok(AgentThreadTitlePromptContext {
+        agent_session_id: payload.agent_session_id.clone(),
+        current_thread_title: payload.current_thread_name.clone(),
+        voice_channel_name: room.channel_name,
+        response_count: responses.len(),
+        responses,
+    })
+}
+
+async fn invoke_agent_thread_title(
+    ctx: &Ctx,
+    job: &Job,
+    payload: &AgentThreadTitleRefreshPayload,
+    prompt: String,
+) -> Result<ThreadTitleInvocation> {
+    let workdir = agent_thread_title_workdir(&payload.agent_session_id);
+    fs::create_dir_all(&workdir)?;
+    let job_dir = ctx
+        .store
+        .channel_dir(&payload.guild_id, &payload.voice_channel_id)
+        .join("jobs");
+    fs::create_dir_all(&job_dir)?;
+    let prompt_path = job_dir.join(format!("{}.agent-thread-title-prompt.txt", job.id));
+    let result_path = job_dir.join(format!("{}.agent-thread-title-result.txt", job.id));
+    let raw_result_path = job_dir.join(format!("{}.agent-thread-title.codex.jsonl", job.id));
+    fs::write(&prompt_path, &prompt)?;
+    let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
+        role: AgentRole::ThreadTitle,
+        session_key: format!("agent:thread-title:{}", payload.agent_session_id),
+        job_id: job.id.clone(),
+        guild_id: payload.guild_id.clone(),
+        scope_id: payload.voice_channel_id.clone(),
+        prior_session_id: String::new(),
+        prompt,
+        cwd: Some(workdir),
+        model: config::codex_model(),
+        reasoning_effort: config::codex_reasoning_effort(),
+        fast_mode: config::codex_fast_mode(),
+        env: agent_thread_title_env(job)?,
+        result_path: result_path.clone(),
+        raw_result_path: raw_result_path.clone(),
+    })?;
+    if !invocation.success {
+        let detail = first_non_empty([
+            invocation.stderr.trim().to_string(),
+            invocation.stdout.trim().to_string(),
+            format!(
+                "codex exited {}",
+                invocation
+                    .returncode
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "without a status code".to_string())
+            ),
+        ]);
+        if detail.contains("TokenRefreshFailed")
+            || detail.contains("invalid_grant")
+            || detail.contains("Auth(")
+        {
+            return Err(AgentInfrastructureError::new(detail).into());
+        }
+        anyhow::bail!("{detail}");
+    }
+    let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
+    Ok(ThreadTitleInvocation {
+        title: sanitize_agent_thread_title(&response_text)?,
+    })
+}
+
+async fn complete_agent_thread_title_refresh_job(
+    ctx: &Ctx,
+    job: &Job,
+    payload: &AgentThreadTitleRefreshPayload,
+    children: &[Job],
+) -> Result<JobDecision> {
+    let rename_child = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordForumThreadRename)
+        .ok_or_else(|| anyhow::anyhow!("agent thread title refresh has no rename child"))?;
+    let Some(JobOutput::DiscordForumThreadRename(output)) = rename_child.metadata.output.clone()
+    else {
+        return Ok(JobDecision::fail(format!(
+            "agent thread title child {} completed without rename output",
+            rename_child.id
+        )));
+    };
+    ctx.store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "agent_thread_titled",
+                "kind": "agent_thread_titled",
                 "agent_session_id": payload.agent_session_id,
                 "discord_thread_id": payload.discord_thread_id,
                 "title": output.name,
                 "response_count": payload.response_count,
+                "refresh_job_id": job.id,
                 "rename_job_id": rename_child.id,
             }),
-        )?))
-    }
-
-    async fn complete_thread_title_refresh_for_unavailable_thread(
-        &self,
-        job: &Job,
-        payload: &AgentThreadTitleRefreshPayload,
-        children: &[Job],
-    ) -> Result<Option<JobDecision>> {
-        let Some(rename_child) = children
-            .iter()
-            .find(|child| child.kind == JobKind::DiscordForumThreadRename)
-        else {
-            return Ok(None);
-        };
-        if rename_child.state == JobState::Complete
-            || !discord_error_text_is_unavailable_channel(&rename_child.metadata.error)
-        {
-            return Ok(None);
-        }
-        let Some(rename_thread_id) = discord_forum_thread_rename_child_thread_id(rename_child)
-        else {
-            return Ok(None);
-        };
-        if rename_thread_id != payload.discord_thread_id {
-            return Ok(None);
-        }
-        let thread_id = first_non_empty([
-            discord_error_text_unavailable_channel_id(&rename_child.metadata.error),
-            payload.discord_thread_id.clone(),
-        ]);
-        self.mark_agent_session_thread_unavailable(
-            &payload.agent_session_id,
-            &thread_id,
-            &rename_child.id,
-            &rename_child.metadata.error,
         )
         .await?;
-        self.timeline_store
-            .append_event(
-                &payload.guild_id,
-                &payload.voice_channel_id,
-                json!({
-                    "event_kind": "agent_thread_title_skipped",
-                    "kind": "agent_thread_title_skipped",
-                    "agent_session_id": payload.agent_session_id,
-                    "discord_thread_id": payload.discord_thread_id,
-                    "response_count": payload.response_count,
-                    "refresh_job_id": job.id,
-                    "rename_job_id": rename_child.id,
-                    "status": UNAVAILABLE_SESSION_THREAD_STATUS,
-                    "reason": preview(&rename_child.metadata.error, 500),
-                }),
-            )
-            .await?;
-        Ok(Some(JobDecision::Complete(JobOutput::from_boundary_json(
-            &json!({
-                "kind": "agent_thread_title_refresh",
+    Ok(JobDecision::Complete(JobOutput::from_boundary_json(
+        &json!({
+            "kind": "agent_thread_title_refresh",
+            "agent_session_id": payload.agent_session_id,
+            "discord_thread_id": payload.discord_thread_id,
+            "title": output.name,
+            "response_count": payload.response_count,
+            "rename_job_id": rename_child.id,
+        }),
+    )?))
+}
+
+async fn complete_thread_title_refresh_for_unavailable_thread(
+    ctx: &Ctx,
+    job: &Job,
+    payload: &AgentThreadTitleRefreshPayload,
+    children: &[Job],
+) -> Result<Option<JobDecision>> {
+    let Some(rename_child) = children
+        .iter()
+        .find(|child| child.kind == JobKind::DiscordForumThreadRename)
+    else {
+        return Ok(None);
+    };
+    if rename_child.state == JobState::Complete
+        || !discord_error_text_is_unavailable_channel(&rename_child.metadata.error)
+    {
+        return Ok(None);
+    }
+    let Some(rename_thread_id) = discord_forum_thread_rename_child_thread_id(rename_child) else {
+        return Ok(None);
+    };
+    if rename_thread_id != payload.discord_thread_id {
+        return Ok(None);
+    }
+    let thread_id = first_non_empty([
+        discord_error_text_unavailable_channel_id(&rename_child.metadata.error),
+        payload.discord_thread_id.clone(),
+    ]);
+    crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(
+        ctx,
+        &payload.agent_session_id,
+        &thread_id,
+        &rename_child.id,
+        &rename_child.metadata.error,
+    )
+    .await?;
+    ctx.store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "agent_thread_title_skipped",
+                "kind": "agent_thread_title_skipped",
                 "agent_session_id": payload.agent_session_id,
                 "discord_thread_id": payload.discord_thread_id,
                 "response_count": payload.response_count,
+                "refresh_job_id": job.id,
                 "rename_job_id": rename_child.id,
                 "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+                "reason": preview(&rename_child.metadata.error, 500),
             }),
-        )?)))
-    }
+        )
+        .await?;
+    Ok(Some(JobDecision::Complete(JobOutput::from_boundary_json(
+        &json!({
+            "kind": "agent_thread_title_refresh",
+            "agent_session_id": payload.agent_session_id,
+            "discord_thread_id": payload.discord_thread_id,
+            "response_count": payload.response_count,
+            "rename_job_id": rename_child.id,
+            "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+        }),
+    )?)))
+}
 
-    async fn record_agent_thread_title_refresh_attempt(
-        &self,
-        job: &Job,
-        payload: &AgentThreadTitleRefreshPayload,
-    ) -> Result<()> {
-        self.timeline_store
-            .append_event(
-                &payload.guild_id,
-                &payload.voice_channel_id,
-                json!({
-                    "event_kind": "agent_thread_title_refresh_attempted",
-                    "kind": "agent_thread_title_refresh_attempted",
-                    "agent_session_id": payload.agent_session_id,
-                    "discord_thread_id": payload.discord_thread_id,
-                    "response_count": payload.response_count,
-                    "refresh_job_id": job.id,
-                }),
-            )
-            .await
-            .map(|_| ())
-    }
+async fn record_agent_thread_title_refresh_attempt(
+    ctx: &Ctx,
+    job: &Job,
+    payload: &AgentThreadTitleRefreshPayload,
+) -> Result<()> {
+    ctx.store
+        .append_event(
+            &payload.guild_id,
+            &payload.voice_channel_id,
+            json!({
+                "event_kind": "agent_thread_title_refresh_attempted",
+                "kind": "agent_thread_title_refresh_attempted",
+                "agent_session_id": payload.agent_session_id,
+                "discord_thread_id": payload.discord_thread_id,
+                "response_count": payload.response_count,
+                "refresh_job_id": job.id,
+            }),
+        )
+        .await
+        .map(|_| ())
+}
 
-    async fn last_agent_thread_title_refresh_attempt_count(
-        &self,
-        record: &AgentSessionRecord,
-    ) -> Result<usize> {
-        let mut count = 0usize;
-        for event in self
-            .timeline_store
-            .load_events(
-                &record.guild_id,
-                &record.scope_id,
-                None,
-                None,
-                None,
-                None,
-                false,
-            )
-            .await?
+async fn last_agent_thread_title_refresh_attempt_count(
+    ctx: &Ctx,
+    record: &AgentSessionRecord,
+) -> Result<usize> {
+    let mut count = 0usize;
+    for event in ctx
+        .store
+        .load_events(
+            &record.guild_id,
+            &record.scope_id,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await?
+    {
+        if first_value_string(&event, &["event_kind", "kind"])
+            != "agent_thread_title_refresh_attempted"
+            || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
         {
-            if first_value_string(&event, &["event_kind", "kind"])
-                != "agent_thread_title_refresh_attempted"
-                || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
-            {
-                continue;
-            }
-            count = count.max(usize_event_field(&event, "response_count"));
+            continue;
         }
-        Ok(count)
+        count = count.max(usize_event_field(&event, "response_count"));
     }
+    Ok(count)
+}
 
-    async fn latest_agent_thread_title(
-        &self,
-        record: &AgentSessionRecord,
-    ) -> Result<Option<String>> {
-        let mut latest = None::<(usize, String)>;
-        for event in self
-            .timeline_store
-            .load_events(
-                &record.guild_id,
-                &record.scope_id,
-                None,
-                None,
-                None,
-                None,
-                false,
-            )
-            .await?
+async fn latest_agent_thread_title(
+    ctx: &Ctx,
+    record: &AgentSessionRecord,
+) -> Result<Option<String>> {
+    let mut latest = None::<(usize, String)>;
+    for event in ctx
+        .store
+        .load_events(
+            &record.guild_id,
+            &record.scope_id,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await?
+    {
+        if first_value_string(&event, &["event_kind", "kind"]) != "agent_thread_titled"
+            || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
         {
-            if first_value_string(&event, &["event_kind", "kind"]) != "agent_thread_titled"
-                || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
-            {
-                continue;
-            }
-            let title = first_value_string(&event, &["title"]);
-            if title.trim().is_empty() {
-                continue;
-            }
-            let response_count = usize_event_field(&event, "response_count");
-            if latest
-                .as_ref()
-                .map(|(latest_count, _)| response_count >= *latest_count)
-                .unwrap_or(true)
-            {
-                latest = Some((response_count, title));
-            }
+            continue;
         }
-        Ok(latest.map(|(_, title)| title))
+        let title = first_value_string(&event, &["title"]);
+        if title.trim().is_empty() {
+            continue;
+        }
+        let response_count = usize_event_field(&event, "response_count");
+        if latest
+            .as_ref()
+            .map(|(latest_count, _)| response_count >= *latest_count)
+            .unwrap_or(true)
+        {
+            latest = Some((response_count, title));
+        }
     }
+    Ok(latest.map(|(_, title)| title))
 }
 
 pub fn build_agent_thread_title_prompt(context: &AgentThreadTitlePromptContext) -> Result<String> {

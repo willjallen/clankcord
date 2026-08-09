@@ -8,7 +8,7 @@ use crate::runtime::timeline::{
     TimelineStore, event_text, isoformat_z, parse_instant, resolve_time_reference, utc_now,
 };
 
-use crate::runtime::Runtime;
+use crate::runtime::Ctx;
 use crate::runtime::util::{first_non_empty, first_value_string, non_empty, string_field};
 
 #[derive(Debug, Clone, Default)]
@@ -141,31 +141,80 @@ impl Default for ForgetRequest {
     }
 }
 
-impl Runtime {
-    pub async fn timeline_tail(&self, request: TimelineTailRequest) -> Result<Value> {
-        let guild_id = request.guild_id;
-        let channel_id = request.channel_id;
-        let room = if guild_id.is_empty() || channel_id.is_empty() {
-            self.room_for_identifier(if channel_id.is_empty() {
+pub async fn timeline_tail(ctx: &Ctx, request: TimelineTailRequest) -> Result<Value> {
+    let guild_id = request.guild_id;
+    let channel_id = request.channel_id;
+    let room = if guild_id.is_empty() || channel_id.is_empty() {
+        crate::runtime::rooms::catalog::room_for_identifier(
+            ctx,
+            if channel_id.is_empty() {
                 None
             } else {
                 Some(&channel_id)
-            })
+            },
+        )
+        .await?
+    } else {
+        crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
             .await?
-        } else {
-            self.resolve_room_scope(&guild_id, Some(&channel_id))
-                .await?
-        };
-        let now = utc_now();
-        let start = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
-            .unwrap_or_else(|| now - chrono::Duration::hours(1));
-        let events = self
-            .timeline_store
+    };
+    let now = utc_now();
+    let start = resolve_time_reference(&non_empty(request.since, "-1h".to_string()), Some(now))
+        .unwrap_or_else(|| now - chrono::Duration::hours(1));
+    let events = ctx
+        .store
+        .load_events(
+            &room.guild_id,
+            &room.channel_id,
+            Some(start),
+            None,
+            None,
+            None,
+            false,
+        )
+        .await?;
+    let events = compact_timeline_events(
+        events,
+        request.include_ephemeral,
+        request.verbose,
+        request.limit,
+    );
+    Ok(
+        json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(Some(start)), "events": events}),
+    )
+}
+
+pub async fn timeline_range(ctx: &Ctx, request: TimelineRangeRequest) -> Result<Value> {
+    let guild_id = request.guild_id;
+    let start = resolve_time_reference(&request.from, None)
+        .ok_or_else(|| discord_tool_error("guild and from are required"))?;
+    let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
+    if guild_id.is_empty() {
+        return Err(discord_tool_error("guild and from are required"));
+    }
+    let channel_id = request.channel_id;
+    let all_channels = request.all_channels;
+    let mut channels = Vec::new();
+    for dir in ctx
+        .store
+        .channel_dirs(
+            &guild_id,
+            if all_channels {
+                None
+            } else {
+                Some(&channel_id)
+            },
+        )
+        .await?
+    {
+        let current_channel_id = TimelineStore::channel_id_from_dir(&dir);
+        let events = ctx
+            .store
             .load_events(
-                &room.guild_id,
-                &room.channel_id,
+                &guild_id,
+                &current_channel_id,
                 Some(start),
-                None,
+                Some(end),
                 None,
                 None,
                 false,
@@ -177,361 +226,319 @@ impl Runtime {
             request.verbose,
             request.limit,
         );
-        Ok(
-            json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(Some(start)), "events": events}),
-        )
+        channels.push(json!({"voice_channel_id": current_channel_id, "events": events}));
     }
+    Ok(
+        json!({"guildId": guild_id, "from": isoformat_z(Some(start)), "to": isoformat_z(Some(end)), "channels": channels}),
+    )
+}
 
-    pub async fn timeline_range(&self, request: TimelineRangeRequest) -> Result<Value> {
+pub async fn materialize_transcript(
+    ctx: &Ctx,
+    request: MaterializeTranscriptRequest,
+) -> Result<Value> {
+    let mut guild_id = request.guild_id;
+    let mut channel_id = request.channel_id;
+    if !guild_id.is_empty() && !channel_id.is_empty() {
+        let room =
+            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
+                .await?;
+        guild_id = room.guild_id;
+        channel_id = room.channel_id;
+    } else {
+        let room = crate::runtime::rooms::catalog::room_for_identifier(
+            ctx,
+            if channel_id.is_empty() {
+                None
+            } else {
+                Some(&channel_id)
+            },
+        )
+        .await?;
+        guild_id = room.guild_id;
+        channel_id = room.channel_id;
+    }
+    let now = utc_now();
+    let has_since = !request.since.trim().is_empty();
+    let start_raw = first_non_empty([request.since, request.from]);
+    let start = resolve_time_reference(&start_raw, Some(now))
+        .unwrap_or_else(|| now - chrono::Duration::minutes(10));
+    let end = resolve_time_reference(&request.to, Some(now)).unwrap_or(now);
+    let publish = non_empty(request.publish, "local".to_string());
+    let mut result = ctx
+        .store
+        .materialize(
+            &guild_id,
+            &channel_id,
+            start,
+            end,
+            if has_since {
+                "relative_time"
+            } else {
+                "absolute_time_range"
+            },
+            &non_empty(start_raw, "last 10 minutes".to_string()),
+            &request.created_by_user_id,
+            &publish,
+            request.live,
+            if request.parent_job_id.trim().is_empty() {
+                None
+            } else {
+                Some(request.parent_job_id.as_str())
+            },
+        )
+        .await?;
+    if publish == "discord" {
+        crate::runtime::domain::transcripts::publication::publish_materialized_transcript(
+            ctx,
+            &mut result,
+            request.live,
+        )
+        .await?;
+    }
+    Ok(result)
+}
+pub async fn render_transcript(ctx: &Ctx, request: RenderTranscriptRequest) -> Result<Value> {
+    let window_id = request.window_id;
+    let (window, guild_id, channel_id, start, end) = if !window_id.is_empty() {
+        let window = ctx.store.get_window(&window_id).await?;
+        let guild_id = string_field(&window, "guild_id");
+        let channel_id = string_field(&window, "voice_channel_id");
+        let start = parse_instant(&string_field(&window, "start_time"))
+            .ok_or_else(|| discord_tool_error("invalid transcript window start"))?;
+        let end = parse_instant(&string_field(&window, "end_time"))
+            .ok_or_else(|| discord_tool_error("invalid transcript window end"))?;
+        (window, guild_id, channel_id, start, end)
+    } else {
         let guild_id = request.guild_id;
-        let start = resolve_time_reference(&request.from, None)
-            .ok_or_else(|| discord_tool_error("guild and from are required"))?;
-        let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
-        if guild_id.is_empty() {
-            return Err(discord_tool_error("guild and from are required"));
-        }
         let channel_id = request.channel_id;
-        let all_channels = request.all_channels;
-        let mut channels = Vec::new();
-        for dir in self
-            .timeline_store
-            .channel_dirs(
-                &guild_id,
-                if all_channels {
-                    None
-                } else {
-                    Some(&channel_id)
-                },
-            )
-            .await?
-        {
-            let current_channel_id = TimelineStore::channel_id_from_dir(&dir);
-            let events = self
-                .timeline_store
-                .load_events(
-                    &guild_id,
-                    &current_channel_id,
-                    Some(start),
-                    Some(end),
-                    None,
-                    None,
-                    false,
-                )
+        let room =
+            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
                 .await?;
-            let events = compact_timeline_events(
-                events,
-                request.include_ephemeral,
-                request.verbose,
-                request.limit,
-            );
-            channels.push(json!({"voice_channel_id": current_channel_id, "events": events}));
-        }
-        Ok(
-            json!({"guildId": guild_id, "from": isoformat_z(Some(start)), "to": isoformat_z(Some(end)), "channels": channels}),
-        )
-    }
-
-    pub async fn materialize_transcript(
-        &self,
-        request: MaterializeTranscriptRequest,
-    ) -> Result<Value> {
-        let mut guild_id = request.guild_id;
-        let mut channel_id = request.channel_id;
-        if !guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self
-                .resolve_room_scope(&guild_id, Some(&channel_id))
-                .await?;
-            guild_id = room.guild_id;
-            channel_id = room.channel_id;
-        } else {
-            let room = self
-                .room_for_identifier(if channel_id.is_empty() {
-                    None
-                } else {
-                    Some(&channel_id)
-                })
-                .await?;
-            guild_id = room.guild_id;
-            channel_id = room.channel_id;
-        }
         let now = utc_now();
-        let has_since = !request.since.trim().is_empty();
-        let start_raw = first_non_empty([request.since, request.from]);
-        let start = resolve_time_reference(&start_raw, Some(now))
-            .unwrap_or_else(|| now - chrono::Duration::minutes(10));
+        let start = resolve_time_reference(
+            &first_non_empty([request.since, request.from, "-1h".to_string()]),
+            Some(now),
+        )
+        .ok_or_else(|| discord_tool_error("invalid transcript start"))?;
         let end = resolve_time_reference(&request.to, Some(now)).unwrap_or(now);
-        let publish = non_empty(request.publish, "local".to_string());
-        let mut result = self
-            .timeline_store
-            .materialize(
-                &guild_id,
-                &channel_id,
-                start,
-                end,
-                if has_since {
-                    "relative_time"
-                } else {
-                    "absolute_time_range"
-                },
-                &non_empty(start_raw, "last 10 minutes".to_string()),
-                &request.created_by_user_id,
-                &publish,
-                request.live,
-                if request.parent_job_id.trim().is_empty() {
-                    None
-                } else {
-                    Some(request.parent_job_id.as_str())
-                },
-            )
-            .await?;
-        if publish == "discord" {
-            self.publish_materialized_transcript(&mut result, request.live)
-                .await?;
-        }
-        Ok(result)
-    }
-    pub async fn render_transcript(&self, request: RenderTranscriptRequest) -> Result<Value> {
-        let window_id = request.window_id;
-        let (window, guild_id, channel_id, start, end) = if !window_id.is_empty() {
-            let window = self.timeline_store.get_window(&window_id).await?;
-            let guild_id = string_field(&window, "guild_id");
-            let channel_id = string_field(&window, "voice_channel_id");
-            let start = parse_instant(&string_field(&window, "start_time"))
-                .ok_or_else(|| discord_tool_error("invalid transcript window start"))?;
-            let end = parse_instant(&string_field(&window, "end_time"))
-                .ok_or_else(|| discord_tool_error("invalid transcript window end"))?;
-            (window, guild_id, channel_id, start, end)
-        } else {
-            let guild_id = request.guild_id;
-            let channel_id = request.channel_id;
-            let room = self
-                .resolve_room_scope(&guild_id, Some(&channel_id))
-                .await?;
-            let now = utc_now();
-            let start = resolve_time_reference(
-                &first_non_empty([request.since, request.from, "-1h".to_string()]),
-                Some(now),
-            )
-            .ok_or_else(|| discord_tool_error("invalid transcript start"))?;
-            let end = resolve_time_reference(&request.to, Some(now)).unwrap_or(now);
-            (
-                Value::Object(Map::new()),
-                room.guild_id,
-                room.channel_id,
-                start,
-                end,
-            )
-        };
-        let format = non_empty(request.format, "json".to_string());
-        let rendered = self
-            .timeline_store
-            .render_transcript(&guild_id, &channel_id, start, end, &window_id, &format)
-            .await?;
-        let events = if request.verbose {
-            rendered.events
-        } else {
-            rendered
-                .events
-                .into_iter()
-                .map(compact_timeline_event)
-                .collect::<Vec<_>>()
-        };
-        let content = if format == "json" {
-            String::new()
-        } else {
-            rendered.content
-        };
-        Ok(json!({
-            "window": if window.is_object() && window.as_object().is_some_and(|map| map.is_empty()) { rendered.window } else { window },
-            "content": content,
-            "events": events,
-        }))
-    }
-
-    pub async fn search_transcripts(&self, request: SearchTranscriptsRequest) -> Result<Value> {
-        let mut guild_id = request.guild_id;
-        let mut channel_id = request.channel_id;
-        let all_channels = request.all_channels;
-        if guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self.resolve_room_scope("", Some(&channel_id)).await?;
-            guild_id = room.guild_id;
-            channel_id = room.channel_id;
-        }
-        if guild_id.is_empty() {
-            return Err(discord_tool_error("guild is required"));
-        }
-        if !channel_id.is_empty() && !all_channels {
-            let room = self
-                .resolve_room_scope(&guild_id, Some(&channel_id))
-                .await?;
-            guild_id = room.guild_id;
-            channel_id = room.channel_id;
-        }
-        let query = request.query;
-        let since = resolve_time_reference(&non_empty(request.since, "-7d".to_string()), None);
-        let limit = request.limit;
-        let hits = self
-            .timeline_store
-            .search(
-                &guild_id,
-                if all_channels || channel_id.is_empty() {
-                    None
-                } else {
-                    Some(&channel_id)
-                },
-                &query,
-                since,
-                limit,
-            )
-            .await?;
-        Ok(json!({"guildId": guild_id, "query": query, "count": hits.len(), "hits": hits}))
-    }
-
-    pub async fn list_conversations(&self, request: ListConversationsRequest) -> Result<Value> {
-        let mut guild_id = request.guild_id;
-        let mut channel_id = request.channel_id;
-        let all_channels = request.all_channels;
-        if guild_id.is_empty() && !channel_id.is_empty() {
-            let room = self.room_for_identifier(Some(&channel_id)).await?;
-            guild_id = room.guild_id;
-            channel_id = room.channel_id;
-        }
-        if guild_id.is_empty() {
-            return Err(discord_tool_error("guild is required"));
-        }
-        let since = resolve_time_reference(&non_empty(request.since, "-2d".to_string()), None);
-        let conversations = self
-            .timeline_store
-            .list_conversations(
-                &guild_id,
-                if all_channels || channel_id.is_empty() {
-                    None
-                } else {
-                    Some(&channel_id)
-                },
-                since,
-            )
-            .await?;
-        Ok(
-            json!({"guildId": guild_id, "count": conversations.len(), "conversations": conversations}),
+        (
+            Value::Object(Map::new()),
+            room.guild_id,
+            room.channel_id,
+            start,
+            end,
         )
-    }
+    };
+    let format = non_empty(request.format, "json".to_string());
+    let rendered = ctx
+        .store
+        .render_transcript(&guild_id, &channel_id, start, end, &window_id, &format)
+        .await?;
+    let events = if request.verbose {
+        rendered.events
+    } else {
+        rendered
+            .events
+            .into_iter()
+            .map(compact_timeline_event)
+            .collect::<Vec<_>>()
+    };
+    let content = if format == "json" {
+        String::new()
+    } else {
+        rendered.content
+    };
+    Ok(json!({
+        "window": if window.is_object() && window.as_object().is_some_and(|map| map.is_empty()) { rendered.window } else { window },
+        "content": content,
+        "events": events,
+    }))
+}
 
-    pub async fn participant_trace(&self, request: ParticipantTraceRequest) -> Result<Value> {
-        let guild_id = request.guild_id;
-        let user_id = request.user_id;
-        let start = resolve_time_reference(&request.from, None)
-            .ok_or_else(|| discord_tool_error("guild, user, and from are required"))?;
-        let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
-        if guild_id.is_empty() || user_id.is_empty() {
-            return Err(discord_tool_error("guild, user, and from are required"));
-        }
-        let trace = self
-            .timeline_store
-            .participant_trace(
-                &guild_id,
-                &user_id,
-                start,
-                end,
-                request.include_speech_snippets,
-            )
-            .await?;
-        Ok(json!({"guildId": guild_id, "userId": user_id, "count": trace.len(), "trace": trace}))
+pub async fn search_transcripts(ctx: &Ctx, request: SearchTranscriptsRequest) -> Result<Value> {
+    let mut guild_id = request.guild_id;
+    let mut channel_id = request.channel_id;
+    let all_channels = request.all_channels;
+    if guild_id.is_empty() && !channel_id.is_empty() {
+        let room =
+            crate::runtime::rooms::catalog::resolve_room_scope(ctx, "", Some(&channel_id)).await?;
+        guild_id = room.guild_id;
+        channel_id = room.channel_id;
     }
-
-    pub async fn context_resolve(&self, request: ContextResolveRequest) -> Result<Value> {
-        let guild_id = request.guild_id;
-        let channel_id = request.channel_id;
-        let reference = request.reference;
-        if guild_id.is_empty() || channel_id.is_empty() || reference.is_empty() {
-            return Err(discord_tool_error(
-                "guild, channel, and reference are required",
-            ));
-        }
-        let room = self
-            .resolve_room_scope(&guild_id, Some(&channel_id))
-            .await?;
-        let now = utc_now();
-        let lowered = reference.to_lowercase();
-        if lowered.contains("just said") || lowered.contains("last thing") {
-            let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-            let events = self
-                .timeline_store
-                .load_events(
-                    &room.guild_id,
-                    &room.channel_id,
-                    Some(now - chrono::Duration::minutes(5)),
-                    None,
-                    Some(&kinds),
-                    None,
-                    false,
-                )
+    if guild_id.is_empty() {
+        return Err(discord_tool_error("guild is required"));
+    }
+    if !channel_id.is_empty() && !all_channels {
+        let room =
+            crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
                 .await?;
-            if let Some(event) = events.last() {
-                return Ok(
-                    json!({"resolution": "recent_speaker_turn", "confidence": 0.78, "event": event, "reference": reference}),
-                );
-            }
-        }
-        let (start, confidence) = if lowered.contains("hour ago") {
-            (now - chrono::Duration::hours(1), 0.72)
-        } else {
-            (now - chrono::Duration::minutes(10), 0.35)
-        };
-        let window = self
-            .timeline_store
-            .create_window(
+        guild_id = room.guild_id;
+        channel_id = room.channel_id;
+    }
+    let query = request.query;
+    let since = resolve_time_reference(&non_empty(request.since, "-7d".to_string()), None);
+    let limit = request.limit;
+    let hits = ctx
+        .store
+        .search(
+            &guild_id,
+            if all_channels || channel_id.is_empty() {
+                None
+            } else {
+                Some(&channel_id)
+            },
+            &query,
+            since,
+            limit,
+        )
+        .await?;
+    Ok(json!({"guildId": guild_id, "query": query, "count": hits.len(), "hits": hits}))
+}
+
+pub async fn list_conversations(ctx: &Ctx, request: ListConversationsRequest) -> Result<Value> {
+    let mut guild_id = request.guild_id;
+    let mut channel_id = request.channel_id;
+    let all_channels = request.all_channels;
+    if guild_id.is_empty() && !channel_id.is_empty() {
+        let room =
+            crate::runtime::rooms::catalog::room_for_identifier(ctx, Some(&channel_id)).await?;
+        guild_id = room.guild_id;
+        channel_id = room.channel_id;
+    }
+    if guild_id.is_empty() {
+        return Err(discord_tool_error("guild is required"));
+    }
+    let since = resolve_time_reference(&non_empty(request.since, "-2d".to_string()), None);
+    let conversations = ctx
+        .store
+        .list_conversations(
+            &guild_id,
+            if all_channels || channel_id.is_empty() {
+                None
+            } else {
+                Some(&channel_id)
+            },
+            since,
+        )
+        .await?;
+    Ok(json!({"guildId": guild_id, "count": conversations.len(), "conversations": conversations}))
+}
+
+pub async fn participant_trace(ctx: &Ctx, request: ParticipantTraceRequest) -> Result<Value> {
+    let guild_id = request.guild_id;
+    let user_id = request.user_id;
+    let start = resolve_time_reference(&request.from, None)
+        .ok_or_else(|| discord_tool_error("guild, user, and from are required"))?;
+    let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
+    if guild_id.is_empty() || user_id.is_empty() {
+        return Err(discord_tool_error("guild, user, and from are required"));
+    }
+    let trace = ctx
+        .store
+        .participant_trace(
+            &guild_id,
+            &user_id,
+            start,
+            end,
+            request.include_speech_snippets,
+        )
+        .await?;
+    Ok(json!({"guildId": guild_id, "userId": user_id, "count": trace.len(), "trace": trace}))
+}
+
+pub async fn context_resolve(ctx: &Ctx, request: ContextResolveRequest) -> Result<Value> {
+    let guild_id = request.guild_id;
+    let channel_id = request.channel_id;
+    let reference = request.reference;
+    if guild_id.is_empty() || channel_id.is_empty() || reference.is_empty() {
+        return Err(discord_tool_error(
+            "guild, channel, and reference are required",
+        ));
+    }
+    let room =
+        crate::runtime::rooms::catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id))
+            .await?;
+    let now = utc_now();
+    let lowered = reference.to_lowercase();
+    if lowered.contains("just said") || lowered.contains("last thing") {
+        let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
+        let events = ctx
+            .store
+            .load_events(
                 &room.guild_id,
                 &room.channel_id,
-                start,
-                now,
-                "context_reference",
-                &reference,
-                "single_channel",
+                Some(now - chrono::Duration::minutes(5)),
+                None,
+                Some(&kinds),
+                None,
+                false,
             )
             .await?;
-        Ok(
-            json!({"resolution": "fallback_window", "confidence": confidence, "window": window, "reference": reference}),
-        )
-    }
-    pub async fn forget(&self, request: ForgetRequest) -> Result<Value> {
-        let window_id = request.window_id;
-        let (guild_id, channel_id, start, end) = if !window_id.is_empty() {
-            let window = self.timeline_store.get_window(&window_id).await?;
-            (
-                string_field(&window, "guild_id"),
-                string_field(&window, "voice_channel_id"),
-                parse_instant(&string_field(&window, "start_time"))
-                    .ok_or_else(|| discord_tool_error("invalid forget window"))?,
-                parse_instant(&string_field(&window, "end_time"))
-                    .ok_or_else(|| discord_tool_error("invalid forget window"))?,
-            )
-        } else {
-            let guild_id = request.guild_id;
-            let channel_id = request.channel_id;
-            let now = utc_now();
-            (
-                guild_id,
-                channel_id,
-                resolve_time_reference(&non_empty(request.since, "-10m".to_string()), Some(now))
-                    .ok_or_else(|| discord_tool_error("invalid forget start"))?,
-                resolve_time_reference(&request.to, Some(now)).unwrap_or(now),
-            )
-        };
-        if guild_id.is_empty() || channel_id.is_empty() {
-            return Err(discord_tool_error("invalid forget window"));
+        if let Some(event) = events.last() {
+            return Ok(
+                json!({"resolution": "recent_speaker_turn", "confidence": 0.78, "event": event, "reference": reference}),
+            );
         }
-        self.timeline_store
-            .apply_forget(
-                &guild_id,
-                &channel_id,
-                start,
-                end,
-                &request.requested_by_user_id,
-                request.unpublished_only,
-            )
-            .await
     }
+    let (start, confidence) = if lowered.contains("hour ago") {
+        (now - chrono::Duration::hours(1), 0.72)
+    } else {
+        (now - chrono::Duration::minutes(10), 0.35)
+    };
+    let window = ctx
+        .store
+        .create_window(
+            &room.guild_id,
+            &room.channel_id,
+            start,
+            now,
+            "context_reference",
+            &reference,
+            "single_channel",
+        )
+        .await?;
+    Ok(
+        json!({"resolution": "fallback_window", "confidence": confidence, "window": window, "reference": reference}),
+    )
+}
+pub async fn forget(ctx: &Ctx, request: ForgetRequest) -> Result<Value> {
+    let window_id = request.window_id;
+    let (guild_id, channel_id, start, end) = if !window_id.is_empty() {
+        let window = ctx.store.get_window(&window_id).await?;
+        (
+            string_field(&window, "guild_id"),
+            string_field(&window, "voice_channel_id"),
+            parse_instant(&string_field(&window, "start_time"))
+                .ok_or_else(|| discord_tool_error("invalid forget window"))?,
+            parse_instant(&string_field(&window, "end_time"))
+                .ok_or_else(|| discord_tool_error("invalid forget window"))?,
+        )
+    } else {
+        let guild_id = request.guild_id;
+        let channel_id = request.channel_id;
+        let now = utc_now();
+        (
+            guild_id,
+            channel_id,
+            resolve_time_reference(&non_empty(request.since, "-10m".to_string()), Some(now))
+                .ok_or_else(|| discord_tool_error("invalid forget start"))?,
+            resolve_time_reference(&request.to, Some(now)).unwrap_or(now),
+        )
+    };
+    if guild_id.is_empty() || channel_id.is_empty() {
+        return Err(discord_tool_error("invalid forget window"));
+    }
+    ctx.store
+        .apply_forget(
+            &guild_id,
+            &channel_id,
+            start,
+            end,
+            &request.requested_by_user_id,
+            request.unpublished_only,
+        )
+        .await
 }
 
 fn compact_timeline_events(

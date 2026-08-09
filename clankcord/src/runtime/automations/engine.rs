@@ -15,7 +15,7 @@ use crate::runtime::automations::{
 use crate::runtime::timeline::{event_start, isoformat_z, parse_instant, utc_now};
 use crate::runtime::util::first_value_string;
 use crate::runtime::{
-    CommandRequest, Job, JobKind, JobState, RoomConfig, RoomControl, Runtime, RuntimeScope,
+    CommandRequest, Ctx, Job, JobKind, JobState, RoomConfig, RoomControl, RuntimeScope,
     RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
     VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus,
 };
@@ -152,24 +152,24 @@ impl AutomationRunner {
         }
     }
 
-    async fn run(&self, runtime: &mut Runtime) -> Result<AutomationRun> {
-        runtime.prune_expired_room_controls().await?;
+    async fn run(&self, runtime: &Ctx) -> Result<AutomationRun> {
+        crate::runtime::rooms::control_state::prune_expired_room_controls(runtime).await?;
         let pool_config = runtime
-            .timeline_store
+            .store
             .runtime_pool_config()
             .await
             .context("loading runtime pool config for automation evaluation")?;
         let room_configs = runtime
-            .timeline_store
+            .store
             .list_room_configs()
             .await
             .context("loading room config for automation evaluation")?;
-        let room_controls = runtime.timeline_store.list_room_controls().await?;
+        let room_controls = runtime.store.list_room_controls().await?;
         let mut room_occupants = BTreeMap::new();
         let mut room_empty_since = BTreeMap::new();
         for room in &room_configs {
             let occupants = runtime
-                .timeline_store
+                .store
                 .room_occupants(&room.guild_id, &room.channel_id)
                 .await
                 .with_context(|| {
@@ -180,7 +180,7 @@ impl AutomationRunner {
                 })?;
             if occupants.is_empty() {
                 if let Some(empty_since) = runtime
-                    .timeline_store
+                    .store
                     .room_empty_since(&room.guild_id, &room.channel_id)
                     .await
                     .with_context(|| {
@@ -197,17 +197,17 @@ impl AutomationRunner {
         }
         let voice_state = AutomationVoiceState {
             bots: runtime
-                .timeline_store
+                .store
                 .list_voice_bot_states()
                 .await
                 .context("loading voice bot states for automation evaluation")?,
             sessions: runtime
-                .timeline_store
+                .store
                 .list_active_capture_sessions()
                 .await
                 .context("loading active capture sessions for automation evaluation")?,
             assignments: runtime
-                .timeline_store
+                .store
                 .list_active_voice_assignments()
                 .await
                 .context("loading active voice assignments for automation evaluation")?,
@@ -216,7 +216,7 @@ impl AutomationRunner {
         };
 
         let mut active_jobs = runtime
-            .timeline_store
+            .store
             .list_jobs_by_states(
                 None,
                 &[JobState::Queued, JobState::Running, JobState::Waiting],
@@ -240,13 +240,9 @@ impl AutomationRunner {
                     .into_jobs()
             };
             for job in jobs {
-                let job = runtime
-                    .timeline_store
-                    .create_job(job)
-                    .await
-                    .with_context(|| {
-                        format!("creating job emitted by automation {automation_name}")
-                    })?;
+                let job = runtime.store.create_job(job).await.with_context(|| {
+                    format!("creating job emitted by automation {automation_name}")
+                })?;
                 active_jobs.push(job.clone());
                 created.push(AutomationJob {
                     automation: automation_name.to_string(),
@@ -264,10 +260,8 @@ impl AutomationRunner {
     }
 }
 
-impl Runtime {
-    pub async fn run_automations(&mut self) -> Result<AutomationRun> {
-        AutomationRunner::runtime_default().run(self).await
-    }
+pub async fn run_automations(ctx: &Ctx) -> Result<AutomationRun> {
+    AutomationRunner::runtime_default().run(ctx).await
 }
 
 fn is_active_job_state(state: JobState) -> bool {
@@ -278,12 +272,12 @@ fn is_active_job_state(state: JobState) -> bool {
 }
 
 async fn run_stored_automations(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     active_jobs: &mut Vec<Job>,
 ) -> Result<Vec<AutomationJob>> {
     let mut created = Vec::new();
     let records = runtime
-        .timeline_store
+        .store
         .list_automations(None, None, Some(AutomationState::Active))
         .await?;
     for record in records {
@@ -292,10 +286,7 @@ async fn run_stored_automations(
             let mut expired = record;
             expired.state = AutomationState::Expired;
             expired.mark_evaluated();
-            runtime
-                .timeline_store
-                .save_automation_record(&expired)
-                .await?;
+            runtime.store.save_automation_record(&expired).await?;
             continue;
         }
         let outcome = evaluate_stored_automation(runtime, &record).await?;
@@ -310,15 +301,12 @@ async fn run_stored_automations(
             } else {
                 updated.mark_evaluated();
             }
-            runtime
-                .timeline_store
-                .save_automation_record(&updated)
-                .await?;
+            runtime.store.save_automation_record(&updated).await?;
         }
         for job in outcome.jobs {
-            let job = runtime.timeline_store.create_job(job).await?;
+            let job = runtime.store.create_job(job).await?;
             runtime
-                .timeline_store
+                .store
                 .append_event(
                     &job.guild_id,
                     &job.scope_id,
@@ -357,7 +345,7 @@ struct PendingRecheck {
 }
 
 async fn evaluate_stored_automation(
-    runtime: &Runtime,
+    runtime: &Ctx,
     record: &AutomationRecord,
 ) -> Result<StoredAutomationOutcome> {
     if record.state != AutomationState::Active {
@@ -443,14 +431,14 @@ async fn evaluate_stored_automation(
     })
 }
 
-async fn jobs_for_actions(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Job>> {
+async fn jobs_for_actions(runtime: &Ctx, record: &AutomationRecord) -> Result<Vec<Job>> {
     let mut jobs = Vec::new();
     for action in &record.spec.actions {
         match job_for_action(record, action) {
             Ok(job) => jobs.push(job),
             Err(error) => {
                 runtime
-                    .timeline_store
+                    .store
                     .append_event(
                         &record.spec.scope.guild_id,
                         &record.spec.scope.scope_id,
@@ -493,7 +481,7 @@ fn context_value_json(context: &Value, key: &str) -> Result<Option<String>> {
         .with_context(|| format!("serializing automation pending {key} context"))
 }
 
-async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Result<Vec<Value>> {
+async fn trigger_contexts(runtime: &Ctx, record: &AutomationRecord) -> Result<Vec<Value>> {
     match &record.spec.trigger {
         AutomationTrigger::Tick { interval_seconds } => {
             if !tick_due(record, *interval_seconds) {
@@ -529,14 +517,14 @@ async fn trigger_contexts(runtime: &Runtime, record: &AutomationRecord) -> Resul
 }
 
 async fn event_contexts(
-    runtime: &Runtime,
+    runtime: &Ctx,
     record: &AutomationRecord,
     event_kinds: &[String],
 ) -> Result<Vec<Value>> {
     let kinds = event_kinds.iter().cloned().collect::<BTreeSet<_>>();
     let start = parse_instant(&record.cursor_at()).or_else(|| parse_instant(&record.created_at));
     let events = runtime
-        .timeline_store
+        .store
         .load_events(
             &record.spec.scope.guild_id,
             &record.spec.scope.scope_id,
@@ -563,14 +551,14 @@ async fn event_contexts(
 }
 
 async fn job_contexts(
-    runtime: &Runtime,
+    runtime: &Ctx,
     record: &AutomationRecord,
     job_kinds: &[JobKind],
     states: &[JobState],
 ) -> Result<Vec<Value>> {
     let cursor = parse_instant(&record.cursor_at());
     let jobs = runtime
-        .timeline_store
+        .store
         .list_jobs_for_trigger(
             &record.spec.scope.guild_id,
             &record.spec.scope.scope_id,
@@ -599,24 +587,25 @@ async fn job_contexts(
 }
 
 async fn base_context(
-    runtime: &Runtime,
+    runtime: &Ctx,
     record: &AutomationRecord,
     event: Option<Value>,
     job: Option<Value>,
 ) -> Result<Value> {
-    let room = runtime
-        .room_for_channel_ids(
-            &record.spec.scope.guild_id,
-            &record.spec.scope.scope_id,
-            None,
-        )
-        .await?;
+    let room = crate::runtime::rooms::catalog::room_for_channel_ids(
+        runtime,
+        &record.spec.scope.guild_id,
+        &record.spec.scope.scope_id,
+        None,
+    )
+    .await?;
     let occupants = runtime
-        .timeline_store
+        .store
         .room_occupants(&record.spec.scope.guild_id, &record.spec.scope.scope_id)
         .await?;
     let participants = room_participants(&occupants);
-    let mut room_status = runtime.status_for_room(&room).await?;
+    let mut room_status =
+        crate::runtime::timeline::views::status::status_for_room(runtime, &room).await?;
     if let Value::Object(object) = &mut room_status {
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));

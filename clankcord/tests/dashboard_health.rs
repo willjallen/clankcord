@@ -5,8 +5,8 @@ mod common;
 
 use clankcord::runtime::timeline::{SpeechEventInput, isoformat_z};
 use clankcord::runtime::{
-    CommandRequest, DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest,
-    DashboardTranscriptRequest, Job, JobState, Runtime, RuntimeScope, VoiceBotStatus,
+    CommandRequest, Ctx, DashboardFilter, DashboardOverviewRequest, DashboardTimelineRequest,
+    DashboardTranscriptRequest, Job, JobState, RuntimeScope, VoiceBotStatus,
     VoiceCaptureSessionStatus,
 };
 
@@ -17,9 +17,14 @@ async fn dashboard_health_reports_postgres_diagnostics() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     let database = &overview["database"];
 
     assert_eq!(database["ok"], json!(true));
@@ -87,9 +92,12 @@ async fn dashboard_health_reasons_are_terse_measured_operator_state() {
         .record_voice_adapter_snapshot(0, 0, 0, 0)
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let payload = runtime.dashboard_summary_payload().await.unwrap();
+    let payload =
+        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+            .await
+            .unwrap();
     let components = payload["health"]["components"].as_array().unwrap();
     let scheduler = components
         .iter()
@@ -152,7 +160,7 @@ async fn dashboard_health_includes_http_request_snapshot() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
     let requests = json!({
         "totalStarted": 9,
         "completed": 8,
@@ -160,10 +168,12 @@ async fn dashboard_health_includes_http_request_snapshot() {
         "routes": [{"route": "GET /dashboard", "totalStarted": 3}]
     });
 
-    let overview = runtime
-        .dashboard_health_payload(requests.clone())
-        .await
-        .unwrap();
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        requests.clone(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(overview["requests"], requests);
 }
@@ -194,9 +204,12 @@ async fn dashboard_summary_uses_active_projection_aggregates_and_bounded_failure
     .execute(&store.pool)
     .await
     .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let summary = runtime.dashboard_summary_payload().await.unwrap();
+    let summary =
+        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+            .await
+            .unwrap();
 
     let keys = summary
         .as_object()
@@ -253,17 +266,19 @@ async fn dashboard_transcript_channel_filter_applies_before_limit() {
         )
         .await;
     }
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime
-        .dashboard_transcript(DashboardTranscriptRequest {
+    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_transcript(
+        &runtime,
+        DashboardTranscriptRequest {
             limit: 10,
             channel: "code".to_string(),
             search: "needle".to_string(),
             ..DashboardTranscriptRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let events = overview["transcript"]["events"].as_array().unwrap();
 
     assert_eq!(events.len(), 1);
@@ -295,10 +310,11 @@ async fn dashboard_timeline_limit_returns_newest_events_across_scopes() {
         )
         .await;
     }
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
                 "event".to_string()
             ])),
@@ -307,9 +323,10 @@ async fn dashboard_timeline_limit_returns_newest_events_across_scopes() {
             metadata: "none".to_string(),
             limit: 10,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let events = overview["records"]
         .as_array()
         .unwrap()
@@ -357,10 +374,11 @@ async fn dashboard_timeline_search_applies_before_limit() {
         )
         .await;
     }
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
                 "event".to_string()
             ])),
@@ -371,9 +389,10 @@ async fn dashboard_timeline_search_applies_before_limit() {
             metadata: "none".to_string(),
             limit: 10,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let events = overview["records"]
         .as_array()
         .unwrap()
@@ -413,16 +432,19 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
         ))
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime
-        .dashboard_overview(DashboardOverviewRequest::default())
-        .await
-        .unwrap();
+    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+        &runtime,
+        DashboardOverviewRequest::default(),
+    )
+    .await
+    .unwrap();
     let summary = &overview["jobs"]["summary"];
     let scopes = summary["byScope"].as_array().unwrap();
-    let timeline = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let timeline = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
                 "event".to_string()
             ])),
@@ -430,9 +452,10 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
             job_kinds: DashboardFilter::None,
             metadata: "none".to_string(),
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let events = timeline["records"]
         .as_array()
         .unwrap()
@@ -529,8 +552,13 @@ async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
     .await
     .unwrap();
 
-    let runtime = Runtime::from_store(store).unwrap();
-    let overview = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let runtime = Ctx::new(store);
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     let latency_rows = overview["operations"]["latencies"]["byKind"]
         .as_array()
         .unwrap();
@@ -597,8 +625,13 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
             .unwrap();
     assert_eq!(remaining, 0);
 
-    let runtime = Runtime::from_store(store.clone()).unwrap();
-    let overview = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let runtime = Ctx::new(store.clone());
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     let windows = overview["operations"]["windows"].as_array().unwrap();
     let five_minutes = windows.iter().find(|row| row["label"] == "5m").unwrap();
     let fifteen_minutes = windows.iter().find(|row| row["label"] == "15m").unwrap();
@@ -614,16 +647,18 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
     let recent_failure = &overview["operations"]["failures"]["recent"][0];
     assert_eq!(recent_failure["jobId"], json!(failed.id));
     assert_eq!(recent_failure["category"], json!("background"));
-    assert_eq!(recent_failure["scopeLabel"], json!("Runtime"));
+    assert_eq!(recent_failure["scopeLabel"], json!("Ctx"));
     assert_eq!(
         recent_failure["reason"],
         json!("maintenance snapshot provider timed out")
     );
 
-    let overview_page = runtime
-        .dashboard_overview(DashboardOverviewRequest::default())
-        .await
-        .unwrap();
+    let overview_page = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+        &runtime,
+        DashboardOverviewRequest::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(overview_page["operations"]["failures"]["count"], json!(1));
     assert_eq!(
         overview_page["operations"]["failures"]["recent"][0]["jobId"],
@@ -631,7 +666,7 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
     );
     assert_eq!(
         overview_page["operations"]["failures"]["recent"][0]["scopeLabel"],
-        json!("Runtime")
+        json!("Ctx")
     );
 }
 
@@ -661,9 +696,14 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
     .execute(&store.pool)
     .await
     .unwrap();
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    let overview = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     assert_eq!(overview["health"]["failures"]["count"], json!(1));
     let recent = overview["health"]["failures"]["recent"].as_array().unwrap();
     assert_eq!(recent.len(), 1);
@@ -677,7 +717,12 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
         .execute(&store.pool)
         .await
         .unwrap();
-    let cleared = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let cleared = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     assert_eq!(cleared["health"]["failures"]["count"], json!(0));
     assert!(
         cleared["health"]["failures"]["recent"]
@@ -837,10 +882,15 @@ async fn stale_voice_rows_are_separated_from_current_dashboard_status() {
         .execute(&store.pool)
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let rooms = runtime.dashboard_rooms_payload().await.unwrap();
-    let overview = runtime.dashboard_summary_payload().await.unwrap();
+    let rooms = clankcord::runtime::timeline::views::operations::dashboard_rooms_payload(&runtime)
+        .await
+        .unwrap();
+    let overview =
+        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+            .await
+            .unwrap();
 
     assert!(rooms["status"]["bots"].as_array().unwrap().is_empty());
     assert!(rooms["status"]["sessions"].as_array().unwrap().is_empty());

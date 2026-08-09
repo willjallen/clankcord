@@ -1,7 +1,7 @@
-mod engine;
+pub mod engine;
 mod manual;
 mod room_agents;
-mod spec;
+pub(crate) mod spec;
 
 pub(crate) use engine::{Automation, AutomationContext, AutomationOutput, AutomationVoiceState};
 pub use engine::{AutomationJob, AutomationRun};

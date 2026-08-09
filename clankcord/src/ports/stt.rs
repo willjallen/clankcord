@@ -37,7 +37,6 @@ pub struct TranscriptionSpan {
     pub speaker_id: String,
 }
 
-
 pub trait Transcriber: Send + Sync {
     fn transcribe_file(
         &self,

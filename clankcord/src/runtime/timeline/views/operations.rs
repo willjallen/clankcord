@@ -19,7 +19,7 @@ use crate::runtime::timeline::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now,
 };
 use crate::runtime::util::{first_non_empty, non_empty, preview, string_field};
-use crate::runtime::{AgentRuntime, Job, JobKind, JobState, Runtime};
+use crate::runtime::{AgentRuntime, Ctx, Job, JobKind, JobState};
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
@@ -30,245 +30,242 @@ const FAILURE_WINDOW_SECONDS: i64 = 60 * 60;
 const FAILURE_RECENT_LIMIT: i64 = 25;
 const OPERATIONAL_COVERAGE_START_KEY: &str = "operational_job_outcomes_coverage_start_ms";
 
-impl Runtime {
-    pub async fn operational_health_payload(&self) -> Result<Value> {
-        Ok(self
-            .dashboard_summary_payload()
-            .await?
-            .get("health")
-            .cloned()
-            .expect("dashboard summary always contains health"))
-    }
+pub async fn operational_health_payload(ctx: &Ctx) -> Result<Value> {
+    Ok(dashboard_summary_payload(ctx)
+        .await?
+        .get("health")
+        .cloned()
+        .expect("dashboard summary always contains health"))
+}
 
-    pub async fn dashboard_summary_payload(&self) -> Result<Value> {
-        let now = utc_now();
-        let database = database_health_probe(self).await;
-        if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-            return Ok(json!({
-                "generatedAt": isoformat_z(Some(now)),
-                "health": runtime_health_from_facts(
-                    &database,
-                    &RuntimeHealthFacts::default(),
-                    &unavailable_failure_summary(now),
-                    &VoiceObservationSummary::default(),
-                    &json!({"status": "unknown", "available": false, "reason": "database_unavailable"}),
-                    0,
-                    0,
-                    now,
-                ),
-                "jobs": {"summary": active_job_summary(&[])},
-                "operations": {"backlog": active_job_backlog(&[], now)},
-            }));
-        }
-
-        let (active_jobs, mut health_facts, failures, voice, inventory) = tokio::try_join!(
-            active_job_aggregates(self, now),
-            lean_terminal_health_facts(self, now),
-            lean_failure_summary(self, now),
-            lean_voice_observation_summary(self, now),
-            dashboard_inventory_counts(self),
-        )?;
-        apply_active_health_facts(&mut health_facts, &active_jobs, now);
-        let (configured_room_count, automation_count) = inventory;
-        let wake_provider = crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(
-            &self.timeline_store,
-        )
-        .await?;
-        Ok(json!({
+pub async fn dashboard_summary_payload(ctx: &Ctx) -> Result<Value> {
+    let now = utc_now();
+    let database = database_health_probe(ctx).await;
+    if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "health": runtime_health_from_facts(
                 &database,
-                &health_facts,
-                &failures,
-                &voice,
-                &wake_provider,
-                configured_room_count,
-                automation_count,
-                now,
-            ),
-            "jobs": {"summary": active_job_summary(&active_jobs)},
-            "operations": {"backlog": active_job_backlog(&active_jobs, now)},
-        }))
-    }
-
-    async fn dashboard_health_bundle(&self) -> Result<(Value, Value)> {
-        let now = utc_now();
-        let database = database_health_probe(self).await;
-        if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
-            let failures = unavailable_failure_summary(now);
-            let health = runtime_health(
-                &database,
-                &[],
-                &failures,
+                &RuntimeHealthFacts::default(),
+                &unavailable_failure_summary(now),
                 &VoiceObservationSummary::default(),
                 &json!({"status": "unknown", "available": false, "reason": "database_unavailable"}),
                 0,
                 0,
                 now,
-            );
-            return Ok((
-                health,
-                json!({
-                    "coverage": {"complete": false},
-                    "backlog": {},
-                    "windows": [],
-                    "latencies": {},
-                    "failures": failures,
-                }),
-            ));
-        }
+            ),
+            "jobs": {"summary": active_job_summary(&[])},
+            "operations": {"backlog": active_job_backlog(&[], now)},
+        }));
+    }
 
-        let mut status = self.status_payload(None).await?;
-        let voice = apply_voice_observation_freshness(self, &mut status, now).await?;
-        let operations = operational_diagnostics(self, now).await?;
-        let configured_room_count = self.timeline_store.list_room_configs().await?.len();
-        let automation_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM automations")
-            .fetch_one(&self.timeline_store.pool)
+    let (active_jobs, mut health_facts, failures, voice, inventory) = tokio::try_join!(
+        active_job_aggregates(ctx, now),
+        lean_terminal_health_facts(ctx, now),
+        lean_failure_summary(ctx, now),
+        lean_voice_observation_summary(ctx, now),
+        dashboard_inventory_counts(ctx),
+    )?;
+    apply_active_health_facts(&mut health_facts, &active_jobs, now);
+    let (configured_room_count, automation_count) = inventory;
+    let wake_provider =
+        crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(&ctx.store)
             .await?;
-        let wake_provider = crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(
-            &self.timeline_store,
-        )
-        .await?;
-        let health = runtime_health(
+    Ok(json!({
+        "generatedAt": isoformat_z(Some(now)),
+        "health": runtime_health_from_facts(
             &database,
-            &operations.job_rows,
-            &operations.failure_summary,
+            &health_facts,
+            &failures,
             &voice,
             &wake_provider,
             configured_room_count,
-            automation_count as usize,
+            automation_count,
+            now,
+        ),
+        "jobs": {"summary": active_job_summary(&active_jobs)},
+        "operations": {"backlog": active_job_backlog(&active_jobs, now)},
+    }))
+}
+
+async fn dashboard_health_bundle(ctx: &Ctx) -> Result<(Value, Value)> {
+    let now = utc_now();
+    let database = database_health_probe(ctx).await;
+    if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        let failures = unavailable_failure_summary(now);
+        let health = runtime_health(
+            &database,
+            &[],
+            &failures,
+            &VoiceObservationSummary::default(),
+            &json!({"status": "unknown", "available": false, "reason": "database_unavailable"}),
+            0,
+            0,
             now,
         );
-        Ok((health, operations.payload))
+        return Ok((
+            health,
+            json!({
+                "coverage": {"complete": false},
+                "backlog": {},
+                "windows": [],
+                "latencies": {},
+                "failures": failures,
+            }),
+        ));
     }
 
-    pub async fn dashboard_health_payload(&self, http_requests: Value) -> Result<Value> {
-        let now = utc_now();
-        let (health, operations) = self.dashboard_health_bundle().await?;
-        let database = database_diagnostics(self).await;
-        let active_jobs = self
-            .timeline_store
-            .list_jobs_by_states_with_visibility(
-                None,
-                &[
-                    JobState::Queued,
-                    JobState::Running,
-                    JobState::Waiting,
-                    JobState::CancelRequested,
-                    JobState::ConfirmationPending,
-                ],
-                crate::runtime::timeline::JobVisibility::IncludeEphemeral,
-            )
+    let mut status = crate::runtime::timeline::views::status::status_payload(ctx, None).await?;
+    let voice = apply_voice_observation_freshness(ctx, &mut status, now).await?;
+    let operations = operational_diagnostics(ctx, now).await?;
+    let configured_room_count = ctx.store.list_room_configs().await?.len();
+    let automation_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM automations")
+        .fetch_one(&ctx.store.pool)
+        .await?;
+    let wake_provider =
+        crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(&ctx.store)
             .await?;
-        Ok(json!({
-            "generatedAt": isoformat_z(Some(now)),
-            "health": health,
-            "database": database,
-            "requests": http_requests,
-            "process": {"load": process_load_payload()},
-            "load": load_payload(&active_jobs, now),
-            "operations": operations,
-        }))
-    }
+    let health = runtime_health(
+        &database,
+        &operations.job_rows,
+        &operations.failure_summary,
+        &voice,
+        &wake_provider,
+        configured_room_count,
+        automation_count as usize,
+        now,
+    );
+    Ok((health, operations.payload))
+}
 
-    pub async fn dashboard_rooms_payload(&self) -> Result<Value> {
-        let now = utc_now();
-        let mut status = self.status_payload(None).await?;
-        if let Value::Object(object) = &mut status {
-            object.insert(
-                "liveOccupancy".to_string(),
-                self.timeline_store.voice_occupancy_snapshot().await?,
-            );
-        }
-        apply_voice_observation_freshness(self, &mut status, now).await?;
-        Ok(json!({
-            "generatedAt": isoformat_z(Some(now)),
-            "status": status,
-        }))
-    }
-
-    pub async fn recent_transcript_events(
-        &self,
-        since: Option<DateTime<Utc>>,
-        limit: usize,
-        channel: &str,
-        query: &str,
-    ) -> Result<Vec<Value>> {
-        let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
-        let channel = channel.trim();
-        self.recent_events_by_kind_filtered(
-            since,
+pub async fn dashboard_health_payload(ctx: &Ctx, http_requests: Value) -> Result<Value> {
+    let now = utc_now();
+    let (health, operations) = dashboard_health_bundle(ctx).await?;
+    let database = database_diagnostics(ctx).await;
+    let active_jobs = ctx
+        .store
+        .list_jobs_by_states_with_visibility(
             None,
-            limit,
-            Some(&kinds),
-            query,
-            (!channel.is_empty()).then_some(channel),
+            &[
+                JobState::Queued,
+                JobState::Running,
+                JobState::Waiting,
+                JobState::CancelRequested,
+                JobState::ConfirmationPending,
+            ],
+            crate::runtime::timeline::JobVisibility::IncludeEphemeral,
         )
-        .await
+        .await?;
+    Ok(json!({
+        "generatedAt": isoformat_z(Some(now)),
+        "health": health,
+        "database": database,
+        "requests": http_requests,
+        "process": {"load": process_load_payload()},
+        "load": load_payload(&active_jobs, now),
+        "operations": operations,
+    }))
+}
+
+pub async fn dashboard_rooms_payload(ctx: &Ctx) -> Result<Value> {
+    let now = utc_now();
+    let mut status = crate::runtime::timeline::views::status::status_payload(ctx, None).await?;
+    if let Value::Object(object) = &mut status {
+        object.insert(
+            "liveOccupancy".to_string(),
+            ctx.store.voice_occupancy_snapshot().await?,
+        );
+    }
+    apply_voice_observation_freshness(ctx, &mut status, now).await?;
+    Ok(json!({
+        "generatedAt": isoformat_z(Some(now)),
+        "status": status,
+    }))
+}
+
+pub async fn recent_transcript_events(
+    ctx: &Ctx,
+    since: Option<DateTime<Utc>>,
+    limit: usize,
+    channel: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    let kinds = BTreeSet::from(["speech_segment".to_string(), "transcript".to_string()]);
+    let channel = channel.trim();
+    recent_events_by_kind_filtered(
+        ctx,
+        since,
+        None,
+        limit,
+        Some(&kinds),
+        query,
+        (!channel.is_empty()).then_some(channel),
+    )
+    .await
+}
+
+async fn recent_events_by_kind_filtered(
+    ctx: &Ctx,
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
+    limit: usize,
+    kinds: Option<&BTreeSet<String>>,
+    query: &str,
+    channel: Option<&str>,
+) -> Result<Vec<Value>> {
+    if kinds.is_some_and(BTreeSet::is_empty) {
+        return Ok(Vec::new());
     }
 
-    async fn recent_events_by_kind_filtered(
-        &self,
-        start: Option<DateTime<Utc>>,
-        end: Option<DateTime<Utc>>,
-        limit: usize,
-        kinds: Option<&BTreeSet<String>>,
-        query: &str,
-        channel: Option<&str>,
-    ) -> Result<Vec<Value>> {
-        if kinds.is_some_and(BTreeSet::is_empty) {
-            return Ok(Vec::new());
-        }
-
-        let mut statement = QueryBuilder::<Postgres>::new(
-            r#"
+    let mut statement = QueryBuilder::<Postgres>::new(
+        r#"
             WITH selected_events AS MATERIALIZED (
             SELECT e.sequence, e.started_at_ms, e.event_id
             FROM timeline_events e
             "#,
-        );
-        if !query.trim().is_empty() {
-            statement.push(
-                r#"
+    );
+    if !query.trim().is_empty() {
+        statement.push(
+            r#"
             LEFT JOIN voice_rooms r
               ON e.scope_kind = 'voice_channel'
              AND r.guild_id = e.guild_id
              AND r.voice_channel_id = e.scope_id
                 "#,
-            );
-        }
-        statement.push(
-            r#"
+        );
+    }
+    statement.push(
+        r#"
             WHERE e.forgotten = FALSE
             "#,
-        );
-        if let Some(start) = start {
-            statement
-                .push(" AND e.ended_at_ms > ")
-                .push_bind(instant_ms_dt(start));
-        }
-        if let Some(end) = end {
-            statement
-                .push(" AND e.started_at_ms < ")
-                .push_bind(instant_ms_dt(end));
-        }
-        if let Some(kinds) = kinds {
-            statement.push(" AND e.event_kind IN (");
-            let mut separated = statement.separated(", ");
-            for kind in kinds {
-                separated.push_bind(kind);
-            }
-            separated.push_unseparated(")");
-        }
-        if let Some(channel) = channel {
-            statement.push(" AND e.scope_id = ").push_bind(channel);
-        }
-        push_transcript_event_search(&mut statement, query);
+    );
+    if let Some(start) = start {
         statement
-            .push(" ORDER BY e.started_at_ms DESC, e.sequence DESC, e.event_id DESC LIMIT ")
-            .push_bind(limit as i64)
-            .push(
-                r#"
+            .push(" AND e.ended_at_ms > ")
+            .push_bind(instant_ms_dt(start));
+    }
+    if let Some(end) = end {
+        statement
+            .push(" AND e.started_at_ms < ")
+            .push_bind(instant_ms_dt(end));
+    }
+    if let Some(kinds) = kinds {
+        statement.push(" AND e.event_kind IN (");
+        let mut separated = statement.separated(", ");
+        for kind in kinds {
+            separated.push_bind(kind);
+        }
+        separated.push_unseparated(")");
+    }
+    if let Some(channel) = channel {
+        statement.push(" AND e.scope_id = ").push_bind(channel);
+    }
+    push_transcript_event_search(&mut statement, query);
+    statement
+        .push(" ORDER BY e.started_at_ms DESC, e.sequence DESC, e.event_id DESC LIMIT ")
+        .push_bind(limit as i64)
+        .push(
+            r#"
             )
             SELECT e.*,
                    r.guild_slug AS room_guild_slug,
@@ -282,25 +279,21 @@ impl Runtime {
              AND r.voice_channel_id = e.scope_id
             ORDER BY selected.started_at_ms DESC, selected.sequence DESC, selected.event_id DESC
                 "#,
-            );
+        );
 
-        let rows = statement
-            .build()
-            .fetch_all(&self.timeline_store.pool)
-            .await?;
-        rows.iter()
-            .map(timeline_event_payload)
-            .map(|event| event.map(compact_dashboard_event))
-            .collect()
-    }
+    let rows = statement.build().fetch_all(&ctx.store.pool).await?;
+    rows.iter()
+        .map(timeline_event_payload)
+        .map(|event| event.map(compact_dashboard_event))
+        .collect()
+}
 
-    pub async fn dashboard_agent_job(&self, job_id: &str) -> Result<Value> {
-        let job = self.timeline_store.get_job(job_id).await?;
-        if job.kind != JobKind::AgentTask {
-            anyhow::bail!("job {job_id} is not an agent task");
-        }
-        agent_job_payload(self, &job).await
+pub async fn dashboard_agent_job(ctx: &Ctx, job_id: &str) -> Result<Value> {
+    let job = ctx.store.get_job(job_id).await?;
+    if job.kind != JobKind::AgentTask {
+        anyhow::bail!("job {job_id} is not an agent task");
     }
+    agent_job_payload(ctx, &job).await
 }
 
 fn push_transcript_event_search(statement: &mut QueryBuilder<'_, Postgres>, raw_query: &str) {
@@ -747,7 +740,7 @@ impl BacklogKindSummary {
 }
 
 async fn apply_voice_observation_freshness(
-    runtime: &Runtime,
+    runtime: &Ctx,
     status: &mut Value,
     now: DateTime<Utc>,
 ) -> Result<VoiceObservationSummary> {
@@ -758,13 +751,13 @@ async fn apply_voice_observation_freshness(
         "SELECT updated_at_ms FROM runtime_status WHERE status_key = $1",
     )
     .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
-    .fetch_optional(&runtime.timeline_store.pool)
+    .fetch_optional(&runtime.store.pool)
     .await?;
     let snapshot_fresh =
         snapshot_at_ms.is_some_and(|observed_at_ms| now_ms - observed_at_ms <= fresh_for_ms);
 
     let bot_rows = sqlx::query("SELECT bot_id, updated_at_ms FROM bot_states ORDER BY bot_id")
-        .fetch_all(&runtime.timeline_store.pool)
+        .fetch_all(&runtime.store.pool)
         .await?;
     let bot_observed_at = bot_rows
         .into_iter()
@@ -777,7 +770,7 @@ async fn apply_voice_observation_freshness(
         .collect::<Result<BTreeMap<_, _>>>()?;
     let session_rows =
         sqlx::query("SELECT session_id, updated_at_ms FROM capture_sessions ORDER BY session_id")
-            .fetch_all(&runtime.timeline_store.pool)
+            .fetch_all(&runtime.store.pool)
             .await?;
     let session_observed_at = session_rows
         .into_iter()
@@ -1394,11 +1387,8 @@ fn unavailable_failure_summary(now: DateTime<Utc>) -> Value {
     })
 }
 
-async fn database_health_probe(runtime: &Runtime) -> Value {
-    match sqlx::query("SELECT 1")
-        .execute(&runtime.timeline_store.pool)
-        .await
-    {
+async fn database_health_probe(runtime: &Ctx) -> Value {
+    match sqlx::query("SELECT 1").execute(&runtime.store.pool).await {
         Ok(_) => json!({
             "ok": true,
             "errors": [],
@@ -1414,7 +1404,7 @@ async fn database_health_probe(runtime: &Runtime) -> Value {
 }
 
 async fn active_job_aggregates(
-    runtime: &Runtime,
+    runtime: &Ctx,
     now: DateTime<Utc>,
 ) -> Result<Vec<ActiveJobAggregate>> {
     let rows = sqlx::query(
@@ -1440,7 +1430,7 @@ async fn active_job_aggregates(
         "#,
     )
     .bind(instant_ms_dt(now))
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
     rows.into_iter()
         .map(|row| {
@@ -1642,7 +1632,7 @@ fn apply_active_health_facts(
 }
 
 async fn lean_terminal_health_facts(
-    runtime: &Runtime,
+    runtime: &Ctx,
     now: DateTime<Utc>,
 ) -> Result<RuntimeHealthFacts> {
     let since_ms = instant_ms_dt(now) - FAILURE_WINDOW_SECONDS * 1000;
@@ -1656,7 +1646,7 @@ async fn lean_terminal_health_facts(
             LIMIT 1
             "#,
         )
-        .fetch_optional(&runtime.timeline_store.pool),
+        .fetch_optional(&runtime.store.pool),
         sqlx::query(
             r#"
             SELECT kind, state, failed, COUNT(*)::BIGINT AS outcome_count,
@@ -1671,7 +1661,7 @@ async fn lean_terminal_health_facts(
             "#,
         )
         .bind(since_ms)
-        .fetch_all(&runtime.timeline_store.pool),
+        .fetch_all(&runtime.store.pool),
     )?;
     let mut facts = RuntimeHealthFacts::default();
     if let Some(row) = latest_maintenance {
@@ -1703,7 +1693,7 @@ async fn lean_terminal_health_facts(
     Ok(facts)
 }
 
-async fn lean_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+async fn lean_failure_summary(runtime: &Ctx, now: DateTime<Utc>) -> Result<Value> {
     let now_ms = instant_ms_dt(now);
     let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
     let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
@@ -1711,7 +1701,7 @@ async fn lean_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<V
         "SELECT COUNT(*) FROM operational_job_outcomes WHERE failed = TRUE AND observed_at_ms >= $1",
     )
     .bind(since_ms)
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await?;
     Ok(json!({
         "window": "1h",
@@ -1723,7 +1713,7 @@ async fn lean_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<V
     }))
 }
 
-async fn detailed_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Result<Value> {
+async fn detailed_failure_summary(runtime: &Ctx, now: DateTime<Utc>) -> Result<Value> {
     let now_ms = instant_ms_dt(now);
     let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
     let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
@@ -1731,7 +1721,7 @@ async fn detailed_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Resu
         "SELECT COUNT(*) FROM operational_job_outcomes WHERE failed = TRUE AND observed_at_ms >= $1",
     )
     .bind(since_ms)
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await?;
     let recent = recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?;
     Ok(json!({
@@ -1745,7 +1735,7 @@ async fn detailed_failure_summary(runtime: &Runtime, now: DateTime<Utc>) -> Resu
 }
 
 async fn lean_voice_observation_summary(
-    runtime: &Runtime,
+    runtime: &Ctx,
     now: DateTime<Utc>,
 ) -> Result<VoiceObservationSummary> {
     let now_ms = instant_ms_dt(now);
@@ -1771,7 +1761,7 @@ async fn lean_voice_observation_summary(
     )
     .bind(cutoff_ms)
     .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await?;
     let snapshot_at_ms = row.try_get::<Option<i64>, _>("snapshot_at_ms")?;
     let snapshot_fresh = snapshot_at_ms.is_some_and(|at| at >= cutoff_ms);
@@ -1803,14 +1793,14 @@ async fn lean_voice_observation_summary(
     })
 }
 
-async fn dashboard_inventory_counts(runtime: &Runtime) -> Result<(usize, usize)> {
+async fn dashboard_inventory_counts(runtime: &Ctx) -> Result<(usize, usize)> {
     let row = sqlx::query(
         r#"
         SELECT (SELECT COUNT(*)::BIGINT FROM voice_rooms) AS room_count,
                (SELECT COUNT(*)::BIGINT FROM automations) AS automation_count
         "#,
     )
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await?;
     Ok((
         row.try_get::<i64, _>("room_count")? as usize,
@@ -1818,15 +1808,12 @@ async fn dashboard_inventory_counts(runtime: &Runtime) -> Result<(usize, usize)>
     ))
 }
 
-pub(super) async fn database_diagnostics(runtime: &Runtime) -> Value {
-    if let Err(error) = sqlx::query("SELECT 1")
-        .execute(&runtime.timeline_store.pool)
-        .await
-    {
+pub(super) async fn database_diagnostics(runtime: &Ctx) -> Value {
+    if let Err(error) = sqlx::query("SELECT 1").execute(&runtime.store.pool).await {
         return json!({
             "ok": false,
-            "url": runtime.timeline_store.database_url,
-            "root": runtime.timeline_store.root.display().to_string(),
+            "url": runtime.store.database_url,
+            "root": runtime.store.root.display().to_string(),
             "error": error.to_string(),
             "pool": postgres_pool_payload(runtime),
             "tables": [],
@@ -1835,7 +1822,7 @@ pub(super) async fn database_diagnostics(runtime: &Runtime) -> Value {
     let row = sqlx::query(
         "SELECT current_database() AS database_name, current_user AS user_name, version() AS version",
     )
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await
     .ok();
     let mut errors = Vec::new();
@@ -1877,8 +1864,8 @@ pub(super) async fn database_diagnostics(runtime: &Runtime) -> Value {
     let table_rows = table_counts(runtime).await;
     json!({
         "ok": true,
-        "url": runtime.timeline_store.database_url,
-        "root": runtime.timeline_store.root.display().to_string(),
+        "url": runtime.store.database_url,
+        "root": runtime.store.root.display().to_string(),
         "database": row.as_ref().and_then(|row| row.try_get::<String, _>("database_name").ok()).unwrap_or_default(),
         "user": row.as_ref().and_then(|row| row.try_get::<String, _>("user_name").ok()).unwrap_or_default(),
         "version": row.as_ref().and_then(|row| row.try_get::<String, _>("version").ok()).unwrap_or_default(),
@@ -1893,19 +1880,19 @@ pub(super) async fn database_diagnostics(runtime: &Runtime) -> Value {
     })
 }
 
-fn postgres_pool_payload(runtime: &Runtime) -> Value {
-    let open_connections = u64::from(runtime.timeline_store.pool.size());
-    let idle_connections = runtime.timeline_store.pool.num_idle() as u64;
+fn postgres_pool_payload(runtime: &Ctx) -> Value {
+    let open_connections = u64::from(runtime.store.pool.size());
+    let idle_connections = runtime.store.pool.num_idle() as u64;
     json!({
-        "configuredMaxConnections": runtime.timeline_store.pool.options().get_max_connections(),
+        "configuredMaxConnections": runtime.store.pool.options().get_max_connections(),
         "openConnections": open_connections,
         "idleConnections": idle_connections,
         "inUseConnections": open_connections - idle_connections,
-        "closed": runtime.timeline_store.pool.is_closed(),
+        "closed": runtime.store.pool.is_closed(),
     })
 }
 
-async fn postgres_database_statistics(runtime: &Runtime) -> Result<Value> {
+async fn postgres_database_statistics(runtime: &Ctx) -> Result<Value> {
     let row = sqlx::query(
         r#"
         SELECT
@@ -1931,7 +1918,7 @@ async fn postgres_database_statistics(runtime: &Runtime) -> Result<Value> {
         WHERE datname = current_database()
         "#,
     )
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await?;
 
     let commits = row.try_get::<i64, _>("xact_commit")?;
@@ -1967,7 +1954,7 @@ async fn postgres_database_statistics(runtime: &Runtime) -> Result<Value> {
     }))
 }
 
-async fn postgres_settings(runtime: &Runtime) -> Result<Vec<Value>> {
+async fn postgres_settings(runtime: &Ctx) -> Result<Vec<Value>> {
     let rows = sqlx::query(
         r#"
         SELECT name, setting, COALESCE(unit, '') AS unit
@@ -1983,7 +1970,7 @@ async fn postgres_settings(runtime: &Runtime) -> Result<Vec<Value>> {
         ORDER BY name
         "#,
     )
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -1997,7 +1984,7 @@ async fn postgres_settings(runtime: &Runtime) -> Result<Vec<Value>> {
         .collect()
 }
 
-async fn postgres_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+async fn postgres_activity_rows(runtime: &Ctx) -> Result<Vec<Value>> {
     let rows = sqlx::query(
         r#"
         SELECT
@@ -2012,7 +1999,7 @@ async fn postgres_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
         ORDER BY connections DESC, state
         "#,
     )
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -2028,7 +2015,7 @@ async fn postgres_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
         .collect()
 }
 
-async fn postgres_lock_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+async fn postgres_lock_rows(runtime: &Ctx) -> Result<Vec<Value>> {
     let rows = sqlx::query(
         r#"
         SELECT mode, granted, COUNT(*)::BIGINT AS locks
@@ -2040,7 +2027,7 @@ async fn postgres_lock_rows(runtime: &Runtime) -> Result<Vec<Value>> {
         ORDER BY locks DESC, mode, granted DESC
         "#,
     )
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -2054,7 +2041,7 @@ async fn postgres_lock_rows(runtime: &Runtime) -> Result<Vec<Value>> {
         .collect()
 }
 
-async fn postgres_table_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
+async fn postgres_table_activity_rows(runtime: &Ctx) -> Result<Vec<Value>> {
     let rows = sqlx::query(
         r#"
         SELECT
@@ -2082,7 +2069,7 @@ async fn postgres_table_activity_rows(runtime: &Runtime) -> Result<Vec<Value>> {
         ORDER BY pg_total_relation_size(relid) DESC, n_dead_tup DESC, relname
         "#,
     )
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -2146,13 +2133,13 @@ fn observed_tables() -> &'static [&'static str] {
     ]
 }
 
-async fn table_counts(runtime: &Runtime) -> Vec<Value> {
+async fn table_counts(runtime: &Ctx) -> Vec<Value> {
     let mut rows = Vec::new();
     for table in observed_tables() {
         let result = sqlx::query(&format!(
             "SELECT COUNT(*) AS row_count, pg_total_relation_size('{table}'::regclass)::BIGINT AS total_bytes FROM {table}"
         ))
-            .fetch_one(&runtime.timeline_store.pool)
+            .fetch_one(&runtime.store.pool)
             .await;
         match result {
             Ok(row) => match (
@@ -2179,7 +2166,7 @@ async fn table_counts(runtime: &Runtime) -> Vec<Value> {
 }
 
 async fn operational_diagnostics(
-    runtime: &Runtime,
+    runtime: &Ctx,
     now: DateTime<Utc>,
 ) -> Result<OperationalDiagnostics> {
     let since_ms = instant_ms_dt(now - chrono::Duration::seconds(max_health_window_seconds()));
@@ -2206,7 +2193,7 @@ async fn operational_diagnostics(
 }
 
 pub(super) async fn dashboard_latency_by_kind_payload(
-    runtime: &Runtime,
+    runtime: &Ctx,
     now: DateTime<Utc>,
 ) -> Result<Value> {
     let now_ms = instant_ms_dt(now);
@@ -2223,7 +2210,7 @@ pub(super) async fn dashboard_latency_by_kind_payload(
         "#,
     )
     .bind(since_ms)
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?
     .into_iter()
     .map(|row| {
@@ -2263,7 +2250,7 @@ pub(super) async fn dashboard_latency_by_kind_payload(
     }))
 }
 
-async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<JobDiagnosticRow>> {
+async fn diagnostic_job_rows(runtime: &Ctx, since_ms: i64) -> Result<Vec<JobDiagnosticRow>> {
     let rows = sqlx::query(
         r#"
         SELECT job_id, kind, state, lane,
@@ -2289,7 +2276,7 @@ async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<Job
         "#,
     )
     .bind(since_ms)
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -2312,11 +2299,11 @@ async fn diagnostic_job_rows(runtime: &Runtime, since_ms: i64) -> Result<Vec<Job
         .collect()
 }
 
-async fn operational_coverage_start_ms(runtime: &Runtime) -> Result<i64> {
+async fn operational_coverage_start_ms(runtime: &Ctx) -> Result<i64> {
     let value =
         sqlx::query_scalar::<_, String>("SELECT value FROM runtime_metadata WHERE key = $1")
             .bind(OPERATIONAL_COVERAGE_START_KEY)
-            .fetch_one(&runtime.timeline_store.pool)
+            .fetch_one(&runtime.store.pool)
             .await?;
     value.parse::<i64>().map_err(|error| {
         anyhow::anyhow!(
@@ -2326,7 +2313,7 @@ async fn operational_coverage_start_ms(runtime: &Runtime) -> Result<i64> {
 }
 
 async fn failure_summary(
-    runtime: &Runtime,
+    runtime: &Ctx,
     job_rows: &[JobDiagnosticRow],
     coverage_start_ms: i64,
     now: DateTime<Utc>,
@@ -2354,7 +2341,7 @@ async fn failure_summary(
 }
 
 async fn recent_failure_rows(
-    runtime: &Runtime,
+    runtime: &Ctx,
     since_ms: i64,
     limit: i64,
 ) -> Result<Vec<FailureDiagnosticRow>> {
@@ -2372,7 +2359,7 @@ async fn recent_failure_rows(
     )
     .bind(since_ms)
     .bind(limit)
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
     for row in outcome_rows {
         failures.push(FailureDiagnosticRow {
@@ -2397,7 +2384,11 @@ async fn recent_failure_rows(
             )
         })
         .collect::<Vec<_>>();
-    let scope_labels = runtime.dashboard_scope_label_batch(&scope_keys).await?;
+    let scope_labels = crate::runtime::timeline::views::dashboard::dashboard_scope_label_batch(
+        runtime,
+        &scope_keys,
+    )
+    .await?;
     for failure in &mut failures {
         failure.scope_label = scope_labels
             .get(&(
@@ -2418,10 +2409,7 @@ async fn recent_failure_rows(
     Ok(failures)
 }
 
-async fn diagnostic_event_rows(
-    runtime: &Runtime,
-    since_ms: i64,
-) -> Result<Vec<EventDiagnosticRow>> {
+async fn diagnostic_event_rows(runtime: &Ctx, since_ms: i64) -> Result<Vec<EventDiagnosticRow>> {
     let rows = sqlx::query(
         r#"
         SELECT event_kind, started_at_ms AS at_ms,
@@ -2446,7 +2434,7 @@ async fn diagnostic_event_rows(
         "#,
     )
     .bind(since_ms)
-    .fetch_all(&runtime.timeline_store.pool)
+    .fetch_all(&runtime.store.pool)
     .await?;
 
     rows.into_iter()
@@ -3295,7 +3283,7 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSession> {
     sessions.into_values().collect()
 }
 
-async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
+async fn agent_job_payload(runtime: &Ctx, job: &Job) -> Result<Value> {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
     let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
     let codex = parse_codex_trace(raw.get("content").and_then(Value::as_str).unwrap_or(""));
@@ -3323,13 +3311,13 @@ async fn agent_job_payload(runtime: &Runtime, job: &Job) -> Result<Value> {
 }
 
 async fn agent_session_payload(
-    runtime: &Runtime,
+    runtime: &Ctx,
     selected: &Job,
     selected_codex: &Value,
 ) -> Result<Value> {
     let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.scope_id);
     let mut jobs = runtime
-        .timeline_store
+        .store
         .list_jobs_by_scope_kind(&selected.guild_id, &selected.scope_id, JobKind::AgentTask)
         .await?;
     let current = agent_sessions_from_jobs(&jobs)

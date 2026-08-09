@@ -6,10 +6,11 @@ mod common;
 use clankcord::runtime::timeline::{JobVisibility, TimelineStore};
 use clankcord::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionStartOutput, AgentSessionStartPayload,
-    BinaryPayload, CommandRequest, DiscordForumThreadCreateOutput, DiscordForumThreadRenamePayload,
-    DiscordTextMessagePayload, DiscordTextSendPayload, Job, JobKind, JobOutput, JobPayload,
-    JobState, Runtime, RuntimeScope, RuntimeScopeKind, TextDeliveryKind, TextDeliveryOutput,
-    TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key, voice_route_key,
+    BinaryPayload, CommandRequest, Ctx, DiscordForumThreadCreateOutput,
+    DiscordForumThreadRenamePayload, DiscordTextMessagePayload, DiscordTextSendPayload, Job,
+    JobKind, JobOutput, JobPayload, JobState, RuntimeScope, RuntimeScopeKind, TextDeliveryKind,
+    TextDeliveryOutput, TextDeliveryPayload, TextTarget, TextTargetKind, dm_route_key,
+    voice_route_key,
 };
 
 #[tokio::test(flavor = "current_thread")]
@@ -166,7 +167,7 @@ async fn maintenance_retires_capped_agent_sessions() {
         max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
     );
     store.create_agent_session_record(record).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let created = store
         .create_job(Job::agent_session_retirement("maintenance"))
         .await
@@ -175,7 +176,13 @@ async fn maintenance_retires_capped_agent_sessions() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let updated = store.get_agent_session_record("ags_capped").await.unwrap();
     assert_eq!(updated.state, AgentSessionRecordState::Retired);
@@ -208,7 +215,7 @@ async fn maintenance_retires_sessions_when_bound_voice_session_ended() {
     );
     record.voice_capture_session_id = "cap_test".to_string();
     store.create_agent_session_record(record).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let created = store
         .create_job(Job::agent_session_retirement("maintenance"))
         .await
@@ -217,7 +224,13 @@ async fn maintenance_retires_sessions_when_bound_voice_session_ended() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let updated = store
         .get_agent_session_record("ags_voice_done")
@@ -244,7 +257,7 @@ async fn user_sunset_retires_session() {
         max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
     );
     store.create_agent_session_record(record).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let created = store
         .create_job(Job::agent_session_sunset(
             "ags_sunset",
@@ -257,7 +270,13 @@ async fn user_sunset_retires_session() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let updated = store.get_agent_session_record("ags_sunset").await.unwrap();
     assert_eq!(updated.state, AgentSessionRecordState::Retired);
@@ -294,9 +313,15 @@ async fn resume_reactivates_retired_dm_session() {
     let mut job = store.create_job(job).await.unwrap();
     job.mark_running();
     store.update_job(&job).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime.dispatch_claimed_runtime_job(job).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        job,
+    )
+    .await
+    .unwrap();
 
     let resumed = store.get_agent_session_record("ags_source").await.unwrap();
     assert_eq!(resumed.state, AgentSessionRecordState::Active);
@@ -399,12 +424,15 @@ async fn dm_text_message_creates_dm_scoped_agent_task_and_event() {
     let mut running_text = text.clone();
     running_text.mark_running();
     store.update_job(&running_text).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime
-        .dispatch_claimed_runtime_job(running_text)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_text,
+    )
+    .await
+    .unwrap();
 
     let updated_text = store.get_job(&text.id).await.unwrap();
     assert_eq!(updated_text.state, JobState::Waiting);
@@ -487,9 +515,15 @@ async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
     let mut running = job.clone();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let retired = store.get_agent_session_record("ags_active").await.unwrap();
     assert_eq!(retired.state, AgentSessionRecordState::Retired);
@@ -574,12 +608,15 @@ async fn discord_thread_message_resumes_retired_voice_session() {
     let mut running_text = text.clone();
     running_text.mark_running();
     store.update_job(&running_text).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime
-        .dispatch_claimed_runtime_job(running_text)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_text,
+    )
+    .await
+    .unwrap();
 
     let updated_text = store.get_job(&text.id).await.unwrap();
     assert_eq!(updated_text.state, JobState::Waiting);
@@ -610,10 +647,13 @@ async fn discord_thread_message_resumes_retired_voice_session() {
     let mut running_resume = resume.clone();
     running_resume.mark_running();
     store.update_job(&running_resume).await.unwrap();
-    runtime
-        .dispatch_claimed_runtime_job(running_resume)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_resume,
+    )
+    .await
+    .unwrap();
 
     let resumed = store.get_agent_session_record("ags_source").await.unwrap();
     assert_eq!(resumed.state, AgentSessionRecordState::Active);
@@ -678,9 +718,15 @@ async fn retired_start_session_does_not_spawn_agent_task() {
     let mut running = store.get_job(&start.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let updated = store
         .get_agent_session_record("ags_starting")
@@ -734,12 +780,19 @@ async fn search_returns_retired_sessions_with_resume_command() {
         )
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let result = runtime
-        .agent_session_search("guild", "code", "retired", "floating point", "-1h", 10)
-        .await
-        .unwrap();
+    let result = clankcord::runtime::domain::interactions::agent_sessions::agent_session_search(
+        &runtime,
+        "guild",
+        "code",
+        "retired",
+        "floating point",
+        "-1h",
+        10,
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result["count"], json!(1));
     assert_eq!(result["hits"][0]["agent_session_id"], json!("ags_search"));
@@ -796,9 +849,15 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     let mut running = start.clone();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let children = store.list_child_jobs(&start.id).await.unwrap();
     assert!(
@@ -833,10 +892,13 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     running_delivery.mark_running();
     store.update_job(&running_delivery).await.unwrap();
 
-    runtime
-        .dispatch_claimed_runtime_job(running_delivery)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_delivery,
+    )
+    .await
+    .unwrap();
 
     let children = store.list_child_jobs(&delivery.id).await.unwrap();
     let thread_create = children
@@ -872,10 +934,13 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     running_delivery.mark_running();
     store.update_job(&running_delivery).await.unwrap();
 
-    runtime
-        .dispatch_claimed_runtime_job(running_delivery)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_delivery,
+    )
+    .await
+    .unwrap();
 
     let updated = store.get_agent_session_record("ags_intro").await.unwrap();
     assert_eq!(updated.discord_thread_id, "thread-intro");
@@ -968,11 +1033,17 @@ async fn session_text_delivery_reopens_deleted_stored_thread() {
     store.update_job(&failed_send).await.unwrap();
     store.resolve_waiting_jobs().await.unwrap();
 
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let mut running = store.get_job(&delivery.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let cleared = store
         .get_agent_session_record("ags_deleted_thread")
@@ -1002,7 +1073,13 @@ async fn session_text_delivery_reopens_deleted_stored_thread() {
     let mut running = store.get_job(&delivery.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let updated = store
         .get_agent_session_record("ags_deleted_thread")
@@ -1091,9 +1168,15 @@ async fn session_response_reroutes_after_resume_takeover() {
     let mut running = delivery.clone();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let children = store.list_child_jobs(&delivery.id).await.unwrap();
     assert!(
@@ -1125,7 +1208,7 @@ async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_res
         "user-a",
     )
     .await;
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let maintenance = store
         .create_job(Job::runtime_maintenance(500))
         .await
@@ -1134,7 +1217,13 @@ async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_res
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let title_jobs = agent_thread_title_refresh_jobs(&store).await;
     assert_eq!(title_jobs.len(), 1);
@@ -1183,7 +1272,7 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
         )
         .await
         .unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let maintenance = store
         .create_job(Job::runtime_maintenance(500))
         .await
@@ -1192,7 +1281,13 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     assert!(agent_thread_title_refresh_jobs(&store).await.is_empty());
 }
@@ -1236,14 +1331,15 @@ async fn thread_title_refresh_marks_deleted_thread_unavailable() {
     store.update_job(&failed_rename).await.unwrap();
     store.resolve_waiting_jobs().await.unwrap();
 
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let mut running = store.get_job(&refresh.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    runtime
-        .dispatch_claimed_blocking_job(running)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime, running,
+    )
+    .await
+    .unwrap();
 
     let session = store
         .get_agent_session_record("ags_title_deleted")

@@ -30,9 +30,9 @@ use crate::runtime::timeline::{
 };
 use crate::runtime::util::{first_non_empty, first_value_string, log, non_empty, preview};
 use crate::runtime::{
-    AgentSessionRouteKind, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
-    JobOutput, JobPayload, JobState, Runtime, RuntimeScopeKind, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind,
+    AgentSessionRouteKind, Ctx, DiscordTypingAction, DiscordTypingIndicatorPayload, Job, JobKind,
+    JobOutput, JobPayload, JobState, RuntimeScopeKind, TextDeliveryKind, TextDeliveryPayload,
+    TextTarget, TextTargetKind,
 };
 
 use super::linear_mcp::insert_linear_mcp_env;
@@ -40,656 +40,656 @@ use super::linear_mcp::insert_linear_mcp_env;
 const AGENT_UNAVAILABLE_MESSAGE: &str =
     "It looks like ChatGPT is unavailable right now. Try again later.";
 
-impl Runtime {
-    pub(crate) async fn recover_interrupted_agent_tasks(&self) -> Result<Vec<Value>> {
-        let mut recovered = Vec::new();
-        for job in self
-            .timeline_store
-            .list_jobs_with_visibility(None, Some(JobState::Running), JobVisibility::Visible)
-            .await?
-            .into_iter()
-            .filter(|job| job.kind == JobKind::AgentTask)
-        {
-            let submitted_text_deliveries = self.text_delivery_jobs_for_source(&job.id).await?;
-            if !submitted_text_deliveries.is_empty() {
-                let mut completed = job.clone();
-                completed.mark_complete();
-                completed.metadata.agent_task_mut().response_text =
-                    "RESPONSE_SUBMITTED".to_string();
-                self.timeline_store.update_job(&completed).await?;
-                recovered.push(json!({
+pub(crate) async fn recover_interrupted_agent_tasks(ctx: &Ctx) -> Result<Vec<Value>> {
+    let mut recovered = Vec::new();
+    for job in ctx
+        .store
+        .list_jobs_with_visibility(None, Some(JobState::Running), JobVisibility::Visible)
+        .await?
+        .into_iter()
+        .filter(|job| job.kind == JobKind::AgentTask)
+    {
+        let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &job.id).await?;
+        if !submitted_text_deliveries.is_empty() {
+            let mut completed = job.clone();
+            completed.mark_complete();
+            completed.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
+            ctx.store.update_job(&completed).await?;
+            recovered.push(json!({
                     "dispatched": true,
                     "job": completed.to_value(),
                     "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
                     "recovered": true,
                 }));
-                continue;
-            }
-            let mut interrupted = job.clone();
-            interrupted.set_state(JobState::Failed);
-            let error_text = "agent task was interrupted by runtime restart".to_string();
-            interrupted.metadata.error = error_text.clone();
-            interrupted.metadata.agent_task_mut().dispatch_error = error_text;
-            self.timeline_store.update_job(&interrupted).await?;
-            let result = json!({
-                "dispatched": false,
-                "job": interrupted.to_value(),
-                "interrupted": true,
-            });
-            recovered.push(result);
+            continue;
         }
-        Ok(recovered)
+        let mut interrupted = job.clone();
+        interrupted.set_state(JobState::Failed);
+        let error_text = "agent task was interrupted by runtime restart".to_string();
+        interrupted.metadata.error = error_text.clone();
+        interrupted.metadata.agent_task_mut().dispatch_error = error_text;
+        ctx.store.update_job(&interrupted).await?;
+        let result = json!({
+            "dispatched": false,
+            "job": interrupted.to_value(),
+            "interrupted": true,
+        });
+        recovered.push(result);
     }
+    Ok(recovered)
+}
 
-    pub(crate) async fn dispatch_claimed_agent_task_job(&self, job: Job) -> Result<Value> {
-        let job_id = job.id.clone();
-        let mut latest = self.timeline_store.get_job(&job_id).await.unwrap_or(job);
-        let children = self.timeline_store.list_child_jobs(&latest.id).await?;
-        let mut task_metadata = latest
+pub(crate) async fn dispatch_claimed_agent_task_job(ctx: &Ctx, job: Job) -> Result<Value> {
+    let job_id = job.id.clone();
+    let mut latest = ctx.store.get_job(&job_id).await.unwrap_or(job);
+    let children = ctx.store.list_child_jobs(&latest.id).await?;
+    let mut task_metadata = latest
+        .metadata
+        .agent_task()
+        .cloned()
+        .unwrap_or_else(AgentTaskMetadata::default);
+    if agent_task_retry_after_stopped_error(&task_metadata, &children) {
+        latest.metadata.agent_task_mut().dispatch_error.clear();
+        ctx.store.update_job(&latest).await?;
+        task_metadata = latest
             .metadata
             .agent_task()
             .cloned()
             .unwrap_or_else(AgentTaskMetadata::default);
-        if agent_task_retry_after_stopped_error(&task_metadata, &children) {
-            latest.metadata.agent_task_mut().dispatch_error.clear();
-            self.timeline_store.update_job(&latest).await?;
-            task_metadata = latest
-                .metadata
-                .agent_task()
-                .cloned()
-                .unwrap_or_else(AgentTaskMetadata::default);
+    }
+    if agent_task_has_dispatch_outcome(&task_metadata) {
+        return finish_agent_task_after_typing_stop(ctx, latest, task_metadata).await;
+    }
+
+    let attempts = task_metadata.dispatch_attempts;
+    if attempts >= 3 {
+        let mut failed = latest.clone();
+        failed.set_state(JobState::Failed);
+        failed.metadata.error = "agent task dispatch attempts exhausted".to_string();
+        ctx.store.update_job(&failed).await?;
+        return Ok(
+            json!({"dispatched": false, "job": failed.to_value(), "reason": "agent task dispatch attempts exhausted"}),
+        );
+    }
+
+    match agent_task_typing_child(&children, DiscordTypingAction::Start, Some(attempts)) {
+        Some(start) if !start.state.is_terminal() => {
+            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
+                ctx,
+                &job_id,
+                latest,
+                Vec::new(),
+            )
+            .await;
         }
-        if agent_task_has_dispatch_outcome(&task_metadata) {
-            return self
-                .finish_agent_task_after_typing_stop(latest, task_metadata)
+        Some(start) if start.state != JobState::Complete => {
+            if !complete_unavailable_typing_start_child(ctx, &latest, start).await? {
+                return crate::runtime::core::execution::dispatcher::fail_dispatched_job(
+                    ctx,
+                    &job_id,
+                    latest,
+                    anyhow::anyhow!(
+                        "agent task typing start dependency {} ended as {}: {}",
+                        start.id,
+                        start.state,
+                        start.metadata.error
+                    ),
+                )
                 .await;
-        }
-
-        let attempts = task_metadata.dispatch_attempts;
-        if attempts >= 3 {
-            let mut failed = latest.clone();
-            failed.set_state(JobState::Failed);
-            failed.metadata.error = "agent task dispatch attempts exhausted".to_string();
-            self.timeline_store.update_job(&failed).await?;
-            return Ok(
-                json!({"dispatched": false, "job": failed.to_value(), "reason": "agent task dispatch attempts exhausted"}),
-            );
-        }
-
-        match agent_task_typing_child(&children, DiscordTypingAction::Start, Some(attempts)) {
-            Some(start) if !start.state.is_terminal() => {
-                return self.wait_dispatched_job(&job_id, latest, Vec::new()).await;
-            }
-            Some(start) if start.state != JobState::Complete => {
-                if !self
-                    .complete_unavailable_typing_start_child(&latest, start)
-                    .await?
-                {
-                    return self
-                        .fail_dispatched_job(
-                            &job_id,
-                            latest,
-                            anyhow::anyhow!(
-                                "agent task typing start dependency {} ended as {}: {}",
-                                start.id,
-                                start.state,
-                                start.metadata.error
-                            ),
-                        )
-                        .await;
-                }
-            }
-            Some(_) => {}
-            None => {
-                return self
-                    .wait_dispatched_job(
-                        &job_id,
-                        latest.clone(),
-                        vec![agent_task_typing_job(
-                            &latest,
-                            DiscordTypingAction::Start,
-                            attempts,
-                        )],
-                    )
-                    .await;
             }
         }
-
-        match self.dispatch_agent_task(&latest).await {
-            Ok(dispatch_result) => {
-                let mut prepared = self.timeline_store.get_job(&job_id).await?;
-                prepared.metadata.set_agent_task(dispatch_result);
-                self.timeline_store.update_job(&prepared).await?;
-                self.wait_for_agent_task_typing_stop(prepared, attempts)
-                    .await
-            }
-            Err(error) => {
-                let preflight = error
-                    .downcast_ref::<AgentInfrastructureError>()
-                    .and_then(AgentInfrastructureError::preflight)
-                    .cloned();
-                let error_text = error.to_string();
-                let mut failed = self.timeline_store.get_job(&job_id).await?;
-                if let Some(preflight) = preflight {
-                    failed.metadata.agent_task_mut().preflight = Some(preflight);
-                }
-                failed.metadata.agent_task_mut().dispatch_error = error_text;
-                self.timeline_store.update_job(&failed).await?;
-                self.wait_for_agent_task_typing_stop(failed, attempts).await
-            }
+        Some(_) => {}
+        None => {
+            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
+                ctx,
+                &job_id,
+                latest.clone(),
+                vec![agent_task_typing_job(
+                    &latest,
+                    DiscordTypingAction::Start,
+                    attempts,
+                )],
+            )
+            .await;
         }
     }
 
-    async fn finish_agent_task_after_typing_stop(
-        &self,
-        job: Job,
-        task_metadata: AgentTaskMetadata,
-    ) -> Result<Value> {
-        let job_id = job.id.clone();
-        let children = self.timeline_store.list_child_jobs(&job_id).await?;
-        if let Some(stop) = agent_task_typing_child(&children, DiscordTypingAction::Stop, None) {
-            if !stop.state.is_terminal() {
-                return self.wait_dispatched_job(&job_id, job, Vec::new()).await;
-            }
-            if stop.state != JobState::Complete {
-                return self
-                    .fail_dispatched_job(
-                        &job_id,
-                        job,
-                        anyhow::anyhow!(
-                            "agent task typing stop dependency {} ended as {}: {}",
-                            stop.id,
-                            stop.state,
-                            stop.metadata.error
-                        ),
-                    )
-                    .await;
-            }
-            let attempts = stop
-                .discord_typing_indicator_payload()
-                .map(|payload| payload.agent_task_attempt)
-                .unwrap_or(task_metadata.dispatch_attempts);
-            if !task_metadata.dispatch_error.trim().is_empty() {
-                return self
-                    .fail_agent_task_job(
-                        job_id,
-                        attempts,
-                        anyhow::anyhow!(task_metadata.dispatch_error),
-                    )
-                    .await;
-            }
-            return match self
-                .complete_agent_task_job(job_id.clone(), task_metadata)
-                .await
-            {
-                Ok(value) => Ok(value),
-                Err(error) => self.fail_agent_task_job(job_id, attempts, error).await,
-            };
+    match dispatch_agent_task(ctx, &latest).await {
+        Ok(dispatch_result) => {
+            let mut prepared = ctx.store.get_job(&job_id).await?;
+            prepared.metadata.set_agent_task(dispatch_result);
+            ctx.store.update_job(&prepared).await?;
+            wait_for_agent_task_typing_stop(ctx, prepared, attempts).await
         }
+        Err(error) => {
+            let preflight = error
+                .downcast_ref::<AgentInfrastructureError>()
+                .and_then(AgentInfrastructureError::preflight)
+                .cloned();
+            let error_text = error.to_string();
+            let mut failed = ctx.store.get_job(&job_id).await?;
+            if let Some(preflight) = preflight {
+                failed.metadata.agent_task_mut().preflight = Some(preflight);
+            }
+            failed.metadata.agent_task_mut().dispatch_error = error_text;
+            ctx.store.update_job(&failed).await?;
+            wait_for_agent_task_typing_stop(ctx, failed, attempts).await
+        }
+    }
+}
 
-        let attempts = agent_task_typing_child(&children, DiscordTypingAction::Start, None)
-            .and_then(|start| start.discord_typing_indicator_payload())
+async fn finish_agent_task_after_typing_stop(
+    ctx: &Ctx,
+    job: Job,
+    task_metadata: AgentTaskMetadata,
+) -> Result<Value> {
+    let job_id = job.id.clone();
+    let children = ctx.store.list_child_jobs(&job_id).await?;
+    if let Some(stop) = agent_task_typing_child(&children, DiscordTypingAction::Stop, None) {
+        if !stop.state.is_terminal() {
+            return crate::runtime::core::execution::dispatcher::wait_dispatched_job(
+                ctx,
+                &job_id,
+                job,
+                Vec::new(),
+            )
+            .await;
+        }
+        if stop.state != JobState::Complete {
+            return crate::runtime::core::execution::dispatcher::fail_dispatched_job(
+                ctx,
+                &job_id,
+                job,
+                anyhow::anyhow!(
+                    "agent task typing stop dependency {} ended as {}: {}",
+                    stop.id,
+                    stop.state,
+                    stop.metadata.error
+                ),
+            )
+            .await;
+        }
+        let attempts = stop
+            .discord_typing_indicator_payload()
             .map(|payload| payload.agent_task_attempt)
             .unwrap_or(task_metadata.dispatch_attempts);
-        self.wait_for_agent_task_typing_stop(job, attempts).await
-    }
-
-    async fn wait_for_agent_task_typing_stop(&self, job: Job, attempts: i64) -> Result<Value> {
-        let job_id = job.id.clone();
-        self.wait_dispatched_job(
-            &job_id,
-            job.clone(),
-            vec![agent_task_typing_job(
-                &job,
-                DiscordTypingAction::Stop,
+        if !task_metadata.dispatch_error.trim().is_empty() {
+            return fail_agent_task_job(
+                ctx,
+                job_id,
                 attempts,
-            )],
-        )
-        .await
+                anyhow::anyhow!(task_metadata.dispatch_error),
+            )
+            .await;
+        }
+        return match complete_agent_task_job(ctx, job_id.clone(), task_metadata).await {
+            Ok(value) => Ok(value),
+            Err(error) => fail_agent_task_job(ctx, job_id, attempts, error).await,
+        };
     }
 
-    async fn complete_unavailable_typing_start_child(
-        &self,
-        job: &Job,
-        start: &Job,
-    ) -> Result<bool> {
-        let Some(payload) = start.discord_typing_indicator_payload() else {
-            return Ok(false);
-        };
-        if payload.action != DiscordTypingAction::Start
-            || payload.target.kind != TextTargetKind::AgentSession
-        {
-            return Ok(false);
-        }
-        let JobPayload::AgentTask(agent_task) = &job.payload else {
-            return Ok(false);
-        };
-        let session = self
-            .timeline_store
-            .get_agent_session_record(&agent_task.agent_session_id)
-            .await?;
-        let thread_id = first_non_empty([
-            discord_error_text_unavailable_channel_id(&start.metadata.error),
-            session.text_target.channel_id.clone(),
-            session.discord_thread_id.clone(),
+    let attempts = agent_task_typing_child(&children, DiscordTypingAction::Start, None)
+        .and_then(|start| start.discord_typing_indicator_payload())
+        .map(|payload| payload.agent_task_attempt)
+        .unwrap_or(task_metadata.dispatch_attempts);
+    wait_for_agent_task_typing_stop(ctx, job, attempts).await
+}
+
+async fn wait_for_agent_task_typing_stop(ctx: &Ctx, job: Job, attempts: i64) -> Result<Value> {
+    let job_id = job.id.clone();
+    crate::runtime::core::execution::dispatcher::wait_dispatched_job(
+        ctx,
+        &job_id,
+        job.clone(),
+        vec![agent_task_typing_job(
+            &job,
+            DiscordTypingAction::Stop,
+            attempts,
+        )],
+    )
+    .await
+}
+
+async fn complete_unavailable_typing_start_child(
+    ctx: &Ctx,
+    job: &Job,
+    start: &Job,
+) -> Result<bool> {
+    let Some(payload) = start.discord_typing_indicator_payload() else {
+        return Ok(false);
+    };
+    if payload.action != DiscordTypingAction::Start
+        || payload.target.kind != TextTargetKind::AgentSession
+    {
+        return Ok(false);
+    }
+    let JobPayload::AgentTask(agent_task) = &job.payload else {
+        return Ok(false);
+    };
+    let session = ctx
+        .store
+        .get_agent_session_record(&agent_task.agent_session_id)
+        .await?;
+    let thread_id = first_non_empty([
+        discord_error_text_unavailable_channel_id(&start.metadata.error),
+        session.text_target.channel_id.clone(),
+        session.discord_thread_id.clone(),
+    ]);
+    let target = TextTarget {
+        kind: TextTargetKind::Channel,
+        channel_id: thread_id.clone(),
+        user_id: String::new(),
+    };
+    if !discord_error_text_targets_unavailable_session_thread(&start.metadata.error, &target) {
+        return Ok(false);
+    }
+    crate::runtime::domain::messaging::session_threads::mark_agent_session_thread_unavailable(
+        ctx,
+        &agent_task.agent_session_id,
+        &thread_id,
+        &start.id,
+        &start.metadata.error,
+    )
+    .await?;
+    let mut completed = start.clone();
+    completed.metadata.error.clear();
+    completed.metadata.output = Some(JobOutput::DiscordTypingIndicator(
+        DiscordTypingIndicatorOutput {
+            action: DiscordTypingAction::Start,
+            target: target.clone(),
+            source_job_id: payload.source_job_id.clone(),
+            status: UNAVAILABLE_SESSION_THREAD_STATUS.to_string(),
+        },
+    ));
+    completed.mark_complete();
+    ctx.store.update_job(&completed).await?;
+    ctx.store
+        .append_scope_event(
+            &job.scope(),
+            json!({
+                "event_kind": "discord_typing_indicator",
+                "kind": "discord_typing_indicator",
+                "job_id": start.id,
+                "source_job_id": payload.source_job_id,
+                "action": payload.action.as_str(),
+                "target": target.to_json(),
+                "status": UNAVAILABLE_SESSION_THREAD_STATUS,
+            }),
+        )
+        .await?;
+    Ok(true)
+}
+
+async fn dispatch_agent_task(ctx: &Ctx, job: &Job) -> Result<AgentTaskMetadata> {
+    let latest = ctx.store.get_job(&job.id).await?;
+    validate_agent_task_job(&latest)?;
+    if latest.cancel_requested() {
+        anyhow::bail!("agent task was cancelled before the agent process started");
+    }
+
+    let workdir = agent_task_workdir(&latest);
+    fs::create_dir_all(&workdir)?;
+    let repo_dir = agent_repo_dir();
+    let agent_env = agent_task_env(&latest, &workdir, repo_dir.as_ref())?;
+    let preflight = run_agent_task_preflight(Some(&agent_env));
+    if !preflight.ok {
+        let detail = preflight.failed_check_summary();
+        return Err(AgentInfrastructureError::with_preflight(
+            format!("agent task preflight failed: {detail}"),
+            preflight,
+        )
+        .into());
+    }
+
+    let job_dir = ctx
+        .store
+        .channel_dir(&latest.guild_id, &latest.scope_id)
+        .join("jobs");
+    fs::create_dir_all(&job_dir)?;
+
+    let prompt_path = job_dir.join(format!("{}.agent-prompt.txt", latest.id));
+    let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
+    let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
+    let agent_session_id = agent_task_session_id(&latest)?;
+    let agent_session = ctx
+        .store
+        .get_agent_session_record(&agent_session_id)
+        .await?;
+    let session_key = agent_session.invocation_key();
+    let prior_session_id = non_empty(
+        latest
+            .metadata
+            .agent_task()
+            .map(|task| task.agent.session_id.clone())
+            .unwrap_or_default(),
+        agent_session.codex_session_id.clone(),
+    );
+    let include_master_prompt = prior_session_id.trim().is_empty();
+    let prompt =
+        build_agent_task_message_for_job(ctx, &latest, &workdir, include_master_prompt).await?;
+    fs::write(&prompt_path, &prompt)?;
+    let mut prepared = latest.clone();
+    let mut task_metadata = prepared
+        .metadata
+        .agent_task()
+        .cloned()
+        .unwrap_or_else(AgentTaskMetadata::default);
+    task_metadata.workdir_path = workdir.display().to_string();
+    task_metadata.prompt_path = prompt_path.display().to_string();
+    task_metadata.result_path = result_path.display().to_string();
+    task_metadata.raw_result_path = raw_result_path.display().to_string();
+    task_metadata.preflight = Some(preflight.clone());
+    prepared.metadata.set_agent_task(task_metadata);
+    ctx.store.update_job(&prepared).await?;
+    let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
+        role: AgentRole::Task,
+        session_key,
+        job_id: latest.id.clone(),
+        guild_id: latest.guild_id.clone(),
+        scope_id: latest.scope_id.clone(),
+        prior_session_id,
+        prompt,
+        cwd: Some(workdir.clone()),
+        model: agent_task_model(),
+        reasoning_effort: config::codex_reasoning_effort(),
+        fast_mode: config::codex_fast_mode(),
+        env: agent_env,
+        result_path: result_path.clone(),
+        raw_result_path: raw_result_path.clone(),
+    })?;
+
+    append_agent_invocation_warning_events(
+        ctx,
+        &latest,
+        &[invocation.stdout.as_str(), invocation.stderr.as_str()],
+    )
+    .await?;
+
+    if !invocation.success {
+        let detail = first_non_empty([
+            invocation.stderr.trim().to_string(),
+            invocation.stdout.trim().to_string(),
+            format!(
+                "codex exited {}",
+                invocation
+                    .returncode
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "without a status code".to_string())
+            ),
         ]);
-        let target = TextTarget {
-            kind: TextTargetKind::Channel,
-            channel_id: thread_id.clone(),
-            user_id: String::new(),
-        };
-        if !discord_error_text_targets_unavailable_session_thread(&start.metadata.error, &target) {
-            return Ok(false);
+        if agent_invocation_infrastructure_failure(&detail) {
+            return Err(AgentInfrastructureError::new(detail).into());
         }
-        self.mark_agent_session_thread_unavailable(
-            &agent_task.agent_session_id,
-            &thread_id,
-            &start.id,
-            &start.metadata.error,
-        )
-        .await?;
-        let mut completed = start.clone();
-        completed.metadata.error.clear();
-        completed.metadata.output = Some(JobOutput::DiscordTypingIndicator(
-            DiscordTypingIndicatorOutput {
-                action: DiscordTypingAction::Start,
-                target: target.clone(),
-                source_job_id: payload.source_job_id.clone(),
-                status: UNAVAILABLE_SESSION_THREAD_STATUS.to_string(),
-            },
-        ));
-        completed.mark_complete();
-        self.timeline_store.update_job(&completed).await?;
-        self.timeline_store
-            .append_scope_event(
-                &job.scope(),
-                json!({
-                    "event_kind": "discord_typing_indicator",
-                    "kind": "discord_typing_indicator",
-                    "job_id": start.id,
-                    "source_job_id": payload.source_job_id,
-                    "action": payload.action.as_str(),
-                    "target": target.to_json(),
-                    "status": UNAVAILABLE_SESSION_THREAD_STATUS,
-                }),
-            )
-            .await?;
-        Ok(true)
+        anyhow::bail!("{detail}");
     }
 
-    async fn dispatch_agent_task(&self, job: &Job) -> Result<AgentTaskMetadata> {
-        let latest = self.timeline_store.get_job(&job.id).await?;
-        validate_agent_task_job(&latest)?;
-        if latest.cancel_requested() {
-            anyhow::bail!("agent task was cancelled before the agent process started");
-        }
+    let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
+    let completed_session =
+        crate::runtime::domain::interactions::agent_sessions::set_agent_session_codex_session(
+            ctx,
+            &agent_session_id,
+            non_empty(
+                invocation
+                    .session
+                    .as_ref()
+                    .map(|session| session.session_id.clone())
+                    .unwrap_or_default(),
+                invocation.session_id.clone(),
+            ),
+        )
+        .await?;
+    Ok(AgentTaskMetadata {
+        workdir_path: workdir.display().to_string(),
+        prompt_path: prompt_path.display().to_string(),
+        result_path: result_path.display().to_string(),
+        raw_result_path: raw_result_path.display().to_string(),
+        dispatch_stdout_preview: preview(&response_text, 1000),
+        dispatch_stderr: preview(&invocation.stderr, 1000),
+        agent: AgentInvocationMetadata {
+            session_id: completed_session.codex_session_id,
+            provider: "codex".to_string(),
+            model: invocation.model,
+            reasoning_effort: invocation.reasoning_effort.as_str().to_string(),
+            fast_mode: invocation.fast_mode,
+            usage: BinaryPayload::from_json(&extract_codex_usage(&invocation.stdout))
+                .unwrap_or_else(|_| BinaryPayload::empty()),
+        },
+        preflight: Some(preflight),
+        response_text,
+        command: invocation.command_display,
+        ..AgentTaskMetadata::default()
+    })
+}
 
-        let workdir = agent_task_workdir(&latest);
-        fs::create_dir_all(&workdir)?;
-        let repo_dir = agent_repo_dir();
-        let agent_env = agent_task_env(&latest, &workdir, repo_dir.as_ref())?;
-        let preflight = run_agent_task_preflight(Some(&agent_env));
-        if !preflight.ok {
-            let detail = preflight.failed_check_summary();
-            return Err(AgentInfrastructureError::with_preflight(
-                format!("agent task preflight failed: {detail}"),
-                preflight,
-            )
-            .into());
-        }
-
-        let job_dir = self
-            .timeline_store
-            .channel_dir(&latest.guild_id, &latest.scope_id)
-            .join("jobs");
-        fs::create_dir_all(&job_dir)?;
-
-        let prompt_path = job_dir.join(format!("{}.agent-prompt.txt", latest.id));
-        let result_path = job_dir.join(format!("{}.agent-result.txt", latest.id));
-        let raw_result_path = job_dir.join(format!("{}.codex.jsonl", latest.id));
-        let agent_session_id = agent_task_session_id(&latest)?;
-        let agent_session = self
-            .timeline_store
-            .get_agent_session_record(&agent_session_id)
-            .await?;
-        let session_key = agent_session.invocation_key();
-        let prior_session_id = non_empty(
-            latest
-                .metadata
-                .agent_task()
-                .map(|task| task.agent.session_id.clone())
-                .unwrap_or_default(),
-            agent_session.codex_session_id.clone(),
+async fn complete_agent_task_job(
+    ctx: &Ctx,
+    job_id: String,
+    dispatch_result: AgentTaskMetadata,
+) -> Result<Value> {
+    let mut latest = ctx.store.get_job(&job_id).await?;
+    latest.metadata.set_agent_task(dispatch_result);
+    ctx.store.update_job(&latest).await?;
+    if latest.cancel_requested() {
+        let cancelled_at = non_empty(
+            latest.cancelled_at.clone().unwrap_or_default(),
+            isoformat_z(None),
         );
-        let include_master_prompt = prior_session_id.trim().is_empty();
-        let prompt = self
-            .build_agent_task_message_for_session(&latest, &workdir, include_master_prompt)
-            .await?;
-        fs::write(&prompt_path, &prompt)?;
-        let mut prepared = latest.clone();
-        let mut task_metadata = prepared
-            .metadata
-            .agent_task()
-            .cloned()
-            .unwrap_or_else(AgentTaskMetadata::default);
-        task_metadata.workdir_path = workdir.display().to_string();
-        task_metadata.prompt_path = prompt_path.display().to_string();
-        task_metadata.result_path = result_path.display().to_string();
-        task_metadata.raw_result_path = raw_result_path.display().to_string();
-        task_metadata.preflight = Some(preflight.clone());
-        prepared.metadata.set_agent_task(task_metadata);
-        self.timeline_store.update_job(&prepared).await?;
-        let invocation = AgentRuntime::default().invoke(AgentInvocationRequest {
-            role: AgentRole::Task,
-            session_key,
-            job_id: latest.id.clone(),
-            guild_id: latest.guild_id.clone(),
-            scope_id: latest.scope_id.clone(),
-            prior_session_id,
-            prompt,
-            cwd: Some(workdir.clone()),
-            model: agent_task_model(),
-            reasoning_effort: config::codex_reasoning_effort(),
-            fast_mode: config::codex_fast_mode(),
-            env: agent_env,
-            result_path: result_path.clone(),
-            raw_result_path: raw_result_path.clone(),
-        })?;
-
-        self.append_agent_invocation_warning_events(
-            &latest,
-            &[invocation.stdout.as_str(), invocation.stderr.as_str()],
-        )
-        .await?;
-
-        if !invocation.success {
-            let detail = first_non_empty([
-                invocation.stderr.trim().to_string(),
-                invocation.stdout.trim().to_string(),
-                format!(
-                    "codex exited {}",
-                    invocation
-                        .returncode
-                        .map(|code| code.to_string())
-                        .unwrap_or_else(|| "without a status code".to_string())
-                ),
-            ]);
-            if agent_invocation_infrastructure_failure(&detail) {
-                return Err(AgentInfrastructureError::new(detail).into());
-            }
-            anyhow::bail!("{detail}");
-        }
-
-        let response_text = codex_response_text(&invocation.stdout, &invocation.final_message);
-        let completed_session = self
-            .set_agent_session_codex_session(
-                &agent_session_id,
-                non_empty(
-                    invocation
-                        .session
-                        .as_ref()
-                        .map(|session| session.session_id.clone())
-                        .unwrap_or_default(),
-                    invocation.session_id.clone(),
-                ),
-            )
-            .await?;
-        Ok(AgentTaskMetadata {
-            workdir_path: workdir.display().to_string(),
-            prompt_path: prompt_path.display().to_string(),
-            result_path: result_path.display().to_string(),
-            raw_result_path: raw_result_path.display().to_string(),
-            dispatch_stdout_preview: preview(&response_text, 1000),
-            dispatch_stderr: preview(&invocation.stderr, 1000),
-            agent: AgentInvocationMetadata {
-                session_id: completed_session.codex_session_id,
-                provider: "codex".to_string(),
-                model: invocation.model,
-                reasoning_effort: invocation.reasoning_effort.as_str().to_string(),
-                fast_mode: invocation.fast_mode,
-                usage: BinaryPayload::from_json(&extract_codex_usage(&invocation.stdout))
-                    .unwrap_or_else(|_| BinaryPayload::empty()),
-            },
-            preflight: Some(preflight),
-            response_text,
-            command: invocation.command_display,
-            ..AgentTaskMetadata::default()
-        })
-    }
-
-    async fn complete_agent_task_job(
-        &self,
-        job_id: String,
-        dispatch_result: AgentTaskMetadata,
-    ) -> Result<Value> {
-        let mut latest = self.timeline_store.get_job(&job_id).await?;
-        latest.metadata.set_agent_task(dispatch_result);
-        self.timeline_store.update_job(&latest).await?;
-        if latest.cancel_requested() {
-            let cancelled_at = non_empty(
-                latest.cancelled_at.clone().unwrap_or_default(),
-                isoformat_z(None),
-            );
-            latest.mark_cancelled();
-            latest.cancelled_at = Some(cancelled_at);
-            latest.completed_at = Some(isoformat_z(None));
-            latest.metadata.agent_task_mut().result_suppressed = true;
-            self.timeline_store.update_job(&latest).await?;
-            self.timeline_store
-                .append_scope_event(
-                    &latest.scope(),
-                    json!({
-                        "event_kind": "agent_task_result_suppressed",
-                        "kind": "agent_task_result_suppressed",
-                        "job_id": job_id,
-                        "job_kind": latest.kind.as_str(),
-                        "reason": "job was cancelled before the agent task result was posted",
-                    }),
-                )
-                .await?;
-            return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
-        }
-        let submitted_text_deliveries = self.text_delivery_jobs_for_source(&latest.id).await?;
-        if !submitted_text_deliveries.is_empty() {
-            latest.mark_complete();
-            self.timeline_store.update_job(&latest).await?;
-            return Ok(json!({
-                "dispatched": true,
-                "job": latest.to_value(),
-                "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
-            }));
-        }
-        let response_text = latest
-            .metadata
-            .agent_task()
-            .map(|task| task.response_text.clone())
-            .unwrap_or_default();
-        let response_text = response_text.trim();
-        if response_text == "RESPONSE_SUBMITTED" {
-            return self
-                .complete_agent_task_with_suppressed_result(
-                    latest,
-                    "agent reported RESPONSE_SUBMITTED without creating a text delivery job",
-                    "submitted_without_delivery",
-                )
-                .await;
-        }
-        if let Some(reason) = agent_task_no_response_reason(response_text) {
-            return self
-                .complete_agent_task_with_suppressed_result(latest, reason, "none")
-                .await;
-        }
-        if response_text.is_empty() {
-            return self
-                .complete_agent_task_with_suppressed_result(
-                    latest,
-                    "agent completed without final response text",
-                    "empty",
-                )
-                .await;
-        }
-        self.complete_agent_task_with_suppressed_result(
-            latest,
-            "agent returned final text instead of submitting through Clankcord response command",
-            "final_text_without_delivery",
-        )
-        .await
-    }
-
-    async fn text_delivery_jobs_for_source(&self, source_job_id: &str) -> Result<Vec<Job>> {
-        self.timeline_store
-            .list_text_delivery_jobs_for_source(source_job_id)
-            .await
-    }
-
-    async fn complete_agent_task_with_suppressed_result(
-        &self,
-        mut job: Job,
-        reason: &'static str,
-        response: &'static str,
-    ) -> Result<Value> {
-        job.mark_complete();
-        job.metadata.agent_task_mut().result_suppressed = true;
-        self.timeline_store.update_job(&job).await?;
-        self.timeline_store
+        latest.mark_cancelled();
+        latest.cancelled_at = Some(cancelled_at);
+        latest.completed_at = Some(isoformat_z(None));
+        latest.metadata.agent_task_mut().result_suppressed = true;
+        ctx.store.update_job(&latest).await?;
+        ctx.store
             .append_scope_event(
-                &job.scope(),
+                &latest.scope(),
                 json!({
                     "event_kind": "agent_task_result_suppressed",
                     "kind": "agent_task_result_suppressed",
-                    "job_id": job.id.clone(),
-                    "job_kind": job.kind.as_str(),
-                    "reason": reason,
+                    "job_id": job_id,
+                    "job_kind": latest.kind.as_str(),
+                    "reason": "job was cancelled before the agent task result was posted",
                 }),
             )
             .await?;
-        Ok(json!({"dispatched": true, "job": job.to_value(), "response": response}))
+        return Ok(json!({"dispatched": true, "job": latest.to_value(), "cancelled": true}));
     }
-
-    async fn fail_agent_task_job(
-        &self,
-        job_id: String,
-        attempts: i64,
-        error: anyhow::Error,
-    ) -> Result<Value> {
-        let error_text = error.to_string();
-        let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
-        let is_infrastructure_error =
-            infrastructure_error.is_some() || agent_task_error_text_is_infrastructure(&error_text);
-        let publish_unavailable_text =
-            is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
-        let mut latest = self.timeline_store.get_job(&job_id).await?;
-        if latest.cancel_requested() {
-            let cancelled_at = non_empty(
-                latest.cancelled_at.clone().unwrap_or_default(),
-                isoformat_z(None),
-            );
-            latest.mark_cancelled();
-            latest.cancelled_at = Some(cancelled_at);
-            latest.metadata.agent_task_mut().dispatch_error_after_cancel = error_text;
-            self.timeline_store.update_job(&latest).await?;
-            return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
-        }
-        let submitted_text_deliveries = self.text_delivery_jobs_for_source(&job_id).await?;
-        if !submitted_text_deliveries.is_empty() {
-            latest.mark_complete();
-            latest.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
-            latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
-            self.timeline_store.update_job(&latest).await?;
-            return Ok(json!({
-                "dispatched": true,
-                "job": latest.to_value(),
-                "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
-                "error_after_response": error_text,
-            }));
-        }
-        if let Some(preflight) = infrastructure_error.and_then(AgentInfrastructureError::preflight)
-        {
-            latest.metadata.agent_task_mut().preflight = Some(preflight.clone());
-        }
-        let next_attempts = attempts + 1;
-        latest.metadata.agent_task_mut().dispatch_attempts = if is_infrastructure_error {
-            next_attempts.max(3)
-        } else {
-            next_attempts
-        };
-        latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
-        if is_infrastructure_error || next_attempts >= 3 {
-            latest.set_state(JobState::Failed);
-            latest.metadata.error = error_text.clone();
-        } else {
-            latest.set_state(JobState::Queued);
-        }
-        let text_delivery_job = if publish_unavailable_text {
-            self.agent_unavailable_text_delivery_job(&latest).await?
-        } else {
-            None
-        };
-        self.timeline_store.update_job(&latest).await?;
-        log(&format!(
-            "agent task dispatch failed for {job_id}: {error_text}"
-        ));
-        Ok(json!({
-            "dispatched": false,
+    let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &latest.id).await?;
+    if !submitted_text_deliveries.is_empty() {
+        latest.mark_complete();
+        ctx.store.update_job(&latest).await?;
+        return Ok(json!({
+            "dispatched": true,
             "job": latest.to_value(),
-            "error": error_text,
-            "text_delivery_job": text_delivery_job.map(|job| job.to_value()),
-        }))
+            "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+        }));
     }
+    let response_text = latest
+        .metadata
+        .agent_task()
+        .map(|task| task.response_text.clone())
+        .unwrap_or_default();
+    let response_text = response_text.trim();
+    if response_text == "RESPONSE_SUBMITTED" {
+        return complete_agent_task_with_suppressed_result(
+            ctx,
+            latest,
+            "agent reported RESPONSE_SUBMITTED without creating a text delivery job",
+            "submitted_without_delivery",
+        )
+        .await;
+    }
+    if let Some(reason) = agent_task_no_response_reason(response_text) {
+        return complete_agent_task_with_suppressed_result(ctx, latest, reason, "none").await;
+    }
+    if response_text.is_empty() {
+        return complete_agent_task_with_suppressed_result(
+            ctx,
+            latest,
+            "agent completed without final response text",
+            "empty",
+        )
+        .await;
+    }
+    complete_agent_task_with_suppressed_result(
+        ctx,
+        latest,
+        "agent returned final text instead of submitting through Clankcord response command",
+        "final_text_without_delivery",
+    )
+    .await
+}
 
-    async fn agent_unavailable_text_delivery_job(&self, job: &Job) -> Result<Option<Job>> {
-        if !self
-            .text_delivery_jobs_for_source(&job.id)
-            .await?
-            .is_empty()
-        {
-            return Ok(None);
-        }
-        let requested_by_user_id = agent_task_requester_id(job);
-        let response = Job::text_delivery(
-            job.scope(),
-            requested_by_user_id.clone(),
-            TextDeliveryPayload::new(
-                TextDeliveryKind::Message,
-                TextTarget::default(),
-                AGENT_UNAVAILABLE_MESSAGE,
-                job.id.clone(),
-                requested_by_user_id,
-                false,
-            ),
+async fn text_delivery_jobs_for_source(ctx: &Ctx, source_job_id: &str) -> Result<Vec<Job>> {
+    ctx.store
+        .list_text_delivery_jobs_for_source(source_job_id)
+        .await
+}
+
+async fn complete_agent_task_with_suppressed_result(
+    ctx: &Ctx,
+    mut job: Job,
+    reason: &'static str,
+    response: &'static str,
+) -> Result<Value> {
+    job.mark_complete();
+    job.metadata.agent_task_mut().result_suppressed = true;
+    ctx.store.update_job(&job).await?;
+    ctx.store
+        .append_scope_event(
+            &job.scope(),
+            json!({
+                "event_kind": "agent_task_result_suppressed",
+                "kind": "agent_task_result_suppressed",
+                "job_id": job.id.clone(),
+                "job_kind": job.kind.as_str(),
+                "reason": reason,
+            }),
+        )
+        .await?;
+    Ok(json!({"dispatched": true, "job": job.to_value(), "response": response}))
+}
+
+async fn fail_agent_task_job(
+    ctx: &Ctx,
+    job_id: String,
+    attempts: i64,
+    error: anyhow::Error,
+) -> Result<Value> {
+    let error_text = error.to_string();
+    let infrastructure_error = error.downcast_ref::<AgentInfrastructureError>();
+    let is_infrastructure_error =
+        infrastructure_error.is_some() || agent_task_error_text_is_infrastructure(&error_text);
+    let publish_unavailable_text =
+        is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
+    let mut latest = ctx.store.get_job(&job_id).await?;
+    if latest.cancel_requested() {
+        let cancelled_at = non_empty(
+            latest.cancelled_at.clone().unwrap_or_default(),
+            isoformat_z(None),
         );
-        self.timeline_store.create_job(response).await.map(Some)
+        latest.mark_cancelled();
+        latest.cancelled_at = Some(cancelled_at);
+        latest.metadata.agent_task_mut().dispatch_error_after_cancel = error_text;
+        ctx.store.update_job(&latest).await?;
+        return Ok(json!({"dispatched": false, "job": latest.to_value(), "cancelled": true}));
     }
+    let submitted_text_deliveries = text_delivery_jobs_for_source(ctx, &job_id).await?;
+    if !submitted_text_deliveries.is_empty() {
+        latest.mark_complete();
+        latest.metadata.agent_task_mut().response_text = "RESPONSE_SUBMITTED".to_string();
+        latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
+        ctx.store.update_job(&latest).await?;
+        return Ok(json!({
+            "dispatched": true,
+            "job": latest.to_value(),
+            "submitted_text_deliveries": submitted_text_deliveries.into_iter().map(|job| job.to_value()).collect::<Vec<_>>(),
+            "error_after_response": error_text,
+        }));
+    }
+    if let Some(preflight) = infrastructure_error.and_then(AgentInfrastructureError::preflight) {
+        latest.metadata.agent_task_mut().preflight = Some(preflight.clone());
+    }
+    let next_attempts = attempts + 1;
+    latest.metadata.agent_task_mut().dispatch_attempts = if is_infrastructure_error {
+        next_attempts.max(3)
+    } else {
+        next_attempts
+    };
+    latest.metadata.agent_task_mut().dispatch_error = error_text.clone();
+    if is_infrastructure_error || next_attempts >= 3 {
+        latest.set_state(JobState::Failed);
+        latest.metadata.error = error_text.clone();
+    } else {
+        latest.set_state(JobState::Queued);
+    }
+    let text_delivery_job = if publish_unavailable_text {
+        agent_unavailable_text_delivery_job(ctx, &latest).await?
+    } else {
+        None
+    };
+    ctx.store.update_job(&latest).await?;
+    log(&format!(
+        "agent task dispatch failed for {job_id}: {error_text}"
+    ));
+    Ok(json!({
+        "dispatched": false,
+        "job": latest.to_value(),
+        "error": error_text,
+        "text_delivery_job": text_delivery_job.map(|job| job.to_value()),
+    }))
+}
 
-    async fn append_agent_invocation_warning_events(
-        &self,
-        job: &Job,
-        details: &[&str],
-    ) -> Result<()> {
-        let mut emitted = std::collections::BTreeSet::new();
-        for detail in details {
-            let Some(event_kind) = agent_invocation_warning_event_kind(detail) else {
-                continue;
-            };
-            if !emitted.insert(event_kind) {
-                continue;
-            }
-            self.timeline_store
-                .append_scope_event(
-                    &job.scope(),
-                    json!({
-                        "event_kind": event_kind,
-                        "kind": event_kind,
-                        "severity": "warning",
-                        "job_id": job.id.clone(),
-                        "job_kind": job.kind.as_str(),
-                        "message": agent_invocation_warning_message(event_kind),
-                    }),
-                )
-                .await?;
-        }
-        Ok(())
+async fn agent_unavailable_text_delivery_job(ctx: &Ctx, job: &Job) -> Result<Option<Job>> {
+    if !text_delivery_jobs_for_source(ctx, &job.id)
+        .await?
+        .is_empty()
+    {
+        return Ok(None);
     }
+    let requested_by_user_id = agent_task_requester_id(job);
+    let response = Job::text_delivery(
+        job.scope(),
+        requested_by_user_id.clone(),
+        TextDeliveryPayload::new(
+            TextDeliveryKind::Message,
+            TextTarget::default(),
+            AGENT_UNAVAILABLE_MESSAGE,
+            job.id.clone(),
+            requested_by_user_id,
+            false,
+        ),
+    );
+    ctx.store.create_job(response).await.map(Some)
+}
+
+async fn append_agent_invocation_warning_events(
+    ctx: &Ctx,
+    job: &Job,
+    details: &[&str],
+) -> Result<()> {
+    let mut emitted = std::collections::BTreeSet::new();
+    for detail in details {
+        let Some(event_kind) = agent_invocation_warning_event_kind(detail) else {
+            continue;
+        };
+        if !emitted.insert(event_kind) {
+            continue;
+        }
+        ctx.store
+            .append_scope_event(
+                &job.scope(),
+                json!({
+                    "event_kind": event_kind,
+                    "kind": event_kind,
+                    "severity": "warning",
+                    "job_id": job.id.clone(),
+                    "job_kind": job.kind.as_str(),
+                    "message": agent_invocation_warning_message(event_kind),
+                }),
+            )
+            .await?;
+    }
+    Ok(())
 }
 
 fn agent_task_requester_id(job: &Job) -> String {
@@ -811,116 +811,114 @@ pub struct AgentTaskPromptContext {
     pub source_request_events: Vec<String>,
 }
 
-impl Runtime {
-    async fn build_agent_task_message_for_session(
-        &self,
-        job: &Job,
-        workdir: &std::path::Path,
-        include_master_prompt: bool,
-    ) -> Result<String> {
-        let context = self.agent_task_prompt_context(job, workdir).await?;
-        build_agent_task_message_for_session(&context, include_master_prompt)
-    }
+async fn build_agent_task_message_for_job(
+    ctx: &Ctx,
+    job: &Job,
+    workdir: &std::path::Path,
+    include_master_prompt: bool,
+) -> Result<String> {
+    let context = agent_task_prompt_context(ctx, job, workdir).await?;
+    build_agent_task_message_for_session(&context, include_master_prompt)
+}
 
-    async fn agent_task_prompt_context(
-        &self,
-        job: &Job,
-        workdir: &std::path::Path,
-    ) -> Result<AgentTaskPromptContext> {
-        let command = job.command();
-        let request = command
-            .map(|command| command.arguments.request_text())
-            .unwrap_or_default();
-        let requested_by = command
-            .map(|command| command.requested_by_speaker_label.clone())
-            .unwrap_or_default();
-        let source_event_ids = agent_task_source_event_ids(job);
-        let source_events = self.agent_task_source_events(&source_event_ids).await?;
-        let end = parse_instant(&job.created_at).unwrap_or_else(utc_now);
-        let start = end - chrono::Duration::minutes(5);
-        let speech_kinds = set(["speech_segment", "transcript", "discord_text_message"]);
-        let events = self
-            .timeline_store
-            .load_scope_events(
-                job.scope_kind,
-                &job.guild_id,
-                &job.scope_id,
-                Some(start),
-                Some(end + chrono::Duration::minutes(2)),
-                Some(&speech_kinds),
-                None,
-                false,
-            )
-            .await?;
-        let mut recent_scope_events = Vec::new();
-        let mut source_request_events = Vec::new();
-        for event in events {
-            let line = agent_prompt_event_line(&event);
-            if line.is_empty() {
-                continue;
-            }
-            let event_id = first_value_string(&event, &["event_id", "eventId"]);
-            if source_event_ids.contains(&event_id) {
-                source_request_events.push(line);
-            } else {
-                recent_scope_events.push(line);
-            }
+async fn agent_task_prompt_context(
+    ctx: &Ctx,
+    job: &Job,
+    workdir: &std::path::Path,
+) -> Result<AgentTaskPromptContext> {
+    let command = job.command();
+    let request = command
+        .map(|command| command.arguments.request_text())
+        .unwrap_or_default();
+    let requested_by = command
+        .map(|command| command.requested_by_speaker_label.clone())
+        .unwrap_or_default();
+    let source_event_ids = agent_task_source_event_ids(job);
+    let source_events = agent_task_source_events(ctx, &source_event_ids).await?;
+    let end = parse_instant(&job.created_at).unwrap_or_else(utc_now);
+    let start = end - chrono::Duration::minutes(5);
+    let speech_kinds = set(["speech_segment", "transcript", "discord_text_message"]);
+    let events = ctx
+        .store
+        .load_scope_events(
+            job.scope_kind,
+            &job.guild_id,
+            &job.scope_id,
+            Some(start),
+            Some(end + chrono::Duration::minutes(2)),
+            Some(&speech_kinds),
+            None,
+            false,
+        )
+        .await?;
+    let mut recent_scope_events = Vec::new();
+    let mut source_request_events = Vec::new();
+    for event in events {
+        let line = agent_prompt_event_line(&event);
+        if line.is_empty() {
+            continue;
         }
-        if source_request_events.is_empty() && !request.trim().is_empty() {
-            source_request_events.push(format!(
-                "[{}] {}: {}",
-                job.created_at,
-                non_empty(requested_by.clone(), "requester".to_string()),
-                request
-            ));
+        let event_id = first_value_string(&event, &["event_id", "eventId"]);
+        if source_event_ids.contains(&event_id) {
+            source_request_events.push(line);
+        } else {
+            recent_scope_events.push(line);
         }
-        let agent_session_id = agent_task_session_id(job)?;
-        let agent_session = self
-            .timeline_store
-            .get_agent_session_record(&agent_session_id)
-            .await?;
-        let parent = self.agent_task_parent_job(job).await?;
-        let request_origin = agent_task_request_origin(
-            command,
-            &agent_session.route_kind,
-            &source_events,
-            parent.as_ref(),
-        );
-        Ok(AgentTaskPromptContext {
-            job_id: job.id.clone(),
-            agent_session_id,
-            resumed_from_agent_session_id: agent_session.resumed_from_agent_session_id,
-            route_kind: agent_session.route_kind,
-            request_origin,
-            response_surface: agent_session.text_target.kind,
-            guild_id: job.guild_id.clone(),
-            scope_id: job.scope_id.clone(),
-            requested_by_user_id: job.requested_by_user_id.clone(),
-            requested_by,
-            request,
-            workdir: workdir.display().to_string(),
-            recent_scope_events,
-            source_request_events,
-        })
     }
+    if source_request_events.is_empty() && !request.trim().is_empty() {
+        source_request_events.push(format!(
+            "[{}] {}: {}",
+            job.created_at,
+            non_empty(requested_by.clone(), "requester".to_string()),
+            request
+        ));
+    }
+    let agent_session_id = agent_task_session_id(job)?;
+    let agent_session = ctx
+        .store
+        .get_agent_session_record(&agent_session_id)
+        .await?;
+    let parent = agent_task_parent_job(ctx, job).await?;
+    let request_origin = agent_task_request_origin(
+        command,
+        &agent_session.route_kind,
+        &source_events,
+        parent.as_ref(),
+    );
+    Ok(AgentTaskPromptContext {
+        job_id: job.id.clone(),
+        agent_session_id,
+        resumed_from_agent_session_id: agent_session.resumed_from_agent_session_id,
+        route_kind: agent_session.route_kind,
+        request_origin,
+        response_surface: agent_session.text_target.kind,
+        guild_id: job.guild_id.clone(),
+        scope_id: job.scope_id.clone(),
+        requested_by_user_id: job.requested_by_user_id.clone(),
+        requested_by,
+        request,
+        workdir: workdir.display().to_string(),
+        recent_scope_events,
+        source_request_events,
+    })
+}
 
-    async fn agent_task_source_events(
-        &self,
-        source_event_ids: &std::collections::BTreeSet<String>,
-    ) -> Result<Vec<Value>> {
-        let mut events = Vec::new();
-        for event_id in source_event_ids {
-            events.push(self.timeline_store.get_event(event_id).await?);
-        }
-        Ok(events)
+async fn agent_task_source_events(
+    ctx: &Ctx,
+    source_event_ids: &std::collections::BTreeSet<String>,
+) -> Result<Vec<Value>> {
+    let mut events = Vec::new();
+    for event_id in source_event_ids {
+        events.push(ctx.store.get_event(event_id).await?);
     }
+    Ok(events)
+}
 
-    async fn agent_task_parent_job(&self, job: &Job) -> Result<Option<Job>> {
-        let Some(parent_job_id) = job.parent_job_id.as_deref() else {
-            return Ok(None);
-        };
-        Ok(Some(self.timeline_store.get_job(parent_job_id).await?))
-    }
+async fn agent_task_parent_job(ctx: &Ctx, job: &Job) -> Result<Option<Job>> {
+    let Some(parent_job_id) = job.parent_job_id.as_deref() else {
+        return Ok(None);
+    };
+    Ok(Some(ctx.store.get_job(parent_job_id).await?))
 }
 
 pub fn build_agent_task_message(context: &AgentTaskPromptContext) -> Result<String> {

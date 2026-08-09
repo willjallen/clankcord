@@ -12,9 +12,9 @@ use crate::runtime::{
     DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
-pub(crate) type DiscordApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+pub type DiscordApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
-pub(crate) trait DiscordApi: Send + Sync {
+pub trait DiscordApi: Send + Sync {
     fn discord_text_send<'a>(
         &'a self,
         payload: DiscordTextSendPayload,
@@ -65,4 +65,76 @@ pub(crate) trait DiscordApi: Send + Sync {
     fn discord_voice_status_snapshot<'a>(
         &'a self,
     ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput>;
+}
+
+/// Explicit "no Discord wired" implementation for headless contexts (tests,
+/// one-shot CLI). Every effect fails loudly; nothing is silently dropped.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DiscordApiUnavailable;
+
+macro_rules! unavailable {
+    ($name:ident, $payload:ty, $output:ty) => {
+        fn $name<'a>(&'a self, _payload: $payload) -> DiscordApiFuture<'a, $output> {
+            Box::pin(async { Err(anyhow::anyhow!("discord api is not wired in this context")) })
+        }
+    };
+}
+
+impl DiscordApi for DiscordApiUnavailable {
+    unavailable!(
+        discord_text_send,
+        DiscordTextSendPayload,
+        DiscordTextSendOutput
+    );
+    unavailable!(
+        discord_forum_thread_create,
+        DiscordForumThreadCreatePayload,
+        DiscordForumThreadCreateOutput
+    );
+    unavailable!(
+        discord_forum_thread_rename,
+        DiscordForumThreadRenamePayload,
+        DiscordForumThreadRenameOutput
+    );
+    unavailable!(
+        discord_typing_indicator,
+        DiscordTypingIndicatorPayload,
+        DiscordTypingIndicatorOutput
+    );
+    unavailable!(
+        discord_voice_join,
+        DiscordVoiceJoinPayload,
+        DiscordVoiceJoinOutput
+    );
+
+    fn discord_voice_leave<'a>(
+        &'a self,
+        _guild_id: String,
+        _voice_channel_id: String,
+        _payload: DiscordVoiceLeavePayload,
+    ) -> DiscordApiFuture<'a, DiscordVoiceLeaveOutput> {
+        Box::pin(async { Err(anyhow::anyhow!("discord api is not wired in this context")) })
+    }
+
+    unavailable!(
+        discord_voice_mute,
+        DiscordVoiceMutePayload,
+        DiscordVoiceMuteOutput
+    );
+    unavailable!(
+        discord_voice_deafen,
+        DiscordVoiceDeafenPayload,
+        DiscordVoiceDeafenOutput
+    );
+    unavailable!(
+        discord_voice_play_audio,
+        DiscordVoicePlayAudioPayload,
+        DiscordVoicePlayAudioOutput
+    );
+
+    fn discord_voice_status_snapshot<'a>(
+        &'a self,
+    ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
+        Box::pin(async { Err(anyhow::anyhow!("discord api is not wired in this context")) })
+    }
 }

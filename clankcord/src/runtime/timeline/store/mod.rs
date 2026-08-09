@@ -18,10 +18,10 @@ use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
 
 pub use jobs::JobVisibility;
-pub use wake_circuit::WakeCircuitAdmission;
 pub(crate) use jobs::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, upsert_job_rows};
 pub(crate) use transcription::TranscriptionSlotRecord;
 pub(crate) use voice_state::VOICE_ADAPTER_SNAPSHOT_STATUS_KEY;
+pub use wake_circuit::WakeCircuitAdmission;
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 pub(crate) use std::fs;

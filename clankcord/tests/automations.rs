@@ -9,7 +9,7 @@ use clankcord::runtime::automations::{
 };
 use clankcord::runtime::timeline::{TimelineStore, isoformat_z, utc_now};
 use clankcord::runtime::{
-    CommandRequest, Job, JobKind, JobState, RoomAgentPlacementAction, RoomConfig, Runtime,
+    CommandRequest, Ctx, Job, JobKind, JobState, RoomAgentPlacementAction, RoomConfig,
     RuntimeScope, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
     VoiceBotStatus,
 };
@@ -569,7 +569,7 @@ async fn runtime_loads_active_automations_after_restart() {
 
     assert_eq!(
         restarted
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -595,21 +595,24 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
         1,
     )
     .await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.target.kind, TextTargetKind::AgentChat);
     assert_eq!(payload.content, "Blake joined.");
     assert_eq!(payload.source_job_id, record.automation_id);
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -631,9 +634,12 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -644,7 +650,10 @@ async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {
     assert_eq!(payload.reason, "auto_join");
     assert_eq!(payload.cooldown_seconds, None);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -665,9 +674,12 @@ async fn room_placement_builtin_automation_releases_orphan_bot_outside_configure
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -697,9 +709,12 @@ async fn room_placement_builtin_automation_releases_orphan_voice_bot_presence() 
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -727,9 +742,12 @@ async fn room_placement_builtin_automation_groups_orphan_voice_bot_presence_by_c
     second_bot.current_channel_id = "code".to_string();
     store.upsert_voice_bot_state(&first_bot).await.unwrap();
     store.upsert_voice_bot_state(&second_bot).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -758,9 +776,12 @@ async fn room_placement_builtin_automation_uses_only_direct_leave_for_empty_orph
     let mut left = voice_state("", "user-a", "User A");
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -790,9 +811,12 @@ async fn room_placement_builtin_automation_waits_for_pending_orphan_disconnect()
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -813,9 +837,12 @@ async fn room_placement_builtin_automation_uses_configured_join_threshold() {
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 
@@ -824,7 +851,10 @@ async fn room_placement_builtin_automation_uses_configured_join_threshold() {
         .await
         .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"].as_array().unwrap().len(), 1);
 }
@@ -844,9 +874,12 @@ async fn room_placement_builtin_automation_skips_rooms_without_auto_join() {
         .record_voice_state_update(None, voice_state(&room.channel_id, "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -857,11 +890,17 @@ async fn room_placement_builtin_automation_respects_active_auto_join_suppression
     let store = test_store(raw.path()).await;
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let room = code_room();
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .suppress_room_auto_join(&room, 5 * 60, "auto_policy_empty", "", true)
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+        &runtime,
+        &room,
+        5 * 60,
+        "auto_policy_empty",
+        "",
+        true,
+    )
+    .await
+    .unwrap();
     store
         .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
         .await
@@ -871,7 +910,10 @@ async fn room_placement_builtin_automation_respects_active_auto_join_suppression
         .await
         .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -902,18 +944,21 @@ async fn room_placement_restart_sync_prevents_stale_voice_rows_from_triggering_a
     let mut stale_parent = store.create_job(stale_parent).await.unwrap();
     stale_parent.set_state(JobState::FailedTimeout);
     store.update_job(&stale_parent).await.unwrap();
-    let mut restarted = test_runtime(store.clone());
-    restarted
-        .sync_voice_adapter_status(
-            vec![ready_bot()],
-            Vec::new(),
-            vec!["guild".to_string()],
-            Vec::new(),
-        )
-        .await
-        .unwrap();
+    let restarted = test_runtime(store.clone());
+    clankcord::runtime::domain::maintenance::voice_status::sync_voice_adapter_status(
+        &restarted,
+        vec![ready_bot()],
+        Vec::new(),
+        vec!["guild".to_string()],
+        Vec::new(),
+    )
+    .await
+    .unwrap();
 
-    let result = restarted.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+        .await
+        .unwrap()
+        .to_json();
 
     assert!(
         store
@@ -966,9 +1011,12 @@ async fn room_placement_restart_with_recorded_empty_room_does_not_rejoin_after_p
         .record_voice_state_update(None, voice_state("", "user-b", "User B"))
         .await
         .unwrap();
-    let mut restarted = test_runtime(store.clone());
+    let restarted = test_runtime(store.clone());
 
-    let result = restarted.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+        .await
+        .unwrap()
+        .to_json();
 
     assert!(
         store
@@ -986,11 +1034,17 @@ async fn room_placement_builtin_automation_manual_leave_suppresses_auto_join() {
     let store = test_store(raw.path()).await;
     store.upsert_voice_bot_state(&ready_bot()).await.unwrap();
     let room = code_room();
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .suppress_room_auto_join(&room, 60 * 60, "manual_leave", "user-a", true)
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+        &runtime,
+        &room,
+        60 * 60,
+        "manual_leave",
+        "user-a",
+        true,
+    )
+    .await
+    .unwrap();
     store
         .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
         .await
@@ -1000,7 +1054,10 @@ async fn room_placement_builtin_automation_manual_leave_suppresses_auto_join() {
         .await
         .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -1028,13 +1085,22 @@ async fn room_placement_builtin_automation_manual_leave_releases_present_bot() {
         .record_voice_state_update(None, voice_state("code", "user-b", "User B"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .suppress_room_auto_join(&room, 60 * 60, "manual_leave", "user-a", true)
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::suppress_room_auto_join(
+        &runtime,
+        &room,
+        60 * 60,
+        "manual_leave",
+        "user-a",
+        true,
+    )
+    .await
+    .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1054,17 +1120,25 @@ async fn room_placement_builtin_automation_manual_hold_joins_with_one_participan
     let mut room = code_room();
     room.auto_join = false;
     write_test_runtime_config(&store, &[room.clone()]).await;
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .set_room_manual_hold(&room, 60 * 60, "explicit_request", "user-a")
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+        &runtime,
+        &room,
+        60 * 60,
+        "explicit_request",
+        "user-a",
+    )
+    .await
+    .unwrap();
     store
         .record_voice_state_update(None, voice_state("code", "user-a", "User A"))
         .await
         .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1097,9 +1171,12 @@ async fn room_placement_builtin_automation_leaves_empty_rooms_after_grace() {
     let mut left = voice_state("", "user-a", "User A");
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1136,9 +1213,12 @@ async fn room_placement_builtin_automation_waits_for_configured_empty_release_se
     let mut left = voice_state("", "user-a", "User A");
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -1168,9 +1248,12 @@ async fn room_placement_builtin_automation_uses_configured_rejoin_cooldown() {
     let mut left = voice_state("", "user-a", "User A");
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1198,9 +1281,12 @@ async fn room_placement_builtin_automation_leaves_single_deafened_participant_af
     let mut state = voice_state_with_flags("code", "user-a", "User A", false, false, false, true);
     state["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, state).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1233,9 +1319,12 @@ async fn room_placement_builtin_automation_waits_for_configured_deafened_release
     let mut state = voice_state_with_flags("code", "user-a", "User A", false, false, false, true);
     state["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, state).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -1261,9 +1350,12 @@ async fn room_placement_builtin_automation_disables_single_deafened_release_at_z
     let mut state = voice_state_with_flags("code", "user-a", "User A", false, false, false, true);
     state["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, state).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
+    let runtime = test_runtime(store.clone());
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -1286,13 +1378,21 @@ async fn room_placement_builtin_automation_keeps_manual_join_hold_with_deafened_
     let mut state = voice_state_with_flags("code", "user-a", "User A", false, false, false, true);
     state["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, state).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .set_room_manual_hold(&room, 60 * 60, "explicit_request", "user-a")
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+        &runtime,
+        &room,
+        60 * 60,
+        "explicit_request",
+        "user-a",
+    )
+    .await
+    .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(result["createdJobs"], json!([]));
 }
@@ -1319,13 +1419,21 @@ async fn room_placement_builtin_automation_empty_room_overrides_manual_hold() {
     let mut left = voice_state("", "user-a", "User A");
     left["updated_at"] = json!(six_minutes_ago());
     store.record_voice_state_update(None, left).await.unwrap();
-    let mut runtime = test_runtime(store.clone());
-    runtime
-        .set_room_manual_hold(&room, 60 * 60, "explicit_request", "user-a")
-        .await
-        .unwrap();
+    let runtime = test_runtime(store.clone());
+    clankcord::runtime::rooms::control_state::set_room_manual_hold(
+        &runtime,
+        &room,
+        60 * 60,
+        "explicit_request",
+        "user-a",
+    )
+    .await
+    .unwrap();
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
@@ -1376,19 +1484,22 @@ async fn participant_left_automation_fires_from_durable_voice_transition() {
         transition_events[0]["event_kind"],
         json!("participant_left")
     );
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.content, "Blake left.");
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1485,21 +1596,24 @@ async fn overlap_automation_can_match_current_room_participants() {
         .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.target.kind, TextTargetKind::Dm);
     assert_eq!(payload.target.user_id, "user-a");
     assert_eq!(payload.content, "Reminder: talk to Blake about Woven.");
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1545,21 +1659,24 @@ async fn room_participants_exposes_voice_state_flags_for_conditions() {
         .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     assert_eq!(
         job.text_delivery_payload().unwrap().content,
         "Blake is present and can hear."
     );
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1603,21 +1720,24 @@ async fn event_room_participants_exposes_voice_state_flags_for_transition_condit
         .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     assert_eq!(
         job.text_delivery_payload().unwrap().content,
         "Blake joined undeafened."
     );
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1670,21 +1790,24 @@ async fn room_state_changed_trigger_fires_for_participant_deafen_changes() {
         )
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     assert_eq!(
         job.text_delivery_payload().unwrap().content,
         "Blake undeafened."
     );
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1737,21 +1860,24 @@ async fn room_state_changed_trigger_fires_for_participant_mute_changes() {
         )
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     assert_eq!(
         job.text_delivery_payload().unwrap().content,
         "Blake unmuted."
     );
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1799,14 +1925,17 @@ async fn recurring_event_automation_processes_all_matching_events_seen_in_one_pa
         2,
     )
     .await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 2);
     let updated = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -1845,14 +1974,17 @@ async fn recurring_job_automation_processes_all_matching_jobs_seen_in_one_pass()
     create_completed_text_delivery(&store, "source-delivery-1", "first").await;
     tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     create_completed_text_delivery(&store, "source-delivery-2", "second").await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 2);
     let updated = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -1901,19 +2033,22 @@ async fn event_room_snapshot_matches_presence_at_transition_time() {
         .record_voice_state_update(None, voice_state("", "user-a", "Will"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.content, "Blake joined while Will was present.");
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1952,13 +2087,16 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
     .unwrap();
     let record = store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "vince", "Vince joined", 1).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let first = runtime.run_automations().await.unwrap().to_json();
+    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     assert!(first["createdJobs"].as_array().unwrap().is_empty());
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -1967,14 +2105,17 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
     );
 
     append_speech(
-        &runtime.timeline_store,
+        &runtime.store,
         "room.member_joined",
         "blake",
         "Blake joined",
         2,
     )
     .await;
-    let second = runtime.run_automations().await.unwrap().to_json();
+    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     assert_eq!(second["createdJobs"].as_array().unwrap().len(), 1);
 }
 
@@ -1991,16 +2132,22 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
     .unwrap();
     let record = store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let first = runtime.run_automations().await.unwrap().to_json();
-    let second = runtime.run_automations().await.unwrap().to_json();
+    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
+    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert_eq!(first["createdJobs"].as_array().unwrap().len(), 1);
     assert!(second["createdJobs"].as_array().unwrap().is_empty());
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -2009,18 +2156,21 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
     );
 
     append_speech(
-        &runtime.timeline_store,
+        &runtime.store,
         "room.member_joined",
         "blake",
         "Blake joined again",
         2,
     )
     .await;
-    let third = runtime.run_automations().await.unwrap().to_json();
+    let third = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     assert_eq!(third["createdJobs"].as_array().unwrap().len(), 1);
     assert_eq!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -2073,13 +2223,16 @@ async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let first = runtime.run_automations().await.unwrap().to_json();
+    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     assert!(first["createdJobs"].as_array().unwrap().is_empty());
     assert!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -2088,16 +2241,19 @@ async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let second = runtime.run_automations().await.unwrap().to_json();
+    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = second["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     let payload = job.text_delivery_payload().unwrap();
     assert_eq!(payload.content, "Blake is still away.");
     let updated = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -2123,19 +2279,25 @@ async fn delayed_recheck_does_not_duplicate_work_before_due() {
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let first = runtime.run_automations().await.unwrap().to_json();
+    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     let pending = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap()
         .pending_recheck
         .expect("first evaluation stores delayed recheck");
-    let second = runtime.run_automations().await.unwrap().to_json();
+    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     let after_second = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -2175,18 +2337,24 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let first = runtime.run_automations().await.unwrap().to_json();
+    let first = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     runtime
-        .timeline_store
+        .store
         .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let second = runtime.run_automations().await.unwrap().to_json();
+    let second = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     let active_after_skip = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -2198,15 +2366,18 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
     assert_eq!(active_after_skip.state, AutomationState::Active);
 
     runtime
-        .timeline_store
+        .store
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let third = runtime.run_automations().await.unwrap().to_json();
+    let third = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
     assert!(third["createdJobs"].as_array().unwrap().is_empty());
     assert!(
         runtime
-            .timeline_store
+            .store
             .get_automation(&record.automation_id)
             .await
             .unwrap()
@@ -2214,12 +2385,15 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
             .is_some()
     );
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let fourth = runtime.run_automations().await.unwrap().to_json();
+    let fourth = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = fourth["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let updated = runtime
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -2245,19 +2419,24 @@ async fn delayed_recheck_survives_fresh_runtime_context() {
         .record_voice_state_update(None, voice_state("", "blake", "Blake"))
         .await
         .unwrap();
-    let mut first_runtime = test_runtime(store);
-    first_runtime.run_automations().await.unwrap();
-    let store = first_runtime.timeline_store.clone();
+    let first_runtime = test_runtime(store);
+    clankcord::runtime::automations::engine::run_automations(&first_runtime)
+        .await
+        .unwrap();
+    let store = first_runtime.store.clone();
     drop(first_runtime);
 
     tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
-    let mut restarted = test_runtime(store);
-    let result = restarted.run_automations().await.unwrap().to_json();
+    let restarted = test_runtime(store);
+    let result = clankcord::runtime::automations::engine::run_automations(&restarted)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let updated = restarted
-        .timeline_store
+        .store
         .get_automation(&record.automation_id)
         .await
         .unwrap();
@@ -2301,14 +2480,17 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
     completed_delivery = store.create_job(completed_delivery).await.unwrap();
     completed_delivery.mark_complete();
     store.update_job(&completed_delivery).await.unwrap();
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     let created = result["createdJobs"].as_array().unwrap();
     assert_eq!(created.len(), 1);
     let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.timeline_store.get_job(job_id).await.unwrap();
+    let job = runtime.store.get_job(job_id).await.unwrap();
     assert_eq!(job.kind, JobKind::Command);
     assert_eq!(
         job.command().unwrap().arguments.request,
@@ -2332,13 +2514,16 @@ async fn automation_action_failures_are_audited_without_crashing_runner() {
     .unwrap();
     store.create_automation(spec).await.unwrap();
     append_speech(&store, "room.member_joined", "blake", "Blake joined", 1).await;
-    let mut runtime = test_runtime(store);
+    let runtime = test_runtime(store);
 
-    let result = runtime.run_automations().await.unwrap().to_json();
+    let result = clankcord::runtime::automations::engine::run_automations(&runtime)
+        .await
+        .unwrap()
+        .to_json();
 
     assert!(result["createdJobs"].as_array().unwrap().is_empty());
     let failures = runtime
-        .timeline_store
+        .store
         .load_events("guild", "code", None, None, None, None, false)
         .await
         .unwrap()
@@ -2495,8 +2680,8 @@ async fn column_exists(pool: &sqlx::PgPool, table: &str, column: &str) -> bool {
     sqlx::Row::try_get(&row, "exists").unwrap()
 }
 
-fn test_runtime(timeline_store: TimelineStore) -> Runtime {
-    Runtime::from_store(timeline_store).unwrap()
+fn test_runtime(timeline_store: TimelineStore) -> Ctx {
+    Ctx::new(timeline_store)
 }
 
 async fn insert_agent_source_job(store: &TimelineStore) {

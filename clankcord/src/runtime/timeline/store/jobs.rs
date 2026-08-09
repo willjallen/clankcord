@@ -1806,4 +1806,3 @@ fn audio_segment_payload_overlaps_wake_window(
     let window_start = original_wake_at - chrono::Duration::seconds(payload.lookback_seconds);
     segment.segment_start_time <= window_end && segment.segment_end_time >= window_start
 }
-

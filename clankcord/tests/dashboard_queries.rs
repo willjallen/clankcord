@@ -8,8 +8,8 @@ mod common;
 use clankcord::runtime::automations::AutomationSpec;
 use clankcord::runtime::timeline::{instant_ms_dt, isoformat_z};
 use clankcord::runtime::{
-    CommandRequest, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
-    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, Job, Runtime,
+    CommandRequest, Ctx, DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest,
+    DashboardOverviewRequest, DashboardTimelineRequest, DashboardTranscriptRequest, Job,
     RuntimeScope, default_dashboard_categories, parse_dashboard_filter,
 };
 
@@ -74,15 +74,17 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
         job.updated_at = job.created_at.clone();
         store.create_job(job).await.unwrap();
     }
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let default_page = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let default_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             limit: 3,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(default_page["matched"], json!(0));
     assert_eq!(default_page["returned"], json!(0));
     assert_eq!(
@@ -115,14 +117,16 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
         expected_kinds
     );
 
-    let background_page = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let background_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             categories: values(["background"]),
             limit: 3,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(background_page["matched"], json!(7));
     assert_eq!(background_page["returned"], json!(3));
     assert_eq!(background_page["hasMore"], json!(true));
@@ -134,24 +138,28 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
             .all(|job| job["category"] == "background")
     );
 
-    let all_page = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let all_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             categories: DashboardFilter::All,
             limit: 10,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(all_page["matched"], json!(7));
 
-    let none_page = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let none_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             categories: DashboardFilter::None,
             limit: 10,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(none_page["matched"], json!(0));
     assert_eq!(none_page["returned"], json!(0));
 }
@@ -237,17 +245,19 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
         now + Duration::seconds(known_kinds.len() as i64),
     )
     .await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let all = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let all = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             categories: DashboardFilter::All,
             limit: 100,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(all["matched"], json!(known_kinds.len() + 1));
     for record in all["records"].as_array().unwrap() {
         let kind = record["event"]["event_kind"].as_str().unwrap();
@@ -263,14 +273,16 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
         assert_eq!(record["category"], record["event"]["category"]);
     }
 
-    let default_page = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let default_page = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             limit: 100,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert!(default_page["records"].as_array().unwrap().iter().any(
         |record| record["event"]["event_kind"] == "historic_operator_signal"
             && record["category"] == "other"
@@ -285,15 +297,17 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
             )
     );
 
-    let voice_detail = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let voice_detail = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             categories: values(["voice_detail"]),
             limit: 100,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(voice_detail["matched"], json!(8));
     assert!(
         voice_detail["records"]
@@ -303,12 +317,14 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
             .all(|record| record["category"] == "voice_detail")
     );
 
-    let invalid = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let invalid = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             categories: values(["made_up_category"]),
             ..DashboardTimelineRequest::default()
-        })
-        .await;
+        },
+    )
+    .await;
     assert!(invalid.is_err());
 }
 
@@ -350,10 +366,11 @@ async fn dashboard_timeline_applies_search_scope_state_and_kind_before_limit() {
         )
         .await;
     }
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let response = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let response = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             kinds: values(["agent_task"]),
             event_kinds: values(["feedback"]),
@@ -365,9 +382,10 @@ async fn dashboard_timeline_applies_search_scope_state_and_kind_before_limit() {
             search_field: "all".to_string(),
             limit: 1,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(response["matched"], json!(1));
     assert_eq!(response["returned"], json!(1));
@@ -396,15 +414,17 @@ async fn dashboard_timeline_applies_search_scope_state_and_kind_before_limit() {
             .contains(&json!("audio_segment"))
     );
 
-    let none = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let none = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             event_kinds: DashboardFilter::None,
             limit: 1,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(none["matched"], json!(0));
     assert_eq!(none["returned"], json!(0));
     assert!(
@@ -461,16 +481,18 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
         None,
     )
     .await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let response = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let response = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             from: "-1h".to_string(),
             limit: 10,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(response["matched"], json!(1));
     assert!(
         response["jobs"]
@@ -504,16 +526,18 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
         .unwrap();
     assert_eq!(dm_scope["label"], json!("Direct message with rowan"));
 
-    let human_search = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let human_search = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event", "job"]),
             search: "rowan".to_string(),
             search_field: "all".to_string(),
             limit: 10,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(human_search["matched"], json!(2));
     assert!(
         human_search["records"]
@@ -524,15 +548,17 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
                 && record["event"]["scopeLabel"] == "Direct message with rowan")
     );
 
-    let only_maintenance = runtime
-        .dashboard_jobs(DashboardJobsRequest {
+    let only_maintenance = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+        &runtime,
+        DashboardJobsRequest {
             categories: values(["background"]),
             kinds: values(["runtime_maintenance"]),
             limit: 10,
             ..DashboardJobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(only_maintenance["matched"], json!(1));
     assert_eq!(only_maintenance["jobs"][0]["job_id"], json!(maintenance.id));
     assert_eq!(only_maintenance["jobs"][0]["category"], json!("background"));
@@ -561,22 +587,24 @@ async fn dashboard_timeline_cursor_pins_snapshot_and_walks_combined_records_once
         )
         .await;
     }
-    let runtime = Runtime::from_store(store).unwrap();
-    let first = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let runtime = Ctx::new(store);
+    let first = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             limit: 2,
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(first["matched"], json!(3));
     assert_eq!(first["returned"], json!(2));
     assert_eq!(first["hasMore"], json!(true));
     let cursor = first["nextCursor"].as_str().unwrap().to_string();
 
     insert_event(
-        &runtime.timeline_store,
+        &runtime.store,
         "evt_after_snapshot",
         "voice_channel",
         "guild",
@@ -589,16 +617,18 @@ async fn dashboard_timeline_cursor_pins_snapshot_and_walks_combined_records_once
         Some("Code Lounge"),
     )
     .await;
-    let second = runtime
-        .dashboard_timeline(DashboardTimelineRequest {
+    let second = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+        &runtime,
+        DashboardTimelineRequest {
             record_types: values(["event"]),
             limit: 2,
             cursor,
             metadata: "none".to_string(),
             ..DashboardTimelineRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(second["snapshotAt"], first["snapshotAt"]);
     assert!(second.get("matched").is_none());
     assert!(second.get("facets").is_none());
@@ -654,12 +684,14 @@ async fn dashboard_overview_aggregates_the_full_hour_and_excludes_stale_failures
         Some("Code Lounge"),
     )
     .await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let overview = runtime
-        .dashboard_overview(DashboardOverviewRequest { jobs_limit: 2 })
-        .await
-        .unwrap();
+    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+        &runtime,
+        DashboardOverviewRequest { jobs_limit: 2 },
+    )
+    .await
+    .unwrap();
     let failed = overview["jobs"]["summary"]["byState"]
         .as_array()
         .unwrap()
@@ -752,11 +784,13 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
     fresh_failed.updated_at = fresh_failed.created_at.clone();
     fresh_failed.completed_at = Some(fresh_failed.created_at.clone());
     let fresh_failed = store.create_job(fresh_failed).await.unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
-    let view = runtime
-        .dashboard_agents(DashboardAgentsRequest { limit: 1 })
-        .await
-        .unwrap();
+    let runtime = Ctx::new(store);
+    let view = clankcord::runtime::timeline::views::dashboard::dashboard_agents(
+        &runtime,
+        DashboardAgentsRequest { limit: 1 },
+    )
+    .await
+    .unwrap();
 
     assert_eq!(view["agents"]["jobs"].as_array().unwrap().len(), 1);
     assert_eq!(view["agents"]["summary"]["total"], json!(5));
@@ -813,10 +847,12 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         .unwrap();
     assert_eq!(week["jobs"], json!(5));
 
-    let detail = runtime
-        .dashboard_agent_detail(&fresh_failed.id)
-        .await
-        .unwrap();
+    let detail = clankcord::runtime::timeline::views::dashboard::dashboard_agent_detail(
+        &runtime,
+        &fresh_failed.id,
+    )
+    .await
+    .unwrap();
     assert_eq!(detail["job"]["request"], json!(large_request));
     assert_eq!(detail["job"]["attempts"], json!(0));
     assert!(detail["job"]["durationMs"].is_i64());
@@ -899,9 +935,12 @@ async fn dashboard_automations_and_transcript_resolve_labels_without_rooms_view_
         None,
     )
     .await;
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let automations = runtime.dashboard_automations().await.unwrap();
+    let automations =
+        clankcord::runtime::timeline::views::dashboard::dashboard_automations(&runtime)
+            .await
+            .unwrap();
     let record = &automations["automations"]["records"][0];
     assert_eq!(record["spec"]["scope"]["scopeLabel"], json!("Code Lounge"));
     assert_eq!(
@@ -910,10 +949,12 @@ async fn dashboard_automations_and_transcript_resolve_labels_without_rooms_view_
     );
     assert!(automations.get("publications").is_none());
 
-    let transcript = runtime
-        .dashboard_transcript(DashboardTranscriptRequest::default())
-        .await
-        .unwrap();
+    let transcript = clankcord::runtime::timeline::views::dashboard::dashboard_transcript(
+        &runtime,
+        DashboardTranscriptRequest::default(),
+    )
+    .await
+    .unwrap();
     assert_eq!(
         transcript["transcript"]["events"][0]["event_id"],
         json!("evt_dm_older")

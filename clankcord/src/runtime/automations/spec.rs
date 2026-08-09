@@ -6,7 +6,7 @@ use anyhow::Context;
 use sqlx::Row;
 
 use crate::runtime::timeline::{TimelineStore, instant_ms_str, isoformat_z, new_id, parse_instant};
-use crate::runtime::{JobKind, JobState, Runtime, RuntimeScopeKind};
+use crate::runtime::{Ctx, JobKind, JobState, RuntimeScopeKind};
 
 const AUTOMATION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAUT";
 const AUTOMATION_PAYLOAD_BLOB_VERSION: u16 = 1;
@@ -809,45 +809,39 @@ async fn upsert_automation_record_in_tx(
     Ok(())
 }
 
-impl Runtime {
-    pub fn validate_automation_from_value(&self, value: &Value) -> Result<Value> {
-        let spec = AutomationSpec::from_json(value)?;
-        Ok(json!({"valid": true, "automation": spec.to_json()}))
-    }
+pub fn validate_automation_from_value(_ctx: &Ctx, value: &Value) -> Result<Value> {
+    let spec = AutomationSpec::from_json(value)?;
+    Ok(json!({"valid": true, "automation": spec.to_json()}))
+}
 
-    pub async fn create_automation_from_value(&mut self, value: &Value) -> Result<Value> {
-        let spec = AutomationSpec::from_json(value)?;
-        let record = self.timeline_store.create_automation(spec).await?;
-        Ok(json!({"created": true, "automation": record.to_json()}))
-    }
+pub async fn create_automation_from_value(ctx: &Ctx, value: &Value) -> Result<Value> {
+    let spec = AutomationSpec::from_json(value)?;
+    let record = ctx.store.create_automation(spec).await?;
+    Ok(json!({"created": true, "automation": record.to_json()}))
+}
 
-    pub async fn list_automation_records(
-        &self,
-        guild_id: Option<&str>,
-        scope_id: Option<&str>,
-        state: Option<AutomationState>,
-    ) -> Result<Value> {
-        let records = self
-            .timeline_store
-            .list_automations(guild_id, scope_id, state)
-            .await?;
-        Ok(json!({
-            "automations": records.iter().map(AutomationRecord::to_json).collect::<Vec<_>>(),
-        }))
-    }
+pub async fn list_automation_records(
+    ctx: &Ctx,
+    guild_id: Option<&str>,
+    scope_id: Option<&str>,
+    state: Option<AutomationState>,
+) -> Result<Value> {
+    let records = ctx
+        .store
+        .list_automations(guild_id, scope_id, state)
+        .await?;
+    Ok(json!({
+        "automations": records.iter().map(AutomationRecord::to_json).collect::<Vec<_>>(),
+    }))
+}
 
-    pub async fn get_automation_record(&self, automation_id: &str) -> Result<Value> {
-        Ok(self
-            .timeline_store
-            .get_automation(automation_id)
-            .await?
-            .to_json())
-    }
+pub async fn get_automation_record(ctx: &Ctx, automation_id: &str) -> Result<Value> {
+    Ok(ctx.store.get_automation(automation_id).await?.to_json())
+}
 
-    pub async fn cancel_automation_record(&mut self, automation_id: &str) -> Result<Value> {
-        let record = self.timeline_store.cancel_automation(automation_id).await?;
-        Ok(record.to_json())
-    }
+pub async fn cancel_automation_record(ctx: &Ctx, automation_id: &str) -> Result<Value> {
+    let record = ctx.store.cancel_automation(automation_id).await?;
+    Ok(record.to_json())
 }
 
 fn default_schema() -> String {

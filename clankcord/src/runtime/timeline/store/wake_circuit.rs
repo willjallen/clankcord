@@ -106,12 +106,10 @@ impl TimelineStore {
     ) -> Result<()> {
         self.ensure_wake_circuit_row().await?;
         let mut transaction = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT * FROM wake_circuit WHERE circuit_id = $1 FOR UPDATE",
-        )
-        .bind(WAKE_CIRCUIT_ID)
-        .fetch_one(transaction.as_mut())
-        .await?;
+        let row = sqlx::query("SELECT * FROM wake_circuit WHERE circuit_id = $1 FOR UPDATE")
+            .bind(WAKE_CIRCUIT_ID)
+            .fetch_one(transaction.as_mut())
+            .await?;
         let mut state = wake_circuit_row_from(&row)?;
         state.last_failure_at_ms = Some(now_ms);
         state.last_error = error.to_string();

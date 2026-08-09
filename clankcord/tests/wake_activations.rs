@@ -10,8 +10,9 @@ use clankcord::runtime::domain::voice_capture::wake_activations::{
 };
 use clankcord::runtime::timeline::{SpeechEventInput, TimelineStore, parse_instant, sha256_file};
 use clankcord::runtime::{
-    AgentSessionRecord, AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobPayload,
-    JobState, Runtime, SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
+    AgentSessionRecord, AudioSegmentPayload, Ctx, DiscordVoicePlaybackCue, Job, JobKind,
+    JobPayload, JobState, SessionCaptureStats, SessionSpeakerCaptureStats,
+    VoiceCaptureSessionStatus,
 };
 
 use common::{dt, test_store};
@@ -34,7 +35,7 @@ async fn wake_activation_uses_long_default_max_window() {
     let runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -47,11 +48,7 @@ async fn wake_activation_uses_long_default_max_window() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job
         .wake_activation_payload()
         .expect("missing wake activation payload");
@@ -67,10 +64,10 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let prior = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start - chrono::Duration::seconds(20),
         start - chrono::Duration::seconds(18),
         "Vince",
@@ -81,7 +78,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     )
     .await;
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -92,7 +89,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     )
     .await;
     let post = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(3),
         start + chrono::Duration::seconds(4),
         "Will",
@@ -103,7 +100,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
     )
     .await;
     let post_other = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(4),
         start + chrono::Duration::seconds(5),
         "Vince",
@@ -116,11 +113,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job
         .wake_activation_payload()
         .cloned()
@@ -131,11 +124,7 @@ async fn wake_activation_builds_labeled_bundle_before_dispatch() {
 
     assert_eq!(result["status"], json!("dispatched"));
     let command_job_id = string_field(&result["created"]["job"], "job_id");
-    let command = runtime
-        .timeline_store
-        .get_job(&command_job_id)
-        .await
-        .unwrap();
+    let command = runtime.store.get_job(&command_job_id).await.unwrap();
     assert_eq!(command.kind, JobKind::AgentTask);
     let command_value = command.command_value().unwrap();
     assert_eq!(command_value["command_kind"], json!("agent_task"));
@@ -176,10 +165,10 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = runtime
-        .timeline_store
+        .store
         .append_event(
             "guild",
             "code",
@@ -198,7 +187,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
             }),
         ).await.unwrap();
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(3),
         "Will",
@@ -211,11 +200,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -223,11 +208,7 @@ async fn wake_activation_uses_speech_segment_that_overlaps_probe_event() {
 
     assert_eq!(result["status"], json!("dispatched"));
     let command_job_id = string_field(&result["created"]["job"], "job_id");
-    let command = runtime
-        .timeline_store
-        .get_job(&command_job_id)
-        .await
-        .unwrap();
+    let command = runtime.store.get_job(&command_job_id).await.unwrap();
     let command_value = command.command_value().unwrap();
     assert_eq!(
         command_value["arguments"]["request"],
@@ -240,10 +221,10 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -256,11 +237,7 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -268,11 +245,7 @@ async fn wake_activation_completes_without_agent_task_for_bare_wake_word() {
 
     assert_eq!(result["status"], json!("no_request_captured"));
     assert_eq!(result["reason"], json!("empty_request_text"));
-    let jobs = runtime
-        .timeline_store
-        .list_jobs(Some("guild"), None)
-        .await
-        .unwrap();
+    let jobs = runtime.store.list_jobs(Some("guild"), None).await.unwrap();
     assert!(!jobs.iter().any(|job| job.kind == JobKind::AgentTask));
 }
 
@@ -281,10 +254,10 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -295,7 +268,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     )
     .await;
     let first = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(35),
         start + chrono::Duration::seconds(36),
         "Will",
@@ -306,7 +279,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
     )
     .await;
     let last = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(58),
         start + chrono::Duration::seconds(59),
         "Will",
@@ -319,11 +292,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -331,7 +300,7 @@ async fn wake_activation_dispatches_agent_task_for_long_captured_request() {
 
     assert_eq!(result["status"], json!("dispatched"));
     let agent_job_id = string_field(&result["created"]["job"], "job_id");
-    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
+    let agent_job = runtime.store.get_job(&agent_job_id).await.unwrap();
     assert_eq!(agent_job.kind, JobKind::AgentTask);
     let command_value = agent_job.command_value().unwrap();
     assert_eq!(
@@ -361,7 +330,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
     let mut runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -372,7 +341,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(3),
         start + chrono::Duration::seconds(4),
         "Will",
@@ -385,11 +354,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -397,7 +362,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
 
     assert_eq!(result["status"], json!("dispatched"));
     let start_job_id = string_field(&result["created"]["job"], "job_id");
-    let start_job = runtime.timeline_store.get_job(&start_job_id).await.unwrap();
+    let start_job = runtime.store.get_job(&start_job_id).await.unwrap();
     assert_eq!(start_job.kind, JobKind::AgentSessionStart);
     let JobPayload::AgentSessionStart(payload) = &start_job.payload else {
         panic!("expected agent-session start payload");
@@ -406,11 +371,7 @@ async fn wake_activation_treats_resume_text_as_agent_request() {
         payload.command.arguments.request,
         "resume the session about banking"
     );
-    let jobs = runtime
-        .timeline_store
-        .list_jobs(Some("guild"), None)
-        .await
-        .unwrap();
+    let jobs = runtime.store.list_jobs(Some("guild"), None).await.unwrap();
     assert!(
         !jobs
             .iter()
@@ -425,7 +386,7 @@ async fn wake_activation_reuses_active_session_without_thread() {
     let mut runtime = test_runtime(store);
     let created_at = dt(2026, 5, 12, 15, 0, 0);
     runtime
-        .timeline_store
+        .store
         .create_agent_session_record(AgentSessionRecord::new_voice(
             "ags_active",
             "guild",
@@ -439,7 +400,7 @@ async fn wake_activation_reuses_active_session_without_thread() {
         .unwrap();
     let start = dt(2026, 5, 12, 16, 0, 0);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -450,7 +411,7 @@ async fn wake_activation_reuses_active_session_without_thread() {
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(3),
         start + chrono::Duration::seconds(4),
         "Will",
@@ -463,11 +424,7 @@ async fn wake_activation_reuses_active_session_without_thread() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -475,17 +432,13 @@ async fn wake_activation_reuses_active_session_without_thread() {
 
     assert_eq!(result["status"], json!("dispatched"));
     let task_job_id = string_field(&result["created"]["job"], "job_id");
-    let task_job = runtime.timeline_store.get_job(&task_job_id).await.unwrap();
+    let task_job = runtime.store.get_job(&task_job_id).await.unwrap();
     assert_eq!(task_job.kind, JobKind::AgentTask);
     let JobPayload::AgentTask(payload) = &task_job.payload else {
         panic!("expected agent task payload");
     };
     assert_eq!(payload.agent_session_id, "ags_active");
-    let jobs = runtime
-        .timeline_store
-        .list_jobs(Some("guild"), None)
-        .await
-        .unwrap();
+    let jobs = runtime.store.list_jobs(Some("guild"), None).await.unwrap();
     assert!(
         !jobs
             .iter()
@@ -500,7 +453,7 @@ async fn wake_followup_before_execution_amends_existing_activation() {
     let runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -511,7 +464,7 @@ async fn wake_followup_before_execution_amends_existing_activation() {
     )
     .await;
     let second = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(20),
         start + chrono::Duration::seconds(21),
         "Will",
@@ -528,11 +481,7 @@ async fn wake_followup_before_execution_amends_existing_activation() {
 
     assert_eq!(amended["status"], json!("amended"));
     assert_eq!(string_field(&amended["job"], "job_id"), activation_job_id);
-    let activation = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation.wake_activation_payload().unwrap();
     assert_eq!(
         payload.latest_wake_event_id,
@@ -550,9 +499,9 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     runtime
-        .timeline_store
+        .store
         .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
@@ -565,7 +514,7 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
         .unwrap();
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -576,7 +525,7 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     )
     .await;
     let second = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(8),
         start + chrono::Duration::seconds(9),
         "Will",
@@ -591,7 +540,7 @@ async fn wake_activation_schedules_voice_cue_jobs_for_wake_and_preempt() {
     schedule_from_wake_event(&runtime, &second).await.unwrap();
 
     let cues = runtime
-        .timeline_store
+        .store
         .list_jobs(Some("guild"), None)
         .await
         .unwrap()
@@ -610,11 +559,11 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(2),
         "Will",
@@ -626,14 +575,10 @@ async fn wake_activation_waits_for_live_activating_speaker_audio() {
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime
-        .timeline_store
+        .store
         .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
@@ -676,11 +621,11 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(2),
         "Will",
@@ -692,14 +637,10 @@ async fn wake_activation_waits_for_pending_speaker_audio_segment_transcription()
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -741,11 +682,11 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let start = now - chrono::Duration::seconds(20);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(2),
         "Will",
@@ -757,11 +698,7 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let mut audio = Job::audio_segment(AudioSegmentPayload {
         guild_id: "guild".to_string(),
@@ -792,7 +729,7 @@ async fn wake_activation_waits_for_retryable_failed_request_audio_segment() {
     audio.metadata.error =
         "HTTP status server error (503 Service Unavailable) for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
             .to_string();
-    runtime.timeline_store.create_job(audio).await.unwrap();
+    runtime.store.create_job(audio).await.unwrap();
 
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -807,12 +744,12 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(10);
     let close_at = wake_started_at + chrono::Duration::seconds(5);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -824,14 +761,10 @@ async fn wake_activation_waits_for_pending_segment_that_overlaps_closed_window()
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -873,12 +806,12 @@ async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(10);
     let close_at = wake_started_at + chrono::Duration::seconds(5);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -890,14 +823,10 @@ async fn wake_activation_waits_for_pending_room_audio_from_other_speaker() {
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -939,11 +868,11 @@ async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline(
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(300);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -955,14 +884,10 @@ async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline(
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -998,7 +923,7 @@ async fn wake_activation_fails_when_requester_audio_exceeds_settlement_deadline(
 
     assert!(error.contains("requester_transcription_deadline_exceeded"));
     let failure = runtime
-        .timeline_store
+        .store
         .load_events(
             "guild",
             "code",
@@ -1024,12 +949,12 @@ async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
     let close_at = wake_started_at + chrono::Duration::seconds(5);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -1040,7 +965,7 @@ async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at + chrono::Duration::seconds(2),
         wake_started_at + chrono::Duration::seconds(4),
         "Will",
@@ -1078,11 +1003,7 @@ async fn wake_activation_dispatches_with_failed_context_slot_recorded_as_omitted
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -1106,11 +1027,11 @@ async fn wake_activation_fails_immediately_for_terminal_requester_transcription(
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -1147,11 +1068,7 @@ async fn wake_activation_fails_immediately_for_terminal_requester_transcription(
     .unwrap();
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
 
     let error = execute(&mut runtime, &activation_job, &payload)
@@ -1162,7 +1079,7 @@ async fn wake_activation_fails_immediately_for_terminal_requester_transcription(
     assert!(error.contains("requester_transcription_failed"));
     assert!(
         runtime
-            .timeline_store
+            .store
             .list_jobs(Some("guild"), None)
             .await
             .unwrap()
@@ -1176,7 +1093,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store.clone());
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
     let historical_source_job_id = create_transcription_slot_for_wake_test(
@@ -1205,7 +1122,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     .await
     .unwrap();
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -1216,7 +1133,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at + chrono::Duration::seconds(2),
         wake_started_at + chrono::Duration::seconds(4),
         "Will",
@@ -1228,11 +1145,7 @@ async fn wake_activation_ignores_failed_transcription_outside_its_window() {
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
 
     let result = execute(&mut runtime, &activation_job, &payload)
@@ -1248,11 +1161,11 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -1263,7 +1176,7 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at + chrono::Duration::seconds(2),
         wake_started_at + chrono::Duration::seconds(4),
         "Will",
@@ -1274,7 +1187,7 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
     )
     .await;
     runtime
-        .timeline_store
+        .store
         .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
@@ -1306,11 +1219,7 @@ async fn wake_activation_waits_for_live_room_audio_from_other_speaker_before_dis
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let result = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -1324,9 +1233,9 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     runtime
-        .timeline_store
+        .store
         .upsert_capture_session_status(&VoiceCaptureSessionStatus {
             session_id: "cap_test".to_string(),
             guild_id: "guild".to_string(),
@@ -1342,7 +1251,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     let request_started_at = wake_started_at + chrono::Duration::seconds(1);
     let request_ended_at = wake_started_at + chrono::Duration::seconds(4);
     let wake = runtime
-        .timeline_store
+        .store
         .append_event(
             "guild",
             "code",
@@ -1365,14 +1274,10 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
 
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let pending_audio = runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -1414,7 +1319,7 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
         "#,
     )
     .bind(&activation_job_id)
-    .fetch_one(&runtime.timeline_store.pool)
+    .fetch_one(&runtime.store.pool)
     .await
     .unwrap();
     let closed_at_ms =
@@ -1424,18 +1329,14 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     assert_eq!(deadline_at_ms - closed_at_ms, 30_000);
     let next_run_at = parse_instant(&string_field(&deferred, "next_run_at")).unwrap();
     assert!(next_run_at >= Utc::now() + chrono::Duration::milliseconds(800));
-    let jobs = runtime
-        .timeline_store
-        .list_jobs(Some("guild"), None)
-        .await
-        .unwrap();
+    let jobs = runtime.store.list_jobs(Some("guild"), None).await.unwrap();
     assert!(jobs.iter().any(|job| {
         job.discord_voice_playback_payload()
             .is_some_and(|payload| payload.cue == DiscordVoicePlaybackCue::Ack)
     }));
 
     let speech = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         request_started_at,
         request_ended_at,
         "Will",
@@ -1447,24 +1348,16 @@ async fn wake_activation_acks_closed_voice_window_then_waits_for_late_stt() {
     .await;
     let mut completed_audio = pending_audio;
     completed_audio.mark_complete();
-    runtime
-        .timeline_store
-        .update_job(&completed_audio)
-        .await
-        .unwrap();
+    runtime.store.update_job(&completed_audio).await.unwrap();
 
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let dispatched = execute(&mut runtime, &activation_job, &payload)
         .await
         .unwrap();
 
     assert_eq!(dispatched["status"], json!("dispatched"));
     let agent_job_id = string_field(&dispatched["created"]["job"], "job_id");
-    let agent_job = runtime.timeline_store.get_job(&agent_job_id).await.unwrap();
+    let agent_job = runtime.store.get_job(&agent_job_id).await.unwrap();
     let command_value = agent_job.command_value().unwrap();
     assert_eq!(
         command_value["arguments"]["request"],
@@ -1483,7 +1376,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let now = Utc::now();
     let wake_started_at = now - chrono::Duration::seconds(20);
     let request_one_start = wake_started_at + chrono::Duration::seconds(1);
@@ -1491,7 +1384,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     let request_two_start = wake_started_at + chrono::Duration::seconds(3);
     let request_two_end = wake_started_at + chrono::Duration::seconds(5);
     let wake = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         wake_started_at,
         wake_started_at + chrono::Duration::milliseconds(500),
         "Will",
@@ -1503,14 +1396,10 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     .await;
     let scheduled = schedule_from_wake_event(&runtime, &wake).await.unwrap();
     let activation_job_id = string_field(&scheduled["job"], "job_id");
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let first_audio = runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -1539,7 +1428,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
         .await
         .unwrap();
     let second_audio = runtime
-        .timeline_store
+        .store
         .create_job(Job::audio_segment(AudioSegmentPayload {
             guild_id: "guild".to_string(),
             guild_slug: "guild".to_string(),
@@ -1574,7 +1463,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     assert_eq!(deferred["status"], json!("deferred"));
 
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         request_one_start,
         request_one_end,
         "Will",
@@ -1586,17 +1475,9 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     .await;
     let mut first_audio = first_audio;
     first_audio.mark_complete();
-    runtime
-        .timeline_store
-        .update_job(&first_audio)
-        .await
-        .unwrap();
+    runtime.store.update_job(&first_audio).await.unwrap();
 
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let still_deferred = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -1608,7 +1489,7 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     );
 
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         request_two_start,
         request_two_end,
         "Will",
@@ -1620,17 +1501,9 @@ async fn wake_activation_waits_for_all_overlapping_request_audio_segments() {
     .await;
     let mut second_audio = second_audio;
     second_audio.mark_complete();
-    runtime
-        .timeline_store
-        .update_job(&second_audio)
-        .await
-        .unwrap();
+    runtime.store.update_job(&second_audio).await.unwrap();
 
-    let activation_job = runtime
-        .timeline_store
-        .get_job(&activation_job_id)
-        .await
-        .unwrap();
+    let activation_job = runtime.store.get_job(&activation_job_id).await.unwrap();
     let payload = activation_job.wake_activation_payload().cloned().unwrap();
     let dispatched = execute(&mut runtime, &activation_job, &payload)
         .await
@@ -1644,10 +1517,10 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(raw.path()).await;
     let mut runtime = test_runtime(store);
-    insert_agent_session(&runtime.timeline_store).await;
+    insert_agent_session(&runtime.store).await;
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -1658,7 +1531,7 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
     )
     .await;
     append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(2),
         start + chrono::Duration::seconds(3),
         "Will",
@@ -1671,7 +1544,7 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
     let scheduled = schedule_from_wake_event(&runtime, &first).await.unwrap();
     let original_activation_id = string_field(&scheduled["job"], "job_id");
     let original_activation = runtime
-        .timeline_store
+        .store
         .get_job(&original_activation_id)
         .await
         .unwrap();
@@ -1683,18 +1556,14 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
         .await
         .unwrap();
     let command_job_id = string_field(&dispatched["created"]["job"], "job_id");
-    let command_job = runtime
-        .timeline_store
-        .get_job(&command_job_id)
-        .await
-        .unwrap();
+    let command_job = runtime.store.get_job(&command_job_id).await.unwrap();
     assert_eq!(
         command_job.parent_job_id.as_deref(),
         Some(original_activation_id.as_str())
     );
 
     let second = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(8),
         start + chrono::Duration::seconds(9),
         "Will",
@@ -1710,20 +1579,12 @@ async fn wake_followup_inside_preempt_window_replaces_spawned_activation_work() 
     let replacement_id = string_field(&replaced["job"], "job_id");
     assert_ne!(replacement_id, original_activation_id);
     let original = runtime
-        .timeline_store
+        .store
         .get_job(&original_activation_id)
         .await
         .unwrap();
-    let command = runtime
-        .timeline_store
-        .get_job(&command_job_id)
-        .await
-        .unwrap();
-    let replacement = runtime
-        .timeline_store
-        .get_job(&replacement_id)
-        .await
-        .unwrap();
+    let command = runtime.store.get_job(&command_job_id).await.unwrap();
+    let replacement = runtime.store.get_job(&replacement_id).await.unwrap();
     assert_eq!(original.state, JobState::Cancelled);
     assert_eq!(command.state, JobState::Cancelled);
     let payload = replacement.wake_activation_payload().unwrap();
@@ -1745,7 +1606,7 @@ async fn wake_followup_after_independent_threshold_schedules_separate_activation
     let runtime = test_runtime(store);
     let start = dt(2026, 5, 12, 16, 0, 0);
     let first = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start,
         start + chrono::Duration::seconds(1),
         "Will",
@@ -1756,7 +1617,7 @@ async fn wake_followup_after_independent_threshold_schedules_separate_activation
     )
     .await;
     let second = append_event(
-        &runtime.timeline_store,
+        &runtime.store,
         start + chrono::Duration::seconds(50),
         start + chrono::Duration::seconds(51),
         "Will",
@@ -1777,8 +1638,8 @@ async fn wake_followup_after_independent_threshold_schedules_separate_activation
     );
 }
 
-fn test_runtime(timeline_store: TimelineStore) -> Runtime {
-    Runtime::from_store(timeline_store).unwrap()
+fn test_runtime(timeline_store: TimelineStore) -> Ctx {
+    Ctx::new(timeline_store)
 }
 
 async fn insert_agent_session(store: &TimelineStore) {
@@ -1838,7 +1699,7 @@ async fn append_event(
 
 async fn create_transcription_slot_for_wake_test(
     store: &TimelineStore,
-    runtime: &Runtime,
+    runtime: &Ctx,
     root: &std::path::Path,
     speaker_user_id: &str,
     start: chrono::DateTime<chrono::Utc>,
@@ -1882,10 +1743,12 @@ async fn create_transcription_slot_for_wake_test(
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
-    runtime
-        .dispatch_claimed_blocking_job(claimed.pop().unwrap())
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime,
+        claimed.pop().unwrap(),
+    )
+    .await
+    .unwrap();
     job.id
 }
 

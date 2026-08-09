@@ -124,7 +124,10 @@ async fn wake_circuit_state_survives_a_new_store_and_releases_stale_half_open_le
             .unwrap();
     }
     assert_eq!(
-        store.wake_circuit_admit(now + 1_000, LEASE_MS).await.unwrap(),
+        store
+            .wake_circuit_admit(now + 1_000, LEASE_MS)
+            .await
+            .unwrap(),
         None,
         "circuit opened at the failure threshold"
     );

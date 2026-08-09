@@ -58,9 +58,7 @@ impl DiscordTextAdapter {
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::DIRECT_MESSAGES
             | GatewayIntents::MESSAGE_CONTENT;
-        let handler = DiscordTextGatewayHandler {
-            bus: self.bus,
-        };
+        let handler = DiscordTextGatewayHandler { bus: self.bus };
         let mut client = Client::builder(&token, intents)
             .event_handler(handler)
             .await?;
@@ -100,8 +98,7 @@ impl EventHandler for DiscordTextGatewayHandler {
                 slash::handle_slash_command(self.bus.clone(), ctx, command).await;
             }
             Interaction::Component(component) => {
-                components::handle_component_interaction(self.bus.clone(), ctx, component)
-                    .await;
+                components::handle_component_interaction(self.bus.clone(), ctx, component).await;
             }
             _ => {}
         }
@@ -129,7 +126,6 @@ impl EventHandler for DiscordTextGatewayHandler {
                 .map(|referenced| referenced.id.get().to_string())
                 .unwrap_or_default(),
         };
-        self.bus
-            .submit_detached(Job::discord_text_message(payload));
+        self.bus.submit_detached(Job::discord_text_message(payload));
     }
 }

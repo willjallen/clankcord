@@ -4,19 +4,19 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::wakeword::detect_wake_file_sync;
+use crate::config;
+use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use crate::runtime::domain::voice_capture::wake_circuit::{
     acquire_wake_probe_admission, record_wake_provider_failure, record_wake_provider_success,
     wake_provider_health,
 };
 use crate::runtime::timeline::store::WakeCircuitAdmission;
-use crate::config;
-use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use crate::runtime::timeline::{event_end, event_start, isoformat_z, sha256_file};
 use crate::runtime::util::first_value_string;
-use crate::runtime::{Job, Runtime, WakeProbePayload};
+use crate::runtime::{Ctx, Job, WakeProbePayload};
 
 pub(crate) async fn execute_probe_job(
-    runtime: &Runtime,
+    runtime: &Ctx,
     job: &Job,
     payload: &WakeProbePayload,
 ) -> Result<Value> {
@@ -35,7 +35,7 @@ pub(crate) async fn execute_probe_job(
     }
     let audio_bytes = wav_path.metadata()?.len();
     let detection_stream_id = payload.stream_id.clone();
-    let Some(admission) = acquire_wake_probe_admission(&runtime.timeline_store).await? else {
+    let Some(admission) = acquire_wake_probe_admission(&runtime.store).await? else {
         // The wake provider circuit is open. The probe still ran as a job so
         // the timeline records that it existed; the audio artifact is removed
         // because no probe will ever read it.
@@ -52,17 +52,17 @@ pub(crate) async fn execute_probe_job(
             "stream_id": payload.stream_id,
             "artifact_deleted": artifact_deleted,
             "artifact_deletion_error": artifact_deletion_error,
-            "wake_provider": wake_provider_health(&runtime.timeline_store).await?,
+            "wake_provider": wake_provider_health(&runtime.store).await?,
         }));
     };
     let reset_stream = payload.reset_stream || admission == WakeCircuitAdmission::HalfOpen;
     let wake = match detect_wake_file_sync(&wav_path, &detection_stream_id, reset_stream) {
         Ok(wake) => {
-            record_wake_provider_success(&runtime.timeline_store).await?;
+            record_wake_provider_success(&runtime.store).await?;
             wake
         }
         Err(error) => {
-            record_wake_provider_failure(&runtime.timeline_store, &error).await?;
+            record_wake_provider_failure(&runtime.store, &error).await?;
             return Err(error);
         }
     };
@@ -96,7 +96,7 @@ pub(crate) async fn execute_probe_job(
     }
 
     let event = runtime
-        .timeline_store
+        .store
         .append_event(
             &payload.guild_id,
             &payload.voice_channel_id,
@@ -163,7 +163,7 @@ pub(crate) async fn execute_probe_job(
 }
 
 async fn overlapping_wake_event(
-    runtime: &Runtime,
+    runtime: &Ctx,
     payload: &WakeProbePayload,
 ) -> Result<Option<Value>> {
     let mut kinds = BTreeSet::new();
@@ -172,7 +172,7 @@ async fn overlapping_wake_event(
     let start = payload.probe_start_time - chrono::Duration::milliseconds(grace);
     let end = payload.probe_end_time + chrono::Duration::milliseconds(grace);
     Ok(runtime
-        .timeline_store
+        .store
         .load_events(
             &payload.guild_id,
             &payload.voice_channel_id,

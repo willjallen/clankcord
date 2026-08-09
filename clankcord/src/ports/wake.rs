@@ -24,7 +24,6 @@ pub struct WakeDetectionResult {
     pub metadata: Value,
 }
 
-
 impl WakeDetectionResult {
     pub fn to_json(&self) -> Value {
         let mut object = match self.metadata.as_object() {

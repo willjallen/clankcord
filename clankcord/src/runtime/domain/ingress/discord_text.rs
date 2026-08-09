@@ -4,12 +4,12 @@ use crate::Result;
 use crate::runtime::core::execution::JobDecision;
 use crate::runtime::timeline::{isoformat_z, parse_instant, utc_now};
 use crate::runtime::{
-    AgentSessionRecord, AgentSessionRouteKind, CommandRequest, DiscordTextMessagePayload, Job,
-    JobOutput, Runtime, RuntimeScope,
+    AgentSessionRecord, AgentSessionRouteKind, CommandRequest, Ctx, DiscordTextMessagePayload, Job,
+    JobOutput, RuntimeScope,
 };
 
 pub(crate) async fn prepare(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     _job: &Job,
     payload: &DiscordTextMessagePayload,
 ) -> Result<JobDecision> {
@@ -20,11 +20,13 @@ pub(crate) async fn prepare(
     }
 
     let session = if payload.guild_id.trim().is_empty() {
-        runtime
-            .ensure_dm_agent_session(&payload.author_user_id)
-            .await?
+        crate::runtime::domain::interactions::agent_sessions::ensure_dm_agent_session(
+            runtime,
+            &payload.author_user_id,
+        )
+        .await?
     } else if let Some(session) = runtime
-        .timeline_store
+        .store
         .agent_session_for_thread(&payload.channel_id)
         .await?
     {
@@ -32,13 +34,7 @@ pub(crate) async fn prepare(
             return resume_agent_session_from_thread_message(runtime, payload, session).await;
         }
         session
-    } else if payload.channel_id
-        == runtime
-            .timeline_store
-            .control_config()
-            .await?
-            .bots_channel_id
-    {
+    } else if payload.channel_id == runtime.store.control_config().await?.bots_channel_id {
         return Ok(JobDecision::Complete(JobOutput::from_boundary_json(
             &json!({
                 "kind": "discord_text_message",
@@ -53,16 +49,18 @@ pub(crate) async fn prepare(
     };
 
     let event_id = append_thread_message_event(runtime, &session, payload).await?;
-    runtime
-        .touch_agent_session(&session.agent_session_id)
-        .await?;
+    crate::runtime::domain::interactions::agent_sessions::touch_agent_session(
+        runtime,
+        &session.agent_session_id,
+    )
+    .await?;
 
     let agent_job = agent_task_for_thread_message(session, payload, event_id)?;
     Ok(JobDecision::WaitFor(vec![agent_job]))
 }
 
 async fn resume_agent_session_from_thread_message(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     payload: &DiscordTextMessagePayload,
     session: AgentSessionRecord,
 ) -> Result<JobDecision> {
@@ -87,12 +85,12 @@ async fn resume_agent_session_from_thread_message(
 }
 
 async fn append_thread_message_event(
-    runtime: &mut Runtime,
+    runtime: &Ctx,
     session: &AgentSessionRecord,
     payload: &DiscordTextMessagePayload,
 ) -> Result<String> {
     let event = runtime
-        .timeline_store
+        .store
         .append_scope_event(
             &agent_session_scope(session),
             json!({

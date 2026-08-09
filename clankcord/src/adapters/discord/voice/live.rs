@@ -29,8 +29,8 @@ use crate::runtime::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,
     DiscordVoiceMuteOutput, DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput,
-    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue,
-    VoiceBotStatus, log,
+    DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput, OpaqueValue, VoiceBotStatus,
+    log,
 };
 
 type LiveCaptureSessionLock = Arc<Mutex<LiveCaptureSession>>;

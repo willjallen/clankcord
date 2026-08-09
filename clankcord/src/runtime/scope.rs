@@ -10,7 +10,7 @@ pub enum RuntimeScopeKind {
     Dm,
     TextChannel,
     Thread,
-    Runtime,
+    Ctx,
 }
 
 impl RuntimeScopeKind {
@@ -20,7 +20,7 @@ impl RuntimeScopeKind {
             Self::Dm => "dm",
             Self::TextChannel => "text_channel",
             Self::Thread => "thread",
-            Self::Runtime => "runtime",
+            Self::Ctx => "runtime",
         }
     }
 }
@@ -34,7 +34,7 @@ impl FromStr for RuntimeScopeKind {
             "dm" => Ok(Self::Dm),
             "text_channel" => Ok(Self::TextChannel),
             "thread" => Ok(Self::Thread),
-            "runtime" => Ok(Self::Runtime),
+            "runtime" => Ok(Self::Ctx),
             value => anyhow::bail!("unknown runtime scope kind: {value}"),
         }
     }
@@ -42,7 +42,7 @@ impl FromStr for RuntimeScopeKind {
 
 impl Default for RuntimeScopeKind {
     fn default() -> Self {
-        Self::Runtime
+        Self::Ctx
     }
 }
 
@@ -88,7 +88,7 @@ impl RuntimeScope {
 
     pub fn runtime() -> Self {
         Self {
-            kind: RuntimeScopeKind::Runtime,
+            kind: RuntimeScopeKind::Ctx,
             guild_id: String::new(),
             scope_id: "runtime".to_string(),
         }

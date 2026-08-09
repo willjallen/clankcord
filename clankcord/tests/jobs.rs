@@ -11,7 +11,7 @@ use clankcord::runtime::jobs::JobMetadata;
 use clankcord::runtime::timeline::views::JobsRequest;
 use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::runtime::{
-    AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest,
+    AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest, Ctx,
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextMessagePayload,
     DiscordTextSendPayload, DiscordTypingAction, DiscordTypingIndicatorOutput,
     DiscordTypingIndicatorPayload, DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload,
@@ -19,7 +19,7 @@ use clankcord::runtime::{
     DiscordVoiceMutePayload, DiscordVoicePlayAudioOutput, DiscordVoicePlayAudioPayload,
     DiscordVoicePlaybackCue, DiscordVoicePlaybackOutput, DiscordVoicePlaybackPayload,
     DiscordVoiceStatusSnapshotOutput, Job, JobKind, JobOutput, JobPayload, JobState, OpaqueValue,
-    RoomConfig, Runtime, RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind,
+    RoomConfig, RuntimeScope, RuntimeScopeKind, TextAttachmentPayload, TextDeliveryKind,
     TextDeliveryPayload, TextTarget, TextTargetKind, TranscriptPublicationPayload,
     WakeActivationPayload, WakeProbePayload,
 };
@@ -854,7 +854,7 @@ async fn v0_12_0_schema_migration_terminalizes_stranded_wakes_and_preserves_fail
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let activation = store
         .create_job(Job::wake_activation(wake_activation_payload(
             "guild", "code",
@@ -1025,8 +1025,13 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
     .unwrap();
     assert!(coverage_start.parse::<i64>().unwrap() > 0);
 
-    let runtime = Runtime::from_store(store).unwrap();
-    let overview = runtime.dashboard_health_payload(json!({})).await.unwrap();
+    let runtime = Ctx::new(store);
+    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+        &runtime,
+        json!({}),
+    )
+    .await
+    .unwrap();
     let dashboard_failure = overview["health"]["failures"]["recent"]
         .as_array()
         .unwrap()
@@ -1235,15 +1240,17 @@ async fn jobs_public_view_uses_generic_scope_fields() {
         ))
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store).unwrap();
+    let runtime = Ctx::new(store);
 
-    let jobs = runtime
-        .jobs(JobsRequest {
+    let jobs = clankcord::runtime::timeline::views::jobs::jobs(
+        &runtime,
+        JobsRequest {
             guild_id: "guild".to_string(),
             ..JobsRequest::default()
-        })
-        .await
-        .unwrap();
+        },
+    )
+    .await
+    .unwrap();
     let job = jobs["jobs"]
         .as_array()
         .unwrap()
@@ -1255,7 +1262,10 @@ async fn jobs_public_view_uses_generic_scope_fields() {
     assert_eq!(job["scope_id"], "code");
     assert!(job.get("voice_channel_id").is_none());
 
-    let verbose = runtime.get_job_payload(&created.id, true).await.unwrap();
+    let verbose =
+        clankcord::runtime::timeline::views::jobs::get_job_payload(&runtime, &created.id, true)
+            .await
+            .unwrap();
     assert_eq!(verbose["scope_kind"], "voice_channel");
     assert_eq!(verbose["scope_id"], "code");
     assert!(verbose.get("voice_channel_id").is_none());
@@ -1331,11 +1341,13 @@ async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
         .unwrap();
     assert_eq!(claimed.len(), 1);
 
-    let runtime = Runtime::from_store(store.clone()).unwrap();
-    let result = runtime
-        .dispatch_claimed_blocking_job(claimed.pop().unwrap())
-        .await
-        .unwrap();
+    let runtime = Ctx::new(store.clone());
+    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime,
+        claimed.pop().unwrap(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result["result"]["kind"], json!("audio_segment"));
     assert_eq!(
@@ -1389,11 +1401,13 @@ async fn audio_segment_slot_inherits_room_wake_priority() {
         .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
         .await
         .unwrap();
-    let runtime = Runtime::from_store(store.clone()).unwrap();
-    runtime
-        .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
-        .await
-        .unwrap();
+    let runtime = Ctx::new(store.clone());
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime,
+        claimed.into_iter().next().unwrap(),
+    )
+    .await
+    .unwrap();
 
     let row = sqlx::query("SELECT priority FROM transcription_slots WHERE source_job_id = $1")
         .bind(&job.id)
@@ -1416,7 +1430,7 @@ async fn wake_activation_promotes_existing_overlapping_transcription_slots() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let now = Utc::now();
     let source_job_id = create_audio_segment_slot(
         &store,
@@ -1465,7 +1479,7 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let now = Utc::now();
     let mut source_job_ids = Vec::new();
     for index in 0..2 {
@@ -1487,10 +1501,12 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
             .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
             .await
             .unwrap();
-        runtime
-            .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
-            .await
-            .unwrap();
+        clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+            &runtime,
+            claimed.into_iter().next().unwrap(),
+        )
+        .await
+        .unwrap();
         source_job_ids.push(job.id);
     }
 
@@ -1571,7 +1587,7 @@ async fn retryable_failed_transcription_slots_requeue_for_mux_planning() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let now = Utc::now();
     let retryable_source_job_id = create_audio_segment_slot(
         &store,
@@ -1708,7 +1724,7 @@ async fn transcription_mux_planner_uses_one_stream_without_predicted_backlog() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let now = Utc::now();
     for index in 0..2 {
         create_audio_segment_slot(
@@ -1747,7 +1763,7 @@ async fn transcription_mux_planner_overflows_when_one_stream_misses_deadlines() 
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let base = Utc::now() - Duration::seconds(90);
     for index in 0..8 {
         create_audio_segment_slot(
@@ -1786,7 +1802,7 @@ async fn transcription_mux_planner_fairly_packs_short_room_speaker_work() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let base = Utc::now() - Duration::seconds(90);
     for index in 0..8 {
         create_audio_segment_slot(
@@ -1841,7 +1857,7 @@ async fn transcription_mux_planner_isolates_slots_replanned_for_exact_attributio
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let base = Utc::now() - Duration::seconds(10);
     let constrained_source_job_id = create_audio_segment_slot(
         &store,
@@ -2005,7 +2021,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
     let created = store
         .create_job(Job::runtime_maintenance(500))
         .await
@@ -2014,7 +2030,13 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    runtime.dispatch_claimed_runtime_job(running).await.unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let completed = store.get_job(&created.id).await.unwrap();
     assert_eq!(completed.state, JobState::Complete);
@@ -2056,12 +2078,15 @@ async fn runtime_maintenance_times_out_stale_running_jobs() {
     let mut running_maintenance = Job::runtime_maintenance(500);
     running_maintenance.mark_running();
     let maintenance = store.create_job(running_maintenance.clone()).await.unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
+    let runtime = Ctx::new(store.clone());
 
-    runtime
-        .dispatch_claimed_runtime_job(running_maintenance)
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running_maintenance,
+    )
+    .await
+    .unwrap();
 
     let completed = store.get_job(&maintenance.id).await.unwrap();
     let output = completed.metadata.output.unwrap().to_json();
@@ -2863,11 +2888,13 @@ async fn completed_agent_task_with_missing_response_delivery_completes_terminall
         .unwrap();
     assert_eq!(claimed.len(), 1);
 
-    let runtime = Runtime::from_store(store.clone()).unwrap();
-    let result = runtime
-        .dispatch_claimed_blocking_job(claimed[0].clone())
-        .await
-        .unwrap();
+    let runtime = Ctx::new(store.clone());
+    let result = clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime,
+        claimed[0].clone(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result["dispatched"], json!(true));
     assert_eq!(result["response"], json!("submitted_without_delivery"));
@@ -3874,7 +3901,7 @@ fn wake_activation_payload(guild_id: &str, voice_channel_id: &str) -> WakeActiva
 
 async fn create_audio_segment_slot(
     store: &clankcord::runtime::timeline::TimelineStore,
-    runtime: &Runtime,
+    runtime: &Ctx,
     root: &std::path::Path,
     speaker_user_id: &str,
     start: chrono::DateTime<Utc>,
@@ -3899,10 +3926,12 @@ async fn create_audio_segment_slot(
         .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
         .await
         .unwrap();
-    runtime
-        .dispatch_claimed_blocking_job(claimed.into_iter().next().unwrap())
-        .await
-        .unwrap();
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_blocking_job(
+        &runtime,
+        claimed.into_iter().next().unwrap(),
+    )
+    .await
+    .unwrap();
     job.id
 }
 
@@ -3917,11 +3946,14 @@ async fn run_transcription_mux_planner(
         .claim_due_jobs(JobKind::TranscriptionMuxPlan, 1, &mut BTreeSet::new())
         .await
         .unwrap();
-    let mut runtime = Runtime::from_store(store.clone()).unwrap();
-    runtime
-        .dispatch_claimed_runtime_job(claimed.into_iter().next().unwrap())
-        .await
-        .unwrap()
+    let runtime = Ctx::new(store.clone());
+    clankcord::runtime::core::execution::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        claimed.into_iter().next().unwrap(),
+    )
+    .await
+    .unwrap()
 }
 
 async fn transcription_slot_priority(

@@ -12,8 +12,8 @@ use crate::runtime::{Job, JobKind, JobPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum JobExecutor {
-    /// Async tokio task over a fresh `Runtime`.
-    Runtime,
+    /// Async tokio task handed a fresh `Ctx`.
+    Async,
     /// `spawn_blocking` worker for kinds that do heavy synchronous work
     /// (wake detection, WAV handling, agent subprocesses).
     Blocking,
@@ -129,11 +129,14 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
     use JobLane as Lane;
     use ResumePolicy as Resume;
     match kind {
-        JobKind::RuntimeControl => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Settle, Cat::MessagingControl)
-        }
+        JobKind::RuntimeControl => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Settle,
+            Cat::MessagingControl,
+        ),
         JobKind::RuntimeMaintenance => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -141,7 +144,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::VoiceStatusSync => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Resume,
             300,
@@ -149,7 +152,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::DiscordVoiceStatusSnapshot => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -157,7 +160,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::AutomationEvaluation => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -165,7 +168,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::AgentSessionRetirement => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -173,7 +176,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::StaleWakeProbeSweep => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -181,7 +184,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::StaleRunningJobSweep => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -189,7 +192,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::Background,
         ),
         JobKind::EphemeralJobGc => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::Maintenance,
             Resume::Settle,
             300,
@@ -200,12 +203,18 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
         | JobKind::DiscordVoiceLeave
         | JobKind::DiscordVoiceMute
         | JobKind::DiscordVoiceDeafen
-        | JobKind::DiscordVoicePlayAudio => {
-            durable(Exec::Runtime, Lane::VoiceControl, Resume::Settle, Cat::MessagingControl)
-        }
-        JobKind::DiscordVoicePlayback => {
-            durable(Exec::Runtime, Lane::VoiceControl, Resume::Resume, Cat::MessagingControl)
-        }
+        | JobKind::DiscordVoicePlayAudio => durable(
+            Exec::Async,
+            Lane::VoiceControl,
+            Resume::Settle,
+            Cat::MessagingControl,
+        ),
+        JobKind::DiscordVoicePlayback => durable(
+            Exec::Async,
+            Lane::VoiceControl,
+            Resume::Resume,
+            Cat::MessagingControl,
+        ),
         JobKind::WakeProbe => ephemeral(
             Exec::Blocking,
             Lane::Wake,
@@ -223,7 +232,7 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             Cat::VoiceDetail,
         ),
         JobKind::TranscriptionMuxPlan => ephemeral(
-            Exec::Runtime,
+            Exec::Async,
             Lane::GeneralAsync,
             Resume::Settle,
             300,
@@ -238,44 +247,69 @@ pub(crate) const fn spec(kind: JobKind) -> JobSpec {
             1800,
             Cat::Background,
         ),
-        JobKind::WakeActivation => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Settle, Cat::Conversation)
-        }
-        JobKind::RoomAgentPlacement => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Resume, Cat::MessagingControl)
-        }
-        JobKind::Command => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Settle, Cat::MessagingControl)
-        }
-        JobKind::DiscordTextMessage | JobKind::DiscordSlashCommand => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Settle, Cat::MessagingControl)
-        }
-        JobKind::TextDelivery => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Resume, Cat::MessagingControl)
-        }
-        JobKind::ConfirmationRequired => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Resume, Cat::MessagingControl)
-        }
+        JobKind::WakeActivation => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Settle,
+            Cat::Conversation,
+        ),
+        JobKind::RoomAgentPlacement => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Resume,
+            Cat::MessagingControl,
+        ),
+        JobKind::Command => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Settle,
+            Cat::MessagingControl,
+        ),
+        JobKind::DiscordTextMessage | JobKind::DiscordSlashCommand => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Settle,
+            Cat::MessagingControl,
+        ),
+        JobKind::TextDelivery => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Resume,
+            Cat::MessagingControl,
+        ),
+        JobKind::ConfirmationRequired => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Resume,
+            Cat::MessagingControl,
+        ),
         JobKind::AgentSessionStart | JobKind::AgentSessionResume => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Resume, Cat::Agent)
+            durable(Exec::Async, Lane::GeneralAsync, Resume::Resume, Cat::Agent)
         }
         JobKind::AgentSessionSunset => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Settle, Cat::Agent)
+            durable(Exec::Async, Lane::GeneralAsync, Resume::Settle, Cat::Agent)
         }
-        JobKind::TranscriptPublication => {
-            durable(Exec::Runtime, Lane::GeneralAsync, Resume::Resume, Cat::Conversation)
-        }
+        JobKind::TranscriptPublication => durable(
+            Exec::Async,
+            Lane::GeneralAsync,
+            Resume::Resume,
+            Cat::Conversation,
+        ),
         JobKind::DiscordTextSend
         | JobKind::DiscordForumThreadCreate
-        | JobKind::DiscordForumThreadRename => {
-            durable(Exec::Runtime, Lane::DiscordText, Resume::Settle, Cat::MessagingControl)
-        }
-        JobKind::DiscordTypingIndicator => {
-            durable(Exec::Runtime, Lane::DiscordText, Resume::Resume, Cat::Background)
-        }
-        JobKind::AgentTask => {
-            durable(Exec::Blocking, Lane::Agent, Resume::Resume, Cat::Agent)
-        }
+        | JobKind::DiscordForumThreadRename => durable(
+            Exec::Async,
+            Lane::DiscordText,
+            Resume::Settle,
+            Cat::MessagingControl,
+        ),
+        JobKind::DiscordTypingIndicator => durable(
+            Exec::Async,
+            Lane::DiscordText,
+            Resume::Resume,
+            Cat::Background,
+        ),
+        JobKind::AgentTask => durable(Exec::Blocking, Lane::Agent, Resume::Resume, Cat::Agent),
         JobKind::AgentThreadTitleRefresh => ephemeral(
             Exec::Blocking,
             Lane::Agent,
