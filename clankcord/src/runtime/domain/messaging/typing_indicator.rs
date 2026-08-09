@@ -10,8 +10,8 @@ use crate::runtime::domain::messaging::session_threads::{
 use crate::runtime::util::first_non_empty;
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind, Ctx,
-    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, JobState,
-    TextTarget, TextTargetKind,
+    DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, TextTarget,
+    TextTargetKind,
 };
 
 const NO_SESSION_THREAD_TYPING_STATUS: &str = "skipped_no_session_thread";
@@ -39,18 +39,20 @@ pub(crate) async fn execute_discord_typing_indicator_job<A>(
 where
     A: DiscordApi,
 {
-    let children = ctx.store.list_child_jobs(&job.id).await?;
-    if children.iter().any(|child| !child.state.is_terminal()) {
-        return Ok(JobDecision::Wait);
-    }
-    if let Some(failed) = children
-        .iter()
-        .find(|child| child.state != JobState::Complete)
+    match crate::runtime::domain::children::await_children(
+        ctx,
+        &job.id,
+        "discord typing dependency",
+    )
+    .await?
     {
-        return Ok(JobDecision::fail(format!(
-            "discord typing dependency {} ended as {}: {}",
-            failed.id, failed.state, failed.metadata.error
-        )));
+        crate::runtime::domain::children::ChildResolution::Pending => {
+            return Ok(JobDecision::Wait);
+        }
+        crate::runtime::domain::children::ChildResolution::Failed { message, .. } => {
+            return Ok(JobDecision::fail(message));
+        }
+        crate::runtime::domain::children::ChildResolution::Settled(_) => {}
     }
 
     let output = match resolve_typing_target(ctx, job, payload).await? {

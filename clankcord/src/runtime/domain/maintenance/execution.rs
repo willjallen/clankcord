@@ -59,19 +59,21 @@ pub(crate) async fn prepare_runtime_maintenance_job(
 }
 
 pub(crate) async fn prepare_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
-    let children = ctx.store.list_child_jobs(&job.id).await?;
-    if children.iter().any(|child| !child.state.is_terminal()) {
-        return Ok(JobDecision::Wait);
-    }
-    if let Some(failed) = children
-        .iter()
-        .find(|child| child.state != JobState::Complete)
+    let children = match crate::runtime::domain::children::await_children(
+        ctx,
+        &job.id,
+        "voice status snapshot dependency",
+    )
+    .await?
     {
-        return Ok(JobDecision::fail(format!(
-            "voice status snapshot dependency {} ended as {}: {}",
-            failed.id, failed.state, failed.metadata.error
-        )));
-    }
+        crate::runtime::domain::children::ChildResolution::Pending => {
+            return Ok(JobDecision::Wait);
+        }
+        crate::runtime::domain::children::ChildResolution::Failed { message, .. } => {
+            return Ok(JobDecision::fail(message));
+        }
+        crate::runtime::domain::children::ChildResolution::Settled(children) => children,
+    };
     if let Some(snapshot_job) = children
         .iter()
         .find(|child| child.kind == JobKind::DiscordVoiceStatusSnapshot)

@@ -10,7 +10,7 @@ use crate::runtime::timeline::isoformat_z;
 use crate::runtime::util::{first_non_empty, preview, string_field};
 use crate::runtime::{
     BinaryPayload, Ctx, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
-    JobOutput, JobState, RoomConfig, RuntimeScope, TextDeliveryKind, TextTarget, TextTargetKind,
+    JobOutput, RoomConfig, RuntimeScope, TextDeliveryKind, TextTarget, TextTargetKind,
     TranscriptPublicationOutput, TranscriptPublicationPayload,
 };
 
@@ -72,28 +72,21 @@ pub(crate) async fn prepare_transcript_publication_job(
     payload: &TranscriptPublicationPayload,
 ) -> Result<JobDecision> {
     let mut publication = ctx.store.get_publication(&payload.publication_id).await?;
-    let children = ctx.store.list_child_jobs(&job.id).await?;
-    if children.iter().any(|child| !child.state.is_terminal()) {
-        return Ok(JobDecision::Wait);
-    }
-    if let Some(failed) = children
-        .iter()
-        .find(|child| child.state != JobState::Complete)
+    let children = match crate::runtime::domain::children::await_children(
+        ctx,
+        &job.id,
+        "publication dependency",
+    )
+    .await?
     {
-        let message = format!(
-            "publication dependency {} ended as {}: {}",
-            failed.id, failed.state, failed.metadata.error
-        );
-        update_object_fields(
-            &mut publication,
-            [
-                ("discord_publish_error", json!(message.clone())),
-                ("updated_at", json!(isoformat_z(None))),
-            ],
-        )?;
-        ctx.store.update_publication(&publication).await?;
-        return Ok(JobDecision::fail(message));
-    }
+        crate::runtime::domain::children::ChildResolution::Pending => {
+            return Ok(JobDecision::Wait);
+        }
+        crate::runtime::domain::children::ChildResolution::Failed { message, .. } => {
+            return fail_publication_with_error(ctx, publication, message).await;
+        }
+        crate::runtime::domain::children::ChildResolution::Settled(children) => children,
+    };
 
     let thread_job = children
         .iter()
@@ -296,4 +289,20 @@ fn update_object_fields<const N: usize>(
         map.insert(key.to_string(), field_value);
     }
     Ok(())
+}
+
+async fn fail_publication_with_error(
+    ctx: &Ctx,
+    mut publication: Value,
+    message: String,
+) -> Result<JobDecision> {
+    update_object_fields(
+        &mut publication,
+        [
+            ("discord_publish_error", json!(message.clone())),
+            ("updated_at", json!(isoformat_z(None))),
+        ],
+    )?;
+    ctx.store.update_publication(&publication).await?;
+    Ok(JobDecision::fail(message))
 }
