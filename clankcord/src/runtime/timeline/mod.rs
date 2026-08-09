@@ -1,8 +1,7 @@
 mod migrations;
 mod schema;
 pub mod store;
-mod util;
-pub mod views;
+pub(crate) mod util;
 
 pub use migrations::AppliedSchemaMigration;
 pub use store::{

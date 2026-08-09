@@ -177,7 +177,7 @@ mod runtime_control {
     ) -> Result<JobDecision> {
         let output = match payload.action {
             RuntimeControlAction::RetryJob => {
-                let target = crate::runtime::timeline::views::jobs::retry_job_payload(
+                let target = crate::views::jobs::retry_job_payload(
                     runtime,
                     &payload.target_job_id,
                 )

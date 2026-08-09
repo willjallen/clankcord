@@ -8,7 +8,7 @@ use clankcord::config;
 use clankcord::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use clankcord::runtime::jobs::DiscordPostMetadata;
 use clankcord::runtime::jobs::JobMetadata;
-use clankcord::runtime::timeline::views::JobsRequest;
+use clankcord::views::JobsRequest;
 use clankcord::runtime::timeline::{JobVisibility, isoformat_z, sha256_file};
 use clankcord::runtime::{
     AgentSessionStartPayload, AudioSegmentPayload, BinaryPayload, CommandRequest, Ctx,
@@ -1026,7 +1026,7 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
     assert!(coverage_start.parse::<i64>().unwrap() > 0);
 
     let runtime = Ctx::new(store);
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -1242,7 +1242,7 @@ async fn jobs_public_view_uses_generic_scope_fields() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let jobs = clankcord::runtime::timeline::views::jobs::jobs(
+    let jobs = clankcord::views::jobs::jobs(
         &runtime,
         JobsRequest {
             guild_id: "guild".to_string(),
@@ -1263,7 +1263,7 @@ async fn jobs_public_view_uses_generic_scope_fields() {
     assert!(job.get("voice_channel_id").is_none());
 
     let verbose =
-        clankcord::runtime::timeline::views::jobs::get_job_payload(&runtime, &created.id, true)
+        clankcord::views::jobs::get_job_payload(&runtime, &created.id, true)
             .await
             .unwrap();
     assert_eq!(verbose["scope_kind"], "voice_channel");

@@ -76,7 +76,7 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
     }
     let runtime = Ctx::new(store);
 
-    let default_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let default_page = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             limit: 3,
@@ -117,7 +117,7 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
         expected_kinds
     );
 
-    let background_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let background_page = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             categories: values(["background"]),
@@ -138,7 +138,7 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
             .all(|job| job["category"] == "background")
     );
 
-    let all_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let all_page = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             categories: DashboardFilter::All,
@@ -150,7 +150,7 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
     .unwrap();
     assert_eq!(all_page["matched"], json!(7));
 
-    let none_page = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let none_page = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             categories: DashboardFilter::None,
@@ -247,7 +247,7 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
     .await;
     let runtime = Ctx::new(store);
 
-    let all = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let all = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -273,7 +273,7 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
         assert_eq!(record["category"], record["event"]["category"]);
     }
 
-    let default_page = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let default_page = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -297,7 +297,7 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
             )
     );
 
-    let voice_detail = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let voice_detail = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -317,7 +317,7 @@ async fn dashboard_timeline_taxonomy_covers_known_event_kinds_and_keeps_other_vi
             .all(|record| record["category"] == "voice_detail")
     );
 
-    let invalid = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let invalid = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             categories: values(["made_up_category"]),
@@ -368,7 +368,7 @@ async fn dashboard_timeline_applies_search_scope_state_and_kind_before_limit() {
     }
     let runtime = Ctx::new(store);
 
-    let response = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let response = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -414,7 +414,7 @@ async fn dashboard_timeline_applies_search_scope_state_and_kind_before_limit() {
             .contains(&json!("audio_segment"))
     );
 
-    let none = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let none = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -483,7 +483,7 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
     .await;
     let runtime = Ctx::new(store);
 
-    let response = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let response = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             from: "-1h".to_string(),
@@ -526,7 +526,7 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
         .unwrap();
     assert_eq!(dm_scope["label"], json!("Direct message with rowan"));
 
-    let human_search = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let human_search = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event", "job"]),
@@ -548,7 +548,7 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
                 && record["event"]["scopeLabel"] == "Direct message with rowan")
     );
 
-    let only_maintenance = clankcord::runtime::timeline::views::dashboard::dashboard_jobs(
+    let only_maintenance = clankcord::views::dashboard::dashboard_jobs(
         &runtime,
         DashboardJobsRequest {
             categories: values(["background"]),
@@ -588,7 +588,7 @@ async fn dashboard_timeline_cursor_pins_snapshot_and_walks_combined_records_once
         .await;
     }
     let runtime = Ctx::new(store);
-    let first = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let first = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -617,7 +617,7 @@ async fn dashboard_timeline_cursor_pins_snapshot_and_walks_combined_records_once
         Some("Code Lounge"),
     )
     .await;
-    let second = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let second = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: values(["event"]),
@@ -686,7 +686,7 @@ async fn dashboard_overview_aggregates_the_full_hour_and_excludes_stale_failures
     .await;
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+    let overview = clankcord::views::dashboard::dashboard_overview(
         &runtime,
         DashboardOverviewRequest { jobs_limit: 2 },
     )
@@ -785,7 +785,7 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
     fresh_failed.completed_at = Some(fresh_failed.created_at.clone());
     let fresh_failed = store.create_job(fresh_failed).await.unwrap();
     let runtime = Ctx::new(store);
-    let view = clankcord::runtime::timeline::views::dashboard::dashboard_agents(
+    let view = clankcord::views::dashboard::dashboard_agents(
         &runtime,
         DashboardAgentsRequest { limit: 1 },
     )
@@ -847,7 +847,7 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         .unwrap();
     assert_eq!(week["jobs"], json!(5));
 
-    let detail = clankcord::runtime::timeline::views::dashboard::dashboard_agent_detail(
+    let detail = clankcord::views::dashboard::dashboard_agent_detail(
         &runtime,
         &fresh_failed.id,
     )
@@ -938,7 +938,7 @@ async fn dashboard_automations_and_transcript_resolve_labels_without_rooms_view_
     let runtime = Ctx::new(store);
 
     let automations =
-        clankcord::runtime::timeline::views::dashboard::dashboard_automations(&runtime)
+        clankcord::views::dashboard::dashboard_automations(&runtime)
             .await
             .unwrap();
     let record = &automations["automations"]["records"][0];
@@ -949,7 +949,7 @@ async fn dashboard_automations_and_transcript_resolve_labels_without_rooms_view_
     );
     assert!(automations.get("publications").is_none());
 
-    let transcript = clankcord::runtime::timeline::views::dashboard::dashboard_transcript(
+    let transcript = clankcord::views::dashboard::dashboard_transcript(
         &runtime,
         DashboardTranscriptRequest::default(),
     )

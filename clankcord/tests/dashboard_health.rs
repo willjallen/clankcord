@@ -19,7 +19,7 @@ async fn dashboard_health_reports_postgres_diagnostics() {
     let store = test_store(raw.path()).await;
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -95,7 +95,7 @@ async fn dashboard_health_reasons_are_terse_measured_operator_state() {
     let runtime = Ctx::new(store);
 
     let payload =
-        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+        clankcord::views::operations::dashboard_summary_payload(&runtime)
             .await
             .unwrap();
     let components = payload["health"]["components"].as_array().unwrap();
@@ -168,7 +168,7 @@ async fn dashboard_health_includes_http_request_snapshot() {
         "routes": [{"route": "GET /dashboard", "totalStarted": 3}]
     });
 
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         requests.clone(),
     )
@@ -207,7 +207,7 @@ async fn dashboard_summary_uses_active_projection_aggregates_and_bounded_failure
     let runtime = Ctx::new(store);
 
     let summary =
-        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+        clankcord::views::operations::dashboard_summary_payload(&runtime)
             .await
             .unwrap();
 
@@ -268,7 +268,7 @@ async fn dashboard_transcript_channel_filter_applies_before_limit() {
     }
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_transcript(
+    let overview = clankcord::views::dashboard::dashboard_transcript(
         &runtime,
         DashboardTranscriptRequest {
             limit: 10,
@@ -312,7 +312,7 @@ async fn dashboard_timeline_limit_returns_newest_events_across_scopes() {
     }
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let overview = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
@@ -376,7 +376,7 @@ async fn dashboard_timeline_search_applies_before_limit() {
     }
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let overview = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
@@ -434,7 +434,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let overview = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+    let overview = clankcord::views::dashboard::dashboard_overview(
         &runtime,
         DashboardOverviewRequest::default(),
     )
@@ -442,7 +442,7 @@ async fn dashboard_job_summary_groups_by_runtime_scope() {
     .unwrap();
     let summary = &overview["jobs"]["summary"];
     let scopes = summary["byScope"].as_array().unwrap();
-    let timeline = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let timeline = clankcord::views::dashboard::dashboard_timeline(
         &runtime,
         DashboardTimelineRequest {
             record_types: DashboardFilter::Values(std::collections::BTreeSet::from([
@@ -553,7 +553,7 @@ async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
     .unwrap();
 
     let runtime = Ctx::new(store);
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -626,7 +626,7 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
     assert_eq!(remaining, 0);
 
     let runtime = Ctx::new(store.clone());
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -653,7 +653,7 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
         json!("maintenance snapshot provider timed out")
     );
 
-    let overview_page = clankcord::runtime::timeline::views::dashboard::dashboard_overview(
+    let overview_page = clankcord::views::dashboard::dashboard_overview(
         &runtime,
         DashboardOverviewRequest::default(),
     )
@@ -698,7 +698,7 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
     .unwrap();
     let runtime = Ctx::new(store.clone());
 
-    let overview = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -717,7 +717,7 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
         .execute(&store.pool)
         .await
         .unwrap();
-    let cleared = clankcord::runtime::timeline::views::operations::dashboard_health_payload(
+    let cleared = clankcord::views::operations::dashboard_health_payload(
         &runtime,
         json!({}),
     )
@@ -884,11 +884,11 @@ async fn stale_voice_rows_are_separated_from_current_dashboard_status() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let rooms = clankcord::runtime::timeline::views::operations::dashboard_rooms_payload(&runtime)
+    let rooms = clankcord::views::operations::dashboard_rooms_payload(&runtime)
         .await
         .unwrap();
     let overview =
-        clankcord::runtime::timeline::views::operations::dashboard_summary_payload(&runtime)
+        clankcord::views::operations::dashboard_summary_payload(&runtime)
             .await
             .unwrap();
 

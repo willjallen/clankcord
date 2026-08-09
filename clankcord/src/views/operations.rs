@@ -115,7 +115,7 @@ async fn dashboard_health_bundle(ctx: &Ctx) -> Result<(Value, Value)> {
         ));
     }
 
-    let mut status = crate::runtime::timeline::views::status::status_payload(ctx, None).await?;
+    let mut status = crate::views::status::status_payload(ctx, None).await?;
     let voice = apply_voice_observation_freshness(ctx, &mut status, now).await?;
     let operations = operational_diagnostics(ctx, now).await?;
     let configured_room_count = ctx.store.list_room_configs().await?.len();
@@ -169,7 +169,7 @@ pub async fn dashboard_health_payload(ctx: &Ctx, http_requests: Value) -> Result
 
 pub async fn dashboard_rooms_payload(ctx: &Ctx) -> Result<Value> {
     let now = utc_now();
-    let mut status = crate::runtime::timeline::views::status::status_payload(ctx, None).await?;
+    let mut status = crate::views::status::status_payload(ctx, None).await?;
     if let Value::Object(object) = &mut status {
         object.insert(
             "liveOccupancy".to_string(),
@@ -2384,7 +2384,7 @@ async fn recent_failure_rows(
             )
         })
         .collect::<Vec<_>>();
-    let scope_labels = crate::runtime::timeline::views::dashboard::dashboard_scope_label_batch(
+    let scope_labels = crate::views::dashboard::dashboard_scope_label_batch(
         runtime,
         &scope_keys,
     )

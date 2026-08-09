@@ -605,7 +605,7 @@ async fn base_context(
         .await?;
     let participants = room_participants(&occupants);
     let mut room_status =
-        crate::runtime::timeline::views::status::status_for_room(runtime, &room).await?;
+        crate::views::status::status_for_room(runtime, &room).await?;
     if let Value::Object(object) = &mut room_status {
         object.insert("liveOccupants".to_string(), json!(occupants));
         object.insert("participants".to_string(), json!(participants));

@@ -246,9 +246,7 @@ async fn promote_wake_transcription_slots(
         .await?;
     let mut planner_jobs = Vec::new();
     for source_id in &source_ids {
-        if let Some(job) = runtime
-            .store
-            .ensure_transcription_mux_plan_job(source_id, 0)
+        if let Some(job) = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_job(runtime, source_id, 0)
             .await?
         {
             planner_jobs.push(job.to_value());

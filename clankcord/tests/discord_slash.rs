@@ -153,7 +153,7 @@ async fn feedback_slash_records_durable_timeline_event() {
         json!("2026-05-15T10:00:00.000Z")
     );
 
-    let page = clankcord::runtime::timeline::views::dashboard::dashboard_timeline(
+    let page = clankcord::views::dashboard::dashboard_timeline(
         &Ctx::new(store),
         DashboardTimelineRequest {
             record_types: DashboardFilter::Values(BTreeSet::from(["event".to_string()])),

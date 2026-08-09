@@ -4,6 +4,8 @@
 //! metadata; whether a transcription is kept or dropped is decided here,
 //! from configured thresholds — provider transport stays policy-free.
 
+pub mod mux;
+
 use serde_json::Value;
 
 use crate::config;

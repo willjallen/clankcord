@@ -1,4 +1,4 @@
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;

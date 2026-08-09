@@ -55,7 +55,7 @@ pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
         .await?
         .into_iter()
         .filter(|job| job.scope_id == room.channel_id && !job.state.is_terminal())
-        .map(|job| crate::runtime::timeline::views::jobs::public_job_view(&job))
+        .map(|job| crate::views::jobs::public_job_view(&job))
         .collect::<Vec<_>>();
     Ok(json!({
         "room": room.to_json(),

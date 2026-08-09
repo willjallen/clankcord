@@ -91,7 +91,7 @@ async fn prepare_command(
     match job_kind {
         "materialize_transcript" => {
             let (start, end) = command.window_times(None);
-            let materialized = crate::runtime::timeline::views::history::materialize_transcript(
+            let materialized = crate::views::history::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -125,7 +125,7 @@ async fn prepare_command(
         "make_permanent" => {
             let end = utc_now();
             let start = end - chrono::Duration::minutes(30);
-            let materialized = crate::runtime::timeline::views::history::materialize_transcript(
+            let materialized = crate::views::history::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -332,7 +332,7 @@ async fn prepare_command(
         }
         "forget_window" => {
             let (start, end) = command.window_times(None);
-            let result = crate::runtime::timeline::views::history::forget(
+            let result = crate::views::history::forget(
                 ctx,
                 ForgetRequest {
                     window_id: command.arguments.window_id.clone(),

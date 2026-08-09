@@ -50,9 +50,7 @@ pub(crate) async fn prepare_runtime_maintenance_job(
             config::failed_audio_segment_retry_batch_limit(),
         )
         .await?;
-    let transcription_mux_plan_jobs = ctx
-        .store
-        .ensure_transcription_mux_plan_jobs_for_queued_slots(
+    let transcription_mux_plan_jobs = crate::runtime::domain::transcription::mux::ensure_transcription_mux_plan_jobs_for_queued_slots(ctx, 
             config::transcription_mux_batch_delay_ms(),
         )
         .await?;

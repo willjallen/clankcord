@@ -389,7 +389,7 @@ pub async fn serve_until_shutdown(
 
 async fn healthz(State(state): State<AppState>) -> Response {
     let runtime = state.runtime_context();
-    match crate::runtime::timeline::views::operations::operational_health_payload(&runtime).await {
+    match crate::views::operations::operational_health_payload(&runtime).await {
         Ok(payload) => {
             let status = readiness_http_status(&payload);
             (status, Json(payload)).into_response()
@@ -408,7 +408,7 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
         {
             Ok(room) => {
                 let mut payload =
-                    match crate::runtime::timeline::views::status::status_for_room(&runtime, &room)
+                    match crate::views::status::status_for_room(&runtime, &room)
                         .await
                     {
                         Ok(payload) => payload,
@@ -430,7 +430,7 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
             Err(error) => err(error),
         }
     } else {
-        let mut payload = match crate::runtime::timeline::views::status::status_payload(
+        let mut payload = match crate::views::status::status_payload(
             &runtime,
             non_empty_string(channel).as_deref(),
         )
@@ -452,7 +452,7 @@ async fn status(State(state): State<AppState>, Query(query): Query<BTreeQuery>) 
 
 async fn pool_status(State(state): State<AppState>) -> Response {
     let runtime = state.runtime_context();
-    match crate::runtime::timeline::views::status::status_payload(&runtime, None).await {
+    match crate::views::status::status_payload(&runtime, None).await {
         Ok(payload) => ok(payload),
         Err(error) => err(error),
     }
@@ -659,7 +659,7 @@ async fn automation_cancel(
 async fn timeline_tail(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::timeline_tail(
+        crate::views::history::timeline_tail(
             &runtime,
             TimelineTailRequest {
                 guild_id: query_str(&query, &["guild", "guildId", "guild_id"]),
@@ -680,7 +680,7 @@ async fn timeline_range(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::timeline_range(
+        crate::views::history::timeline_range(
             &runtime,
             TimelineRangeRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -703,7 +703,7 @@ async fn transcript_render(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::render_transcript(
+        crate::views::history::render_transcript(
             &runtime,
             RenderTranscriptRequest {
                 window_id: query_str(&query, &["window", "windowId"]),
@@ -726,7 +726,7 @@ async fn transcript_search(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::search_transcripts(
+        crate::views::history::search_transcripts(
             &runtime,
             SearchTranscriptsRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -747,7 +747,7 @@ async fn conversations_list(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::list_conversations(
+        crate::views::history::list_conversations(
             &runtime,
             ListConversationsRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -766,7 +766,7 @@ async fn context_resolve(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::context_resolve(
+        crate::views::history::context_resolve(
             &runtime,
             ContextResolveRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -784,7 +784,7 @@ async fn participant_trace(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::history::participant_trace(
+        crate::views::history::participant_trace(
             &runtime,
             ParticipantTraceRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -808,7 +808,7 @@ async fn members_search(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::members::members_search(
+        crate::views::members::members_search(
             &runtime,
             MemberSearchRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -826,7 +826,7 @@ async fn members_resolve(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::members::members_resolve(
+        crate::views::members::members_resolve(
             &runtime,
             MemberResolveRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -844,7 +844,7 @@ async fn members_get(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::members::members_get(
+        crate::views::members::members_get(
             &runtime,
             MemberGetRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -965,7 +965,7 @@ async fn agent_sessions_resume(
 async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery>) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::jobs::jobs(
+        crate::views::jobs::jobs(
             &runtime,
             JobsRequest {
                 guild_id: query_str(&query, &["guild", "guildId"]),
@@ -989,7 +989,7 @@ async fn jobs_get(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::jobs::get_job_payload(
+        crate::views::jobs::get_job_payload(
             &runtime,
             &job_id,
             query_bool(&query, &["verbose"], false),
@@ -1030,7 +1030,7 @@ async fn confirmation_cancel(
 
 async fn dashboard_summary(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
-    result(crate::runtime::timeline::views::operations::dashboard_summary_payload(&runtime).await)
+    result(crate::views::operations::dashboard_summary_payload(&runtime).await)
 }
 
 async fn dashboard_overview(
@@ -1039,7 +1039,7 @@ async fn dashboard_overview(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::dashboard::dashboard_overview(
+        crate::views::dashboard::dashboard_overview(
             &runtime,
             DashboardOverviewRequest {
                 jobs_limit: query_usize(&query, &["jobsLimit"], 120),
@@ -1055,7 +1055,7 @@ async fn dashboard_agents(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::dashboard::dashboard_agents(
+        crate::views::dashboard::dashboard_agents(
             &runtime,
             DashboardAgentsRequest {
                 limit: query_usize(&query, &["limit"], 120),
@@ -1067,13 +1067,13 @@ async fn dashboard_agents(
 
 async fn dashboard_automations(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
-    result(crate::runtime::timeline::views::dashboard::dashboard_automations(&runtime).await)
+    result(crate::views::dashboard::dashboard_automations(&runtime).await)
 }
 
 async fn dashboard_health(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::operations::dashboard_health_payload(
+        crate::views::operations::dashboard_health_payload(
             &runtime,
             http_request_metrics_snapshot(),
         )
@@ -1083,7 +1083,7 @@ async fn dashboard_health(State(state): State<AppState>) -> Response {
 
 async fn dashboard_rooms(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
-    result(crate::runtime::timeline::views::operations::dashboard_rooms_payload(&runtime).await)
+    result(crate::views::operations::dashboard_rooms_payload(&runtime).await)
 }
 
 async fn dashboard_transcript(
@@ -1092,7 +1092,7 @@ async fn dashboard_transcript(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::dashboard::dashboard_transcript(
+        crate::views::dashboard::dashboard_transcript(
             &runtime,
             DashboardTranscriptRequest {
                 since: query_str(&query, &["since"]),
@@ -1114,7 +1114,7 @@ async fn dashboard_timeline(
         Ok(request) => request,
         Err(error) => return err(error),
     };
-    result(crate::runtime::timeline::views::dashboard::dashboard_timeline(&runtime, request).await)
+    result(crate::views::dashboard::dashboard_timeline(&runtime, request).await)
 }
 
 async fn dashboard_jobs(
@@ -1126,7 +1126,7 @@ async fn dashboard_jobs(
         Ok(request) => request,
         Err(error) => return err(error),
     };
-    result(crate::runtime::timeline::views::dashboard::dashboard_jobs(&runtime, request).await)
+    result(crate::views::dashboard::dashboard_jobs(&runtime, request).await)
 }
 
 async fn dashboard_agent_detail(
@@ -1135,7 +1135,7 @@ async fn dashboard_agent_detail(
 ) -> Response {
     let runtime = runtime_context!(state);
     result(
-        crate::runtime::timeline::views::dashboard::dashboard_agent_detail(&runtime, &job_id).await,
+        crate::views::dashboard::dashboard_agent_detail(&runtime, &job_id).await,
     )
 }
 
