@@ -3,37 +3,12 @@ use std::path::Path;
 use anyhow::Context;
 use reqwest::StatusCode;
 use reqwest::blocking::multipart;
-use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value};
 
 use crate::Result;
 use crate::config::{self, NamedTranscriptionSourceConfig, TranscriptionProvider};
+use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
 use crate::runtime::util::{finite_number, number_or_null};
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptionResult {
-    pub text: String,
-    pub metadata: Value,
-    pub words: Vec<TranscriptionWord>,
-    pub segments: Vec<TranscriptionSpan>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptionWord {
-    pub text: String,
-    pub start_seconds: Option<f64>,
-    pub end_seconds: Option<f64>,
-    pub speaker_id: String,
-    pub kind: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptionSpan {
-    pub text: String,
-    pub start_seconds: Option<f64>,
-    pub end_seconds: Option<f64>,
-    pub speaker_id: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct SttHttpStatusError {
@@ -86,77 +61,6 @@ pub fn content_type_for_path(path: &Path) -> String {
             .unwrap_or("application/octet-stream")
             .to_string(),
     }
-}
-
-pub fn stt_no_speech_probability(metadata: Option<&Value>) -> Option<f64> {
-    let Value::Object(map) = metadata? else {
-        return None;
-    };
-    let mut probabilities = Vec::new();
-    if let Some(value) = finite_number(map.get("no_speech_prob")) {
-        probabilities.push(value);
-    }
-    if let Some(local) = map.get("local").and_then(Value::as_object) {
-        if let Some(value) = finite_number(local.get("estimated_no_speech_prob")) {
-            probabilities.push(value);
-        }
-    }
-    probabilities.into_iter().reduce(f64::max)
-}
-
-pub fn stt_avg_token_logprob(metadata: Option<&Value>) -> Option<f64> {
-    metadata?
-        .get("tokens")
-        .and_then(Value::as_object)
-        .and_then(|tokens| finite_number(tokens.get("avg_token_logprob")))
-}
-
-pub fn stt_drop_decision(
-    metadata: Option<&Value>,
-    no_speech_threshold: Option<f64>,
-    avg_token_logprob_threshold: Option<f64>,
-) -> Value {
-    let active_source = config::active_transcription_source().ok();
-    let no_speech_cutoff = no_speech_threshold.unwrap_or_else(|| {
-        active_source
-            .as_ref()
-            .map(|source| source.config.drop_no_speech_probability)
-            .unwrap_or(0.7)
-    });
-    let token_cutoff = avg_token_logprob_threshold.unwrap_or_else(|| {
-        active_source
-            .as_ref()
-            .map(|source| source.config.drop_avg_token_logprob)
-            .unwrap_or(-0.8)
-    });
-    let no_speech_prob = stt_no_speech_probability(metadata);
-    let token_avg = stt_avg_token_logprob(metadata);
-    let mut reasons = Vec::<Value>::new();
-    if no_speech_prob.is_some_and(|value| value > no_speech_cutoff) {
-        reasons.push(Value::String("no_speech".to_string()));
-    }
-    if token_avg.is_some_and(|value| value < token_cutoff) {
-        reasons.push(Value::String("avg_token_logprob".to_string()));
-    }
-    serde_json::json!({
-        "drop": !reasons.is_empty(),
-        "reasons": reasons,
-        "no_speech_prob": no_speech_prob,
-        "no_speech_threshold": no_speech_cutoff,
-        "avg_token_logprob": token_avg,
-        "avg_token_logprob_threshold": token_cutoff
-    })
-}
-
-pub fn should_drop_low_confidence_transcription(
-    metadata: Option<&Value>,
-    no_speech_threshold: Option<f64>,
-    avg_token_logprob_threshold: Option<f64>,
-) -> bool {
-    stt_drop_decision(metadata, no_speech_threshold, avg_token_logprob_threshold)
-        .get("drop")
-        .and_then(Value::as_bool)
-        == Some(true)
 }
 
 pub fn compact_token_logprobs(entries: Option<&Value>, limit: Option<usize>) -> (Value, Value) {

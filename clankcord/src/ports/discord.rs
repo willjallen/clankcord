@@ -12,57 +12,57 @@ use crate::runtime::{
     DiscordVoicePlayAudioPayload, DiscordVoiceStatusSnapshotOutput,
 };
 
-pub(crate) type ExternalApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
+pub(crate) type DiscordApiFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
-pub(crate) trait RuntimeExternalApi: Send + Sync {
+pub(crate) trait DiscordApi: Send + Sync {
     fn discord_text_send<'a>(
         &'a self,
         payload: DiscordTextSendPayload,
-    ) -> ExternalApiFuture<'a, DiscordTextSendOutput>;
+    ) -> DiscordApiFuture<'a, DiscordTextSendOutput>;
 
     fn discord_forum_thread_create<'a>(
         &'a self,
         payload: DiscordForumThreadCreatePayload,
-    ) -> ExternalApiFuture<'a, DiscordForumThreadCreateOutput>;
+    ) -> DiscordApiFuture<'a, DiscordForumThreadCreateOutput>;
 
     fn discord_forum_thread_rename<'a>(
         &'a self,
         payload: DiscordForumThreadRenamePayload,
-    ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput>;
+    ) -> DiscordApiFuture<'a, DiscordForumThreadRenameOutput>;
 
     fn discord_typing_indicator<'a>(
         &'a self,
         payload: DiscordTypingIndicatorPayload,
-    ) -> ExternalApiFuture<'a, DiscordTypingIndicatorOutput>;
+    ) -> DiscordApiFuture<'a, DiscordTypingIndicatorOutput>;
 
     fn discord_voice_join<'a>(
         &'a self,
         payload: DiscordVoiceJoinPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceJoinOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoiceJoinOutput>;
 
     fn discord_voice_leave<'a>(
         &'a self,
         guild_id: String,
         voice_channel_id: String,
         payload: DiscordVoiceLeavePayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceLeaveOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoiceLeaveOutput>;
 
     fn discord_voice_mute<'a>(
         &'a self,
         payload: DiscordVoiceMutePayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceMuteOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoiceMuteOutput>;
 
     fn discord_voice_deafen<'a>(
         &'a self,
         payload: DiscordVoiceDeafenPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceDeafenOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoiceDeafenOutput>;
 
     fn discord_voice_play_audio<'a>(
         &'a self,
         payload: DiscordVoicePlayAudioPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoicePlayAudioOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoicePlayAudioOutput>;
 
     fn discord_voice_status_snapshot<'a>(
         &'a self,
-    ) -> ExternalApiFuture<'a, DiscordVoiceStatusSnapshotOutput>;
+    ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput>;
 }

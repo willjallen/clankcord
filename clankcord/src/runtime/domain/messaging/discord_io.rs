@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::{
     DiscordForumThreadCreatePayload, DiscordForumThreadRenamePayload, DiscordTextSendPayload,
     JobOutput, Runtime,
@@ -13,7 +13,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api.discord_text_send(payload.clone()).await?;
         Ok(JobDecision::Complete(JobOutput::DiscordTextSend(output)))
@@ -25,7 +25,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api
             .discord_forum_thread_create(payload.clone())
@@ -41,7 +41,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api
             .discord_forum_thread_rename(payload.clone())

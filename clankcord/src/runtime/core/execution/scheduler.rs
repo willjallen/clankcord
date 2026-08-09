@@ -7,7 +7,7 @@ use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 use crate::Result;
 use crate::config;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::jobs::spec::{JobExecutor, JobLane, spec};
 use crate::runtime::timeline::TimelineStore;
 use crate::runtime::{Job, JobKind, Runtime, log};
@@ -15,7 +15,7 @@ use crate::runtime::{Job, JobKind, Runtime, log};
 #[derive(Clone)]
 pub(crate) struct RuntimeExecutor<E>
 where
-    E: RuntimeExternalApi + Clone + Send + Sync + 'static,
+    E: DiscordApi + Clone + Send + Sync + 'static,
 {
     external_api: E,
     timeline_store: TimelineStore,
@@ -36,7 +36,7 @@ struct JobLanes {
 
 impl<E> RuntimeExecutor<E>
 where
-    E: RuntimeExternalApi + Clone + Send + Sync + 'static,
+    E: DiscordApi + Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(external_api: E, timeline_store: TimelineStore) -> Self {
         Self {

@@ -6,6 +6,7 @@ pub mod config;
 pub mod dashboard;
 pub mod engine;
 pub mod errors;
+pub mod ports;
 pub mod runtime;
 
 pub type Result<T> = anyhow::Result<T>;

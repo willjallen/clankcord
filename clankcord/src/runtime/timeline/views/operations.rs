@@ -8,7 +8,6 @@ use sqlx::{Postgres, QueryBuilder, Row};
 use super::dashboard::{dashboard_job_category, dashboard_job_duration_ms};
 use crate::Result;
 use crate::adapters::codex::{codex_usage_payload, parse_codex_jsonl};
-use crate::adapters::wakeword::wake_provider_health;
 use crate::config;
 use crate::runtime::agents::{AgentSession, AgentSessionStatus};
 use crate::runtime::automations::{AutomationRecord, AutomationTrigger};
@@ -52,6 +51,7 @@ impl Runtime {
                     &RuntimeHealthFacts::default(),
                     &unavailable_failure_summary(now),
                     &VoiceObservationSummary::default(),
+                    &json!({"status": "unknown", "available": false, "reason": "database_unavailable"}),
                     0,
                     0,
                     now,
@@ -70,6 +70,10 @@ impl Runtime {
         )?;
         apply_active_health_facts(&mut health_facts, &active_jobs, now);
         let (configured_room_count, automation_count) = inventory;
+        let wake_provider = crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(
+            &self.timeline_store,
+        )
+        .await?;
         Ok(json!({
             "generatedAt": isoformat_z(Some(now)),
             "health": runtime_health_from_facts(
@@ -77,6 +81,7 @@ impl Runtime {
                 &health_facts,
                 &failures,
                 &voice,
+                &wake_provider,
                 configured_room_count,
                 automation_count,
                 now,
@@ -96,6 +101,7 @@ impl Runtime {
                 &[],
                 &failures,
                 &VoiceObservationSummary::default(),
+                &json!({"status": "unknown", "available": false, "reason": "database_unavailable"}),
                 0,
                 0,
                 now,
@@ -119,11 +125,16 @@ impl Runtime {
         let automation_count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM automations")
             .fetch_one(&self.timeline_store.pool)
             .await?;
+        let wake_provider = crate::runtime::domain::voice_capture::wake_circuit::wake_provider_health(
+            &self.timeline_store,
+        )
+        .await?;
         let health = runtime_health(
             &database,
             &operations.job_rows,
             &operations.failure_summary,
             &voice,
+            &wake_provider,
             configured_room_count,
             automation_count as usize,
             now,
@@ -936,6 +947,7 @@ fn runtime_health(
     jobs: &[JobDiagnosticRow],
     failure_summary: &Value,
     voice: &VoiceObservationSummary,
+    wake_provider: &Value,
     configured_room_count: usize,
     automation_count: usize,
     now: DateTime<Utc>,
@@ -946,6 +958,7 @@ fn runtime_health(
         &facts,
         failure_summary,
         voice,
+        wake_provider,
         configured_room_count,
         automation_count,
         now,
@@ -957,6 +970,7 @@ fn runtime_health_from_facts(
     facts: &RuntimeHealthFacts,
     failure_summary: &Value,
     voice: &VoiceObservationSummary,
+    wake_provider: &Value,
     configured_room_count: usize,
     automation_count: usize,
     now: DateTime<Utc>,
@@ -1165,7 +1179,6 @@ fn runtime_health_from_facts(
         now_ms,
     ));
 
-    let wake_provider = wake_provider_health();
     let wake_provider_available = wake_provider
         .get("available")
         .and_then(Value::as_bool)
@@ -1187,7 +1200,7 @@ fn runtime_health_from_facts(
         Some(now_ms),
         30,
         &wake_reason,
-        wake_provider,
+        wake_provider.clone(),
         now_ms,
     ));
 

@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::adapters::stt::{
-    SttHttpStatusError, TranscriptionResult, TranscriptionSpan, TranscriptionWord,
+use crate::adapters::stt::{SttHttpStatusError, transcribe_file_with_source_result_sync};
+use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
+use crate::runtime::domain::transcription::{
     should_drop_low_confidence_transcription, stt_drop_decision,
-    transcribe_file_with_source_result_sync,
 };
 use crate::runtime::timeline::store::TranscriptionSlotRecord;
 use crate::runtime::timeline::{SpeechEventInput, read_wav_mono, sha256_file};

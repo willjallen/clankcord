@@ -1,4 +1,5 @@
 pub(crate) mod segments;
+pub(crate) mod wake_circuit;
 pub mod wake_activations;
 pub(crate) mod wake_probes;
 

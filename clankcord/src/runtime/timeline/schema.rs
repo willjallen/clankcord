@@ -73,6 +73,21 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
         ],
     ),
     table(
+        "wake_circuit",
+        &[
+            column("circuit_id", "text", false),
+            column("consecutive_failures", "bigint", false),
+            column("open_count", "bigint", false),
+            column("open_until_ms", "bigint", true),
+            column("half_open_started_at_ms", "bigint", true),
+            column("last_failure_at_ms", "bigint", true),
+            column("last_success_at_ms", "bigint", true),
+            column("last_error", "text", false),
+            column("suppressed_probes", "bigint", false),
+            column("updated_at_ms", "bigint", false),
+        ],
+    ),
+    table(
         "bot_states",
         &[
             column("bot_id", "text", false),
@@ -513,6 +528,7 @@ const EXPECTED_INDEXES: &[(&str, &[&str])] = &[
     ("runtime_metadata", &["runtime_metadata_pkey"]),
     ("runtime_config", &["runtime_config_pkey"]),
     ("runtime_status", &["runtime_status_pkey"]),
+    ("wake_circuit", &["wake_circuit_pkey"]),
     (
         "capture_sessions",
         &["capture_sessions_pkey", "idx_capture_sessions_active_room"],
@@ -585,6 +601,19 @@ impl TimelineStore {
               status_key TEXT PRIMARY KEY,
               updated_at_ms BIGINT NOT NULL,
               payload_json JSONB NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS wake_circuit (
+              circuit_id TEXT PRIMARY KEY,
+              consecutive_failures BIGINT NOT NULL DEFAULT 0,
+              open_count BIGINT NOT NULL DEFAULT 0,
+              open_until_ms BIGINT,
+              half_open_started_at_ms BIGINT,
+              last_failure_at_ms BIGINT,
+              last_success_at_ms BIGINT,
+              last_error TEXT NOT NULL DEFAULT '',
+              suppressed_probes BIGINT NOT NULL DEFAULT 0,
+              updated_at_ms BIGINT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS bot_states (

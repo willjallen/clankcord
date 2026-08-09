@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::domain::ingress::discord_slash;
 use crate::runtime::domain::ingress::discord_text;
 use crate::runtime::domain::voice_capture::{segments, wake_activations, wake_probes};
@@ -89,7 +89,7 @@ pub(crate) async fn execute_runtime_async_with_external_api<A>(
     external_api: &A,
 ) -> Result<JobDecision>
 where
-    A: RuntimeExternalApi,
+    A: DiscordApi,
 {
     match &job.payload {
         JobPayload::DiscordTextSend(payload) => {

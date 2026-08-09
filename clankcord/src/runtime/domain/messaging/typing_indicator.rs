@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_targets_unavailable_session_thread,
     discord_error_unavailable_channel_id,
@@ -38,7 +38,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let children = self.timeline_store.list_child_jobs(&job.id).await?;
         if children.iter().any(|child| !child.state.is_terminal()) {

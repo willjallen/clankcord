@@ -1,6 +1,6 @@
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::{
     DiscordVoiceDeafenPayload, DiscordVoiceJoinPayload, DiscordVoiceLeavePayload,
     DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload, JobOutput, Runtime,
@@ -13,7 +13,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api.discord_voice_join(payload.clone()).await?;
         Ok(JobDecision::Complete(JobOutput::DiscordVoiceJoin(output)))
@@ -26,7 +26,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api
             .discord_voice_leave(job.guild_id.clone(), job.scope_id.clone(), payload.clone())
@@ -40,7 +40,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api.discord_voice_mute(payload.clone()).await?;
         Ok(JobDecision::Complete(JobOutput::DiscordVoiceMute(output)))
@@ -52,7 +52,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api.discord_voice_deafen(payload.clone()).await?;
         Ok(JobDecision::Complete(JobOutput::DiscordVoiceDeafen(output)))
@@ -64,7 +64,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api
             .discord_voice_play_audio(payload.clone())
@@ -79,7 +79,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<JobDecision>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let output = external_api.discord_voice_status_snapshot().await?;
         Ok(JobDecision::Complete(

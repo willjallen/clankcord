@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::adapters::discord::gateway::{forum_thread, text_send, typing};
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
-use crate::runtime::domain::external::{ExternalApiFuture, RuntimeExternalApi};
+use crate::ports::discord::{DiscordApiFuture, DiscordApi};
 use crate::runtime::{
     DiscordForumThreadCreateOutput, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenameOutput, DiscordForumThreadRenamePayload, DiscordTextSendOutput,
@@ -28,39 +28,39 @@ impl DiscordRuntimeApi {
     }
 }
 
-impl RuntimeExternalApi for DiscordRuntimeApi {
+impl DiscordApi for DiscordRuntimeApi {
     fn discord_text_send<'a>(
         &'a self,
         payload: DiscordTextSendPayload,
-    ) -> ExternalApiFuture<'a, DiscordTextSendOutput> {
+    ) -> DiscordApiFuture<'a, DiscordTextSendOutput> {
         Box::pin(async move { text_send::send(payload).await })
     }
 
     fn discord_forum_thread_create<'a>(
         &'a self,
         payload: DiscordForumThreadCreatePayload,
-    ) -> ExternalApiFuture<'a, DiscordForumThreadCreateOutput> {
+    ) -> DiscordApiFuture<'a, DiscordForumThreadCreateOutput> {
         Box::pin(async move { forum_thread::create(payload).await })
     }
 
     fn discord_forum_thread_rename<'a>(
         &'a self,
         payload: DiscordForumThreadRenamePayload,
-    ) -> ExternalApiFuture<'a, DiscordForumThreadRenameOutput> {
+    ) -> DiscordApiFuture<'a, DiscordForumThreadRenameOutput> {
         Box::pin(async move { forum_thread::rename(payload).await })
     }
 
     fn discord_typing_indicator<'a>(
         &'a self,
         payload: DiscordTypingIndicatorPayload,
-    ) -> ExternalApiFuture<'a, DiscordTypingIndicatorOutput> {
+    ) -> DiscordApiFuture<'a, DiscordTypingIndicatorOutput> {
         Box::pin(async move { typing::execute(payload, self.typing.clone()).await })
     }
 
     fn discord_voice_join<'a>(
         &'a self,
         payload: DiscordVoiceJoinPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceJoinOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoiceJoinOutput> {
         Box::pin(
             async move { LiveVoiceAdapter::join_assigned_room(&self.live_voice, payload).await },
         )
@@ -71,7 +71,7 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
         guild_id: String,
         voice_channel_id: String,
         payload: DiscordVoiceLeavePayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceLeaveOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoiceLeaveOutput> {
         Box::pin(async move {
             LiveVoiceAdapter::finish_session(&self.live_voice, guild_id, voice_channel_id, payload)
                 .await
@@ -81,14 +81,14 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
     fn discord_voice_mute<'a>(
         &'a self,
         payload: DiscordVoiceMutePayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceMuteOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoiceMuteOutput> {
         Box::pin(async move { LiveVoiceAdapter::set_session_mute(&self.live_voice, payload).await })
     }
 
     fn discord_voice_deafen<'a>(
         &'a self,
         payload: DiscordVoiceDeafenPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoiceDeafenOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoiceDeafenOutput> {
         Box::pin(
             async move { LiveVoiceAdapter::set_session_deafen(&self.live_voice, payload).await },
         )
@@ -97,13 +97,13 @@ impl RuntimeExternalApi for DiscordRuntimeApi {
     fn discord_voice_play_audio<'a>(
         &'a self,
         payload: DiscordVoicePlayAudioPayload,
-    ) -> ExternalApiFuture<'a, DiscordVoicePlayAudioOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoicePlayAudioOutput> {
         Box::pin(async move { LiveVoiceAdapter::play_session_cue(&self.live_voice, payload).await })
     }
 
     fn discord_voice_status_snapshot<'a>(
         &'a self,
-    ) -> ExternalApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
+    ) -> DiscordApiFuture<'a, DiscordVoiceStatusSnapshotOutput> {
         Box::pin(async move { self.live_voice.voice_status_snapshot().await })
     }
 }

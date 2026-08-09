@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::runtime::core::execution::JobDecision;
-use crate::runtime::domain::external::RuntimeExternalApi;
+use crate::ports::discord::DiscordApi;
 use crate::runtime::domain::voice_capture::segments;
 use crate::runtime::{Job, JobKind, JobOutput, JobState, Runtime};
 
@@ -23,7 +23,7 @@ impl Runtime {
         external_api: &A,
     ) -> Result<Value>
     where
-        A: RuntimeExternalApi,
+        A: DiscordApi,
     {
         let job_id = running.id.clone();
         match routes::execute_runtime_async_with_external_api(self, &running, external_api).await {

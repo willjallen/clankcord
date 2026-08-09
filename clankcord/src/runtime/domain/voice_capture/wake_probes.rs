@@ -3,10 +3,12 @@ use std::collections::BTreeSet;
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::adapters::wakeword::{
-    WakeCircuitAdmission, acquire_wake_probe_admission, detect_wake_file_sync,
-    record_wake_provider_failure, record_wake_provider_success, wake_provider_health,
+use crate::adapters::wakeword::detect_wake_file_sync;
+use crate::runtime::domain::voice_capture::wake_circuit::{
+    acquire_wake_probe_admission, record_wake_provider_failure, record_wake_provider_success,
+    wake_provider_health,
 };
+use crate::runtime::timeline::store::WakeCircuitAdmission;
 use crate::config;
 use crate::runtime::domain::voice_capture::wake_activations::schedule_from_wake_event;
 use crate::runtime::timeline::{event_end, event_start, isoformat_z, sha256_file};
@@ -33,7 +35,7 @@ pub(crate) async fn execute_probe_job(
     }
     let audio_bytes = wav_path.metadata()?.len();
     let detection_stream_id = payload.stream_id.clone();
-    let Some(admission) = acquire_wake_probe_admission() else {
+    let Some(admission) = acquire_wake_probe_admission(&runtime.timeline_store).await? else {
         // The wake provider circuit is open. The probe still ran as a job so
         // the timeline records that it existed; the audio artifact is removed
         // because no probe will ever read it.
@@ -50,17 +52,17 @@ pub(crate) async fn execute_probe_job(
             "stream_id": payload.stream_id,
             "artifact_deleted": artifact_deleted,
             "artifact_deletion_error": artifact_deletion_error,
-            "wake_provider": wake_provider_health(),
+            "wake_provider": wake_provider_health(&runtime.timeline_store).await?,
         }));
     };
     let reset_stream = payload.reset_stream || admission == WakeCircuitAdmission::HalfOpen;
     let wake = match detect_wake_file_sync(&wav_path, &detection_stream_id, reset_stream) {
         Ok(wake) => {
-            record_wake_provider_success();
+            record_wake_provider_success(&runtime.timeline_store).await?;
             wake
         }
         Err(error) => {
-            record_wake_provider_failure(&error);
+            record_wake_provider_failure(&runtime.timeline_store, &error).await?;
             return Err(error);
         }
     };
