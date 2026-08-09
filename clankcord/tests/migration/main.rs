@@ -4,4 +4,5 @@
 mod support;
 
 mod automation_blobs;
+mod chain_v0;
 mod v1_0_0;

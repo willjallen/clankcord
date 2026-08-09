@@ -1,9 +1,6 @@
 //! Durable wake circuit: threshold opening, backoff, half-open leases, restart survival.
 
-
-
 use clankcord::store::WakeCircuitAdmission;
-
 
 const LEASE_MS: i64 = 60_000;
 

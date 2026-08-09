@@ -4,13 +4,11 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-
 use clankcord::model::job::{CommandRequest, Job, JobState};
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::{CaptureRunInput, SpeechEventInput};
 
 use crate::support::{append_speech, dt, test_store};
-
 
 fn string_field(value: &serde_json::Value, key: &str) -> String {
     match value.get(key) {

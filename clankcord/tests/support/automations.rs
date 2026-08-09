@@ -4,12 +4,9 @@ use serde_json::{Value, json};
 
 use clankcord::domain::Ctx;
 use clankcord::domain::automations::AutomationSpec;
-use clankcord::model::job::{
-    CommandRequest, Job,
-};
+use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::TimelineStore;
-
 
 pub fn reminder_spec(idempotency_key: &str) -> AutomationSpec {
     AutomationSpec::from_json(&json!({

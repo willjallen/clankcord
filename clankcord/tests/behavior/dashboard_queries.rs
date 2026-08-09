@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use chrono::{Duration, Utc};
 use serde_json::json;
 
-
 use clankcord::domain::Ctx;
 use clankcord::domain::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};

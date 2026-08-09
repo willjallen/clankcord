@@ -5,13 +5,11 @@ use serde_json::json;
 use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
 use clankcord::domain::rooms::RoomConfig;
 use clankcord::domain::voice::VoiceBotStatus;
-use clankcord::model::job::{
-    Job, JobKind, JobState, RoomAgentPlacementAction,
-};
+use clankcord::model::job::{Job, JobKind, JobState, RoomAgentPlacementAction};
 use clankcord::store::{TimelineStore, isoformat_z, utc_now};
 
-use crate::support::test_store;
 use crate::support::automations::{test_runtime, voice_state, voice_state_with_flags};
+use crate::support::test_store;
 
 #[tokio::test(flavor = "current_thread")]
 async fn room_placement_builtin_automation_joins_rooms_with_two_participants() {

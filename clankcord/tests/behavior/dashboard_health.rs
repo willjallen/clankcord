@@ -1,7 +1,6 @@
 use chrono::{Duration, Utc};
 use serde_json::json;
 
-
 use clankcord::domain::Ctx;
 use clankcord::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use clankcord::model::job::{CommandRequest, Job, JobState};

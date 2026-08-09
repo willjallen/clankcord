@@ -1,10 +1,8 @@
 //! Wake-provider payload parsing.
 
-
 use serde_json::json;
 
 use clankcord::adapters::wakeword::parse_wake_payload;
-
 
 #[tokio::test(flavor = "current_thread")]
 async fn wakeword_payload_parser_preserves_detector_metadata() {

@@ -7,8 +7,8 @@ use clankcord::domain::automations::{
     AutomationPendingRecheck, AutomationRecord, AutomationState, AutomationTrigger,
 };
 
-use crate::support::test_store;
 use crate::support::automations::{insert_agent_source_job, reminder_spec};
+use crate::support::test_store;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PreV0_3_0AutomationScope {

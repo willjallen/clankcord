@@ -7,14 +7,15 @@ use clankcord::domain::automations::{
     AutomationTextTargetKind, AutomationTrigger,
 };
 use clankcord::model::job::{
-    Job, JobKind, JobState, TextDeliveryKind,
-    TextDeliveryPayload, TextTarget, TextTargetKind,
+    Job, JobKind, JobState, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::TimelineStore;
 
+use crate::support::automations::{
+    insert_agent_source_job, reminder_spec, test_runtime, voice_state, voice_state_with_flags,
+};
 use crate::support::test_store;
-use crate::support::automations::{insert_agent_source_job, reminder_spec, test_runtime, voice_state, voice_state_with_flags};
 
 #[tokio::test(flavor = "current_thread")]
 async fn automation_spec_lowers_boundary_json_to_typed_structs() {

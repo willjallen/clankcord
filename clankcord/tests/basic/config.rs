@@ -1,11 +1,13 @@
+use crate::support::initialize_test_config;
+use clankcord::config;
+use clankcord::config::{AppConfig, CodexReasoningEffort};
 use std::env;
 use std::fs;
-use clankcord::config::{AppConfig, CodexReasoningEffort};
 
 #[test]
 fn codex_invocation_options_are_loaded_from_config_toml() {
-    let config =
-        toml::from_str::<AppConfig>(include_str!("../../../config.ex.toml")).expect("config parses");
+    let config = toml::from_str::<AppConfig>(include_str!("../../../config.ex.toml"))
+        .expect("config parses");
 
     assert_eq!(config.codex.model, "gpt-5.6-sol");
     assert_eq!(config.codex.reasoning_effort, CodexReasoningEffort::XHigh);
@@ -95,4 +97,25 @@ fn codex_bypass_sandbox_uses_environment_override() {
     assert!(clankcord::config::codex_bypass_sandbox());
 
     env::set_current_dir(original_dir).expect("restore current dir");
+}
+
+#[test]
+fn example_config_separates_audio_segment_intake_from_mux_streams() {
+    let raw = tempfile::tempdir().unwrap();
+    initialize_test_config(raw.path());
+
+    let concurrency = config::job_concurrency();
+    let batch = config::job_batch_limits();
+
+    assert_eq!(concurrency.audio_segment, 32);
+    assert_eq!(batch.audio_segment, 32);
+    assert_eq!(config::transcription_mux_provider_streams(), 2);
+    assert_eq!(config::wake_connect_timeout_seconds(), 2);
+    assert_eq!(config::wake_circuit_failure_threshold(), 3);
+    assert_eq!(
+        config::wake_activation_config().transcription_settlement_seconds,
+        30
+    );
+    assert_eq!(concurrency.wake, 32);
+    assert_eq!(batch.wake, 32);
 }

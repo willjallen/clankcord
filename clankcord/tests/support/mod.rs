@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 pub mod automations;
+pub mod job_wire;
+pub mod jobs;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

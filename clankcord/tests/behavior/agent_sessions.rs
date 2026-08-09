@@ -1,7 +1,6 @@
 use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 
-
 use clankcord::domain::Ctx;
 use clankcord::domain::agents::{
     AgentSessionRecord, AgentSessionRecordState, dm_route_key, voice_route_key,

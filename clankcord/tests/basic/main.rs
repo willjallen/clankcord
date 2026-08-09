@@ -1,6 +1,9 @@
 //! Pure-function tests: parsing, formatting, classification, config reading.
 //! No Postgres, no subprocesses.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 mod agent_messages;
 mod chunking;
 mod codex_output;

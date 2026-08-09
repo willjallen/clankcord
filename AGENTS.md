@@ -7,7 +7,7 @@ be construed as either of those in any way
 - This is not the same thing as not handling edge cases, or having graceful failure conditions around external interfaces like discord etc. These are not fallbacks.
 - We should not treat our own codebase as hostile. Checking an incoming parameter is valid or mutating it to fit a certain spec is stupid. We own the codebase, we own the contracts, we do not need to be defensive against ourselves.
 - Do not frame the hierarchical parent/child job architecture as the root cause of latency. If a parent/child transition is slow, identify the specific inefficient operation behind it: lock contention, unnecessary blob fetch/decode, storage contention, sleeps/timers, API calls, or other concrete causes.
-- All tests go in tests/, not inline with the source file
+- All tests go in tests/, not inline with the source file. Tests are filed by purpose into one binary per category folder: basic/ (pure functions, no Postgres or subprocesses), integrity/ (durable contracts: wire formats, claim ordering, retention, restart survival), behavior/ (subsystem behavior end-to-end against the store), migration/ (schema/blob migration replays), performance/ (capacity math). Shared fixtures live in tests/support/. New files are named `<subsystem>[_<facet>].rs`, open with a one-line `//!` scope, and get registered in the category's main.rs.
 - When making a change, check if docs/ needs to be updated
 
 

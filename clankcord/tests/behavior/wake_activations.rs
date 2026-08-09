@@ -3,7 +3,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Value, json};
 
-
 use clankcord::domain::Ctx;
 use clankcord::domain::agents::AgentSessionRecord;
 use clankcord::domain::voice::capture::wake_activations::{execute, schedule_from_wake_event};

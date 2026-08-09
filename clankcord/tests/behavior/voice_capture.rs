@@ -1,4 +1,3 @@
-
 use clankcord::adapters::discord::voice::artifacts::PCM_20MS_SILENCE;
 use clankcord::adapters::discord::voice::capture::{
     CaptureAction, CaptureUser, VoiceCaptureSink, VoiceData,

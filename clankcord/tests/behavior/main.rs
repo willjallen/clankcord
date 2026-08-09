@@ -17,6 +17,7 @@ mod members;
 mod room_controls;
 mod room_join;
 mod room_placement;
+mod transcription_mux;
 mod transcripts;
 mod voice_capture;
 mod wake_activations;

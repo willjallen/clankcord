@@ -92,6 +92,9 @@ fn serve_once(body: String) -> (String, thread::JoinHandle<String>) {
                 Err(error) => panic!("accept test request: {error}"),
             }
         };
+        // The listener is nonblocking so accept can poll against the deadline,
+        // but macOS accepted sockets inherit that flag; reads must block.
+        stream.set_nonblocking(false).expect("set stream blocking");
         let mut request = Vec::new();
         let mut buf = [0_u8; 1024];
         loop {
