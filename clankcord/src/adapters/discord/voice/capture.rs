@@ -74,43 +74,6 @@ pub enum CaptureAction {
     Log(String),
 }
 
-pub trait VoiceCaptureHandler {
-    fn note_packet_debug(&mut self, session_id: &str, key: &str);
-    fn note_synthetic_packet(&mut self, session_id: &str, has_pcm: bool);
-    fn handle_speaking_state(
-        &mut self,
-        session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        active: bool,
-    );
-    fn handle_pcm_packet(
-        &mut self,
-        session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        pcm: &[u8],
-    );
-    fn handle_silence_packet(
-        &mut self,
-        session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        pcm: &[u8],
-    );
-    fn handle_empty_pcm_packet(
-        &mut self,
-        session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-    );
-    fn log(&mut self, message: &str);
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceCaptureSink {
     pub session_id: String,
@@ -220,12 +183,6 @@ impl VoiceCaptureSink {
         }
         actions
     }
-
-    pub fn write<H: VoiceCaptureHandler>(&mut self, handler: &mut H, data: VoiceData) {
-        for action in self.write_actions(data) {
-            apply_action(handler, action);
-        }
-    }
 }
 
 pub(super) struct LiveCaptureSession {
@@ -288,14 +245,8 @@ impl LiveCaptureSession {
                 .or_insert(0) += 1;
             return;
         }
-        let pipeline = self.pipeline.clone();
-        let session_id = self.session.session_id.clone();
-        let mut handler = SessionCaptureHandler {
-            pipeline,
-            session: &mut self.session,
-        };
-        handler.handle_speaking_state(
-            &session_id,
+        let _ = self.pipeline.handle_speaking_state(
+            Some(&mut self.session),
             &user.id,
             &user.display_name,
             &user.name,
@@ -305,15 +256,8 @@ impl LiveCaptureSession {
 
     pub(super) fn note_client_disconnect(&mut self, user_id: &str) -> Vec<Job> {
         self.ssrc_users.retain(|_, user| user.id != user_id);
-        let session_id = self.session.session_id.clone();
         let pipeline = self.pipeline.clone();
-        {
-            let mut handler = SessionCaptureHandler {
-                pipeline: pipeline.clone(),
-                session: &mut self.session,
-            };
-            handler.handle_speaking_state(&session_id, user_id, "", "", false);
-        }
+        let _ = pipeline.handle_speaking_state(Some(&mut self.session), user_id, "", "", false);
         let mut jobs = self.capture_wake_probes(vec![user_id.to_string()], true);
         match pipeline.close_speaker_segment_with_reason(
             &mut self.session,
@@ -480,11 +424,8 @@ impl LiveCaptureSession {
             &mut self.sink,
             VoiceCaptureSink::new(&self.session.session_id),
         );
-        let mut handler = SessionCaptureHandler {
-            pipeline: self.pipeline.clone(),
-            session: &mut self.session,
-        };
-        sink.write(&mut handler, data);
+        let actions = sink.write_actions(data);
+        apply_capture_actions(&self.pipeline.clone(), &mut self.session, actions);
         self.sink = sink;
     }
 
@@ -529,140 +470,8 @@ pub fn user_label(user: &CaptureUser) -> String {
     String::new()
 }
 
-pub fn apply_action<H: VoiceCaptureHandler>(handler: &mut H, action: CaptureAction) {
-    match action {
-        CaptureAction::PacketDebug { session_id, key } => {
-            handler.note_packet_debug(&session_id, &key)
-        }
-        CaptureAction::SyntheticPacket {
-            session_id,
-            has_pcm,
-        } => handler.note_synthetic_packet(&session_id, has_pcm),
-        CaptureAction::SpeakingState {
-            session_id,
-            user_id,
-            label,
-            username,
-            active,
-        } => handler.handle_speaking_state(&session_id, &user_id, &label, &username, active),
-        CaptureAction::PcmPacket {
-            session_id,
-            user_id,
-            label,
-            username,
-            pcm,
-        } => handler.handle_pcm_packet(&session_id, &user_id, &label, &username, &pcm),
-        CaptureAction::SilencePacket {
-            session_id,
-            user_id,
-            label,
-            username,
-            pcm,
-        } => handler.handle_silence_packet(&session_id, &user_id, &label, &username, &pcm),
-        CaptureAction::EmptyPcmPacket {
-            session_id,
-            user_id,
-            label,
-            username,
-        } => handler.handle_empty_pcm_packet(&session_id, &user_id, &label, &username),
-        CaptureAction::Log(message) => handler.log(&message),
-    }
-}
-
 fn default_has_packet() -> bool {
     true
-}
-
-struct SessionCaptureHandler<'a> {
-    pipeline: SessionAudioPipeline,
-    session: &'a mut LiveVoiceSession,
-}
-
-impl VoiceCaptureHandler for SessionCaptureHandler<'_> {
-    fn note_packet_debug(&mut self, _session_id: &str, key: &str) {
-        *self
-            .session
-            .packet_debug
-            .entry(key.to_string())
-            .or_insert(0) += 1;
-    }
-
-    fn note_synthetic_packet(&mut self, _session_id: &str, has_pcm: bool) {
-        self.note_packet_debug("", "syntheticPackets");
-        if has_pcm {
-            self.note_packet_debug("", "syntheticPcmPackets");
-        }
-    }
-
-    fn handle_speaking_state(
-        &mut self,
-        _session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        active: bool,
-    ) {
-        let _ = self.pipeline.handle_speaking_state(
-            Some(&mut *self.session),
-            user_id,
-            label,
-            username,
-            active,
-        );
-    }
-
-    fn handle_pcm_packet(
-        &mut self,
-        _session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        pcm: &[u8],
-    ) {
-        let _ = self.pipeline.handle_pcm_packet(
-            Some(&mut *self.session),
-            user_id,
-            label,
-            username,
-            pcm,
-        );
-    }
-
-    fn handle_silence_packet(
-        &mut self,
-        _session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-        pcm: &[u8],
-    ) {
-        let _ = self.pipeline.handle_silence_packet(
-            Some(&mut *self.session),
-            user_id,
-            label,
-            username,
-            pcm,
-        );
-    }
-
-    fn handle_empty_pcm_packet(
-        &mut self,
-        _session_id: &str,
-        user_id: &str,
-        label: &str,
-        username: &str,
-    ) {
-        let _ = self.pipeline.handle_empty_pcm_packet(
-            Some(&mut *self.session),
-            user_id,
-            label,
-            username,
-        );
-    }
-
-    fn log(&mut self, message: &str) {
-        log(message);
-    }
 }
 
 fn collect_audio_job(outcome: AudioPipelineOutcome, jobs: &mut Vec<Job>) {
@@ -675,5 +484,84 @@ fn audio_job_from_outcome(outcome: AudioPipelineOutcome) -> Option<Job> {
     match outcome {
         AudioPipelineOutcome::SegmentReady { payload, .. } => Some(Job::audio_segment(payload)),
         _ => None,
+    }
+}
+
+/// Applies produced capture actions straight onto the session through the
+/// audio pipeline. `CaptureAction` stays as the pure, testable output
+/// contract of the sink; this is its one consumer.
+pub(super) fn apply_capture_actions(
+    pipeline: &SessionAudioPipeline,
+    session: &mut LiveVoiceSession,
+    actions: Vec<CaptureAction>,
+) {
+    for action in actions {
+        match action {
+            CaptureAction::PacketDebug { key, .. } => {
+                *session.packet_debug.entry(key).or_insert(0) += 1;
+            }
+            CaptureAction::SyntheticPacket { has_pcm, .. } => {
+                *session
+                    .packet_debug
+                    .entry("syntheticPackets".to_string())
+                    .or_insert(0) += 1;
+                if has_pcm {
+                    *session
+                        .packet_debug
+                        .entry("syntheticPcmPackets".to_string())
+                        .or_insert(0) += 1;
+                }
+            }
+            CaptureAction::SpeakingState {
+                user_id,
+                label,
+                username,
+                active,
+                ..
+            } => {
+                let _ = pipeline.handle_speaking_state(
+                    Some(session),
+                    &user_id,
+                    &label,
+                    &username,
+                    active,
+                );
+            }
+            CaptureAction::PcmPacket {
+                user_id,
+                label,
+                username,
+                pcm,
+                ..
+            } => {
+                let _ =
+                    pipeline.handle_pcm_packet(Some(session), &user_id, &label, &username, &pcm);
+            }
+            CaptureAction::SilencePacket {
+                user_id,
+                label,
+                username,
+                pcm,
+                ..
+            } => {
+                let _ = pipeline.handle_silence_packet(
+                    Some(session),
+                    &user_id,
+                    &label,
+                    &username,
+                    &pcm,
+                );
+            }
+            CaptureAction::EmptyPcmPacket {
+                user_id,
+                label,
+                username,
+                ..
+            } => {
+                let _ =
+                    pipeline.handle_empty_pcm_packet(Some(session), &user_id, &label, &username);
+            }
+            CaptureAction::Log(message) => log(&message),
+        }
     }
 }
