@@ -354,7 +354,7 @@ fn job_payload_blob_uses_current_version_envelope() {
     let encoded = job.encode().unwrap();
 
     assert_eq!(&encoded[..8], b"CLANKJOB");
-    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 8);
+    assert_eq!(u16::from_le_bytes([encoded[8], encoded[9]]), 9);
     assert!(Job::is_current_payload_blob(&encoded));
 }
 
@@ -411,62 +411,68 @@ async fn timeline_initialize_records_registered_schema_migrations() {
             (
                 "0.2.0".to_string(),
                 "job payload blob envelope".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.3.0".to_string(),
                 "generic runtime scope projections".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.4.0".to_string(),
                 "database hard-cut performance contracts".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.5.0".to_string(),
                 "policy-driven durable retention".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.6.0".to_string(),
                 "job payload blob agent invocation metadata".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.7.0".to_string(),
                 "job payload blob text response attachments".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.8.0".to_string(),
                 "transcription source mux slots".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.9.0".to_string(),
                 "durable transcription mux planner".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.10.0".to_string(),
                 "voice status snapshot payload state".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.11.0".to_string(),
                 "bounded timeline dashboard reads".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.12.0".to_string(),
                 "bounded wake transcription settlement".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
             ),
             (
                 "0.13.0".to_string(),
                 "durable operational outcomes and canonical event scopes".to_string(),
-                "0.13.0".to_string()
+                "1.0.0".to_string()
+            ),
+            (
+                "1.0.0".to_string(),
+                "job spec authority, schedules, durable wake circuit, typed agent outcomes"
+                    .to_string(),
+                "1.0.0".to_string()
             ),
         ]
     );
@@ -506,7 +512,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.3.0', '0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -514,7 +520,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 11);
+    assert_eq!(applied.len(), 12);
     assert_eq!(applied[0].version, "0.3.0");
     assert_eq!(applied[1].version, "0.4.0");
     assert_eq!(applied[2].version, "0.5.0");
@@ -526,6 +532,7 @@ async fn v0_3_0_schema_migration_rewrites_legacy_job_scope_projection_and_blob()
     assert_eq!(applied[8].version, "0.11.0");
     assert_eq!(applied[9].version, "0.12.0");
     assert_eq!(applied[10].version, "0.13.0");
+    assert_eq!(applied[11].version, "1.0.0");
     assert!(!column_exists(&store.pool, "jobs", "voice_channel_id").await);
     let row = sqlx::query("SELECT scope_kind, scope_id FROM jobs WHERE job_id = $1")
         .bind(&created.id)
@@ -572,7 +579,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert!(column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.4.0', '0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -580,7 +587,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 10);
+    assert_eq!(applied.len(), 11);
     assert_eq!(applied[0].version, "0.4.0");
     assert_eq!(applied[1].version, "0.5.0");
     assert_eq!(applied[2].version, "0.6.0");
@@ -591,6 +598,7 @@ async fn v0_4_0_schema_migration_enforces_timeline_event_time_contract() {
     assert_eq!(applied[7].version, "0.11.0");
     assert_eq!(applied[8].version, "0.12.0");
     assert_eq!(applied[9].version, "0.13.0");
+    assert_eq!(applied[10].version, "1.0.0");
     assert!(!column_nullable(&store.pool, "timeline_events", "started_at_ms").await);
     assert!(!column_nullable(&store.pool, "timeline_events", "ended_at_ms").await);
 }
@@ -614,7 +622,7 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     assert!(index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.5.0', '0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -622,7 +630,7 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 9);
+    assert_eq!(applied.len(), 10);
     assert_eq!(applied[0].version, "0.5.0");
     assert_eq!(applied[1].version, "0.6.0");
     assert_eq!(applied[2].version, "0.7.0");
@@ -632,6 +640,7 @@ async fn v0_5_0_schema_migration_drops_terminal_retention_index() {
     assert_eq!(applied[6].version, "0.11.0");
     assert_eq!(applied[7].version, "0.12.0");
     assert_eq!(applied[8].version, "0.13.0");
+    assert_eq!(applied[9].version, "1.0.0");
     assert!(!index_exists(&store.pool, "idx_jobs_terminal_retention").await);
 }
 
@@ -658,7 +667,7 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.6.0', '0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -666,7 +675,7 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 8);
+    assert_eq!(applied.len(), 9);
     assert_eq!(applied[0].version, "0.6.0");
     assert_eq!(applied[1].version, "0.7.0");
     assert_eq!(applied[2].version, "0.8.0");
@@ -675,6 +684,7 @@ async fn v0_6_0_schema_migration_rewrites_v3_agent_task_job_blob() {
     assert_eq!(applied[5].version, "0.11.0");
     assert_eq!(applied[6].version, "0.12.0");
     assert_eq!(applied[7].version, "0.13.0");
+    assert_eq!(applied[8].version, "1.0.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let metadata = migrated.metadata.to_json();
     let agent = &metadata["agent_task"]["agent"];
@@ -728,7 +738,7 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.7.0', '0.8.0', '0.9.0', '0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -736,7 +746,7 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 7);
+    assert_eq!(applied.len(), 8);
     assert_eq!(applied[0].version, "0.7.0");
     assert_eq!(applied[1].version, "0.8.0");
     assert_eq!(applied[2].version, "0.9.0");
@@ -744,6 +754,7 @@ async fn v0_7_0_schema_migration_rewrites_v4_text_delivery_payload_blob() {
     assert_eq!(applied[4].version, "0.11.0");
     assert_eq!(applied[5].version, "0.12.0");
     assert_eq!(applied[6].version, "0.13.0");
+    assert_eq!(applied[7].version, "1.0.0");
     let migrated = store.get_job(&created.id).await.unwrap();
     let payload = migrated.text_delivery_payload().unwrap();
     assert!(payload.attachments.is_empty());
@@ -798,7 +809,7 @@ async fn v0_10_0_schema_migration_rewrites_v7_voice_status_snapshot_outputs() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.10.0', '0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.10.0', '0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -806,11 +817,12 @@ async fn v0_10_0_schema_migration_rewrites_v7_voice_status_snapshot_outputs() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 4);
+    assert_eq!(applied.len(), 5);
     assert_eq!(applied[0].version, "0.10.0");
     assert_eq!(applied[1].version, "0.11.0");
     assert_eq!(applied[2].version, "0.12.0");
     assert_eq!(applied[3].version, "0.13.0");
+    assert_eq!(applied[4].version, "1.0.0");
     let migrated_old = store.get_job(&old_snapshot.id).await.unwrap();
     let Some(JobOutput::DiscordVoiceStatusSnapshot(output)) = migrated_old.metadata.output else {
         panic!("migrated old status snapshot output");
@@ -846,7 +858,7 @@ async fn v0_11_0_schema_migration_creates_recent_unforgotten_timeline_index() {
         .await
         .unwrap();
     sqlx::query(
-        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.11.0', '0.12.0', '0.13.0')",
+        "DELETE FROM clankcord_schema_migrations WHERE version IN ('0.11.0', '0.12.0', '0.13.0', '1.0.0')",
     )
     .execute(&store.pool)
     .await
@@ -855,10 +867,11 @@ async fn v0_11_0_schema_migration_creates_recent_unforgotten_timeline_index() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 3);
+    assert_eq!(applied.len(), 4);
     assert_eq!(applied[0].version, "0.11.0");
     assert_eq!(applied[1].version, "0.12.0");
     assert_eq!(applied[2].version, "0.13.0");
+    assert_eq!(applied[3].version, "1.0.0");
     let definition = index_definition(&store.pool, "idx_timeline_recent_unforgotten").await;
     assert!(definition.contains("started_at_ms DESC, sequence DESC, event_id DESC"));
     assert!(definition.contains("WHERE (forgotten = false)"));
@@ -907,7 +920,7 @@ async fn v0_12_0_schema_migration_terminalizes_stranded_wakes_and_preserves_fail
         DROP TABLE wake_activation_progress;
         DROP INDEX idx_transcription_slots_scope_state_interval;
         ALTER TABLE transcription_slots DROP COLUMN requires_single_slot;
-        DELETE FROM clankcord_schema_migrations WHERE version IN ('0.12.0', '0.13.0');
+        DELETE FROM clankcord_schema_migrations WHERE version IN ('0.12.0', '0.13.0', '1.0.0');
         "#,
     )
     .execute(&store.pool)
@@ -916,9 +929,10 @@ async fn v0_12_0_schema_migration_terminalizes_stranded_wakes_and_preserves_fail
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 2);
+    assert_eq!(applied.len(), 3);
     assert_eq!(applied[0].version, "0.12.0");
     assert_eq!(applied[1].version, "0.13.0");
+    assert_eq!(applied[2].version, "1.0.0");
     assert!(column_exists(&store.pool, "transcription_slots", "requires_single_slot").await);
     assert!(index_exists(&store.pool, "idx_transcription_slots_scope_state_interval").await);
     let migrated = store.get_job(&activation.id).await.unwrap();
@@ -992,7 +1006,7 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
         DROP TABLE operational_job_outcomes;
         DELETE FROM runtime_metadata
           WHERE key = 'operational_job_outcomes_coverage_start_ms';
-        DELETE FROM clankcord_schema_migrations WHERE version = '0.13.0';
+        DELETE FROM clankcord_schema_migrations WHERE version IN ('0.13.0', '1.0.0');
         "#,
     )
     .execute(&store.pool)
@@ -1001,8 +1015,9 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
 
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].version, "0.13.0");
+    assert_eq!(applied[1].version, "1.0.0");
     assert!(column_exists(&store.pool, "operational_job_outcomes", "observed_at_ms").await);
     assert!(index_exists(&store.pool, "idx_operational_job_outcomes_observed_kind").await);
     assert!(index_exists(&store.pool, "idx_operational_job_outcomes_job_observed").await);
@@ -1172,7 +1187,7 @@ async fn v0_13_0_schema_migration_canonicalizes_generic_timeline_event_scopes() 
         DROP TABLE operational_job_outcomes;
         DELETE FROM runtime_metadata
           WHERE key = 'operational_job_outcomes_coverage_start_ms';
-        DELETE FROM clankcord_schema_migrations WHERE version = '0.13.0';
+        DELETE FROM clankcord_schema_migrations WHERE version IN ('0.13.0', '1.0.0');
         "#,
     )
     .execute(&store.pool)
@@ -1180,8 +1195,9 @@ async fn v0_13_0_schema_migration_canonicalizes_generic_timeline_event_scopes() 
     .unwrap();
 
     let applied = store.run_pending_schema_migrations().await.unwrap();
-    assert_eq!(applied.len(), 1);
+    assert_eq!(applied.len(), 2);
     assert_eq!(applied[0].version, "0.13.0");
+    assert_eq!(applied[1].version, "1.0.0");
 
     for (event, scope_kind, guild_id, scope_id) in [
         (&dm_event, "dm", "", "dm-user"),
@@ -3793,7 +3809,7 @@ fn encode_current_agent_task(
     let body = bincode::serialize(&encoded).unwrap();
     let mut bytes = Vec::with_capacity(10 + body.len());
     bytes.extend_from_slice(b"CLANKJOB");
-    bytes.extend_from_slice(&8_u16.to_le_bytes());
+    bytes.extend_from_slice(&9_u16.to_le_bytes());
     bytes.extend_from_slice(&body);
     bytes
 }

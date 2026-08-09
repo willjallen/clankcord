@@ -11,6 +11,7 @@ mod v0_6_0;
 mod v0_7_0;
 mod v0_8_0;
 mod v0_9_0;
+mod v1_0_0;
 
 use std::cmp::Ordering;
 
@@ -101,6 +102,11 @@ const REGISTERED_MIGRATIONS: &[RegisteredMigration] = &[
         version_text: "0.13.0",
         name: "durable operational outcomes and canonical event scopes",
     },
+    RegisteredMigration {
+        version: SchemaVersion::new(1, 0, 0),
+        version_text: "1.0.0",
+        name: "job spec authority, schedules, durable wake circuit, typed agent outcomes",
+    },
 ];
 
 impl TimelineStore {
@@ -175,6 +181,7 @@ impl TimelineStore {
             "0.11.0" => v0_11_0::run(&mut transaction).await?,
             "0.12.0" => v0_12_0::run(&mut transaction).await?,
             "0.13.0" => v0_13_0::run(&mut transaction).await?,
+            "1.0.0" => v1_0_0::run(&mut transaction).await?,
             version => anyhow::bail!("unregistered schema migration implementation {version}"),
         }
         sqlx::query(

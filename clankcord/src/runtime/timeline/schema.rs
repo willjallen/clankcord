@@ -401,7 +401,6 @@ const EXPECTED_TABLE_SCHEMAS: &[TableSchema] = &[
             column("child_job_id", "text", false),
             column("dependency_kind", "text", false),
             column("created_at_ms", "bigint", false),
-            column("resolution_policy", "text", false),
         ],
     ),
     table(
@@ -890,7 +889,6 @@ impl TimelineStore {
               child_job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
               dependency_kind TEXT NOT NULL DEFAULT 'required',
               created_at_ms BIGINT NOT NULL,
-              resolution_policy TEXT NOT NULL DEFAULT 'parent_resumes',
               PRIMARY KEY (parent_job_id, child_job_id)
             );
 
