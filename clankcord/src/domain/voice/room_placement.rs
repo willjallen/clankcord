@@ -17,7 +17,7 @@ use crate::model::job::{
     RoomAgentPlacementAction, RoomAgentPlacementOutput, RoomAgentPlacementPayload,
 };
 
-pub(crate) async fn prepare_join_room_jobs(
+pub(crate) async fn plan_join_room_jobs(
     ctx: &Ctx,
     room: RoomConfig,
     requested_by_user_id: &str,
@@ -224,7 +224,7 @@ pub(crate) async fn fail_join_room_job(
     Ok(())
 }
 
-pub(crate) async fn prepare_leave_room_jobs(
+pub(crate) async fn plan_leave_room_jobs(
     ctx: &Ctx,
     room_identifier: Option<&str>,
     cooldown_seconds: i64,

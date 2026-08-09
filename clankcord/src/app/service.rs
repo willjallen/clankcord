@@ -7,7 +7,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::Result;
-use crate::adapters::discord::gateway::text::DiscordTextAdapter;
+use crate::adapters::discord::gateway::client::DiscordTextAdapter;
 use crate::adapters::discord::runtime_api::DiscordRuntimeApi;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;

@@ -136,7 +136,7 @@ pub(crate) async fn set_agent_session_codex_session(
     Ok(record)
 }
 
-pub(crate) async fn prepare_agent_session_start_job(
+pub(crate) async fn execute_agent_session_start_job(
     ctx: &Ctx,
     job: &Job,
     payload: &AgentSessionStartPayload,
@@ -215,7 +215,7 @@ pub(crate) async fn prepare_agent_session_start_job(
     )]))
 }
 
-pub(crate) async fn prepare_agent_session_sunset_job(
+pub(crate) async fn execute_agent_session_sunset_job(
     ctx: &Ctx,
     payload: &AgentSessionSunsetPayload,
 ) -> Result<JobDecision> {
@@ -237,7 +237,7 @@ pub(crate) async fn prepare_agent_session_sunset_job(
     )?))
 }
 
-pub(crate) async fn prepare_agent_session_resume_job(
+pub(crate) async fn execute_agent_session_resume_job(
     ctx: &Ctx,
     job: &Job,
     payload: &AgentSessionResumePayload,
@@ -434,7 +434,7 @@ pub(crate) async fn prepare_agent_session_resume_job(
     )?))
 }
 
-pub(crate) async fn prepare_agent_session_retirement_job(ctx: &Ctx) -> Result<JobDecision> {
+pub(crate) async fn execute_agent_session_retirement_job(ctx: &Ctx) -> Result<JobDecision> {
     let retired = retire_due_agent_sessions(ctx).await?;
     Ok(JobDecision::Complete(JobOutput::from_boundary_json(
         &json!({

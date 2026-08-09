@@ -10,7 +10,7 @@ use crate::model::job::{
 };
 use crate::util::single_child_of_kind;
 
-pub(crate) async fn prepare_voice_playback_job(
+pub(crate) async fn execute_voice_playback_job(
     ctx: &Ctx,
     job: &Job,
     payload: &DiscordVoicePlaybackPayload,

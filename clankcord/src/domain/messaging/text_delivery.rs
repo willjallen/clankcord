@@ -72,7 +72,7 @@ pub(crate) async fn text_delivery_job_from_value(ctx: &Ctx, value: &Value) -> Re
     ))
 }
 
-pub(crate) async fn prepare_text_delivery_job(
+pub(crate) async fn execute_text_delivery_job(
     ctx: &Ctx,
     job: &Job,
     payload: &TextDeliveryPayload,

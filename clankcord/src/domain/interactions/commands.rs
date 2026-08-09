@@ -72,7 +72,7 @@ pub async fn create_command_job(
     }))
 }
 
-pub(crate) async fn prepare_command_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
+pub(crate) async fn execute_command_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
     if job.kind != JobKind::Command {
         anyhow::bail!("job {} is not a command", job.id);
     }

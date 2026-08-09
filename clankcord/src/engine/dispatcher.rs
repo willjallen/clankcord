@@ -10,7 +10,6 @@ use crate::ports::discord::DiscordApi;
 use crate::domain::interactions::tasks;
 use crate::domain::interactions::thread_titles;
 use crate::engine::routes;
-use crate::store;
 use crate::util;
 
 pub async fn dispatch_claimed_runtime_job<A>(
@@ -71,7 +70,7 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
         JobKind::AgentThreadTitleRefresh => {
             let decision = match &running.payload {
                 crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
-                    thread_titles::prepare_agent_thread_title_refresh_job(ctx, &running, payload)
+                    thread_titles::execute_agent_thread_title_refresh_job(ctx, &running, payload)
                         .await
                 }
                 payload => anyhow::bail!(

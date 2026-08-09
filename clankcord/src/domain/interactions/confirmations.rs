@@ -76,7 +76,7 @@ pub async fn confirmation_context_for_command(
     })
 }
 
-pub(crate) async fn prepare_confirmation_required_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
+pub(crate) async fn execute_confirmation_required_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
     let command = job
         .command()
         .cloned()

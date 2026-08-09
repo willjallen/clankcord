@@ -117,22 +117,22 @@ where
 
         JobPayload::RuntimeControl(payload) => runtime_control::prepare(runtime, payload).await,
         JobPayload::RuntimeMaintenance(payload) => {
-            execution::prepare_runtime_maintenance_job(runtime, job, payload).await
+            execution::execute_runtime_maintenance_job(runtime, job, payload).await
         }
         JobPayload::VoiceStatusSync(_) => {
-            execution::prepare_voice_status_sync_job(runtime, job).await
+            execution::execute_voice_status_sync_job(runtime, job).await
         }
         JobPayload::AutomationEvaluation(_) => {
-            execution::prepare_automation_evaluation_job(runtime, job).await
+            execution::execute_automation_evaluation_job(runtime, job).await
         }
         JobPayload::AgentSessionRetirement(_) => {
-            agent_sessions::prepare_agent_session_retirement_job(runtime).await
+            agent_sessions::execute_agent_session_retirement_job(runtime).await
         }
         JobPayload::StaleWakeProbeSweep(payload) => {
-            execution::prepare_stale_wake_probe_sweep_job(runtime, payload.max_age_seconds).await
+            execution::execute_stale_wake_probe_sweep_job(runtime, payload.max_age_seconds).await
         }
         JobPayload::EphemeralJobGc(payload) => {
-            execution::prepare_ephemeral_job_gc_job(runtime, payload.batch_limit).await
+            execution::execute_ephemeral_job_gc_job(runtime, payload.batch_limit).await
         }
         JobPayload::WakeActivation(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
@@ -145,7 +145,7 @@ where
             )?))
         }
         JobPayload::Command(_) => {
-            crate::domain::interactions::commands::prepare_command_job(runtime, job).await
+            crate::domain::interactions::commands::execute_command_job(runtime, job).await
         }
         JobPayload::DiscordTextMessage(payload) => {
             discord_text::prepare(runtime, job, payload).await
@@ -154,28 +154,28 @@ where
             discord_slash::prepare(runtime, job, payload).await
         }
         JobPayload::TextDelivery(payload) => {
-            text_delivery::prepare_text_delivery_job(runtime, job, payload).await
+            text_delivery::execute_text_delivery_job(runtime, job, payload).await
         }
         JobPayload::ConfirmationRequired(_) => {
-            confirmations::prepare_confirmation_required_job(runtime, job).await
+            confirmations::execute_confirmation_required_job(runtime, job).await
         }
         JobPayload::AgentSessionStart(payload) => {
-            agent_sessions::prepare_agent_session_start_job(runtime, job, payload).await
+            agent_sessions::execute_agent_session_start_job(runtime, job, payload).await
         }
         JobPayload::AgentSessionSunset(payload) => {
-            agent_sessions::prepare_agent_session_sunset_job(runtime, payload).await
+            agent_sessions::execute_agent_session_sunset_job(runtime, payload).await
         }
         JobPayload::AgentSessionResume(payload) => {
-            agent_sessions::prepare_agent_session_resume_job(runtime, job, payload).await
+            agent_sessions::execute_agent_session_resume_job(runtime, job, payload).await
         }
         JobPayload::TranscriptPublication(payload) => {
-            publication::prepare_transcript_publication_job(runtime, job, payload).await
+            publication::execute_transcript_publication_job(runtime, job, payload).await
         }
         JobPayload::RoomAgentPlacement(payload) => {
             room_agents::prepare(runtime, job, payload).await
         }
         JobPayload::DiscordVoicePlayback(payload) => {
-            playback::prepare_voice_playback_job(runtime, job, payload).await
+            playback::execute_voice_playback_job(runtime, job, payload).await
         }
         payload => anyhow::bail!(
             "job payload {} is not handled by async dispatcher",
@@ -286,7 +286,7 @@ mod room_agents {
                 } else {
                     catalog::room_for_identifier(runtime, None).await?
                 };
-                room_placement::prepare_join_room_jobs(
+                room_placement::plan_join_room_jobs(
                     runtime,
                     room,
                     &job.requested_by_user_id,
@@ -299,7 +299,7 @@ mod room_agents {
                 let cooldown_seconds = payload
                     .cooldown_seconds
                     .unwrap_or(pool.manual_override_seconds);
-                room_placement::prepare_leave_room_jobs(
+                room_placement::plan_leave_room_jobs(
                     runtime,
                     Some(target_room_identifier),
                     cooldown_seconds,

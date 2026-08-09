@@ -71,7 +71,7 @@ pub(crate) async fn publish_materialized_transcript(
     Ok(())
 }
 
-pub(crate) async fn prepare_transcript_publication_job(
+pub(crate) async fn execute_transcript_publication_job(
     ctx: &Ctx,
     job: &Job,
     payload: &TranscriptPublicationPayload,

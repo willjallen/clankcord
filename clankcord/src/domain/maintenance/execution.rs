@@ -15,7 +15,7 @@ use crate::model::job::{
 };
 use crate::store::{JobVisibility, isoformat_z, parse_instant, utc_now};
 
-pub(crate) async fn prepare_runtime_maintenance_job(
+pub(crate) async fn execute_runtime_maintenance_job(
     ctx: &Ctx,
     job: &Job,
     _payload: &RuntimeMaintenancePayload,
@@ -60,7 +60,7 @@ pub(crate) async fn prepare_runtime_maintenance_job(
     )?))
 }
 
-pub(crate) async fn prepare_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
+pub(crate) async fn execute_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Result<JobDecision> {
     let children =
         match children::await_children(ctx, &job.id, "voice status snapshot dependency").await? {
             crate::domain::children::ChildResolution::Pending => {
@@ -116,7 +116,7 @@ pub(crate) async fn prepare_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Resul
     ]))
 }
 
-pub(crate) async fn prepare_automation_evaluation_job(
+pub(crate) async fn execute_automation_evaluation_job(
     ctx: &Ctx,
     _job: &Job,
 ) -> Result<JobDecision> {
@@ -129,7 +129,7 @@ pub(crate) async fn prepare_automation_evaluation_job(
     )?))
 }
 
-pub(crate) async fn prepare_stale_wake_probe_sweep_job(
+pub(crate) async fn execute_stale_wake_probe_sweep_job(
     ctx: &Ctx,
     max_age_seconds: i64,
 ) -> Result<JobDecision> {
@@ -146,7 +146,7 @@ pub(crate) async fn prepare_stale_wake_probe_sweep_job(
     )?))
 }
 
-pub(crate) async fn prepare_ephemeral_job_gc_job(
+pub(crate) async fn execute_ephemeral_job_gc_job(
     ctx: &Ctx,
     batch_limit: usize,
 ) -> Result<JobDecision> {

@@ -33,7 +33,6 @@ use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::domain::voice::VoiceBotStatus;
 use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
-use crate::store;
 use crate::util::log;
 
 pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;

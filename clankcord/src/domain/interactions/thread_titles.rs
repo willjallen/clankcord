@@ -99,7 +99,7 @@ pub(crate) async fn agent_thread_title_refresh_jobs(
     Ok(jobs)
 }
 
-pub(crate) async fn prepare_agent_thread_title_refresh_job(
+pub(crate) async fn execute_agent_thread_title_refresh_job(
     ctx: &Ctx,
     job: &Job,
     payload: &AgentThreadTitleRefreshPayload,
