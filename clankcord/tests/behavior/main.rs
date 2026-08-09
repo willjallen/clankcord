@@ -5,6 +5,7 @@
 mod support;
 
 mod agent_sessions;
+mod automations;
 mod cli_help;
 mod cli_transcripts;
 mod dashboard_frontend;
@@ -15,6 +16,7 @@ mod discord_slash;
 mod members;
 mod room_controls;
 mod room_join;
+mod room_placement;
 mod transcripts;
 mod voice_capture;
 mod wake_activations;
