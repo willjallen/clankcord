@@ -1,21 +1,10 @@
-//! Transcript rendering, search, windowing, and payload compaction over speech events.
+//! Rendered transcript content: speech-event rendering, search, and window boundaries.
 
-use std::collections::BTreeSet;
-
-use serde_json::json;
-
+use crate::support::append_speech;
+use crate::support::dt;
+use crate::support::test_store;
+use crate::support::voice::string_field;
 use clankcord::store::CaptureRunInput;
-
-use crate::support::{append_speech, dt, test_store};
-
-fn string_field(value: &serde_json::Value, key: &str) -> String {
-    match value.get(key) {
-        Some(serde_json::Value::String(text)) => text.trim().to_string(),
-        Some(serde_json::Value::Number(number)) => number.to_string(),
-        Some(serde_json::Value::Bool(boolean)) => boolean.to_string(),
-        _ => String::new(),
-    }
-}
 
 #[tokio::test(flavor = "current_thread")]
 async fn transcript_render_and_search_use_speech_events() {
@@ -94,89 +83,6 @@ async fn transcript_render_and_search_use_speech_events() {
         ),
         "speech_segment"
     );
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn timeline_finds_existing_speech_segment_for_audio_retry() {
-    let raw = tempfile::tempdir().unwrap();
-    let store = test_store(raw.path()).await;
-    let start = dt(2026, 5, 12, 16, 0, 0);
-    let event = append_speech(
-        &store,
-        raw.path(),
-        start,
-        start + chrono::Duration::seconds(2),
-        "retry-safe words",
-        4,
-        None,
-    )
-    .await;
-    let found = store
-        .speech_event_for_segment("guild", "code", "cap_test", "user-a", 4)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(found["event_id"], event["event_id"]);
-    let (count, last) = store
-        .speech_stats_for_capture_run("guild", "code", "cap_test")
-        .await
-        .unwrap();
-    assert_eq!(count, 1);
-    assert_eq!(last.unwrap(), start + chrono::Duration::seconds(2));
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn timeline_primary_store_keeps_payload_compact() {
-    let raw = tempfile::tempdir().unwrap();
-    let store = test_store(raw.path()).await;
-    let start = dt(2026, 5, 12, 16, 0, 0);
-    append_speech(
-        &store,
-        raw.path(),
-        start,
-        start + chrono::Duration::seconds(1),
-        "postgres indexed compact words",
-        1,
-        None,
-    )
-    .await;
-    assert!(
-        !raw.path()
-            .join("ephemeral/guild-guild/channel-code/timeline.jsonl")
-            .exists()
-    );
-    assert_eq!(
-        string_field(
-            &store
-                .search("guild", Some("code"), "indexed", None, 10)
-                .await
-                .unwrap()[0],
-            "kind"
-        ),
-        "speech_segment"
-    );
-
-    let payload_json: serde_json::Value = sqlx::query_scalar(
-        "SELECT payload_json FROM timeline_events WHERE event_kind = 'speech_segment'",
-    )
-    .fetch_one(&store.pool)
-    .await
-    .unwrap();
-    let payload = payload_json;
-    assert!(payload.get("text").is_none());
-    assert!(payload.get("text_draft").is_none());
-    assert!(payload.get("guildId").is_none());
-    assert!(payload.get("channelId").is_none());
-    assert!(payload.get("speakerLabel").is_none());
-    let kinds = BTreeSet::from(["speech_segment".to_string()]);
-    let event = store
-        .load_events("guild", "code", None, None, Some(&kinds), None, false)
-        .await
-        .unwrap()[0]
-        .clone();
-    assert_eq!(event["text"], json!("postgres indexed compact words"));
-    assert_eq!(event["channelName"], json!("Code Lounge"));
-    assert_eq!(event["speakerLabel"], json!("Will"));
 }
 
 #[tokio::test(flavor = "current_thread")]

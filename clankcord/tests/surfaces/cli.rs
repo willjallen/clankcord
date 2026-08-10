@@ -1,16 +1,48 @@
+//! CLI copy and usage: help text, spec descriptions, and transcript render output.
+
+use crate::support::cli::{clankcord, stderr, stdout};
 use std::fs;
-use std::io::{Read, Write};
+use std::io::Read;
+use std::io::Write;
 use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 
-fn stdout(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stdout).to_string()
+#[test]
+fn agent_sessions_help_exposes_lifecycle_commands() {
+    let output = clankcord(&["agent-sessions", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    assert!(help.contains("current"));
+    assert!(help.contains("search"));
+    assert!(help.contains("sunset"));
+    assert!(help.contains("resume"));
 }
 
-fn stderr(output: &std::process::Output) -> String {
-    String::from_utf8_lossy(&output.stderr).to_string()
+#[test]
+fn coding_spec_describes_single_file_c_and_zip_submission() {
+    let output = clankcord(&["coding", "spec"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let spec = stdout(&output);
+    assert!(spec.contains("single-file C program"));
+    assert!(spec.contains("Compiler Explorer"));
+    assert!(spec.contains("CLANKCORD_OBSERVE"));
+    assert!(spec.contains("volatile"));
+    assert!(spec.contains("zip -r artifact.zip"));
+    assert!(spec.contains("clankcord responses send --attachment artifact.zip"));
+}
+
+#[test]
+fn feedback_help_uses_stdin_or_file_body_transport() {
+    let output = clankcord(&["feedback", "submit", "--help"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let help = stdout(&output);
+    assert!(help.contains("Record feedback text in the current room timeline"));
+    assert!(help.contains("--file <PATH>"));
+    assert!(!help.contains("--content"));
+    assert!(!help.contains("--stdin"));
 }
 
 #[test]

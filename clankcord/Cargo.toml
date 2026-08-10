@@ -57,3 +57,11 @@ path = "tests/migration/main.rs"
 [[test]]
 name = "performance"
 path = "tests/performance/main.rs"
+
+[[test]]
+name = "regression"
+path = "tests/regression/main.rs"
+
+[[test]]
+name = "surfaces"
+path = "tests/surfaces/main.rs"

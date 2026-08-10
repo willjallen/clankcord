@@ -160,3 +160,24 @@ pub fn write_test_wav(path: &std::path::Path, sample_rate: u32, channels: u16, f
     }
     writer.finalize().unwrap();
 }
+
+pub async fn run_transcription_mux_planner(
+    store: &clankcord::store::TimelineStore,
+) -> serde_json::Value {
+    store
+        .create_job(Job::transcription_mux_plan("local-granite", 0))
+        .await
+        .unwrap();
+    let claimed = store
+        .claim_due_jobs(JobKind::TranscriptionMuxPlan, 1, &mut BTreeSet::new())
+        .await
+        .unwrap();
+    let runtime = Ctx::new(store.clone());
+    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        claimed.into_iter().next().unwrap(),
+    )
+    .await
+    .unwrap()
+}

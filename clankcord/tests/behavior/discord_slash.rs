@@ -2,87 +2,13 @@ use std::collections::BTreeSet;
 
 use serde_json::json;
 
-use clankcord::adapters::discord::gateway::slash::{
-    slash_missing_voice_channel_response_content, slash_success_response_content,
-};
 use clankcord::domain::Ctx;
-use clankcord::model::job::{BinaryPayload, CommandKind, DiscordSlashCommandPayload, Job, JobKind};
+use clankcord::model::job::{CommandKind, Job, JobKind};
 use clankcord::model::scope::RuntimeScopeKind;
 use clankcord::views::{DashboardFilter, DashboardTimelineRequest};
 
+use crate::support::cli::slash_payload;
 use crate::support::{initialize_test_config, test_store};
-
-#[test]
-fn discord_slash_command_job_round_trips() {
-    let job = Job::discord_slash_command(DiscordSlashCommandPayload {
-        interaction_id: "interaction-1".to_string(),
-        interaction_token: "token-1".to_string(),
-        application_id: "app-1".to_string(),
-        guild_id: "guild".to_string(),
-        channel_id: "code".to_string(),
-        voice_channel_id: "code".to_string(),
-        user_id: "user-a".to_string(),
-        username: "will".to_string(),
-        command_name: "join".to_string(),
-        options: BinaryPayload::from_json(&json!([{"name": "room", "value": "code"}])).unwrap(),
-        created_at: "2026-05-15T10:00:00.000Z".to_string(),
-        response_visibility: "ephemeral".to_string(),
-    });
-
-    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
-    assert_eq!(decoded.kind, JobKind::DiscordSlashCommand);
-    assert_eq!(decoded.requested_by_user_id, "user-a");
-    assert_eq!(decoded.scope_kind, RuntimeScopeKind::VoiceChannel);
-    assert_eq!(decoded.scope_id, "code");
-    assert_eq!(decoded.payload.to_json()["command_name"], "join");
-    assert_eq!(decoded.payload.to_json()["voice_channel_id"], "code");
-    assert_eq!(decoded.payload.to_json()["options"][0]["value"], "code");
-}
-
-#[test]
-fn slash_command_responses_are_human_readable() {
-    let join = slash_success_response_content(&slash_payload(
-        "interaction-join",
-        "join",
-        "slash-text",
-        "code",
-        json!([]),
-    ));
-    assert_eq!(join, "Connecting Clanky to <#code>.");
-
-    let deafen = slash_success_response_content(&slash_payload(
-        "interaction-deafen",
-        "deafen",
-        "slash-text",
-        "code",
-        json!([]),
-    ));
-    assert_eq!(deafen, "Deafening Clanky in <#code>.");
-
-    let feedback = slash_success_response_content(&slash_payload(
-        "interaction-feedback",
-        "feedback",
-        "slash-text",
-        "",
-        json!([{"name": "message", "value": "The join command stalled."}]),
-    ));
-    assert_eq!(feedback, "Feedback sent: The join command stalled.");
-
-    let responses = [
-        join,
-        deafen,
-        feedback,
-        slash_missing_voice_channel_response_content().to_string(),
-    ];
-    for response in responses {
-        assert!(!response.contains("job_"));
-        assert!(!response.contains("queued"));
-    }
-    assert_eq!(
-        slash_missing_voice_channel_response_content(),
-        "You are not in a voice channel."
-    );
-}
 
 #[tokio::test(flavor = "current_thread")]
 async fn feedback_slash_records_durable_timeline_event() {
@@ -295,29 +221,6 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
         assert_eq!(command.target_channel_id, "");
         assert_eq!(command.arguments.channel, "");
         assert_eq!(command.arguments.target_channel, "");
-    }
-}
-
-fn slash_payload(
-    interaction_id: &str,
-    command_name: &str,
-    channel_id: &str,
-    voice_channel_id: &str,
-    options: serde_json::Value,
-) -> DiscordSlashCommandPayload {
-    DiscordSlashCommandPayload {
-        interaction_id: interaction_id.to_string(),
-        interaction_token: format!("token-{interaction_id}"),
-        application_id: "app-1".to_string(),
-        guild_id: "guild".to_string(),
-        channel_id: channel_id.to_string(),
-        voice_channel_id: voice_channel_id.to_string(),
-        user_id: "user-a".to_string(),
-        username: "will".to_string(),
-        command_name: command_name.to_string(),
-        options: BinaryPayload::from_json(&options).unwrap(),
-        created_at: "2026-05-15T10:00:00.000Z".to_string(),
-        response_visibility: "ephemeral".to_string(),
     }
 }
 

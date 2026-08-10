@@ -358,3 +358,57 @@ fn voice_state(
         "suppress": false,
     })
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_primary_store_keeps_payload_compact() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    append_speech(
+        &store,
+        raw.path(),
+        start,
+        start + chrono::Duration::seconds(1),
+        "postgres indexed compact words",
+        1,
+        None,
+    )
+    .await;
+    assert!(
+        !raw.path()
+            .join("ephemeral/guild-guild/channel-code/timeline.jsonl")
+            .exists()
+    );
+    assert_eq!(
+        string_field(
+            &store
+                .search("guild", Some("code"), "indexed", None, 10)
+                .await
+                .unwrap()[0],
+            "kind"
+        ),
+        "speech_segment"
+    );
+
+    let payload_json: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload_json FROM timeline_events WHERE event_kind = 'speech_segment'",
+    )
+    .fetch_one(&store.pool)
+    .await
+    .unwrap();
+    let payload = payload_json;
+    assert!(payload.get("text").is_none());
+    assert!(payload.get("text_draft").is_none());
+    assert!(payload.get("guildId").is_none());
+    assert!(payload.get("channelId").is_none());
+    assert!(payload.get("speakerLabel").is_none());
+    let kinds = BTreeSet::from(["speech_segment".to_string()]);
+    let event = store
+        .load_events("guild", "code", None, None, Some(&kinds), None, false)
+        .await
+        .unwrap()[0]
+        .clone();
+    assert_eq!(event["text"], json!("postgres indexed compact words"));
+    assert_eq!(event["channelName"], json!("Code Lounge"));
+    assert_eq!(event["speakerLabel"], json!("Will"));
+}

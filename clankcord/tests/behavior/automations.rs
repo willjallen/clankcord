@@ -12,6 +12,7 @@ use clankcord::model::job::{
 use clankcord::model::scope::RuntimeScope;
 use clankcord::store::TimelineStore;
 
+use crate::support::automations::spec_value;
 use crate::support::automations::{
     insert_agent_source_job, reminder_spec, test_runtime, voice_state, voice_state_with_flags,
 };
@@ -45,6 +46,7 @@ async fn automation_spec_lowers_boundary_json_to_typed_structs() {
     assert_eq!(sink.kind, AutomationTextTargetKind::AgentChat);
     assert_eq!(content, "Timer done.");
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_job_trigger_accepts_runtime_job_names() {
     let spec = AutomationSpec::from_json(&json!({
@@ -70,6 +72,7 @@ async fn automation_job_trigger_accepts_runtime_job_names() {
     assert_eq!(job_kinds, vec![JobKind::AgentTask]);
     assert_eq!(states, vec![JobState::Complete, JobState::Failed]);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_spec_accepts_delayed_recheck_condition() {
     let spec = AutomationSpec::from_json(&json!({
@@ -107,6 +110,7 @@ async fn automation_spec_accepts_delayed_recheck_condition() {
         AutomationCondition::Predicate { path, .. } if path == "room.participants.blake.present"
     ));
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
     let spec = AutomationSpec::from_json(&json!({
@@ -143,6 +147,7 @@ async fn automation_spec_accepts_camel_case_agent_json_at_the_boundary() {
     assert_eq!(sink.kind, AutomationTextTargetKind::Channel);
     assert_eq!(sink.id, "agent-thread");
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn invalid_automation_specs_return_actionable_errors() {
     let cases = [
@@ -362,6 +367,7 @@ async fn invalid_automation_specs_return_actionable_errors() {
         }
     }
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_store_is_binary_idempotent_and_cancellable() {
     let raw = tempfile::tempdir().unwrap();
@@ -413,6 +419,7 @@ async fn automation_store_is_binary_idempotent_and_cancellable() {
             .is_empty()
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_payload_blob_uses_current_envelope() {
     let raw = tempfile::tempdir().unwrap();
@@ -445,6 +452,7 @@ async fn automation_payload_blob_uses_current_envelope() {
         .to_string();
     assert!(error.contains("invalid blob envelope"));
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn runtime_loads_active_automations_after_restart() {
     let raw = tempfile::tempdir().unwrap();
@@ -467,6 +475,7 @@ async fn runtime_loads_active_automations_after_restart() {
         AutomationState::Active
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
     let raw = tempfile::tempdir().unwrap();
@@ -509,69 +518,7 @@ async fn stored_event_automation_emits_text_delivery_job_once_and_expires() {
         AutomationState::Expired
     );
 }
-#[tokio::test(flavor = "current_thread")]
-async fn participant_left_automation_fires_from_durable_voice_transition() {
-    let raw = tempfile::tempdir().unwrap();
-    let store = test_store(raw.path()).await;
-    insert_agent_source_job(&store).await;
-    store
-        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
-        .await
-        .unwrap();
-    let record = store
-        .create_automation(
-            AutomationSpec::from_json(&spec_value(json!({
-                "name": "left watcher",
-                "idempotency_key": "job_1:left-watcher",
-                "trigger": {"kind": "event", "event_kinds": ["participant_left"]},
-                "condition": {
-                    "kind": "predicate",
-                    "path": "event.user_id",
-                    "op": "eq",
-                    "value": "blake"
-                },
-                "actions": [{
-                    "kind": "response.send",
-                    "sink": {"kind": "agent_chat"},
-                    "content": "Blake left."
-                }]
-            })))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    let transition_events = store
-        .record_voice_state_update(None, voice_state("", "blake", "Blake"))
-        .await
-        .unwrap();
-    assert_eq!(
-        transition_events[0]["event_kind"],
-        json!("participant_left")
-    );
-    let runtime = test_runtime(store);
 
-    let result = clankcord::domain::automations::engine::run_automations(&runtime)
-        .await
-        .unwrap()
-        .to_json();
-
-    let created = result["createdJobs"].as_array().unwrap();
-    assert_eq!(created.len(), 1);
-    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.store.get_job(job_id).await.unwrap();
-    let payload = job.text_delivery_payload().unwrap();
-    assert_eq!(payload.content, "Blake left.");
-    assert_eq!(
-        runtime
-            .store
-            .get_automation(&record.automation_id)
-            .await
-            .unwrap()
-            .state,
-        AutomationState::Expired
-    );
-}
 #[tokio::test(flavor = "current_thread")]
 async fn participant_left_event_room_snapshot_records_before_and_after_presence() {
     let raw = tempfile::tempdir().unwrap();
@@ -622,68 +569,7 @@ async fn participant_left_event_room_snapshot_records_before_and_after_presence(
         1
     );
 }
-#[tokio::test(flavor = "current_thread")]
-async fn overlap_automation_can_match_current_room_participants() {
-    let raw = tempfile::tempdir().unwrap();
-    let store = test_store(raw.path()).await;
-    insert_agent_source_job(&store).await;
-    store
-        .record_voice_state_update(None, voice_state("code", "user-a", "Will"))
-        .await
-        .unwrap();
-    let record = store
-        .create_automation(
-            AutomationSpec::from_json(&spec_value(json!({
-                "name": "overlap watcher",
-                "idempotency_key": "job_1:overlap-watcher",
-                "trigger": {"kind": "event", "event_kinds": ["participant_joined"]},
-                "condition": {
-                    "kind": "all",
-                    "conditions": [
-                        {"kind": "predicate", "path": "room.participants.user-a.present", "op": "eq", "value": true},
-                        {"kind": "predicate", "path": "room.participants.blake.present", "op": "eq", "value": true}
-                    ]
-                },
-                "actions": [{
-                    "kind": "response.send",
-                    "sink": {"kind": "dm", "id": "user-a"},
-                    "content": "Reminder: talk to Blake about Woven."
-                }]
-            })))
-            .unwrap(),
-        )
-        .await
-        .unwrap();
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-    store
-        .record_voice_state_update(None, voice_state("code", "blake", "Blake"))
-        .await
-        .unwrap();
-    let runtime = test_runtime(store);
 
-    let result = clankcord::domain::automations::engine::run_automations(&runtime)
-        .await
-        .unwrap()
-        .to_json();
-
-    let created = result["createdJobs"].as_array().unwrap();
-    assert_eq!(created.len(), 1);
-    let job_id = created[0]["job"]["job_id"].as_str().unwrap();
-    let job = runtime.store.get_job(job_id).await.unwrap();
-    let payload = job.text_delivery_payload().unwrap();
-    assert_eq!(payload.target.kind, TextTargetKind::Dm);
-    assert_eq!(payload.target.user_id, "user-a");
-    assert_eq!(payload.content, "Reminder: talk to Blake about Woven.");
-    assert_eq!(
-        runtime
-            .store
-            .get_automation(&record.automation_id)
-            .await
-            .unwrap()
-            .state,
-        AutomationState::Expired
-    );
-}
 #[tokio::test(flavor = "current_thread")]
 async fn room_participants_exposes_voice_state_flags_for_conditions() {
     let raw = tempfile::tempdir().unwrap();
@@ -746,6 +632,7 @@ async fn room_participants_exposes_voice_state_flags_for_conditions() {
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn event_room_participants_exposes_voice_state_flags_for_transition_conditions() {
     let raw = tempfile::tempdir().unwrap();
@@ -806,6 +693,7 @@ async fn event_room_participants_exposes_voice_state_flags_for_transition_condit
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn room_state_changed_trigger_fires_for_participant_deafen_changes() {
     let raw = tempfile::tempdir().unwrap();
@@ -875,6 +763,7 @@ async fn room_state_changed_trigger_fires_for_participant_deafen_changes() {
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn room_state_changed_trigger_fires_for_participant_mute_changes() {
     let raw = tempfile::tempdir().unwrap();
@@ -944,6 +833,7 @@ async fn room_state_changed_trigger_fires_for_participant_mute_changes() {
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn recurring_event_automation_processes_all_matching_events_seen_in_one_pass() {
     let raw = tempfile::tempdir().unwrap();
@@ -1000,6 +890,7 @@ async fn recurring_event_automation_processes_all_matching_events_seen_in_one_pa
     assert_eq!(updated.fire_count, 2);
     assert_eq!(updated.state, AutomationState::Expired);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn recurring_job_automation_processes_all_matching_jobs_seen_in_one_pass() {
     let raw = tempfile::tempdir().unwrap();
@@ -1048,6 +939,7 @@ async fn recurring_job_automation_processes_all_matching_jobs_seen_in_one_pass()
     assert_eq!(updated.fire_count, 2);
     assert_eq!(updated.state, AutomationState::Expired);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn event_room_snapshot_matches_presence_at_transition_time() {
     let raw = tempfile::tempdir().unwrap();
@@ -1112,6 +1004,7 @@ async fn event_room_snapshot_matches_presence_at_transition_time() {
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn stored_event_automation_uses_compound_conditions_without_firing_on_noise() {
     let raw = tempfile::tempdir().unwrap();
@@ -1173,6 +1066,7 @@ async fn stored_event_automation_uses_compound_conditions_without_firing_on_nois
         .to_json();
     assert_eq!(second["createdJobs"].as_array().unwrap().len(), 1);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allows_more() {
     let raw = tempfile::tempdir().unwrap();
@@ -1232,6 +1126,7 @@ async fn stored_event_automation_does_not_replay_same_event_when_max_fires_allow
         AutomationState::Expired
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
     let raw = tempfile::tempdir().unwrap();
@@ -1313,6 +1208,7 @@ async fn delayed_recheck_waits_and_fires_when_condition_still_matches() {
     assert!(updated.pending_recheck.is_none());
     assert_eq!(updated.state, AutomationState::Expired);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn delayed_recheck_does_not_duplicate_work_before_due() {
     let raw = tempfile::tempdir().unwrap();
@@ -1370,6 +1266,7 @@ async fn delayed_recheck_does_not_duplicate_work_before_due() {
     assert_eq!(after_second.fire_count, 0);
     assert_eq!(after_second.state, AutomationState::Active);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger() {
     let raw = tempfile::tempdir().unwrap();
@@ -1451,6 +1348,7 @@ async fn delayed_recheck_skips_when_condition_changes_and_allows_future_trigger(
     assert_eq!(updated.fire_count, 1);
     assert_eq!(updated.state, AutomationState::Expired);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn delayed_recheck_survives_fresh_runtime_context() {
     let raw = tempfile::tempdir().unwrap();
@@ -1493,6 +1391,7 @@ async fn delayed_recheck_survives_fresh_runtime_context() {
     assert!(updated.pending_recheck.is_none());
     assert_eq!(updated.state, AutomationState::Expired);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job() {
     let raw = tempfile::tempdir().unwrap();
@@ -1546,6 +1445,7 @@ async fn stored_job_automation_emits_agent_task_job_from_completed_runtime_job()
         "Summarize the completed text delivery job."
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn automation_action_failures_are_audited_without_crashing_runner() {
     let raw = tempfile::tempdir().unwrap();
@@ -1586,6 +1486,7 @@ async fn automation_action_failures_are_audited_without_crashing_runner() {
             .contains("sound.play")
     );
 }
+
 fn still_away_spec(idempotency_key: &str, delay_seconds: u64) -> AutomationSpec {
     AutomationSpec::from_json(&spec_value(json!({
         "name": "still away watcher",
@@ -1613,43 +1514,13 @@ fn still_away_spec(idempotency_key: &str, delay_seconds: u64) -> AutomationSpec 
     })))
     .unwrap()
 }
-fn spec_value(overrides: Value) -> Value {
-    let mut base = json!({
-        "schema": "clankcord.automation.v0",
-        "name": "test automation",
-        "idempotency_key": "test:auto",
-        "owner": {"kind": "agent", "user_id": "user-a", "source_job_id": "job_1"},
-        "scope": {"scope_kind": "voice_channel", "guild_id": "guild", "scope_id": "code"},
-        "trigger": {"kind": "event", "event_kinds": ["room.member_joined"]},
-        "condition": {"kind": "true"},
-        "actions": [{
-            "kind": "response.send",
-            "sink": {"kind": "agent_chat"},
-            "content": "hello"
-        }]
-    });
-    merge_json(&mut base, overrides);
-    base
-}
+
 fn spec_value_replacing(key: &str, replacement: Value) -> Value {
     let mut value = spec_value(json!({}));
     value[key] = replacement;
     value
 }
-fn merge_json(base: &mut Value, overrides: Value) {
-    match (base, overrides) {
-        (Value::Object(base), Value::Object(overrides)) => {
-            for (key, value) in overrides {
-                if let Some(existing) = base.get_mut(&key) {
-                    merge_json(existing, value);
-                } else {
-                    base.insert(key, value);
-                }
-            }
-        }
-        (base, value) => *base = value,
-    }
-}
+
 async fn append_speech(
     store: &TimelineStore,
     event_kind: &str,
@@ -1671,6 +1542,7 @@ async fn append_speech(
         .await
         .unwrap();
 }
+
 async fn create_completed_text_delivery(store: &TimelineStore, source_job_id: &str, content: &str) {
     let mut delivery = Job::text_delivery(
         RuntimeScope::voice_channel("guild", "code"),

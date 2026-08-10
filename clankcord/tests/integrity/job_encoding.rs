@@ -1,7 +1,10 @@
 //! Binary job records: envelope versioning, payload round-trips, decode rejections,
 //! and the public jobs view projection.
 
-use chrono::{TimeZone, Utc};
+use chrono::{SecondsFormat, TimeZone, Utc};
+use clankcord::domain::agents::AgentSessionRecord;
+use clankcord::model::job::{DiscordSlashCommandPayload, DiscordTextMessagePayload};
+use clankcord::model::scope::RuntimeScopeKind;
 use serde_json::json;
 
 use clankcord::domain::Ctx;
@@ -653,4 +656,94 @@ async fn discord_voice_jobs_are_first_class_binary_jobs() {
     };
     assert_eq!(output.voice_states.len(), 1);
     assert_eq!(output.voice_states[0].to_json()["voice_channel_id"], "code");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn agent_session_payload_blob_uses_current_envelope() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = crate::support::test_store(&raw.path().join("voice")).await;
+    let created_at = Utc::now();
+    let max_active_until = created_at + chrono::Duration::hours(8);
+    let record = AgentSessionRecord::new_voice(
+        "ags_blob",
+        "guild",
+        "code",
+        "agent-threads",
+        "thread-blob",
+        created_at.to_rfc3339_opts(SecondsFormat::Millis, true),
+        max_active_until.to_rfc3339_opts(SecondsFormat::Millis, true),
+    );
+
+    store
+        .create_agent_session_record(record.clone())
+        .await
+        .unwrap();
+    let row = sqlx::query("SELECT payload_blob FROM agent_sessions WHERE agent_session_id = $1")
+        .bind("ags_blob")
+        .fetch_one(&store.pool)
+        .await
+        .unwrap();
+    let payload_blob: Vec<u8> = sqlx::Row::try_get(&row, "payload_blob").unwrap();
+    assert_eq!(&payload_blob[..8], b"CLANKAGS");
+    assert_eq!(u16::from_le_bytes([payload_blob[8], payload_blob[9]]), 1);
+
+    sqlx::query("UPDATE agent_sessions SET payload_blob = $1 WHERE agent_session_id = $2")
+        .bind(bincode::serialize(&record).unwrap())
+        .bind("ags_blob")
+        .execute(&store.pool)
+        .await
+        .unwrap();
+    let error = store
+        .get_agent_session_record("ags_blob")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid blob envelope"));
+}
+
+#[test]
+fn discord_text_message_job_round_trips() {
+    let job = Job::discord_text_message(DiscordTextMessagePayload {
+        guild_id: "guild".to_string(),
+        channel_id: "thread-1".to_string(),
+        message_id: "message-1".to_string(),
+        author_user_id: "user-a".to_string(),
+        author_username: "will".to_string(),
+        author_display_name: "Will".to_string(),
+        content: "follow up".to_string(),
+        created_at: "2026-05-15T10:00:00.000Z".to_string(),
+        referenced_message_id: String::new(),
+    });
+
+    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordTextMessage);
+    assert_eq!(decoded.requested_by_user_id, "user-a");
+    assert_eq!(decoded.payload.to_json()["content"], "follow up");
+}
+
+#[test]
+fn discord_slash_command_job_round_trips() {
+    let job = Job::discord_slash_command(DiscordSlashCommandPayload {
+        interaction_id: "interaction-1".to_string(),
+        interaction_token: "token-1".to_string(),
+        application_id: "app-1".to_string(),
+        guild_id: "guild".to_string(),
+        channel_id: "code".to_string(),
+        voice_channel_id: "code".to_string(),
+        user_id: "user-a".to_string(),
+        username: "will".to_string(),
+        command_name: "join".to_string(),
+        options: BinaryPayload::from_json(&json!([{"name": "room", "value": "code"}])).unwrap(),
+        created_at: "2026-05-15T10:00:00.000Z".to_string(),
+        response_visibility: "ephemeral".to_string(),
+    });
+
+    let decoded = Job::decode(&job.encode().unwrap()).unwrap();
+    assert_eq!(decoded.kind, JobKind::DiscordSlashCommand);
+    assert_eq!(decoded.requested_by_user_id, "user-a");
+    assert_eq!(decoded.scope_kind, RuntimeScopeKind::VoiceChannel);
+    assert_eq!(decoded.scope_id, "code");
+    assert_eq!(decoded.payload.to_json()["command_name"], "join");
+    assert_eq!(decoded.payload.to_json()["voice_channel_id"], "code");
+    assert_eq!(decoded.payload.to_json()["options"][0]["value"], "code");
 }

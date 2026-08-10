@@ -1,8 +1,14 @@
 #![allow(dead_code)]
 
 pub mod automations;
+pub mod cli;
+pub mod dashboard;
 pub mod job_wire;
 pub mod jobs;
+pub mod rooms;
+pub mod sessions;
+pub mod voice;
+pub mod wake;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

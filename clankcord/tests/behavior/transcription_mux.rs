@@ -11,10 +11,11 @@ use clankcord::domain::voice::capture::wake_activations::schedule_from_wake_even
 use clankcord::model::job::{AudioSegmentPayload, Job, JobKind, JobState};
 use clankcord::store::{isoformat_z, sha256_file};
 
+use crate::support::jobs::run_transcription_mux_planner;
 use crate::support::jobs::{
     audio_segment_payload, create_audio_segment_slot, wake_activation_payload, write_test_wav,
 };
-use crate::support::{initialize_test_config, test_store};
+use crate::support::{append_speech, dt, initialize_test_config, test_store};
 
 #[tokio::test(flavor = "current_thread")]
 async fn audio_segment_payload_references_ready_audio_artifact() {
@@ -59,6 +60,7 @@ async fn audio_segment_payload_references_ready_audio_artifact() {
     assert_eq!(payload["audio_bytes"], json!(44));
     assert!(payload.get("pcm").is_none());
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
     let raw = tempfile::tempdir().unwrap();
@@ -111,6 +113,7 @@ async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
         JobState::Complete
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn audio_segment_slot_inherits_room_wake_priority() {
     let raw = tempfile::tempdir().unwrap();
@@ -167,6 +170,7 @@ async fn audio_segment_slot_inherits_room_wake_priority() {
         .unwrap();
     assert_eq!(claimed_planner.len(), 1);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn wake_activation_promotes_existing_overlapping_transcription_slots() {
     let raw = tempfile::tempdir().unwrap();
@@ -215,6 +219,7 @@ async fn wake_activation_promotes_existing_overlapping_transcription_slots() {
         1000
     );
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
     let raw = tempfile::tempdir().unwrap();
@@ -322,142 +327,7 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
         "failed"
     );
 }
-#[tokio::test(flavor = "current_thread")]
-async fn retryable_failed_transcription_slots_requeue_for_mux_planning() {
-    let raw = tempfile::tempdir().unwrap();
-    initialize_test_config(raw.path());
-    let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Ctx::new(store.clone());
-    let now = Utc::now();
-    let retryable_source_job_id = create_audio_segment_slot(
-        &store,
-        &runtime,
-        raw.path(),
-        "user-a",
-        now - Duration::seconds(10),
-        Duration::seconds(2),
-        70,
-    )
-    .await;
-    let non_retryable_source_job_id = create_audio_segment_slot(
-        &store,
-        &runtime,
-        raw.path(),
-        "user-b",
-        now - Duration::seconds(8),
-        Duration::seconds(2),
-        71,
-    )
-    .await;
-    let retryable_error = r#"elevenlabs speech-to-text HTTP 500 Internal Server Error: {"detail":{"type":"internal_error","code":"internal_error","message":"An unexpected error occurred."}}"#;
-    sqlx::query(
-        r#"
-        UPDATE transcription_slots
-        SET state = 'failed',
-            mux_job_id = 'job_retryable_mux',
-            mux_stream_id = 'mux:retryable',
-            mux_start_ms = 0,
-            mux_end_ms = 1000,
-            guard_before_ms = 0,
-            guard_after_ms = 150,
-            payload_json = payload_json || jsonb_build_object(
-              'state', 'failed',
-              'mux_job_id', 'job_retryable_mux',
-              'mux_stream_id', 'mux:retryable',
-              'mux_start_ms', 0,
-              'mux_end_ms', 1000,
-              'guard_after_ms', 150,
-              'error', $2
-            )
-        WHERE source_job_id = $1
-        "#,
-    )
-    .bind(&retryable_source_job_id)
-    .bind(retryable_error)
-    .execute(&store.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        r#"
-        UPDATE transcription_slots
-        SET state = 'failed',
-            payload_json = payload_json || jsonb_build_object(
-              'state', 'failed',
-              'error', 'provider returned malformed timestamp payload'
-            )
-        WHERE source_job_id = $1
-        "#,
-    )
-    .bind(&non_retryable_source_job_id)
-    .execute(&store.pool)
-    .await
-    .unwrap();
 
-    let requeued = store
-        .requeue_retryable_failed_transcription_slots(10)
-        .await
-        .unwrap();
-
-    assert_eq!(requeued.len(), 1);
-    assert_eq!(
-        requeued[0]["source_job_id"].as_str().unwrap(),
-        retryable_source_job_id
-    );
-    let retryable = sqlx::query(
-        r#"
-        SELECT state,
-               mux_job_id,
-               mux_stream_id,
-               mux_start_ms,
-               payload_json ? 'error' AS has_error
-        FROM transcription_slots
-        WHERE source_job_id = $1
-        "#,
-    )
-    .bind(&retryable_source_job_id)
-    .fetch_one(&store.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&retryable, "state").unwrap(),
-        "queued"
-    );
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&retryable, "mux_job_id").unwrap(),
-        ""
-    );
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&retryable, "mux_stream_id").unwrap(),
-        ""
-    );
-    assert!(
-        sqlx::Row::try_get::<Option<i64>, _>(&retryable, "mux_start_ms")
-            .unwrap()
-            .is_none()
-    );
-    assert!(!sqlx::Row::try_get::<bool, _>(&retryable, "has_error").unwrap());
-    let non_retryable =
-        sqlx::query("SELECT state FROM transcription_slots WHERE source_job_id = $1")
-            .bind(&non_retryable_source_job_id)
-            .fetch_one(&store.pool)
-            .await
-            .unwrap();
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&non_retryable, "state").unwrap(),
-        "failed"
-    );
-    let result = run_transcription_mux_planner(&store).await;
-    assert_eq!(result["result"]["status"], json!("planned"));
-    let planned = sqlx::query("SELECT state FROM transcription_slots WHERE source_job_id = $1")
-        .bind(&retryable_source_job_id)
-        .fetch_one(&store.pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        sqlx::Row::try_get::<String, _>(&planned, "state").unwrap(),
-        "planned"
-    );
-}
 #[tokio::test(flavor = "current_thread")]
 async fn transcription_mux_planner_uses_one_stream_without_predicted_backlog() {
     let raw = tempfile::tempdir().unwrap();
@@ -496,6 +366,7 @@ async fn transcription_mux_planner_uses_one_stream_without_predicted_backlog() {
     .unwrap();
     assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "mux_jobs").unwrap(), 1);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn transcription_mux_planner_overflows_when_one_stream_misses_deadlines() {
     let raw = tempfile::tempdir().unwrap();
@@ -534,6 +405,7 @@ async fn transcription_mux_planner_overflows_when_one_stream_misses_deadlines() 
     .unwrap();
     assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "mux_jobs").unwrap(), 2);
 }
+
 #[tokio::test(flavor = "current_thread")]
 async fn transcription_mux_planner_fairly_packs_short_room_speaker_work() {
     let raw = tempfile::tempdir().unwrap();
@@ -588,90 +460,7 @@ async fn transcription_mux_planner_fairly_packs_short_room_speaker_work() {
 
     assert!(speakers.contains(&"user-b".to_string()));
 }
-#[tokio::test(flavor = "current_thread")]
-async fn transcription_mux_planner_isolates_slots_replanned_for_exact_attribution() {
-    let raw = tempfile::tempdir().unwrap();
-    initialize_test_config(raw.path());
-    let store = test_store(&raw.path().join("voice")).await;
-    let runtime = Ctx::new(store.clone());
-    let base = Utc::now() - Duration::seconds(10);
-    let constrained_source_job_id = create_audio_segment_slot(
-        &store,
-        &runtime,
-        raw.path(),
-        "user-a",
-        base,
-        Duration::seconds(2),
-        450,
-    )
-    .await;
-    create_audio_segment_slot(
-        &store,
-        &runtime,
-        raw.path(),
-        "user-b",
-        base + Duration::seconds(3),
-        Duration::seconds(2),
-        451,
-    )
-    .await;
-    sqlx::query(
-        r#"
-        UPDATE transcription_slots
-        SET requires_single_slot = TRUE,
-            payload_json = payload_json || jsonb_build_object('requires_single_slot', TRUE)
-        WHERE source_job_id = $1
-        "#,
-    )
-    .bind(&constrained_source_job_id)
-    .execute(&store.pool)
-    .await
-    .unwrap();
 
-    let result = run_transcription_mux_planner(&store).await;
-
-    assert_eq!(result["result"]["status"], json!("planned"));
-    let row = sqlx::query(
-        r#"
-        SELECT constrained.mux_job_id,
-               COUNT(all_slots.slot_id) AS slot_count
-        FROM transcription_slots constrained
-        JOIN transcription_slots all_slots ON all_slots.mux_job_id = constrained.mux_job_id
-        WHERE constrained.source_job_id = $1
-        GROUP BY constrained.mux_job_id
-        "#,
-    )
-    .bind(&constrained_source_job_id)
-    .fetch_one(&store.pool)
-    .await
-    .unwrap();
-    assert!(
-        !sqlx::Row::try_get::<String, _>(&row, "mux_job_id")
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(sqlx::Row::try_get::<i64, _>(&row, "slot_count").unwrap(), 1);
-}
-async fn run_transcription_mux_planner(
-    store: &clankcord::store::TimelineStore,
-) -> serde_json::Value {
-    store
-        .create_job(Job::transcription_mux_plan("local-granite", 0))
-        .await
-        .unwrap();
-    let claimed = store
-        .claim_due_jobs(JobKind::TranscriptionMuxPlan, 1, &mut BTreeSet::new())
-        .await
-        .unwrap();
-    let runtime = Ctx::new(store.clone());
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
-        &runtime,
-        &clankcord::ports::discord::DiscordApiUnavailable,
-        claimed.into_iter().next().unwrap(),
-    )
-    .await
-    .unwrap()
-}
 async fn transcription_slot_priority(
     store: &clankcord::store::TimelineStore,
     source_job_id: &str,
@@ -682,4 +471,33 @@ async fn transcription_slot_priority(
         .await
         .unwrap();
     sqlx::Row::try_get::<i64, _>(&row, "priority").unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn timeline_finds_existing_speech_segment_for_audio_retry() {
+    let raw = tempfile::tempdir().unwrap();
+    let store = test_store(raw.path()).await;
+    let start = dt(2026, 5, 12, 16, 0, 0);
+    let event = append_speech(
+        &store,
+        raw.path(),
+        start,
+        start + chrono::Duration::seconds(2),
+        "retry-safe words",
+        4,
+        None,
+    )
+    .await;
+    let found = store
+        .speech_event_for_segment("guild", "code", "cap_test", "user-a", 4)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(found["event_id"], event["event_id"]);
+    let (count, last) = store
+        .speech_stats_for_capture_run("guild", "code", "cap_test")
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    assert_eq!(last.unwrap(), start + chrono::Duration::seconds(2));
 }

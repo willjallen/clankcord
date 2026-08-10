@@ -3,6 +3,7 @@
 
 mod job_claiming;
 mod job_encoding;
+mod outcome_retention;
 mod schedules;
 #[path = "../support/mod.rs"]
 mod support;
