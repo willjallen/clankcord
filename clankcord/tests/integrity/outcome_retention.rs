@@ -60,7 +60,7 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
 
     let runtime = Ctx::new(store.clone());
     let overview =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     let windows = overview["operations"]["windows"].as_array().unwrap();
@@ -130,7 +130,7 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
     let runtime = Ctx::new(store.clone());
 
     let overview =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     assert_eq!(overview["health"]["failures"]["count"], json!(1));
@@ -147,7 +147,7 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
         .await
         .unwrap();
     let cleared =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     assert_eq!(cleared["health"]["failures"]["count"], json!(0));

@@ -691,7 +691,7 @@ async fn v0_13_0_schema_migration_backfills_retained_terminal_job_outcomes() {
 
     let runtime = Ctx::new(store);
     let overview =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     let dashboard_failure = overview["health"]["failures"]["recent"]

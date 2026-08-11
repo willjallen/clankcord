@@ -4,18 +4,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value, json};
 use sqlx::{Postgres, QueryBuilder, Row};
 
-use super::operations::{
-    agent_usage_payload, automation_dashboard_payload, dashboard_job_value,
-    dashboard_latency_by_kind_payload,
+use super::diagnostics::dashboard_latency_by_kind_payload;
+use super::operations::automation_dashboard_payload;
+use super::render::{
+    ScopeKey, dashboard_job_category, dashboard_job_duration_ms, dashboard_job_value,
+    dashboard_scope_labels, payload_scope_label, scope_label,
 };
 use crate::Result;
 use crate::domain::Ctx;
 use crate::model::job::{Job, JobState};
 use crate::store::JobVisibility;
 use crate::store::timeline_event_payload;
-use crate::time::{
-    instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference, utc_now,
-};
+use crate::time::{instant_ms_dt, isoformat_z, ms_to_datetime, resolve_time_reference, utc_now};
 use crate::util::{first_non_empty, preview};
 use crate::views::agents;
 use crate::views::jobs;
@@ -323,13 +323,6 @@ struct TimelineRecord {
     payload: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct ScopeKey {
-    kind: String,
-    guild_id: String,
-    id: String,
-}
-
 #[derive(Debug, Default)]
 struct FacetAccumulator {
     record_types: BTreeMap<String, i64>,
@@ -412,7 +405,7 @@ pub async fn dashboard_agents(ctx: &Ctx, request: DashboardAgentsRequest) -> Res
         "jobs": jobs.iter().map(dashboard_agent_list_entry).collect::<Vec<_>>(),
         "summary": dashboard_agent_summary(ctx).await?,
         "sessions": agents::agent_session_rollups(ctx, None).await?,
-        "codex": {"usage": agent_usage_payload(&usage_jobs, now)},
+        "codex": {"usage": agents::agent_usage_payload(&usage_jobs, now)},
     });
     if let Some(entries) = agents.get_mut("jobs").and_then(Value::as_array_mut) {
         let mut values = entries
@@ -479,7 +472,7 @@ pub async fn dashboard_transcript(ctx: &Ctx, request: DashboardTranscriptRequest
 }
 
 pub async fn dashboard_agent_detail(ctx: &Ctx, job_id: &str) -> Result<Value> {
-    let mut detail = operations::dashboard_agent_job(ctx, job_id).await?;
+    let mut detail = agents::dashboard_agent_job(ctx, job_id).await?;
     if let Some(job_value) = detail.get_mut("job") {
         let job = ctx.store.get_job(job_id).await?;
         enrich_job_values(
@@ -1376,162 +1369,6 @@ async fn dashboard_facets(ctx: &Ctx, window: &QueryWindow) -> Result<FacetAccumu
     Ok(facets)
 }
 
-async fn dashboard_scope_labels(
-    ctx: &Ctx,
-    keys: &[ScopeKey],
-) -> Result<BTreeMap<ScopeKey, String>> {
-    if keys.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-    let wanted = keys.iter().cloned().collect::<BTreeSet<_>>();
-    let mut labels = BTreeMap::new();
-
-    let voice_keys = keys
-        .iter()
-        .filter(|key| key.kind == "voice_channel")
-        .cloned()
-        .collect::<Vec<_>>();
-    if !voice_keys.is_empty() {
-        let mut query = QueryBuilder::<Postgres>::new(
-            r#"
-            SELECT guild_id, voice_channel_id,
-                   COALESCE(NULLIF(voice_channel_name, ''), NULLIF(voice_channel_slug, ''), '') AS label
-            FROM voice_rooms
-            WHERE FALSE
-            "#,
-        );
-        for key in &voice_keys {
-            query
-                .push(" OR (guild_id = ")
-                .push_bind(key.guild_id.clone())
-                .push(" AND voice_channel_id = ")
-                .push_bind(key.id.clone())
-                .push(")");
-        }
-        for row in query.build().fetch_all(&ctx.store.pool).await? {
-            let key = ScopeKey {
-                kind: "voice_channel".to_string(),
-                guild_id: row.try_get("guild_id")?,
-                id: row.try_get("voice_channel_id")?,
-            };
-            let label: String = row.try_get("label")?;
-            if !label.is_empty() {
-                labels.insert(key, label);
-            }
-        }
-    }
-
-    let dm_user_ids = keys
-        .iter()
-        .filter(|key| key.kind == "dm")
-        .map(|key| key.id.clone())
-        .collect::<BTreeSet<_>>();
-    if !dm_user_ids.is_empty() {
-        let mut query = QueryBuilder::<Postgres>::new(
-            r#"
-            SELECT DISTINCT ON (user_id) user_id,
-                   COALESCE(NULLIF(display_name, ''), NULLIF(global_name, ''), NULLIF(username, ''), '') AS label
-            FROM discord_members
-            WHERE user_id IN (
-            "#,
-        );
-        {
-            let mut ids = query.separated(", ");
-            for user_id in &dm_user_ids {
-                ids.push_bind(user_id.clone());
-            }
-            ids.push_unseparated(")");
-        }
-        query.push(
-            r#"
-            ORDER BY user_id, updated_at_ms DESC
-            "#,
-        );
-        for row in query.build().fetch_all(&ctx.store.pool).await? {
-            let user_id: String = row.try_get("user_id")?;
-            let label: String = row.try_get("label")?;
-            if label.is_empty() {
-                continue;
-            }
-            for key in keys
-                .iter()
-                .filter(|key| key.kind == "dm" && key.id == user_id)
-            {
-                labels.entry(key.clone()).or_insert_with(|| label.clone());
-            }
-        }
-    }
-
-    let unresolved = wanted
-        .iter()
-        .filter(|key| !labels.contains_key(*key))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unresolved.is_empty() {
-        let mut query = QueryBuilder::<Postgres>::new(
-            r#"
-            SELECT DISTINCT ON (scope_kind, guild_id, scope_id)
-                   scope_kind, guild_id, scope_id, payload_json
-            FROM timeline_events
-            WHERE forgotten = FALSE AND (FALSE
-            "#,
-        );
-        push_scope_key_predicates(&mut query, &unresolved, "");
-        query.push(
-            r#")
-            ORDER BY scope_kind, guild_id, scope_id, started_at_ms DESC, sequence DESC
-            "#,
-        );
-        for row in query.build().fetch_all(&ctx.store.pool).await? {
-            let key = ScopeKey {
-                kind: row.try_get("scope_kind")?,
-                guild_id: row.try_get("guild_id")?,
-                id: row.try_get("scope_id")?,
-            };
-            let payload: Value = row.try_get("payload_json")?;
-            if let Some(label) = payload_scope_label(&key.kind, &payload) {
-                labels.insert(key, label);
-            }
-        }
-    }
-
-    let unresolved = wanted
-        .iter()
-        .filter(|key| !labels.contains_key(*key))
-        .cloned()
-        .collect::<Vec<_>>();
-    if !unresolved.is_empty() {
-        let mut query = QueryBuilder::<Postgres>::new(
-            r#"
-            SELECT DISTINCT ON (j.scope_kind, j.guild_id, j.scope_id)
-                   j.scope_kind, j.guild_id, j.scope_id, p.payload_blob
-            FROM jobs j
-            JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE FALSE
-            "#,
-        );
-        push_scope_key_predicates(&mut query, &unresolved, "j.");
-        query.push(
-            r#"
-            ORDER BY j.scope_kind, j.guild_id, j.scope_id, j.updated_at_ms DESC, j.job_id DESC
-            "#,
-        );
-        for row in query.build().fetch_all(&ctx.store.pool).await? {
-            let key = ScopeKey {
-                kind: row.try_get("scope_kind")?,
-                guild_id: row.try_get("guild_id")?,
-                id: row.try_get("scope_id")?,
-            };
-            let blob: Vec<u8> = row.try_get("payload_blob")?;
-            let job = Job::decode(&blob)?;
-            if let Some(label) = payload_scope_label(&key.kind, &job.payload_value()) {
-                labels.insert(key, label);
-            }
-        }
-    }
-    Ok(labels)
-}
-
 async fn dashboard_member_labels(
     ctx: &Ctx,
     members: &BTreeSet<(String, String)>,
@@ -1791,30 +1628,6 @@ async fn enrich_automation_payload(ctx: &Ctx, automations: &mut Value) -> Result
     Ok(())
 }
 
-pub(crate) async fn dashboard_scope_label_batch(
-    ctx: &Ctx,
-    scopes: &[(String, String, String)],
-) -> Result<BTreeMap<(String, String, String), String>> {
-    let keys = scopes
-        .iter()
-        .map(|(kind, guild_id, id)| ScopeKey {
-            kind: kind.clone(),
-            guild_id: guild_id.clone(),
-            id: id.clone(),
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let labels = dashboard_scope_labels(ctx, &keys).await?;
-    Ok(keys
-        .into_iter()
-        .map(|key| {
-            let tuple = (key.kind.clone(), key.guild_id.clone(), key.id.clone());
-            (tuple, scope_label(&key, labels.get(&key)))
-        })
-        .collect())
-}
-
 fn value_string(value: &Value, key: &str) -> String {
     match value.get(key) {
         Some(Value::String(value)) => value.clone(),
@@ -1959,30 +1772,6 @@ fn dashboard_agent_list_entry(job: &Job) -> Value {
         "codex": codex,
         "detailUrl": format!("/v1/dashboard/agents/{}", job.id),
     })
-}
-
-pub(super) fn dashboard_job_duration_ms(job: &Job) -> i64 {
-    let started = job
-        .started_at
-        .as_deref()
-        .and_then(parse_instant)
-        .or_else(|| parse_instant(&job.created_at));
-    let ended = job
-        .completed_at
-        .as_deref()
-        .and_then(parse_instant)
-        .or_else(|| parse_instant(&job.updated_at));
-    started
-        .zip(ended)
-        .map(|(started, ended)| (ended - started).num_milliseconds().max(0))
-        .unwrap_or_default()
-}
-
-pub(super) fn dashboard_job_category(kind: &str) -> &'static str {
-    match kind.parse::<crate::model::job::JobKind>() {
-        Ok(kind) => crate::model::job::spec::spec(kind).dashboard.as_str(),
-        Err(_) => "other",
-    }
 }
 
 fn event_category_for_kind(event_kind: &str, related_job_kind: &str) -> &'static str {
@@ -2317,29 +2106,6 @@ fn push_event_unified_kind_filter(
     }
 }
 
-fn push_scope_key_predicates(
-    query: &mut QueryBuilder<'_, Postgres>,
-    keys: &[ScopeKey],
-    prefix: &str,
-) {
-    for key in keys {
-        query
-            .push(" OR (")
-            .push(prefix)
-            .push("scope_kind = ")
-            .push_bind(key.kind.clone())
-            .push(" AND ")
-            .push(prefix)
-            .push("guild_id = ")
-            .push_bind(key.guild_id.clone())
-            .push(" AND ")
-            .push(prefix)
-            .push("scope_id = ")
-            .push_bind(key.id.clone())
-            .push(")");
-    }
-}
-
 fn push_event_room_join(query: &mut QueryBuilder<'_, Postgres>) {
     query.push(
         r#" LEFT JOIN voice_rooms r
@@ -2601,75 +2367,6 @@ fn compact_dashboard_json(value: &Value, depth: usize) -> Value {
         ),
         Value::Array(_) | Value::Object(_) => Value::Null,
         value => value.clone(),
-    }
-}
-
-fn payload_scope_label(scope_kind: &str, payload: &Value) -> Option<String> {
-    let keys: &[&str] = match scope_kind {
-        "voice_channel" => &[
-            "voice_channel_name",
-            "channelName",
-            "voice_channel_slug",
-            "channelSlug",
-            "target_room_name",
-        ],
-        "dm" => &[
-            "display_name",
-            "member_display_name",
-            "global_name",
-            "recipient_name",
-            "target_user_name",
-            "username",
-        ],
-        "text_channel" => &["channel_name", "channelName", "channel_slug", "channelSlug"],
-        "thread" => &["thread_name", "threadName"],
-        _ => return None,
-    };
-    find_payload_label(payload, keys, 0)
-}
-
-fn find_payload_label(payload: &Value, keys: &[&str], depth: usize) -> Option<String> {
-    if depth > 6 {
-        return None;
-    }
-    match payload {
-        Value::Object(object) => {
-            for key in keys {
-                if let Some(label) = object
-                    .get(*key)
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|label| !label.is_empty())
-                {
-                    return Some(label.to_string());
-                }
-            }
-            object
-                .values()
-                .find_map(|value| find_payload_label(value, keys, depth + 1))
-        }
-        Value::Array(values) => values
-            .iter()
-            .find_map(|value| find_payload_label(value, keys, depth + 1)),
-        _ => None,
-    }
-}
-
-fn scope_label(key: &ScopeKey, candidate: Option<&String>) -> String {
-    if let Some(candidate) = candidate.filter(|candidate| !candidate.trim().is_empty()) {
-        return match key.kind.as_str() {
-            "dm" => format!("Direct message with {}", candidate.trim()),
-            _ => candidate.trim().to_string(),
-        };
-    }
-    match key.kind.as_str() {
-        "voice_channel" => "Unconfigured voice room".to_string(),
-        "dm" => "Direct message".to_string(),
-        "text_channel" => "Text channel".to_string(),
-        "thread" => "Thread".to_string(),
-        "runtime" => "Ctx".to_string(),
-        value if !value.is_empty() => value.replace('_', " "),
-        _ => "Unknown scope".to_string(),
     }
 }
 

@@ -30,6 +30,7 @@ use crate::model::job::CommandRequest;
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::util::first_value_string;
 use crate::views::dashboard;
+use crate::views::health;
 use crate::views::history;
 use crate::views::jobs;
 use crate::views::members;
@@ -401,7 +402,7 @@ pub async fn serve_until_shutdown(
 
 async fn healthz(State(state): State<AppState>) -> Response {
     let runtime = state.runtime_context();
-    match operations::operational_health_payload(&runtime).await {
+    match health::operational_health_payload(&runtime).await {
         Ok(payload) => {
             let status = readiness_http_status(&payload);
             (status, Json(payload)).into_response()
@@ -1009,7 +1010,7 @@ async fn confirmation_cancel(
 
 async fn dashboard_summary(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
-    result(operations::dashboard_summary_payload(&runtime).await)
+    result(health::dashboard_summary_payload(&runtime).await)
 }
 
 async fn dashboard_overview(
@@ -1052,7 +1053,7 @@ async fn dashboard_automations(State(state): State<AppState>) -> Response {
 async fn dashboard_health(State(state): State<AppState>) -> Response {
     let runtime = runtime_context!(state);
     result(
-        operations::dashboard_health_payload(
+        health::dashboard_health_payload(
             &runtime,
             http_request_metrics_snapshot(),
             crate::app::ops::process_load_payload(),

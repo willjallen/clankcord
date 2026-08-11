@@ -24,7 +24,7 @@ async fn dashboard_health_reports_postgres_diagnostics() {
     let runtime = Ctx::new(store);
 
     let overview =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     let database = &overview["database"];
@@ -96,7 +96,7 @@ async fn dashboard_health_reasons_are_terse_measured_operator_state() {
         .unwrap();
     let runtime = Ctx::new(store);
 
-    let payload = clankcord::views::operations::dashboard_summary_payload(&runtime)
+    let payload = clankcord::views::health::dashboard_summary_payload(&runtime)
         .await
         .unwrap();
     let components = payload["health"]["components"].as_array().unwrap();
@@ -169,7 +169,7 @@ async fn dashboard_health_includes_http_request_snapshot() {
         "routes": [{"route": "GET /dashboard", "totalStarted": 3}]
     });
 
-    let overview = clankcord::views::operations::dashboard_health_payload(
+    let overview = clankcord::views::health::dashboard_health_payload(
         &runtime,
         requests.clone(),
         serde_json::json!({}),
@@ -208,7 +208,7 @@ async fn dashboard_summary_uses_active_projection_aggregates_and_bounded_failure
     .unwrap();
     let runtime = Ctx::new(store);
 
-    let summary = clankcord::views::operations::dashboard_summary_payload(&runtime)
+    let summary = clankcord::views::health::dashboard_summary_payload(&runtime)
         .await
         .unwrap();
 
@@ -358,7 +358,7 @@ async fn stale_voice_rows_are_separated_from_current_dashboard_status() {
     let rooms = clankcord::views::operations::dashboard_rooms_payload(&runtime)
         .await
         .unwrap();
-    let overview = clankcord::views::operations::dashboard_summary_payload(&runtime)
+    let overview = clankcord::views::health::dashboard_summary_payload(&runtime)
         .await
         .unwrap();
 

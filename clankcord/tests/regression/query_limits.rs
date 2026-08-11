@@ -219,7 +219,7 @@ async fn dashboard_latency_stats_exclude_phase_contaminated_intervals() {
 
     let runtime = Ctx::new(store);
     let overview =
-        clankcord::views::operations::dashboard_health_payload(&runtime, json!({}), json!({}))
+        clankcord::views::health::dashboard_health_payload(&runtime, json!({}), json!({}))
             .await
             .unwrap();
     let latency_rows = overview["operations"]["latencies"]["byKind"]
