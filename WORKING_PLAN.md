@@ -13,26 +13,26 @@ green. Tests file by purpose category; regression pins cite fix commits.
 
 ### Wave 1 — loud failures, canonical predicates
 
-- [ ] 1. `JobState::is_failed()` beside `is_terminal`/`is_cancellable`; delete
+- [x] 1. `JobState::is_failed()` beside `is_terminal`/`is_cancellable`; delete
   the operations.rs substring heuristic and its OR-fallback over the persisted
   column; dashboard SQL filters on the persisted `failed`/`terminal` columns;
   one definition of "active" everywhere.
-- [ ] 2. Dispatcher finalizers propagate store-read errors instead of writing a
+- [x] 2. Dispatcher finalizers propagate store-read errors instead of writing a
   stale in-memory snapshot back over the row (dispatcher.rs ×4,
   tasks.rs `unwrap_or(job)`).
-- [ ] 3. `due_job_kinds` fails loud on an unparseable kind; scheduler drain
+- [x] 3. `due_job_kinds` fails loud on an unparseable kind; scheduler drain
   report becomes a typed struct (deletes the untyped `exhausted`/
   `totalScheduled` control flow and the dead fallback re-derivation);
   job-lane capacity clamps defined once.
-- [ ] 4. Transcript publication fails loud when the draft artifact our own
+- [x] 4. Transcript publication fails loud when the draft artifact our own
   store recorded is missing; `read_json_file` deleted (sole caller inlined,
   loud).
-- [ ] 5. Infallible internal serialization loses its `json!({})` fallbacks;
+- [x] 5. Infallible internal serialization loses its `json!({})` fallbacks;
   control_state propagates `append_event` errors in all four functions.
 
 ### Wave 2 — durable contract
 
-- [ ] 6. `removed_boolean_slot` deleted from the payload encoding — a
+- [x] 6. `removed_boolean_slot` deleted from the payload encoding — a
   compatibility shim on a durable contract. If the current blob version is
   still unreleased, amend it in place through the existing migration; else
   bump the blob version with a new migration. Wire-mirror tests updated to
