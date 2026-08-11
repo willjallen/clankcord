@@ -6,6 +6,7 @@ mod support;
 
 mod automation_voice_state;
 mod cli_inputs;
+mod job_state_classification;
 mod orphan_voice_presence;
 mod query_limits;
 mod session_threads;
