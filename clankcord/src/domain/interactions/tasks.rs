@@ -94,7 +94,7 @@ const AWAIT_DELIVERY_POLL_MS: i64 = 2000;
 /// indicators are lineage-only children and never gate completion.
 pub(crate) async fn dispatch_claimed_agent_task_job(ctx: &Ctx, job: Job) -> Result<Value> {
     let job_id = job.id.clone();
-    let latest = ctx.store.get_job(&job_id).await.unwrap_or(job);
+    let latest = ctx.store.get_job(&job_id).await?;
     let task = latest
         .metadata
         .agent_task()
@@ -183,7 +183,7 @@ async fn resolve_agent_task_delivery(
         }));
     }
     if deliveries.iter().any(|child| !child.state.is_terminal()) {
-        return dispatcher::wait_dispatched_job(ctx, &job_id, latest, Vec::new()).await;
+        return dispatcher::wait_dispatched_job(ctx, &job_id, Vec::new()).await;
     }
     let deadline = parse_instant(&task.await_delivery_until);
     if deadline.is_some_and(|deadline| utc_now() < deadline) {

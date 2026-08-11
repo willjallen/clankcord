@@ -22,8 +22,8 @@ where
 {
     let job_id = running.id.clone();
     match routes::execute(ctx, &running, external_api).await {
-        Ok(decision) => apply_job_decision(ctx, &job_id, running, decision).await,
-        Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
+        Ok(decision) => apply_job_decision(ctx, &job_id, decision).await,
+        Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
     }
 }
 
@@ -31,40 +31,38 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
     let job_id = running.id.clone();
     match running.kind {
         JobKind::WakeProbe => match routes::execute_wake_probe(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, running, result).await,
-            Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
+            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
+            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
         },
         JobKind::AudioSegment => match routes::execute_audio_segment(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, running, result).await,
+            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
             Err(error) if segments::is_retryable_audio_segment_error(&error) => {
                 let retry = segments::retry_plan(error);
                 requeue_dispatched_job(
                     ctx,
                     &job_id,
-                    running,
                     retry.delay_for_attempt,
                     retry.error,
                     retry.log_prefix,
                 )
                 .await
             }
-            Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
+            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
         },
         JobKind::TranscriptionMux => match routes::execute_transcription_mux(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, running, result).await,
+            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
             Err(error) if segments::is_retryable_audio_segment_error(&error) => {
                 let retry = segments::retry_plan(error);
                 requeue_dispatched_job(
                     ctx,
                     &job_id,
-                    running,
                     retry.delay_for_attempt,
                     retry.error,
                     retry.log_prefix,
                 )
                 .await
             }
-            Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
+            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
         },
         JobKind::AgentTask => tasks::dispatch_claimed_agent_task_job(ctx, running).await,
         JobKind::AgentThreadTitleRefresh => {
@@ -80,8 +78,8 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
                 ),
             };
             match decision {
-                Ok(decision) => apply_job_decision(ctx, &job_id, running, decision).await,
-                Err(error) => fail_dispatched_job(ctx, &job_id, running, error).await,
+                Ok(decision) => apply_job_decision(ctx, &job_id, decision).await,
+                Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
             }
         }
         kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
@@ -91,33 +89,24 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
 pub(crate) async fn apply_job_decision(
     ctx: &Ctx,
     job_id: &str,
-    fallback_job: Job,
     decision: JobDecision,
 ) -> Result<Value> {
     match decision {
-        JobDecision::Complete(output) => {
-            complete_dispatched_job(ctx, job_id, fallback_job, output).await
-        }
+        JobDecision::Complete(output) => complete_dispatched_job(ctx, job_id, output).await,
         JobDecision::Fail(failure) => {
-            fail_dispatched_job(ctx, job_id, fallback_job, anyhow::anyhow!(failure.message)).await
+            fail_dispatched_job(ctx, job_id, anyhow::anyhow!(failure.message)).await
         }
-        JobDecision::Wait => wait_dispatched_job(ctx, job_id, fallback_job, Vec::new()).await,
-        JobDecision::WaitFor(children) => {
-            wait_dispatched_job(ctx, job_id, fallback_job, children).await
-        }
+        JobDecision::Wait => wait_dispatched_job(ctx, job_id, Vec::new()).await,
+        JobDecision::WaitFor(children) => wait_dispatched_job(ctx, job_id, children).await,
     }
 }
 
 pub(crate) async fn complete_dispatched_job(
     ctx: &Ctx,
     job_id: &str,
-    fallback_job: Job,
     output: JobOutput,
 ) -> Result<Value> {
-    let mut latest = match ctx.store.get_job(job_id).await {
-        Ok(job) => job,
-        Err(_) => fallback_job.clone(),
-    };
+    let mut latest = ctx.store.get_job(job_id).await?;
     latest.metadata.output = Some(output.clone());
     if latest.state != JobState::Waiting
         && latest.state != JobState::Queued
@@ -132,13 +121,9 @@ pub(crate) async fn complete_dispatched_job(
 pub(crate) async fn wait_dispatched_job(
     ctx: &Ctx,
     job_id: &str,
-    fallback_job: Job,
     children: Vec<Job>,
 ) -> Result<Value> {
-    let latest = match ctx.store.get_job(job_id).await {
-        Ok(job) => job,
-        Err(_) => fallback_job.clone(),
-    };
+    let latest = ctx.store.get_job(job_id).await?;
     let mut child_ids = Vec::new();
     if children.is_empty() {
         let mut waiting = latest.clone();
@@ -158,14 +143,10 @@ pub(crate) async fn wait_dispatched_job(
 pub(crate) async fn fail_dispatched_job(
     ctx: &Ctx,
     job_id: &str,
-    fallback_job: Job,
     error: anyhow::Error,
 ) -> Result<Value> {
     let error_text = error.to_string();
-    let mut latest = match ctx.store.get_job(job_id).await {
-        Ok(job) => job,
-        Err(_) => fallback_job.clone(),
-    };
+    let mut latest = ctx.store.get_job(job_id).await?;
     latest.set_state(JobState::Failed);
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
@@ -176,15 +157,11 @@ pub(crate) async fn fail_dispatched_job(
 pub(crate) async fn requeue_dispatched_job(
     ctx: &Ctx,
     job_id: &str,
-    fallback_job: Job,
     delay_for_attempt: fn(i64) -> chrono::Duration,
     error_text: String,
     log_prefix: &'static str,
 ) -> Result<Value> {
-    let mut latest = match ctx.store.get_job(job_id).await {
-        Ok(job) => job,
-        Err(_) => fallback_job.clone(),
-    };
+    let mut latest = ctx.store.get_job(job_id).await?;
     latest.attempts = latest.attempts.saturating_add(1);
     latest.set_state(JobState::Queued);
     latest.started_at = None;
