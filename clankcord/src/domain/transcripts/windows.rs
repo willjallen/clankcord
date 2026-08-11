@@ -8,7 +8,6 @@ use crate::Result;
 use crate::domain::Ctx;
 use crate::domain::rooms::catalog;
 use crate::domain::transcripts::publication;
-use crate::errors::discord_tool_error;
 use crate::time::{parse_instant, resolve_time_reference, utc_now};
 use crate::util::{first_non_empty, non_empty, string_field};
 
@@ -117,9 +116,9 @@ pub async fn forget(ctx: &Ctx, request: ForgetRequest) -> Result<Value> {
             string_field(&window, "guild_id"),
             string_field(&window, "voice_channel_id"),
             parse_instant(&string_field(&window, "start_time"))
-                .ok_or_else(|| discord_tool_error("invalid forget window"))?,
+                .ok_or_else(|| anyhow::anyhow!("invalid forget window"))?,
             parse_instant(&string_field(&window, "end_time"))
-                .ok_or_else(|| discord_tool_error("invalid forget window"))?,
+                .ok_or_else(|| anyhow::anyhow!("invalid forget window"))?,
         )
     } else {
         let guild_id = request.guild_id;
@@ -129,12 +128,12 @@ pub async fn forget(ctx: &Ctx, request: ForgetRequest) -> Result<Value> {
             guild_id,
             channel_id,
             resolve_time_reference(&non_empty(request.since, "-10m".to_string()), Some(now))
-                .ok_or_else(|| discord_tool_error("invalid forget start"))?,
+                .ok_or_else(|| anyhow::anyhow!("invalid forget start"))?,
             resolve_time_reference(&request.to, Some(now)).unwrap_or(now),
         )
     };
     if guild_id.is_empty() || channel_id.is_empty() {
-        return Err(discord_tool_error("invalid forget window"));
+        return Err(anyhow::anyhow!("invalid forget window"));
     }
     ctx.store
         .apply_forget(

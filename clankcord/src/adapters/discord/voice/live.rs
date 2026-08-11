@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use crate::Result;
+use crate::adapters::discord::error::discord_tool_error;
 use crate::adapters::discord::voice::capture::{CaptureUser, LiveCaptureSession, VoiceData};
 use crate::adapters::discord::voice::client_connection::{
     BotPresenceProbe, DiscordVoiceClient, collect_guild_voice_states, describe_error,
@@ -20,7 +21,6 @@ use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::config::{local_tz, transcription_config};
 use crate::engine::JobBus;
-use crate::errors::discord_tool_error;
 use crate::model::job::{
     DiscordVoiceDeafenOutput, DiscordVoiceDeafenPayload, DiscordVoiceJoinOutput,
     DiscordVoiceJoinPayload, DiscordVoiceLeaveOutput, DiscordVoiceLeavePayload,

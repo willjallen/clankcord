@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::adapters::discord::api::{get_channel, iter_channel_messages};
-use crate::errors::discord_tool_error;
+use crate::adapters::discord::error::discord_tool_error;
 use crate::util::{first_non_empty, string_field};
 
 #[derive(Debug, clap::Args)]

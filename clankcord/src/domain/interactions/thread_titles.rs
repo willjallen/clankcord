@@ -9,6 +9,7 @@ use super::prompts::{
 };
 use crate::Result;
 use crate::adapters::codex::codex_response_text;
+use crate::adapters::discord::error::discord_error_text_is_unavailable_channel;
 use crate::config;
 use crate::domain::Ctx;
 use crate::domain::agents::{
@@ -21,7 +22,6 @@ use crate::domain::messaging::session_threads::{
 };
 use crate::domain::rooms::catalog;
 use crate::engine::JobDecision;
-use crate::errors::discord_error_text_is_unavailable_channel;
 use crate::model::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::model::job::{
     AgentThreadTitleRefreshPayload, DiscordForumThreadRenamePayload, Job, JobKind, JobOutput,

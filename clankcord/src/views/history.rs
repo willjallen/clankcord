@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use crate::Result;
-use crate::errors::discord_tool_error;
 use crate::store::{TimelineStore, event_text};
 use crate::time::{isoformat_z, parse_instant, resolve_time_reference, utc_now};
 
@@ -148,10 +147,10 @@ pub async fn timeline_tail(ctx: &Ctx, request: TimelineTailRequest) -> Result<Va
 pub async fn timeline_range(ctx: &Ctx, request: TimelineRangeRequest) -> Result<Value> {
     let guild_id = request.guild_id;
     let start = resolve_time_reference(&request.from, None)
-        .ok_or_else(|| discord_tool_error("guild and from are required"))?;
+        .ok_or_else(|| anyhow::anyhow!("guild and from are required"))?;
     let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
     if guild_id.is_empty() {
-        return Err(discord_tool_error("guild and from are required"));
+        return Err(anyhow::anyhow!("guild and from are required"));
     }
     let channel_id = request.channel_id;
     let all_channels = request.all_channels;
@@ -201,9 +200,9 @@ pub async fn render_transcript(ctx: &Ctx, request: RenderTranscriptRequest) -> R
         let guild_id = string_field(&window, "guild_id");
         let channel_id = string_field(&window, "voice_channel_id");
         let start = parse_instant(&string_field(&window, "start_time"))
-            .ok_or_else(|| discord_tool_error("invalid transcript window start"))?;
+            .ok_or_else(|| anyhow::anyhow!("invalid transcript window start"))?;
         let end = parse_instant(&string_field(&window, "end_time"))
-            .ok_or_else(|| discord_tool_error("invalid transcript window end"))?;
+            .ok_or_else(|| anyhow::anyhow!("invalid transcript window end"))?;
         (window, guild_id, channel_id, start, end)
     } else {
         let guild_id = request.guild_id;
@@ -214,7 +213,7 @@ pub async fn render_transcript(ctx: &Ctx, request: RenderTranscriptRequest) -> R
             &first_non_empty([request.since, request.from, "-1h".to_string()]),
             Some(now),
         )
-        .ok_or_else(|| discord_tool_error("invalid transcript start"))?;
+        .ok_or_else(|| anyhow::anyhow!("invalid transcript start"))?;
         let end = resolve_time_reference(&request.to, Some(now)).unwrap_or(now);
         (
             Value::Object(Map::new()),
@@ -260,7 +259,7 @@ pub async fn search_transcripts(ctx: &Ctx, request: SearchTranscriptsRequest) ->
         channel_id = room.channel_id;
     }
     if guild_id.is_empty() {
-        return Err(discord_tool_error("guild is required"));
+        return Err(anyhow::anyhow!("guild is required"));
     }
     if !channel_id.is_empty() && !all_channels {
         let room = catalog::resolve_room_scope(ctx, &guild_id, Some(&channel_id)).await?;
@@ -297,7 +296,7 @@ pub async fn list_conversations(ctx: &Ctx, request: ListConversationsRequest) ->
         channel_id = room.channel_id;
     }
     if guild_id.is_empty() {
-        return Err(discord_tool_error("guild is required"));
+        return Err(anyhow::anyhow!("guild is required"));
     }
     let since = resolve_time_reference(&non_empty(request.since, "-2d".to_string()), None);
     let conversations = ctx
@@ -319,10 +318,10 @@ pub async fn participant_trace(ctx: &Ctx, request: ParticipantTraceRequest) -> R
     let guild_id = request.guild_id;
     let user_id = request.user_id;
     let start = resolve_time_reference(&request.from, None)
-        .ok_or_else(|| discord_tool_error("guild, user, and from are required"))?;
+        .ok_or_else(|| anyhow::anyhow!("guild, user, and from are required"))?;
     let end = resolve_time_reference(&request.to, None).unwrap_or_else(utc_now);
     if guild_id.is_empty() || user_id.is_empty() {
-        return Err(discord_tool_error("guild, user, and from are required"));
+        return Err(anyhow::anyhow!("guild, user, and from are required"));
     }
     let trace = ctx
         .store
@@ -342,7 +341,7 @@ pub async fn context_resolve(ctx: &Ctx, request: ContextResolveRequest) -> Resul
     let channel_id = request.channel_id;
     let reference = request.reference;
     if guild_id.is_empty() || channel_id.is_empty() || reference.is_empty() {
-        return Err(discord_tool_error(
+        return Err(anyhow::anyhow!(
             "guild, channel, and reference are required",
         ));
     }

@@ -1,11 +1,11 @@
 use serde_json::json;
 
 use crate::Result;
-use crate::domain::Ctx;
-use crate::errors::{
+use crate::adapters::discord::error::{
     discord_error_channel_id, discord_error_is_unavailable_channel, discord_error_text_channel_id,
     discord_error_text_is_unavailable_channel,
 };
+use crate::domain::Ctx;
 use crate::model::agents::{AgentSessionRecord, AgentSessionRecordState};
 use crate::model::job::{Job, TextTarget, TextTargetKind};
 use crate::util::{first_non_empty, preview};

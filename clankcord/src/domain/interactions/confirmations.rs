@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::domain::interactions::requires_confirmation;
 use crate::engine::JobDecision;
-use crate::errors::discord_tool_error;
 use crate::model::job::{
     BinaryPayload, CommandRequest, ConfirmationContext, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextDeliveryKind, TextTarget, TextTargetKind,
@@ -80,7 +79,7 @@ pub(crate) async fn execute_confirmation_required_job(ctx: &Ctx, job: &Job) -> R
     let command = job
         .command()
         .cloned()
-        .ok_or_else(|| discord_tool_error("confirmation job has no command payload"))?;
+        .ok_or_else(|| anyhow::anyhow!("confirmation job has no command payload"))?;
     let sensitive = requires_confirmation(command.command_kind.as_str());
     let delivery = if sensitive { "dm" } else { "channel" };
     let requested_user_id = first_non_empty([
@@ -255,21 +254,21 @@ pub async fn confirmation_card_content(
 pub async fn approve_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String) -> Result<Value> {
     let mut job = ctx.store.get_job(job_id).await?;
     if job.kind != JobKind::ConfirmationRequired {
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "job {job_id} is not a pending confirmation"
-        )));
+        ));
     }
     if !matches!(job.state, JobState::Queued | JobState::ConfirmationPending) {
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "job {job_id} confirmation is already {}",
             job.state
-        )));
+        ));
     }
     require_confirmation_actor(&job, &actor_user_id)?;
     let mut command = job
         .command()
         .cloned()
-        .ok_or_else(|| discord_tool_error(format!("job {job_id} has no command payload")))?;
+        .ok_or_else(|| anyhow::anyhow!("job {job_id} has no command payload"))?;
     command.clear_confirmation_requirement(actor_user_id.clone());
     job.set_state(JobState::Approved);
     {
@@ -317,15 +316,15 @@ pub async fn approve_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String
 pub async fn cancel_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String) -> Result<Value> {
     let mut job = ctx.store.get_job(job_id).await?;
     if job.kind != JobKind::ConfirmationRequired {
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "job {job_id} is not a pending confirmation"
-        )));
+        ));
     }
     if !matches!(job.state, JobState::Queued | JobState::ConfirmationPending) {
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "job {job_id} confirmation is already {}",
             job.state
-        )));
+        ));
     }
     require_confirmation_actor(&job, &actor_user_id)?;
     job.mark_cancelled();
@@ -337,7 +336,7 @@ pub async fn cancel_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String)
 fn require_confirmation_actor(job: &Job, actor_user_id: &str) -> Result<()> {
     let expected = job.requested_by_user_id.trim();
     if !expected.is_empty() && actor_user_id.trim() != expected {
-        return Err(discord_tool_error(
+        return Err(anyhow::anyhow!(
             "only the requesting user can approve or cancel this confirmation",
         ));
     }

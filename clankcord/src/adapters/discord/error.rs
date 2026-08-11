@@ -1,3 +1,7 @@
+//! Discord API failure classification: the typed error the Discord
+//! adapter raises and the text-form classifiers domain retry logic uses
+//! on persisted error strings.
+
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone)]

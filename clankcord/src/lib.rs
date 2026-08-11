@@ -6,7 +6,6 @@ pub mod config;
 pub mod dashboard;
 pub mod domain;
 pub mod engine;
-pub mod errors;
 pub mod model;
 pub mod ports;
 pub mod store;

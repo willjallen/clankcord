@@ -10,7 +10,6 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::errors::discord_tool_error;
 use crate::model::rooms::RoomConfig;
 
 pub const CONFIG_PATH: &str = "config.toml";
@@ -608,7 +607,7 @@ pub fn raw_voice_bot_token_lines() -> Result<Vec<String>> {
 pub fn wake_url() -> Result<String> {
     let base_url = app_config().wake.base_url.trim().trim_end_matches('/');
     if base_url.is_empty() {
-        return Err(discord_tool_error("config.toml wake.base_url is not set"));
+        return Err(anyhow::anyhow!("config.toml wake.base_url is not set"));
     }
     if base_url.ends_with("/audio/wake") {
         Ok(base_url.to_string())
@@ -750,9 +749,9 @@ pub fn active_transcription_source() -> Result<NamedTranscriptionSourceConfig> {
 pub fn transcription_source(source_id: &str) -> Result<NamedTranscriptionSourceConfig> {
     let source_id = source_id.trim();
     let Some(source) = app_config().transcription.sources.get(source_id) else {
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "config.toml transcription source `{source_id}` is not defined"
-        )));
+        ));
     };
     Ok(NamedTranscriptionSourceConfig {
         id: source_id.to_string(),

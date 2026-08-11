@@ -8,7 +8,6 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::adapters::discord::messages::{read as read_messages, search as search_messages};
-use crate::errors::discord_tool_error;
 
 const CLI_AFTER_HELP: &str = r#"Common agent workflows:
   Inspect recent memory:      clankcord timeline tail --since=-10m --file timeline.json --format json
@@ -1551,7 +1550,7 @@ fn required_room_target(
         .or(room)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| discord_tool_error(format!("{command} requires ROOM or --channel")))
+        .ok_or_else(|| anyhow::anyhow!("{command} requires ROOM or --channel"))
 }
 
 fn pause(args: PauseArgs) -> Result<i32> {
@@ -1642,7 +1641,7 @@ fn api_request(
     let mut request = match method {
         "GET" => client.get(&url),
         "POST" => client.post(&url),
-        other => return Err(discord_tool_error(format!("unsupported method: {other}"))),
+        other => return Err(anyhow::anyhow!("unsupported method: {other}")),
     };
     let query = query_pairs(params.as_ref());
     if !query.is_empty() {
@@ -1656,11 +1655,11 @@ fn api_request(
     let text = response.text()?;
     if !status.is_success() {
         let detail = text.split_whitespace().collect::<Vec<_>>().join(" ");
-        return Err(discord_tool_error(format!(
+        return Err(anyhow::anyhow!(
             "clankcord runtime API {method} {path} failed ({}): {}",
             status.as_u16(),
             detail.chars().take(500).collect::<String>()
-        )));
+        ));
     }
     if text.trim().is_empty() {
         return Ok(json!({}));
@@ -1716,7 +1715,7 @@ fn emit_transcript_render_output(payload: Value, output: &OutputArgs) -> Result<
     match output.format.trim() {
         "" | "json" => emit_output(payload, output),
         "markdown" => emit_markdown_transcript(payload, output),
-        _ => Err(discord_tool_error(
+        _ => Err(anyhow::anyhow!(
             "--format must be json or markdown for transcript render",
         )),
     }
@@ -1725,7 +1724,7 @@ fn emit_transcript_render_output(payload: Value, output: &OutputArgs) -> Result<
 fn ensure_transcript_render_format(format: &str) -> Result<()> {
     match format.trim() {
         "" | "json" | "markdown" => Ok(()),
-        _ => Err(discord_tool_error(
+        _ => Err(anyhow::anyhow!(
             "--format must be json or markdown for transcript render",
         )),
     }
@@ -1768,7 +1767,7 @@ fn ensure_json_format(format: &str) -> Result<()> {
     if format.trim().is_empty() || format.trim() == "json" {
         Ok(())
     } else {
-        Err(discord_tool_error(
+        Err(anyhow::anyhow!(
             "--format json is the only supported format",
         ))
     }

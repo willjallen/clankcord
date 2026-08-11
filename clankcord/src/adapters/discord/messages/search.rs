@@ -9,7 +9,7 @@ use crate::adapters::discord::api::{
     list_active_guild_threads, list_forum_threads, list_guild_channels,
     list_public_archived_threads,
 };
-use crate::errors::discord_tool_error;
+use crate::adapters::discord::error::discord_tool_error;
 use crate::util::{non_empty, string_field};
 
 #[derive(Debug, clap::Args)]

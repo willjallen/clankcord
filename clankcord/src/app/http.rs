@@ -469,9 +469,7 @@ async fn room_occupants(
     let guild = query_str(&query, &["guild", "guildId"]);
     let channel = query_str(&query, &["channel", "channelId", "room"]);
     if guild.is_empty() || channel.is_empty() {
-        return err(crate::errors::discord_tool_error(
-            "guild and room/channel are required",
-        ));
+        return err(anyhow::anyhow!("guild and room/channel are required",));
     }
     match catalog::resolve_room_scope(&runtime, &guild, Some(&channel)).await {
         Ok(room) => match state
@@ -910,9 +908,7 @@ async fn agent_sessions_sunset(
     Json(payload): Json<AgentSessionSunsetBody>,
 ) -> Response {
     if payload.reason.trim().is_empty() {
-        return err(crate::errors::discord_tool_error(
-            "agent session sunset requires reason",
-        ));
+        return err(anyhow::anyhow!("agent session sunset requires reason",));
     }
     result(
         state

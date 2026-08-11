@@ -3,7 +3,6 @@ use serde_json::{Value, json};
 use crate::Result;
 use crate::config;
 use crate::domain::Ctx;
-use crate::errors::discord_tool_error;
 
 #[derive(Debug, Clone, Default)]
 pub struct MemberSearchRequest {
@@ -131,7 +130,7 @@ async fn ensure_member_cache(ctx: &Ctx, guild_id: &str) -> Result<Value> {
 fn require_guild(guild_id: String) -> Result<String> {
     let guild_id = guild_id.trim().to_string();
     if guild_id.is_empty() {
-        Err(discord_tool_error("guild is required"))
+        Err(anyhow::anyhow!("guild is required"))
     } else {
         Ok(guild_id)
     }

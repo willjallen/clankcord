@@ -1,4 +1,4 @@
-use clankcord::errors::{
+use clankcord::adapters::discord::error::{
     DiscordToolError, discord_api_error, discord_error_channel_id,
     discord_error_is_unavailable_channel, discord_error_text_channel_id,
     discord_error_text_is_unavailable_channel,

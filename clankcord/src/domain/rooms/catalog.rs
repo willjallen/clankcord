@@ -1,7 +1,6 @@
 use std::collections::BTreeSet;
 
 use crate::Result;
-use crate::errors::discord_tool_error;
 
 use crate::domain::Ctx;
 use crate::model::rooms::RoomConfig;
@@ -117,8 +116,8 @@ pub async fn room_for_identifier(ctx: &Ctx, identifier: Option<&str>) -> Result<
     if wanted.is_empty() {
         return match rooms.as_slice() {
             [room] => Ok(room.clone()),
-            [] => Err(discord_tool_error("room is required")),
-            _ => Err(discord_tool_error("room is required")),
+            [] => Err(anyhow::anyhow!("room is required")),
+            _ => Err(anyhow::anyhow!("room is required")),
         };
     }
     let exact = rooms
@@ -129,7 +128,7 @@ pub async fn room_for_identifier(ctx: &Ctx, identifier: Option<&str>) -> Result<
     match exact.as_slice() {
         [room] => return Ok(room.clone()),
         [] => {}
-        _ => return Err(discord_tool_error(format!("room is ambiguous: {wanted}"))),
+        _ => return Err(anyhow::anyhow!("room is ambiguous: {wanted}")),
     }
     let wanted_slug = slugify(&wanted);
     let prefix = rooms
@@ -144,8 +143,8 @@ pub async fn room_for_identifier(ctx: &Ctx, identifier: Option<&str>) -> Result<
         .collect::<Vec<_>>();
     match prefix.as_slice() {
         [room] => Ok(room.clone()),
-        [] => Err(discord_tool_error(format!("unknown room: {wanted}"))),
-        _ => Err(discord_tool_error(format!("room is ambiguous: {wanted}"))),
+        [] => Err(anyhow::anyhow!("unknown room: {wanted}")),
+        _ => Err(anyhow::anyhow!("room is ambiguous: {wanted}")),
     }
 }
 

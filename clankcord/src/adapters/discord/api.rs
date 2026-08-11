@@ -5,8 +5,8 @@ use reqwest::blocking::{Client, multipart::Form};
 use serde_json::Value;
 
 use crate::Result;
+use crate::adapters::discord::error::discord_api_error;
 use crate::config::{discord_api_base, load_discord_bot_token};
-use crate::errors::discord_api_error;
 use crate::util::string_field;
 
 pub const GUILD_TEXT_CHANNEL_TYPES: &[i64] = &[0, 5];
