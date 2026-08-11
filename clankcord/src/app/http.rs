@@ -963,7 +963,13 @@ async fn jobs_list(State(state): State<AppState>, Query(query): Query<BTreeQuery
 }
 
 async fn jobs_run_due(State(state): State<AppState>) -> Response {
-    result(state.handle.drain_ready_jobs().await)
+    result(
+        state
+            .handle
+            .drain_ready_jobs()
+            .await
+            .map(|report| report.to_json()),
+    )
 }
 
 async fn jobs_get(

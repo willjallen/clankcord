@@ -29,14 +29,94 @@ where
 }
 
 struct JobLanes {
-    wake: Arc<Semaphore>,
-    audio_segment: Arc<Semaphore>,
-    transcription_mux: Arc<Semaphore>,
-    voice_control: Arc<Semaphore>,
-    discord_text: Arc<Semaphore>,
-    agent: Arc<Semaphore>,
-    maintenance: Arc<Semaphore>,
-    async_jobs: Arc<Semaphore>,
+    wake: Lane,
+    audio_segment: Lane,
+    transcription_mux: Lane,
+    voice_control: Lane,
+    discord_text: Lane,
+    agent: Lane,
+    maintenance: Lane,
+    async_jobs: Lane,
+}
+
+/// A lane's semaphore and the capacity it was built with. Capacity lives
+/// beside the semaphore so idle-waits acquire exactly the permits that
+/// exist, whatever the config says by the time they run.
+struct Lane {
+    semaphore: Arc<Semaphore>,
+    capacity: usize,
+}
+
+impl Lane {
+    fn new(capacity: usize) -> Self {
+        Self {
+            semaphore: Arc::new(Semaphore::new(capacity)),
+            capacity,
+        }
+    }
+}
+
+/// One drain cycle over the dispatch passes: typed control flow for the
+/// dispatch loop, serialized only at the HTTP edge.
+pub struct DrainReport {
+    pub exhausted: bool,
+    total_timed_out_running: usize,
+    total_resolved: usize,
+    total_scheduled: usize,
+    passes: Vec<Value>,
+}
+
+impl DrainReport {
+    pub fn to_json(&self) -> Value {
+        json!({
+            "ok": true,
+            "passes": self.passes,
+            "totalTimedOutRunningJobs": self.total_timed_out_running,
+            "totalResolvedWaiting": self.total_resolved,
+            "totalScheduled": self.total_scheduled,
+            "exhausted": self.exhausted,
+        })
+    }
+}
+
+struct ScheduleRound {
+    per_kind: Vec<(JobKind, KindSchedule)>,
+}
+
+struct KindSchedule {
+    scheduled: usize,
+    available_permits: usize,
+    active_ordering_keys: usize,
+    lane: &'static str,
+}
+
+impl ScheduleRound {
+    fn total_scheduled(&self) -> usize {
+        self.per_kind
+            .iter()
+            .map(|(_, schedule)| schedule.scheduled)
+            .sum()
+    }
+
+    fn to_json(&self) -> Value {
+        let mut object = Map::new();
+        for (kind, schedule) in &self.per_kind {
+            object.insert(
+                kind.as_str().to_string(),
+                json!({
+                    "scheduled": schedule.scheduled,
+                    "availablePermits": schedule.available_permits,
+                    "activeOrderingKeys": schedule.active_ordering_keys,
+                    "lane": schedule.lane,
+                }),
+            );
+        }
+        object.insert(
+            "totalScheduled".to_string(),
+            json!(self.total_scheduled()),
+        );
+        Value::Object(object)
+    }
 }
 
 impl<E> RuntimeExecutor<E>
@@ -63,25 +143,20 @@ where
     /// Schedules every kind with a due queued row. Iterating kinds reported
     /// by Postgres (instead of a hardcoded table) means a queued job of any
     /// kind is always considered — a kind cannot be silently unschedulable.
-    pub(crate) async fn schedule_due_jobs(&self) -> Result<Value> {
-        let mut scheduled = Map::new();
+    async fn schedule_due_jobs(&self) -> Result<ScheduleRound> {
+        let mut per_kind = Vec::new();
         let due_kinds = self.timeline_store.due_job_kinds().await?;
         for kind in due_kinds {
-            scheduled.insert(kind.as_str().to_string(), self.schedule_kind(kind).await?);
+            per_kind.push((kind, self.schedule_kind(kind).await?));
         }
-        let total_scheduled = scheduled
-            .values()
-            .map(scheduled_count_for_kind)
-            .sum::<usize>();
-        scheduled.insert("totalScheduled".to_string(), json!(total_scheduled));
-        Ok(Value::Object(scheduled))
+        Ok(ScheduleRound { per_kind })
     }
 
     pub(crate) async fn next_queued_job_ready_at(&self) -> Result<Option<DateTime<Utc>>> {
         self.timeline_store.next_queued_job_ready_at().await
     }
 
-    pub(crate) async fn drain_ready_jobs(&self) -> Result<Value> {
+    pub(crate) async fn drain_ready_jobs(&self) -> Result<DrainReport> {
         let max_passes = dispatch_drain_max_passes();
         let mut passes = Vec::new();
         let mut total_timed_out_running = 0usize;
@@ -102,7 +177,7 @@ where
             .await?;
             let resolved_waiting = self.timeline_store.resolve_waiting_jobs().await?;
             let scheduled = self.schedule_due_jobs().await?;
-            let scheduled_count = scheduled_job_count(&scheduled);
+            let scheduled_count = scheduled.total_scheduled();
             let timed_out_count = timed_out_running_jobs.len();
             let schedule_count = schedule_submissions.len();
             let resolved_count = resolved_waiting.len();
@@ -114,7 +189,7 @@ where
                 "timedOutRunningJobs": timed_out_running_jobs,
                 "scheduleSubmissions": schedule_submissions,
                 "resolvedWaiting": resolved_waiting,
-                "scheduled": scheduled,
+                "scheduled": scheduled.to_json(),
             }));
             if timed_out_count == 0
                 && resolved_count == 0
@@ -127,14 +202,13 @@ where
             tokio::task::yield_now().await;
         }
 
-        Ok(json!({
-            "ok": true,
-            "passes": passes,
-            "totalTimedOutRunningJobs": total_timed_out_running,
-            "totalResolvedWaiting": total_resolved,
-            "totalScheduled": total_scheduled,
-            "exhausted": exhausted,
-        }))
+        Ok(DrainReport {
+            exhausted,
+            total_timed_out_running,
+            total_resolved,
+            total_scheduled,
+            passes,
+        })
     }
 
     pub(crate) async fn wait_for_voice_idle(&self, timeout: Duration) -> Value {
@@ -163,9 +237,10 @@ where
         let mut reports = Vec::new();
         let mut idle = true;
         for lane in lanes {
-            let Some((name, semaphore, capacity)) = self.lanes.lane_entry(*lane) else {
-                continue;
-            };
+            let entry = self.lanes.lane(*lane);
+            let name = lane.as_str();
+            let capacity = entry.capacity;
+            let semaphore = entry.semaphore.clone();
             let active_before = capacity.saturating_sub(semaphore.available_permits());
             if active_before == 0 {
                 reports.push(json!({
@@ -228,7 +303,7 @@ where
         })
     }
 
-    async fn schedule_kind(&self, kind: JobKind) -> Result<Value> {
+    async fn schedule_kind(&self, kind: JobKind) -> Result<KindSchedule> {
         let job_spec = spec(kind);
         let lane = self.lanes.semaphore(job_spec.lane);
         let permits = take_permits(&lane, dispatch_batch_limit(job_spec.lane));
@@ -245,12 +320,12 @@ where
                 JobExecutor::Blocking => self.spawn_blocking_job(job, permit),
             }
         }
-        Ok(json!({
-            "scheduled": count,
-            "availablePermits": lane.available_permits(),
-            "activeOrderingKeys": blocked_keys.len(),
-            "lane": job_spec.lane.as_str(),
-        }))
+        Ok(KindSchedule {
+            scheduled: count,
+            available_permits: lane.available_permits(),
+            active_ordering_keys: blocked_keys.len(),
+            lane: job_spec.lane.as_str(),
+        })
     }
 
     fn spawn_runtime_job(&self, job: Job, permit: OwnedSemaphorePermit) {
@@ -301,68 +376,32 @@ impl JobLanes {
     fn from_config() -> Self {
         let concurrency = config::job_concurrency();
         Self {
-            wake: Arc::new(Semaphore::new(concurrency.wake.clamp(1, 32))),
-            audio_segment: Arc::new(Semaphore::new(concurrency.audio_segment.clamp(1, 128))),
-            transcription_mux: Arc::new(Semaphore::new(
-                config::transcription_mux_provider_streams(),
-            )),
-            voice_control: Arc::new(Semaphore::new(concurrency.voice_control.clamp(1, 128))),
-            discord_text: Arc::new(Semaphore::new(concurrency.discord_text.clamp(1, 64))),
-            agent: Arc::new(Semaphore::new(concurrency.agent.clamp(1, 32))),
-            maintenance: Arc::new(Semaphore::new(concurrency.maintenance.clamp(1, 1))),
-            async_jobs: Arc::new(Semaphore::new(concurrency.general_async.clamp(1, 128))),
+            wake: Lane::new(concurrency.wake.clamp(1, 32)),
+            audio_segment: Lane::new(concurrency.audio_segment.clamp(1, 128)),
+            transcription_mux: Lane::new(config::transcription_mux_provider_streams()),
+            voice_control: Lane::new(concurrency.voice_control.clamp(1, 128)),
+            discord_text: Lane::new(concurrency.discord_text.clamp(1, 64)),
+            agent: Lane::new(concurrency.agent.clamp(1, 32)),
+            maintenance: Lane::new(concurrency.maintenance.clamp(1, 1)),
+            async_jobs: Lane::new(concurrency.general_async.clamp(1, 128)),
+        }
+    }
+
+    fn lane(&self, lane: JobLane) -> &Lane {
+        match lane {
+            JobLane::GeneralAsync => &self.async_jobs,
+            JobLane::VoiceControl => &self.voice_control,
+            JobLane::DiscordText => &self.discord_text,
+            JobLane::Wake => &self.wake,
+            JobLane::AudioSegment => &self.audio_segment,
+            JobLane::TranscriptionMux => &self.transcription_mux,
+            JobLane::Agent => &self.agent,
+            JobLane::Maintenance => &self.maintenance,
         }
     }
 
     fn semaphore(&self, lane: JobLane) -> Arc<Semaphore> {
-        match lane {
-            JobLane::GeneralAsync => self.async_jobs.clone(),
-            JobLane::VoiceControl => self.voice_control.clone(),
-            JobLane::DiscordText => self.discord_text.clone(),
-            JobLane::Wake => self.wake.clone(),
-            JobLane::AudioSegment => self.audio_segment.clone(),
-            JobLane::TranscriptionMux => self.transcription_mux.clone(),
-            JobLane::Agent => self.agent.clone(),
-            JobLane::Maintenance => self.maintenance.clone(),
-        }
-    }
-
-    fn lane_entry(&self, lane: JobLane) -> Option<(&'static str, Arc<Semaphore>, usize)> {
-        let concurrency = config::job_concurrency();
-        Some(match lane {
-            JobLane::GeneralAsync => (
-                "general_async",
-                self.async_jobs.clone(),
-                concurrency.general_async.clamp(1, 128),
-            ),
-            JobLane::VoiceControl => (
-                "voice_control",
-                self.voice_control.clone(),
-                concurrency.voice_control.clamp(1, 128),
-            ),
-            JobLane::DiscordText => (
-                "discord_text",
-                self.discord_text.clone(),
-                concurrency.discord_text.clamp(1, 64),
-            ),
-            JobLane::Wake => ("wake", self.wake.clone(), concurrency.wake.clamp(1, 32)),
-            JobLane::AudioSegment => (
-                "audio_segment",
-                self.audio_segment.clone(),
-                concurrency.audio_segment.clamp(1, 128),
-            ),
-            JobLane::TranscriptionMux => (
-                "transcription_mux",
-                self.transcription_mux.clone(),
-                config::transcription_mux_provider_streams(),
-            ),
-            JobLane::Agent => ("agent", self.agent.clone(), concurrency.agent.clamp(1, 32)),
-            JobLane::Maintenance => (
-                "maintenance",
-                self.maintenance.clone(),
-                concurrency.maintenance.clamp(1, 1),
-            ),
-        })
+        self.lane(lane).semaphore.clone()
     }
 }
 
@@ -393,27 +432,6 @@ fn dispatch_batch_limit(lane: JobLane) -> usize {
 
 fn dispatch_drain_max_passes() -> usize {
     config::dispatch_drain_max_passes()
-}
-
-fn scheduled_job_count(report: &Value) -> usize {
-    report
-        .get("totalScheduled")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or_else(|| {
-            report
-                .as_object()
-                .map(|object| object.values().map(scheduled_count_for_kind).sum())
-                .unwrap_or(0)
-        })
-}
-
-fn scheduled_count_for_kind(value: &Value) -> usize {
-    value
-        .get("scheduled")
-        .and_then(Value::as_u64)
-        .map(|value| value as usize)
-        .unwrap_or(0)
 }
 
 fn error_chain(error: &anyhow::Error) -> String {

@@ -14,6 +14,7 @@ use crate::config;
 use crate::domain::Ctx;
 use crate::domain::interactions::commands;
 use crate::domain::interactions::tasks;
+use crate::engine::DrainReport;
 use crate::engine::JobBus;
 use crate::engine::RuntimeExecutor;
 use crate::engine::schedules;
@@ -99,7 +100,7 @@ impl RuntimeHandle {
             .await
     }
 
-    pub async fn drain_ready_jobs(&self) -> Result<Value> {
+    pub async fn drain_ready_jobs(&self) -> Result<DrainReport> {
         self.executor.drain_ready_jobs().await
     }
 
@@ -295,11 +296,7 @@ fn spawn_dispatch_loop(
             }
             match handle.drain_ready_jobs().await {
                 Ok(report) => {
-                    if report
-                        .get("exhausted")
-                        .and_then(Value::as_bool)
-                        .is_some_and(|exhausted| !exhausted)
-                    {
+                    if !report.exhausted {
                         continue;
                     }
                 }

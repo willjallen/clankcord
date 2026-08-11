@@ -11,4 +11,5 @@ pub mod schedules;
 
 pub use bus::JobBus;
 pub use decision::JobDecision;
+pub use scheduler::DrainReport;
 pub(crate) use scheduler::RuntimeExecutor;

@@ -213,9 +213,7 @@ impl TimelineStore {
         let mut kinds = BTreeSet::new();
         for row in rows {
             let raw: String = row.try_get("kind")?;
-            if let Ok(kind) = raw.parse::<crate::model::job::JobKind>() {
-                kinds.insert(kind);
-            }
+            kinds.insert(raw.parse::<crate::model::job::JobKind>()?);
         }
         Ok(kinds)
     }
