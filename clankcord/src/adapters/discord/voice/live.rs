@@ -1261,9 +1261,18 @@ impl LiveVoiceAdapter {
         let Some(session) = session else {
             return;
         };
-        let mut live_session = session.lock().await;
-        let jobs = live_session.write_voice_tick(speaking, silent);
-        drop(live_session);
+        // Tick processing encodes WAV artifacts, hashes them, and writes
+        // them to disk. That work runs on the blocking pool with an owned
+        // guard so the async workers driving every other session never
+        // stall on this session's artifact IO.
+        let mut live_session = session.lock_owned().await;
+        let jobs = tokio::task::spawn_blocking(move || {
+            let jobs = live_session.write_voice_tick(speaking, silent);
+            drop(live_session);
+            jobs
+        })
+        .await
+        .expect("voice tick worker never panics");
         for job in jobs {
             self.bus.submit_detached(job);
         }

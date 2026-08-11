@@ -78,10 +78,10 @@ green. Tests file by purpose category; regression pins cite fix commits.
 
 ### Wave 5 — views reseam
 
-- [ ] 19. One timeline-event search SQL builder and one term normalization,
+- [x] 19. One timeline-event search SQL builder and one term normalization,
   shared by transcript and dashboard search.
-- [ ] 20. One agent-session rollup implementation with one status precedence.
-- [ ] 21. Health capability kind-to-bucket mapping defined once; the
+- [x] 20. One agent-session rollup implementation with one status precedence.
+- [x] 21. Health capability kind-to-bucket mapping defined once; the
   lean/detailed failure-summary pair unified.
 - [ ] 22. operations.rs / dashboard.rs reseamed by responsibility (health,
   Postgres diagnostics, agents, timeline); imports between view modules run
@@ -94,9 +94,12 @@ green. Tests file by purpose category; regression pins cite fix commits.
   ceremony; migration if the column representation changes.
 - [ ] 24. CommandArguments fully typed: activation and friends become real
   fields; typed→JSON→typed round-trips and alias-key probing deleted.
-- [ ] 25. LiveVoiceSession.mode becomes an enum.
-- [ ] 26. Artifact IO (WAV encode, sha256, fs::write) leaves the live-session
-  mutex critical section on the voice tick path.
+- [x] 25. LiveVoiceSession.mode becomes an enum.
+- [x] 26. Voice tick processing (WAV encode, sha256, fs::write) runs on the
+  blocking pool with an owned session guard, so artifact IO never stalls
+  the async workers. Moving the IO outside the lock entirely rides with
+  the deferred voice registry inversion (session state carries artifact
+  checksums; the flush paths restructure there).
 
 ### Wave 7 — remainders
 
