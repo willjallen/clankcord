@@ -418,7 +418,7 @@ impl TimelineStore {
                 payload.remove(key);
             }
         }
-        set_default_string(&mut payload, "created_at", &isoformat_z(None));
+        set_default_string(&mut payload, "created_at", &isoformat_z(utc_now()));
         let created_at = string_value(payload.get("created_at"));
         set_default_string(&mut payload, "timestamp", &created_at);
         let kind = non_empty(
@@ -429,10 +429,10 @@ impl TimelineStore {
         set_default_string(&mut payload, "kind", &kind);
         let payload_value = Value::Object(payload.clone());
         let started_ms = event_started_ms(&payload_value)
-            .or_else(|| instant_ms_str(Some(&created_at)))
+            .or_else(|| instant_ms_str(&created_at))
             .unwrap_or_else(|| instant_ms_dt(utc_now()));
         let ended_ms = event_ended_ms(&payload_value).unwrap_or(started_ms);
-        let created_ms = instant_ms_str(Some(&created_at)).unwrap_or(started_ms);
+        let created_ms = instant_ms_str(&created_at).unwrap_or(started_ms);
         let text = event_text(&payload_value);
         let speaker = first_string(&payload, &["speaker_user_id", "speakerId", "user_id"]);
         let speaker_label = if !speaker.is_empty() || SPEECH_KINDS.contains(&kind.as_str()) {
@@ -525,13 +525,13 @@ impl TimelineStore {
         set_default_string(&mut current_object, "user_id", &user_id);
         set_default_string(&mut current_object, "userId", &user_id);
         set_default_string(&mut current_object, "speaker_user_id", &user_id);
-        set_default_string(&mut current_object, "updated_at", &isoformat_z(None));
+        set_default_string(&mut current_object, "updated_at", &isoformat_z(utc_now()));
         let current = Value::Object(current_object);
         let current_channel_id = first_value_string(
             &current,
             &["voice_channel_id", "voiceChannelId", "channelId"],
         );
-        let updated_ms = instant_ms_str(Some(&string_field(&current, "updated_at")))
+        let updated_ms = instant_ms_str(&string_field(&current, "updated_at"))
             .unwrap_or_else(|| instant_ms_dt(utc_now()));
 
         let previous = {
@@ -645,7 +645,7 @@ impl TimelineStore {
                     ("voice_channel_id", Value::String(String::new())),
                     ("voiceChannelId", Value::String(String::new())),
                     ("channelId", Value::String(String::new())),
-                    ("updated_at", Value::String(isoformat_z(None))),
+                    ("updated_at", Value::String(isoformat_z(utc_now()))),
                 ],
             );
             self.record_voice_state_update(Some(previous), current)
@@ -964,10 +964,10 @@ impl TimelineStore {
             "speakerLabel": input.speaker_label,
             "speaker_username": input.speaker_username,
             "speakerUsername": input.speaker_username,
-            "segment_start_time": isoformat_z(Some(input.segment_start_time)),
-            "startedAt": isoformat_z(Some(input.segment_start_time)),
-            "segment_end_time": isoformat_z(Some(input.segment_end_time)),
-            "endedAt": isoformat_z(Some(input.segment_end_time)),
+            "segment_start_time": isoformat_z(input.segment_start_time),
+            "startedAt": isoformat_z(input.segment_start_time),
+            "segment_end_time": isoformat_z(input.segment_end_time),
+            "endedAt": isoformat_z(input.segment_end_time),
             "text_draft": input.text_draft,
             "text": input.text_draft,
             "quality": "draft",
@@ -987,7 +987,7 @@ impl TimelineStore {
             "gap_since_previous_speech_ms": gap_ms,
             "provisional_conversation_id": conversation_id,
             "conversationId": conversation_id,
-            "created_at": isoformat_z(None)
+            "created_at": isoformat_z(utc_now())
         });
         self.append_event(&input.guild_id, &input.voice_channel_id, payload)
             .await
@@ -1034,8 +1034,8 @@ impl TimelineStore {
             "botId": voice_bot_id,
             "voice_bot_discord_user_id": voice_bot_discord_user_id,
             "botUserId": voice_bot_discord_user_id,
-            "started_at": isoformat_z(Some(started)),
-            "startedAt": isoformat_z(Some(started)),
+            "started_at": isoformat_z(started),
+            "startedAt": isoformat_z(started),
             "ended_at": Value::Null,
             "endedAt": "",
             "state": "joining",
@@ -1053,7 +1053,7 @@ impl TimelineStore {
             "capture_run_id": capture_run_id,
             "state": "joining",
             "mode": mode,
-            "assigned_at": isoformat_z(Some(started)),
+            "assigned_at": isoformat_z(started),
             "released_at": Value::Null,
             "assignment_reason": reason
         });
@@ -1119,7 +1119,7 @@ impl TimelineStore {
                 "voice_bot_id": voice_bot_id,
                 "voice_bot_discord_user_id": voice_bot_discord_user_id,
                 "voice_channel_name": voice_channel_name,
-                "assigned_at": isoformat_z(Some(started)),
+                "assigned_at": isoformat_z(started),
                 "mode": mode,
                 "assignment_reason": reason
             }),
@@ -1152,8 +1152,8 @@ impl TimelineStore {
         update_value_object(
             &mut run,
             [
-                ("ended_at", Value::String(isoformat_z(Some(ended)))),
-                ("endedAt", Value::String(isoformat_z(Some(ended)))),
+                ("ended_at", Value::String(isoformat_z(ended))),
+                ("endedAt", Value::String(isoformat_z(ended))),
                 ("state", Value::String(state.to_string())),
                 ("release_reason", Value::String(reason.to_string())),
             ],
@@ -1190,7 +1190,7 @@ impl TimelineStore {
                 "assignment_id": assignment_id,
                 "capture_run_id": capture_run_id,
                 "voice_bot_id": first_value_string(&run, &["voice_bot_id", "botId"]),
-                "released_at": isoformat_z(Some(ended)),
+                "released_at": isoformat_z(ended),
                 "release_reason": reason,
                 "state": state,
             }),
@@ -1221,22 +1221,22 @@ impl TimelineStore {
         update_value_object(
             &mut assignment,
             [
-                ("released_at", Value::String(isoformat_z(Some(released)))),
-                ("releasedAt", Value::String(isoformat_z(Some(released)))),
+                ("released_at", Value::String(isoformat_z(released))),
+                ("releasedAt", Value::String(isoformat_z(released))),
                 ("state", Value::String(state.to_string())),
                 ("release_reason", Value::String(reason.to_string())),
                 ("releaseReason", Value::String(reason.to_string())),
             ],
         );
         let updated_ms = instant_ms_dt(released);
-        let assigned_ms = instant_ms_str(Some(&first_value_string(
+        let assigned_ms = instant_ms_str(&first_value_string(
             &assignment,
             &["assigned_at", "assignedAt"],
-        )));
-        let released_ms = instant_ms_str(Some(&first_value_string(
+        ));
+        let released_ms = instant_ms_str(&first_value_string(
             &assignment,
             &["released_at", "releasedAt"],
-        )));
+        ));
         sqlx::query(
             r#"
             INSERT INTO assignments(
@@ -1330,8 +1330,8 @@ impl TimelineStore {
                 "voice_channel_id": voice_channel_id,
                 "event_id_start": event_id,
                 "event_id_end": event_id,
-                "start_time": isoformat_z(Some(started_at)),
-                "end_time": isoformat_z(Some(ended_at)),
+                "start_time": isoformat_z(started_at),
+                "end_time": isoformat_z(ended_at),
                 "participants": if speaker_user_id.is_empty() { Value::Array(vec![]) } else { Value::Array(vec![Value::String(speaker_user_id.to_string())]) },
                 "participant_labels": if speaker_user_id.is_empty() { Value::Object(Map::new()) } else { serde_json::json!({speaker_user_id: speaker_label}) },
                 "title": "",
@@ -1352,7 +1352,7 @@ impl TimelineStore {
                     "event_kind": "conversation_started",
                     "kind": "conversation_started",
                     "conversation_id": active_id,
-                    "start_time": isoformat_z(Some(started_at)),
+                    "start_time": isoformat_z(started_at),
                     "reason": if gap_ms.is_none() { "initial_speech" } else { "speech_gap" },
                     "gap_since_previous_speech_ms": gap_ms
                 }),
@@ -1389,10 +1389,7 @@ impl TimelineStore {
             "event_id_end".to_string(),
             Value::String(event_id.to_string()),
         );
-        conversation.insert(
-            "end_time".to_string(),
-            Value::String(isoformat_z(Some(ended_at))),
-        );
+        conversation.insert("end_time".to_string(), Value::String(isoformat_z(ended_at)));
         conversation.insert("participants".to_string(), Value::Array(participants));
         conversation.insert("participant_labels".to_string(), Value::Object(labels));
         if string_value(conversation.get("title")).is_empty() && !text.is_empty() {
@@ -1403,7 +1400,7 @@ impl TimelineStore {
         }
         conversation.insert(
             "last_speech_at".to_string(),
-            Value::String(isoformat_z(Some(ended_at))),
+            Value::String(isoformat_z(ended_at)),
         );
         self.store_conversation(&Value::Object(conversation))
             .await?;
@@ -1417,10 +1414,9 @@ impl TimelineStore {
         if conversation_id.is_empty() || guild_id.is_empty() || channel_id.is_empty() {
             return Ok(());
         }
-        let start_ms = instant_ms_str(Some(&string_field(conversation, "start_time")));
-        let end_ms = instant_ms_str(Some(&string_field(conversation, "end_time")));
-        let last_ms =
-            instant_ms_str(Some(&string_field(conversation, "last_speech_at"))).or(end_ms);
+        let start_ms = instant_ms_str(&string_field(conversation, "start_time"));
+        let end_ms = instant_ms_str(&string_field(conversation, "end_time"));
+        let last_ms = instant_ms_str(&string_field(conversation, "last_speech_at")).or(end_ms);
         self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
         sqlx::query(
             r#"
@@ -1496,11 +1492,13 @@ impl TimelineStore {
             payload.insert(key, value);
         }
         if !payload.contains_key("updated_at") {
-            payload.insert("updated_at".to_string(), Value::String(isoformat_z(None)));
+            payload.insert(
+                "updated_at".to_string(),
+                Value::String(isoformat_z(utc_now())),
+            );
         }
         let payload_value = Value::Object(payload);
-        let updated_ms =
-            instant_ms_str(Some(&string_field(&payload_value, "updated_at"))).unwrap_or(0);
+        let updated_ms = instant_ms_str(&string_field(&payload_value, "updated_at")).unwrap_or(0);
         self.ensure_room(
             &guild_id,
             &channel_id,

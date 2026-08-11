@@ -9,7 +9,6 @@ use chrono::Utc;
 use clankcord::domain::Ctx;
 use clankcord::model::job::{CommandRequest, Job, JobState};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::time::isoformat_z;
 use clankcord::views::{DashboardAgentsRequest, DashboardOverviewRequest};
 use serde_json::json;
 
@@ -68,15 +67,15 @@ async fn approved_jobs_count_active_on_every_dashboard_panel() {
 
     let mut approved = agent_task("approved-session", "approved task");
     approved.set_state(JobState::Approved);
-    approved.created_at = isoformat_z(Some(now - Duration::minutes(5)));
-    approved.updated_at = approved.created_at.clone();
+    approved.created_at = now - Duration::minutes(5);
+    approved.updated_at = approved.created_at;
     store.create_job(approved).await.unwrap();
 
     let mut retained = agent_task("retained-session", "failed task");
     retained.set_state(JobState::FailedDraftRetained);
-    retained.created_at = isoformat_z(Some(now - Duration::minutes(4)));
-    retained.updated_at = retained.created_at.clone();
-    retained.completed_at = Some(retained.created_at.clone());
+    retained.created_at = now - Duration::minutes(4);
+    retained.updated_at = retained.created_at;
+    retained.completed_at = Some(retained.created_at);
     store.create_job(retained).await.unwrap();
 
     let runtime = Ctx::new(store);

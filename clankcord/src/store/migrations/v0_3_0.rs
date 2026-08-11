@@ -375,10 +375,10 @@ fn decode_job_payload_for_scope_migration(bytes: &[u8], legacy_scope_id: &str) -
     }
     if let Some(body) = pre_v0_3_0_envelope_body(bytes) {
         let previous: PreV0_3_0Job = bincode::deserialize(body)?;
-        return Ok(previous.into_current(legacy_scope_id));
+        return previous.into_current(legacy_scope_id);
     }
     let previous: PreV0_3_0Job = bincode::deserialize(bytes)?;
-    Ok(previous.into_current(legacy_scope_id))
+    previous.into_current(legacy_scope_id)
 }
 
 fn pre_v0_3_0_envelope_body(bytes: &[u8]) -> Option<&[u8]> {
@@ -404,9 +404,9 @@ fn decode_automation_for_scope_migration(
 }
 
 impl PreV0_3_0Job {
-    fn into_current(self, legacy_scope_id: &str) -> Job {
+    fn into_current(self, legacy_scope_id: &str) -> Result<Job> {
         let scope = legacy_scope_for_job(&self.guild_id, &self.voice_channel_id, &self.payload);
-        Job {
+        Ok(Job {
             id: self.id,
             kind: self.payload.kind(),
             scope_kind: scope.kind,
@@ -420,17 +420,17 @@ impl PreV0_3_0Job {
             requested_by_user_id: self.requested_by_user_id,
             payload: self.payload,
             attempts: self.attempts,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            next_run_at: self.next_run_at,
-            started_at: self.started_at,
-            completed_at: self.completed_at,
-            cancelled_at: self.cancelled_at,
+            created_at: migrated_instant(&self.created_at, "created_at")?,
+            updated_at: migrated_instant(&self.updated_at, "updated_at")?,
+            next_run_at: migrated_optional_instant(self.next_run_at)?,
+            started_at: migrated_optional_instant(self.started_at)?,
+            completed_at: migrated_optional_instant(self.completed_at)?,
+            cancelled_at: migrated_optional_instant(self.cancelled_at)?,
             parent_job_id: self.parent_job_id,
             root_job_id: self.root_job_id,
             lineage_depth: self.lineage_depth,
             metadata: self.metadata,
-        }
+        })
     }
 }
 
@@ -523,4 +523,15 @@ fn legacy_scope_for_job(
 
 fn quote_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn migrated_instant(raw: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    crate::time::parse_instant(raw)
+        .ok_or_else(|| anyhow::anyhow!("migrated job has invalid {field}: {raw}"))
+}
+
+fn migrated_optional_instant(raw: Option<String>) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    raw.filter(|value| !value.trim().is_empty())
+        .map(|value| migrated_instant(&value, "timestamp"))
+        .transpose()
 }

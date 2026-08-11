@@ -389,12 +389,12 @@ impl LiveVoiceAdapter {
         };
         let (session_metadata, debug_notes) = {
             let mut live_session = session.lock().await;
-            live_session.set_debug_note("joinStartedAt", isoformat_z(Some(join_started_at)));
+            live_session.set_debug_note("joinStartedAt", isoformat_z(join_started_at));
             live_session.set_debug_note(
                 "joinStartedAtMs",
                 join_started_at.timestamp_millis().to_string(),
             );
-            live_session.set_debug_note("joinReadyAt", isoformat_z(Some(join_completed_at)));
+            live_session.set_debug_note("joinReadyAt", isoformat_z(join_completed_at));
             live_session.set_debug_note(
                 "joinReadyAtMs",
                 join_completed_at.timestamp_millis().to_string(),
@@ -1180,7 +1180,7 @@ impl LiveVoiceAdapter {
         let now = utc_now();
         let (status, debug_notes) = {
             let mut live_session = session.lock().await;
-            live_session.set_debug_note("botVoiceStateAt", isoformat_z(Some(now)));
+            live_session.set_debug_note("botVoiceStateAt", isoformat_z(now));
             live_session.set_debug_note("botVoiceStateAtMs", now.timestamp_millis().to_string());
             live_session.set_debug_note("botVoiceStateChannelId", channel_id.to_string());
             (

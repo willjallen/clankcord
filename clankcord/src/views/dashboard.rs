@@ -374,7 +374,7 @@ pub async fn dashboard_overview(ctx: &Ctx, request: DashboardOverviewRequest) ->
     let operations = dashboard_latency_by_kind_payload(ctx, now).await?;
     let charts = dashboard_overview_charts(ctx, now).await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "jobs": {
             "summary": summary,
             "active": active,
@@ -422,7 +422,7 @@ pub async fn dashboard_agents(ctx: &Ctx, request: DashboardAgentsRequest) -> Res
     }
     enrich_agent_sessions(ctx, &mut agents).await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "agents": agents,
     }))
 }
@@ -432,7 +432,7 @@ pub async fn dashboard_automations(ctx: &Ctx) -> Result<Value> {
     let mut automations = automation_dashboard_payload(&records);
     enrich_automation_payload(ctx, &mut automations).await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(utc_now())),
+        "generatedAt": isoformat_z(utc_now()),
         "automations": automations,
     }))
 }
@@ -463,9 +463,9 @@ pub async fn dashboard_transcript(ctx: &Ctx, request: DashboardTranscriptRequest
     enrich_event_values(ctx, &mut events).await?;
     events.reverse();
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "transcript": {
-            "since": since.map(|value| isoformat_z(Some(value))).unwrap_or_else(|| "all".to_string()),
+            "since": since.map(isoformat_z).unwrap_or_else(|| "all".to_string()),
             "events": events,
         },
     }))
@@ -591,7 +591,7 @@ async fn dashboard_agent_summary(ctx: &Ctx) -> Result<Value> {
         "failed": row.try_get::<i64, _>("failed")?,
         "completed": row.try_get::<i64, _>("completed")?,
         "window": "24h",
-        "since": isoformat_z(Some(since)),
+        "since": isoformat_z(since),
     }))
 }
 
@@ -716,7 +716,7 @@ async fn dashboard_overview_job_summary(
         "byState": by_state,
         "byKind": by_kind,
         "byScope": by_scope,
-        "window": {"from": isoformat_z(Some(now - chrono::Duration::hours(1))), "to": isoformat_z(Some(now))},
+        "window": {"from": isoformat_z(now - chrono::Duration::hours(1)), "to": isoformat_z(now)},
     }))
 }
 
@@ -2424,7 +2424,5 @@ fn facet_payload(mut facets: FacetAccumulator) -> Value {
 }
 
 fn timestamp(milliseconds: i64) -> String {
-    isoformat_z(Some(
-        ms_to_datetime(milliseconds).expect("validated dashboard timestamp"),
-    ))
+    isoformat_z(ms_to_datetime(milliseconds).expect("validated dashboard timestamp"))
 }

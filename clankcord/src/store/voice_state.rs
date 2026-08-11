@@ -55,7 +55,7 @@ impl TimelineStore {
         .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
         .bind(observed_at_ms)
         .bind(json!({
-            "observedAt": isoformat_z(Some(observed_at)),
+            "observedAt": isoformat_z(observed_at),
             "botCount": bot_count,
             "sessionCount": session_count,
             "voiceStateGuildCount": voice_state_guild_count,
@@ -83,8 +83,8 @@ impl TimelineStore {
     ) -> Result<()> {
         let payload = session.to_json();
         let active = session.active && session.ended_at.trim().is_empty();
-        let started_ms = instant_ms_str(Some(&session.started_at));
-        let ended_ms = instant_ms_str(Some(&session.ended_at));
+        let started_ms = instant_ms_str(&session.started_at);
+        let ended_ms = instant_ms_str(&session.ended_at);
         let updated_ms = instant_ms_dt(utc_now());
         sqlx::query(
             r#"
@@ -355,7 +355,7 @@ impl TimelineStore {
             capture_run_id: capture_run_id.clone(),
             state: "joining".to_string(),
             mode: "local_buffering".to_string(),
-            assigned_at: isoformat_z(Some(started)),
+            assigned_at: isoformat_z(started),
             released_at: String::new(),
             assignment_reason: reason.to_string(),
             release_reason: String::new(),
@@ -384,8 +384,8 @@ impl TimelineStore {
             "botId": bot.bot_id,
             "voice_bot_discord_user_id": bot.user_id,
             "botUserId": bot.user_id,
-            "started_at": isoformat_z(Some(started)),
-            "startedAt": isoformat_z(Some(started)),
+            "started_at": isoformat_z(started),
+            "startedAt": isoformat_z(started),
             "ended_at": Value::Null,
             "endedAt": "",
             "state": "joining",
@@ -476,7 +476,7 @@ impl TimelineStore {
         };
         let mut session: VoiceCaptureSessionStatus =
             serde_json::from_value(json_value(&row, "payload_json")?)?;
-        session.mark_ended(isoformat_z(Some(ended_at)));
+        session.mark_ended(isoformat_z(ended_at));
         self.upsert_capture_session_status(&session).await
     }
 
@@ -492,7 +492,7 @@ impl TimelineStore {
         };
         assignment.state = state.to_string();
         if let Some(released_at) = released_at {
-            assignment.released_at = isoformat_z(Some(released_at));
+            assignment.released_at = isoformat_z(released_at);
         }
         if !reason.trim().is_empty() {
             assignment.release_reason = reason.to_string();
@@ -526,8 +526,8 @@ async fn upsert_voice_assignment_in_tx(
     assignment: &VoiceAssignment,
     updated_ms: Option<i64>,
 ) -> Result<()> {
-    let assigned_ms = instant_ms_str(Some(&assignment.assigned_at));
-    let released_ms = instant_ms_str(Some(&assignment.released_at));
+    let assigned_ms = instant_ms_str(&assignment.assigned_at);
+    let released_ms = instant_ms_str(&assignment.released_at);
     let updated_ms = updated_ms
         .or(released_ms)
         .or(assigned_ms)

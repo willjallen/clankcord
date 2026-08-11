@@ -28,7 +28,7 @@ pub async fn dashboard_rooms_payload(ctx: &Ctx) -> Result<Value> {
     }
     apply_voice_observation_freshness(ctx, &mut status, now).await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "status": status,
     }))
 }

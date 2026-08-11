@@ -64,8 +64,8 @@ pub(crate) async fn agent_session_start_or_task_job(
             guild_id.to_string(),
             voice_channel_id.to_string(),
             parent_channel_id.to_string(),
-            isoformat_z(Some(created_at)),
-            isoformat_z(Some(max_active_until)),
+            isoformat_z(created_at),
+            isoformat_z(max_active_until),
         );
         record.voice_capture_session_id =
             playback::active_session_for_channel(ctx, guild_id, voice_channel_id)
@@ -104,8 +104,8 @@ pub(crate) async fn ensure_dm_agent_session(
     let record = AgentSessionRecord::new_dm(
         new_id("ags"),
         user_id.to_string(),
-        isoformat_z(Some(created_at)),
-        isoformat_z(Some(max_active_until)),
+        isoformat_z(created_at),
+        isoformat_z(max_active_until),
     );
     ctx.store.create_agent_session_record(record).await
 }
@@ -113,7 +113,7 @@ pub(crate) async fn ensure_dm_agent_session(
 pub(crate) async fn touch_agent_session(ctx: &Ctx, agent_session_id: &str) -> Result<()> {
     let mut record = ctx.store.get_agent_session_record(agent_session_id).await?;
     let now = utc_now();
-    record.last_activity_at = isoformat_z(Some(now));
+    record.last_activity_at = isoformat_z(now);
     if record.state == AgentSessionRecordState::Starting {
         record.state = AgentSessionRecordState::Active;
     }
@@ -128,7 +128,7 @@ pub(crate) async fn set_agent_session_codex_session(
     let mut record = ctx.store.get_agent_session_record(agent_session_id).await?;
     let now = utc_now();
     record.codex_session_id = codex_session_id;
-    record.last_activity_at = isoformat_z(Some(now));
+    record.last_activity_at = isoformat_z(now);
     if record.state == AgentSessionRecordState::Starting {
         record.state = AgentSessionRecordState::Active;
     }
@@ -162,7 +162,7 @@ pub(crate) async fn execute_agent_session_start_job(
         .await?;
     if record.state == AgentSessionRecordState::Starting {
         record.state = AgentSessionRecordState::Active;
-        record.last_activity_at = isoformat_z(None);
+        record.last_activity_at = isoformat_z(utc_now());
         ctx.store.update_agent_session_record(&record).await?;
         ctx.store
             .append_event(
@@ -376,8 +376,8 @@ pub(crate) async fn execute_agent_session_resume_job(
         _ => unreachable!(),
     }
     record.state = AgentSessionRecordState::Active;
-    record.last_activity_at = isoformat_z(Some(now));
-    record.max_active_until = isoformat_z(Some(max_active_until));
+    record.last_activity_at = isoformat_z(now);
+    record.max_active_until = isoformat_z(max_active_until);
     record.retired_at.clear();
     record.retirement_reason.clear();
     record.retired_by_user_id.clear();
@@ -472,7 +472,7 @@ pub(crate) async fn retire_agent_session(
     let mut record = ctx.store.get_agent_session_record(agent_session_id).await?;
     if record.state != AgentSessionRecordState::Retired {
         record.state = AgentSessionRecordState::Retired;
-        record.retired_at = isoformat_z(None);
+        record.retired_at = isoformat_z(utc_now());
         record.retirement_reason = reason.to_string();
         record.retired_by_user_id = retired_by_user_id.to_string();
         ctx.store.update_agent_session_record(&record).await?;

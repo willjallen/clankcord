@@ -33,6 +33,7 @@ use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
 use crate::model::voice::VoiceBotStatus;
 use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
+use crate::time::utc_now;
 use crate::util::log;
 
 pub(super) const VOICE_DISCONNECT_SETTLE_MS: i64 = 30_000;
@@ -716,7 +717,7 @@ fn voice_state_payload(state: &VoiceState) -> Value {
         } else {
             Value::String(request_to_speak_timestamp)
         },
-        "updated_at": crate::store::isoformat_z(None),
+        "updated_at": crate::store::isoformat_z(utc_now()),
     })
 }
 

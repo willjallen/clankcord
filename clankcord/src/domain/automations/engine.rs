@@ -407,7 +407,7 @@ async fn evaluate_stored_automation(
         if let Some(delay) = &record.spec.delay {
             let delay_seconds =
                 i64::try_from(delay.seconds).context("automation delay seconds exceeds i64")?;
-            let due_at = isoformat_z(Some(utc_now() + chrono::Duration::seconds(delay_seconds)));
+            let due_at = isoformat_z(utc_now() + chrono::Duration::seconds(delay_seconds));
             return Ok(StoredAutomationOutcome {
                 evaluated: true,
                 jobs,
@@ -573,13 +573,7 @@ async fn job_contexts(
         .filter(|job| job.guild_id == record.spec.scope.guild_id)
         .filter(|job| job.scope_id == record.spec.scope.scope_id)
         .filter(|job| job_kinds.contains(&job.kind) && states.contains(&job.state))
-        .filter(|job| {
-            let updated = parse_instant(&job.updated_at);
-            match (updated, cursor) {
-                (Some(updated), Some(cursor)) => updated > cursor,
-                _ => true,
-            }
-        })
+        .filter(|job| cursor.is_none_or(|cursor| job.updated_at > cursor))
         .collect::<Vec<_>>();
     let mut contexts = Vec::new();
     for job in jobs {
@@ -619,7 +613,7 @@ async fn base_context(
     Ok(json!({
         "automation": record.to_json(),
         "runtime": {
-            "now": isoformat_z(None),
+            "now": isoformat_z(utc_now()),
         },
         "room": room_status,
         "event_room": event_room,

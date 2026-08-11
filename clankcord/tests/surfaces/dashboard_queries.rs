@@ -7,7 +7,7 @@ use clankcord::domain::Ctx;
 use clankcord::model::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::time::{instant_ms_dt, isoformat_z};
+use clankcord::time::instant_ms_dt;
 use clankcord::views::{
     DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest, DashboardOverviewRequest,
     DashboardTimelineRequest, DashboardTranscriptRequest, default_dashboard_categories,
@@ -71,8 +71,8 @@ async fn dashboard_timeline_defaults_exclude_background_jobs_before_limit() {
         .map(|job| job.kind.as_str().to_string())
         .collect::<BTreeSet<_>>();
     for (index, mut job) in jobs.into_iter().enumerate() {
-        job.created_at = isoformat_z(Some(now + Duration::seconds(index as i64)));
-        job.updated_at = job.created_at.clone();
+        job.created_at = now + Duration::seconds(index as i64);
+        job.updated_at = job.created_at;
         store.create_job(job).await.unwrap();
     }
     let runtime = Ctx::new(store);
@@ -461,12 +461,12 @@ async fn dashboard_jobs_include_retained_ephemeral_rows_and_human_dm_labels() {
         "dm-user",
         CommandRequest::agent_task("", "dm-user", "dm-user", "inspect the dashboard"),
     );
-    dm_job.created_at = isoformat_z(Some(now));
-    dm_job.updated_at = dm_job.created_at.clone();
+    dm_job.created_at = now;
+    dm_job.updated_at = dm_job.created_at;
     let dm_job = store.create_job(dm_job).await.unwrap();
     let mut maintenance = Job::runtime_maintenance(500);
-    maintenance.created_at = isoformat_z(Some(now + Duration::seconds(1)));
-    maintenance.updated_at = maintenance.created_at.clone();
+    maintenance.created_at = now + Duration::seconds(1);
+    maintenance.updated_at = maintenance.created_at;
     let maintenance = store.create_job(maintenance).await.unwrap();
     insert_event(
         &store,
@@ -657,18 +657,17 @@ async fn dashboard_overview_aggregates_the_full_hour_and_excludes_stale_failures
 
     let mut stale = Job::runtime_maintenance(500);
     stale.set_state(clankcord::model::job::JobState::Failed);
-    stale.created_at = isoformat_z(Some(now - Duration::hours(3)));
-    stale.updated_at = stale.created_at.clone();
-    stale.completed_at = Some(stale.created_at.clone());
+    stale.created_at = now - Duration::hours(3);
+    stale.updated_at = stale.created_at;
+    stale.completed_at = Some(stale.created_at);
     store.create_job(stale).await.unwrap();
 
     for index in 0..5 {
         let mut fresh = Job::runtime_maintenance(500);
         fresh.set_state(clankcord::model::job::JobState::Failed);
-        fresh.created_at =
-            isoformat_z(Some(now - Duration::minutes(10) + Duration::seconds(index)));
-        fresh.updated_at = fresh.created_at.clone();
-        fresh.completed_at = Some(fresh.created_at.clone());
+        fresh.created_at = now - Duration::minutes(10) + Duration::seconds(index);
+        fresh.updated_at = fresh.created_at;
+        fresh.completed_at = Some(fresh.created_at);
         store.create_job(fresh).await.unwrap();
     }
     insert_event(
@@ -747,8 +746,8 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
             CommandRequest::agent_task("guild", "code", "operator", format!("task {index}")),
         );
         let at = Utc::now() - Duration::minutes(index);
-        job.created_at = isoformat_z(Some(at));
-        job.updated_at = job.created_at.clone();
+        job.created_at = at;
+        job.updated_at = job.created_at;
         store.create_job(job).await.unwrap();
     }
     let mut dm_job = Job::agent_task_for_session(
@@ -757,8 +756,8 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         "dm-user",
         CommandRequest::agent_task("", "dm-user", "dm-user", "older DM task"),
     );
-    dm_job.created_at = isoformat_z(Some(Utc::now() - Duration::minutes(30)));
-    dm_job.updated_at = dm_job.created_at.clone();
+    dm_job.created_at = Utc::now() - Duration::minutes(30);
+    dm_job.updated_at = dm_job.created_at;
     store.create_job(dm_job).await.unwrap();
     let mut stale_failed = Job::agent_task_for_session(
         "stale-session",
@@ -767,9 +766,9 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
         CommandRequest::agent_task("guild", "code", "operator", "old failed task"),
     );
     stale_failed.set_state(clankcord::model::job::JobState::Failed);
-    stale_failed.created_at = isoformat_z(Some(Utc::now() - Duration::days(8)));
-    stale_failed.updated_at = stale_failed.created_at.clone();
-    stale_failed.completed_at = Some(stale_failed.created_at.clone());
+    stale_failed.created_at = Utc::now() - Duration::days(8);
+    stale_failed.updated_at = stale_failed.created_at;
+    stale_failed.completed_at = Some(stale_failed.created_at);
     store.create_job(stale_failed).await.unwrap();
 
     let large_request = "r".repeat(100_000);
@@ -781,9 +780,9 @@ async fn dashboard_agents_are_exact_beyond_detail_limit_and_resolve_direct_label
     );
     fresh_failed.set_state(clankcord::model::job::JobState::Failed);
     fresh_failed.metadata.error = "e".repeat(100_000);
-    fresh_failed.created_at = isoformat_z(Some(Utc::now() + Duration::seconds(1)));
-    fresh_failed.updated_at = fresh_failed.created_at.clone();
-    fresh_failed.completed_at = Some(fresh_failed.created_at.clone());
+    fresh_failed.created_at = Utc::now() + Duration::seconds(1);
+    fresh_failed.updated_at = fresh_failed.created_at;
+    fresh_failed.completed_at = Some(fresh_failed.created_at);
     let fresh_failed = store.create_job(fresh_failed).await.unwrap();
     let runtime = Ctx::new(store);
     let view = clankcord::views::dashboard::dashboard_agents(

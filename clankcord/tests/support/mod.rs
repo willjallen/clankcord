@@ -256,5 +256,5 @@ pub(crate) fn merge_json(base: &Value, extra: Value) -> Value {
 
 #[allow(dead_code)]
 pub(crate) fn ended(session: &mut VoiceCaptureSessionStatus) {
-    session.mark_ended(clankcord::time::isoformat_z(None));
+    session.mark_ended(clankcord::time::isoformat_z(clankcord::time::utc_now()));
 }

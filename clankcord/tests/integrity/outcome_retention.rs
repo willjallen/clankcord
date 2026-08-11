@@ -10,7 +10,6 @@ use clankcord::model::job::CommandRequest;
 use clankcord::model::job::Job;
 use clankcord::model::job::JobState;
 use clankcord::model::scope::RuntimeScope;
-use clankcord::time::isoformat_z;
 use clankcord::views::DashboardOverviewRequest;
 use serde_json::json;
 
@@ -20,16 +19,16 @@ async fn operational_windows_keep_success_and_failure_outcomes_after_ephemeral_g
     initialize_test_config(raw.path());
     let store = test_store(raw.path()).await;
     let now = Utc::now();
-    let created_at = isoformat_z(Some(now - Duration::minutes(12)));
-    let started_at = isoformat_z(Some(now - Duration::minutes(11)));
-    let observed_at = isoformat_z(Some(now - Duration::minutes(10)));
+    let created_at = now - Duration::minutes(12);
+    let started_at = now - Duration::minutes(11);
+    let observed_at = now - Duration::minutes(10);
 
     let mut completed = Job::runtime_maintenance(15_000);
-    completed.created_at = created_at.clone();
-    completed.started_at = Some(started_at.clone());
+    completed.created_at = created_at;
+    completed.started_at = Some(started_at);
     completed.mark_complete();
-    completed.completed_at = Some(observed_at.clone());
-    completed.updated_at = observed_at.clone();
+    completed.completed_at = Some(observed_at);
+    completed.updated_at = observed_at;
     let completed = store.create_job(completed).await.unwrap();
 
     let mut failed = Job::runtime_maintenance(15_000);
@@ -110,13 +109,13 @@ async fn one_hour_failure_summary_excludes_and_clears_expired_outcomes() {
 
     let mut expired = Job::runtime_maintenance(15_000);
     expired.set_state(JobState::Failed);
-    expired.updated_at = isoformat_z(Some(now - Duration::minutes(61)));
+    expired.updated_at = now - Duration::minutes(61);
     expired.metadata.error = "expired maintenance failure".to_string();
     let expired = store.create_job(expired).await.unwrap();
 
     let mut current = Job::runtime_maintenance(15_000);
     current.set_state(JobState::Failed);
-    current.updated_at = isoformat_z(Some(now - Duration::minutes(10)));
+    current.updated_at = now - Duration::minutes(10);
     current.metadata.error = "current maintenance failure".to_string();
     let current = store.create_job(current).await.unwrap();
 
@@ -214,8 +213,8 @@ async fn concurrent_terminal_upserts_record_one_transition_outcome() {
     let mut right_job = left_job.clone();
     left_job.set_state(JobState::Failed);
     right_job.set_state(JobState::Failed);
-    left_job.updated_at = isoformat_z(Some(Utc::now() - Duration::seconds(1)));
-    right_job.updated_at = isoformat_z(Some(Utc::now()));
+    left_job.updated_at = Utc::now() - Duration::seconds(1);
+    right_job.updated_at = Utc::now();
     left_job.metadata.error = "same terminal transition from left writer".to_string();
     right_job.metadata.error = "same terminal transition from right writer".to_string();
 

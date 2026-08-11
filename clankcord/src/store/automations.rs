@@ -88,7 +88,7 @@ impl TimelineStore {
     pub async fn cancel_automation(&self, automation_id: &str) -> Result<AutomationRecord> {
         let mut record = self.get_automation(automation_id).await?;
         record.state = AutomationState::Cancelled;
-        record.updated_at = isoformat_z(None);
+        record.updated_at = isoformat_z(utc_now());
         self.upsert_automation_record(&record).await?;
         self.append_event(
             &record.spec.scope.guild_id,
@@ -209,11 +209,10 @@ async fn upsert_automation_record_in_tx(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     record: &AutomationRecord,
 ) -> Result<()> {
-    let created_ms = instant_ms_str(Some(&record.created_at)).unwrap_or(0);
-    let updated_ms = instant_ms_str(Some(&record.updated_at)).unwrap_or(created_ms);
+    let created_ms = instant_ms_str(&record.created_at).unwrap_or(0);
+    let updated_ms = instant_ms_str(&record.updated_at).unwrap_or(created_ms);
     let expires_at_ms = record.spec.expiry.expires_at.as_deref().and_then(|value| {
-        parse_instant(value)
-            .and_then(|expires_at| instant_ms_str(Some(&isoformat_z(Some(expires_at)))))
+        parse_instant(value).and_then(|expires_at| instant_ms_str(&isoformat_z(expires_at)))
     });
     sqlx::query(
         r#"

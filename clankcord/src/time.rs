@@ -11,10 +11,8 @@ pub fn utc_now() -> DateTime<Utc> {
     Utc::now()
 }
 
-pub fn isoformat_z(value: Option<DateTime<Utc>>) -> String {
-    value
-        .unwrap_or_else(utc_now)
-        .to_rfc3339_opts(SecondsFormat::Millis, true)
+pub fn isoformat_z(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 pub fn format_timestamp_local(value: DateTime<Utc>, tz: chrono_tz::Tz) -> BTreeMap<String, String> {
@@ -118,10 +116,57 @@ pub fn instant_ms_dt(value: DateTime<Utc>) -> i64 {
     value.timestamp_millis()
 }
 
-pub fn instant_ms_str(value: Option<&str>) -> Option<i64> {
-    parse_instant(value.unwrap_or("")).map(instant_ms_dt)
+pub fn instant_ms_str(value: &str) -> Option<i64> {
+    parse_instant(value).map(instant_ms_dt)
 }
 
 pub fn ms_to_datetime(value: i64) -> Option<DateTime<Utc>> {
     Utc.timestamp_millis_opt(value).single()
+}
+
+/// Serde representation for instants persisted as isoformat_z strings:
+/// the in-memory type is `DateTime<Utc>`, the wire stays the millisecond
+/// RFC3339 string every existing blob already carries.
+pub mod serde_iso {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &DateTime<Utc>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        super::isoformat_z(*value).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<DateTime<Utc>, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        super::parse_instant(&raw)
+            .ok_or_else(|| serde::de::Error::custom(format!("invalid instant: {raw}")))
+    }
+}
+
+/// [`serde_iso`] over `Option<DateTime<Utc>>`.
+pub mod serde_iso_opt {
+    use chrono::{DateTime, Utc};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<DateTime<Utc>>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        value.map(super::isoformat_z).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<DateTime<Utc>>, D::Error> {
+        let raw = Option::<String>::deserialize(deserializer)?;
+        raw.map(|raw| {
+            super::parse_instant(&raw)
+                .ok_or_else(|| serde::de::Error::custom(format!("invalid instant: {raw}")))
+        })
+        .transpose()
+    }
 }

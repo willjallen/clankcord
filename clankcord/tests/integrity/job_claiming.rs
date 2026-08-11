@@ -67,8 +67,7 @@ async fn timeline_claim_due_jobs_marks_running_without_claiming_future_jobs() {
         text_delivery_payload("future"),
     );
     let future_id = future.id.clone();
-    future.next_run_at =
-        Some((Utc::now() + Duration::minutes(5)).to_rfc3339_opts(SecondsFormat::Millis, true));
+    future.next_run_at = Some(Utc::now() + Duration::minutes(5));
 
     store.create_job(future).await.unwrap();
     store.create_job(due).await.unwrap();
@@ -104,8 +103,8 @@ async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
     let store = test_store(&raw.path().join("voice")).await;
     let now = Utc::now();
     let mut wake_payload = wake_activation_payload("guild", "code");
-    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(20)));
-    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.wake_started_at = isoformat_z(now - Duration::seconds(20));
+    wake_payload.latest_wake_at = isoformat_z(now - Duration::seconds(20));
     wake_payload.max_window_seconds = 3600;
     store
         .create_job(Job::wake_activation(wake_payload))
@@ -120,8 +119,8 @@ async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
         now - Duration::seconds(69),
         1,
     ));
-    normal.created_at = isoformat_z(Some(now - Duration::seconds(40)));
-    normal.updated_at = normal.created_at.clone();
+    normal.created_at = now - Duration::seconds(40);
+    normal.updated_at = normal.created_at;
     let normal_id = normal.id.clone();
     store.create_job(normal).await.unwrap();
 
@@ -133,8 +132,8 @@ async fn timeline_claim_due_audio_prioritizes_active_wake_window_segments() {
         now - Duration::seconds(9),
         2,
     ));
-    priority.created_at = isoformat_z(Some(now - Duration::seconds(10)));
-    priority.updated_at = priority.created_at.clone();
+    priority.created_at = now - Duration::seconds(10);
+    priority.updated_at = priority.created_at;
     let priority_id = priority.id.clone();
     store.create_job(priority).await.unwrap();
 
@@ -156,8 +155,8 @@ async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake
     let store = test_store(&raw.path().join("voice")).await;
     let now = Utc::now();
     let mut wake_payload = wake_activation_payload("guild", "code");
-    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(30)));
-    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(30)));
+    wake_payload.wake_started_at = isoformat_z(now - Duration::seconds(30));
+    wake_payload.latest_wake_at = isoformat_z(now - Duration::seconds(30));
     let activation_id = wake_payload.activation_id.clone();
     let closed_at = now - Duration::seconds(20);
     store
@@ -172,7 +171,7 @@ async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake
                 "event_kind": "wake_activation_window_closed",
                 "kind": "wake_activation_window_closed",
                 "activation_id": activation_id,
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "request_audio_closed_at": isoformat_z(closed_at),
                 "startedAt": closed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
                 "endedAt": closed_at.to_rfc3339_opts(SecondsFormat::Millis, true),
             }),
@@ -188,8 +187,8 @@ async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake
         now - Duration::seconds(39),
         1,
     ));
-    normal.created_at = isoformat_z(Some(now - Duration::seconds(40)));
-    normal.updated_at = normal.created_at.clone();
+    normal.created_at = now - Duration::seconds(40);
+    normal.updated_at = normal.created_at;
     let normal_id = normal.id.clone();
     store.create_job(normal).await.unwrap();
 
@@ -201,8 +200,8 @@ async fn timeline_claim_due_audio_does_not_prioritize_segments_after_closed_wake
         now - Duration::seconds(9),
         2,
     ));
-    after_closed.created_at = isoformat_z(Some(now - Duration::seconds(10)));
-    after_closed.updated_at = after_closed.created_at.clone();
+    after_closed.created_at = now - Duration::seconds(10);
+    after_closed.updated_at = after_closed.created_at;
     let after_closed_id = after_closed.id.clone();
     store.create_job(after_closed).await.unwrap();
 
@@ -232,7 +231,7 @@ async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
         1,
     ));
     retryable_transport.set_state(JobState::Failed);
-    retryable_transport.started_at = Some(isoformat_z(Some(now - Duration::seconds(8))));
+    retryable_transport.started_at = Some(now - Duration::seconds(8));
     retryable_transport.metadata.error =
         "retryable STT connection error: error sending request for url (http://127.0.0.1:8080/v1/audio/transcriptions)"
             .to_string();
@@ -509,8 +508,8 @@ async fn timeline_reports_earliest_queued_ready_time() {
         "user-a",
         text_delivery_payload("late"),
     );
-    early_job.next_run_at = Some(early.to_rfc3339_opts(SecondsFormat::Millis, true));
-    late_job.next_run_at = Some(late.to_rfc3339_opts(SecondsFormat::Millis, true));
+    early_job.next_run_at = Some(early);
+    late_job.next_run_at = Some(late);
 
     store.create_job(late_job).await.unwrap();
     store.create_job(early_job).await.unwrap();
@@ -694,11 +693,8 @@ async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
         "user-a",
         command.clone(),
     );
-    first.created_at = Utc
-        .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
-    first.updated_at = first.created_at.clone();
+    first.created_at = Utc.with_ymd_and_hms(2026, 5, 12, 16, 0, 0).unwrap();
+    first.updated_at = first.created_at;
     let first_id = first.id.clone();
     let mut second = Job::agent_task_for_session(
         "ags_test",
@@ -706,11 +702,8 @@ async fn timeline_claim_due_jobs_applies_skip_after_due_sorting() {
         "user-a",
         command,
     );
-    second.created_at = Utc
-        .with_ymd_and_hms(2026, 5, 12, 16, 0, 1)
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
-    second.updated_at = second.created_at.clone();
+    second.created_at = Utc.with_ymd_and_hms(2026, 5, 12, 16, 0, 1).unwrap();
+    second.updated_at = second.created_at;
     let second_id = second.id.clone();
     store.create_job(first).await.unwrap();
     store.create_job(second).await.unwrap();
@@ -780,12 +773,9 @@ async fn timeline_preserves_ordered_wake_probe_backlog_per_stream() {
 async fn timeline_cancels_stale_wake_probe_backlog() {
     let raw = tempfile::tempdir().unwrap();
     let store = test_store(&raw.path().join("voice")).await;
-    let old_at = Utc
-        .with_ymd_and_hms(2026, 5, 12, 16, 0, 0)
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Millis, true);
+    let old_at = Utc.with_ymd_and_hms(2026, 5, 12, 16, 0, 0).unwrap();
     let mut old = Job::wake_probe(wake_probe_payload("guild:code:cap:user-a", 0));
-    old.created_at = old_at.clone();
+    old.created_at = old_at;
     old.updated_at = old_at;
     let old_id = old.id.clone();
     store.create_job(old).await.unwrap();

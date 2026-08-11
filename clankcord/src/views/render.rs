@@ -8,7 +8,6 @@ use sqlx::{Postgres, QueryBuilder, Row};
 use crate::Result;
 use crate::domain::Ctx;
 use crate::model::job::Job;
-use crate::time::parse_instant;
 
 const DASHBOARD_VALUE_MAX_STRING_CHARS: usize = 4000;
 const DASHBOARD_VALUE_MAX_ARRAY_ITEMS: usize = 100;
@@ -152,20 +151,9 @@ fn truncate_dashboard_string(value: String) -> String {
 }
 
 pub(crate) fn dashboard_job_duration_ms(job: &Job) -> i64 {
-    let started = job
-        .started_at
-        .as_deref()
-        .and_then(parse_instant)
-        .or_else(|| parse_instant(&job.created_at));
-    let ended = job
-        .completed_at
-        .as_deref()
-        .and_then(parse_instant)
-        .or_else(|| parse_instant(&job.updated_at));
-    started
-        .zip(ended)
-        .map(|(started, ended)| (ended - started).num_milliseconds().max(0))
-        .unwrap_or_default()
+    let started = job.started_at.unwrap_or(job.created_at);
+    let ended = job.completed_at.unwrap_or(job.updated_at);
+    (ended - started).num_milliseconds().max(0)
 }
 
 pub(crate) fn dashboard_job_category(kind: &str) -> &'static str {

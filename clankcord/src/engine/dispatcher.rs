@@ -123,15 +123,13 @@ pub(crate) async fn requeue_dispatched_job(
     latest.started_at = None;
     latest.completed_at = None;
     let delay = delay_for_attempt(latest.attempts);
-    latest.next_run_at = Some(crate::time::isoformat_z(Some(
-        crate::time::utc_now() + delay,
-    )));
+    latest.next_run_at = Some(crate::time::utc_now() + delay);
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;
     util::log(&format!(
         "{log_prefix} {job_id}: attempt {} next_run_at {} error: {error_text}",
         latest.attempts,
-        latest.next_run_at.clone().unwrap_or_default()
+        latest.next_run_at.unwrap_or_default()
     ));
     Ok(json!({
         "dispatched": false,

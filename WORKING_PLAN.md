@@ -89,7 +89,7 @@ green. Tests file by purpose category; regression pins cite fix commits.
 
 ### Wave 6 — type discipline
 
-- [ ] 23. Job timestamps typed end-to-end (no ISO-String fields on the core
+- [x] 23. Job timestamps typed end-to-end (no ISO-String fields on the core
   record, no parse/format round-trips); time helper API loses its Option
   ceremony; migration if the column representation changes.
 - [x] 24. CommandArguments fully typed: activation and friends become real

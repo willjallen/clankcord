@@ -15,7 +15,7 @@ use crate::model::job::{
     Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
 };
 use crate::store::JobVisibility;
-use crate::time::{isoformat_z, parse_instant, utc_now};
+use crate::time::{isoformat_z, utc_now};
 
 pub(crate) async fn execute_runtime_maintenance_job(
     ctx: &Ctx,
@@ -185,16 +185,12 @@ async fn fail_stale_running_jobs(ctx: &Ctx, timeout_minutes: i64) -> Result<Vec<
         if job.kind == JobKind::AgentTask {
             continue;
         }
-        let updated_at = parse_instant(&job.updated_at);
-        if updated_at
-            .map(|value| now - value < timeout)
-            .unwrap_or(false)
-        {
+        if now - job.updated_at < timeout {
             continue;
         }
         job.set_state(JobState::FailedTimeout);
         job.metadata.error = "job exceeded stale running-job timeout".to_string();
-        job.metadata.timed_out_at = isoformat_z(None);
+        job.metadata.timed_out_at = isoformat_z(utc_now());
         ctx.store.update_job(&job).await?;
         timed_out.push(job.to_value());
     }

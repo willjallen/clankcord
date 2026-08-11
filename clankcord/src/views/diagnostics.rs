@@ -382,7 +382,7 @@ async fn postgres_database_statistics(runtime: &Ctx) -> Result<Value> {
         "deadlocks": row.try_get::<i64, _>("deadlocks")?,
         "blockReadMillis": row.try_get::<f64, _>("blk_read_time")?,
         "blockWriteMillis": row.try_get::<f64, _>("blk_write_time")?,
-        "statsResetAt": stats_reset.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+        "statsResetAt": stats_reset.map(isoformat_z).unwrap_or_default(),
     }))
 }
 
@@ -523,10 +523,10 @@ async fn postgres_table_activity_rows(runtime: &Ctx) -> Result<Vec<Value>> {
                 "autovacuumCount": row.try_get::<i64, _>("autovacuum_count")?,
                 "analyzeCount": row.try_get::<i64, _>("analyze_count")?,
                 "autoanalyzeCount": row.try_get::<i64, _>("autoanalyze_count")?,
-                "lastVacuumAt": last_vacuum.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
-                "lastAutovacuumAt": last_autovacuum.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
-                "lastAnalyzeAt": last_analyze.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
-                "lastAutoanalyzeAt": last_autoanalyze.map(|time| isoformat_z(Some(time))).unwrap_or_default(),
+                "lastVacuumAt": last_vacuum.map(isoformat_z).unwrap_or_default(),
+                "lastAutovacuumAt": last_autovacuum.map(isoformat_z).unwrap_or_default(),
+                "lastAnalyzeAt": last_analyze.map(isoformat_z).unwrap_or_default(),
+                "lastAutoanalyzeAt": last_autoanalyze.map(isoformat_z).unwrap_or_default(),
                 "totalBytes": row.try_get::<i64, _>("total_bytes")?,
                 "heapBytes": row.try_get::<i64, _>("heap_bytes")?,
                 "indexBytes": row.try_get::<i64, _>("index_bytes")?,
@@ -1237,7 +1237,7 @@ pub(crate) fn age_seconds(now_ms: i64, then_ms: i64) -> i64 {
 
 pub(crate) fn ms_iso(value: i64) -> String {
     ms_to_datetime(value)
-        .map(|instant| isoformat_z(Some(instant)))
+        .map(isoformat_z)
         .expect("health timestamp is representable")
 }
 

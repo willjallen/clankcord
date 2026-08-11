@@ -124,7 +124,7 @@ pub async fn update_room_control(
     control.guild_id = room.guild_id.clone();
     control.voice_channel_id = room.channel_id.clone();
     control.voice_channel_name = room.channel_name.clone();
-    control.updated_at = isoformat_z(None);
+    control.updated_at = isoformat_z(utc_now());
     clear_expired_room_control_markers(&mut control);
     if control.has_active_marker() {
         ctx.store.upsert_room_control(&control).await?;
@@ -151,7 +151,7 @@ pub async fn suppress_room_auto_join(
         Vec::new()
     };
     let control = update_room_control(ctx, room, &clear, |control| {
-        control.auto_join_suppressed_until = Some(isoformat_z(Some(until)));
+        control.auto_join_suppressed_until = Some(isoformat_z(until));
         control.auto_join_suppression_reason = Some(reason.to_string());
         control.auto_join_suppressed_by_user_id = Some(requested_by_user_id.to_string());
     })
@@ -186,7 +186,7 @@ pub async fn set_room_manual_hold(
         room,
         &["auto_join_suppressed_until", "listening_paused_until"],
         |control| {
-            control.manual_hold_until = Some(isoformat_z(Some(until)));
+            control.manual_hold_until = Some(isoformat_z(until));
             control.manual_hold_reason = Some(reason.to_string());
             control.manual_hold_by_user_id = Some(requested_by_user_id.to_string());
         },
@@ -218,7 +218,7 @@ pub async fn set_room_listening_pause(
 ) -> Result<RoomControl> {
     let until = utc_now() + chrono::Duration::seconds(duration_seconds.max(0));
     update_room_control(ctx, room, &[], |control| {
-        control.listening_paused_until = Some(isoformat_z(Some(until)));
+        control.listening_paused_until = Some(isoformat_z(until));
         control.listening_pause_reason = Some(reason.to_string());
         control.listening_paused_by_user_id = Some(requested_by_user_id.to_string());
     })
@@ -238,7 +238,7 @@ pub async fn clear_room_controls(ctx: &Ctx, room: &RoomConfig, keys: &[&str]) ->
     }
     clear_expired_room_control_markers(&mut control);
     if control.has_active_marker() {
-        control.updated_at = isoformat_z(None);
+        control.updated_at = isoformat_z(utc_now());
         ctx.store.upsert_room_control(&control).await
     } else {
         ctx.store

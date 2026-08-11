@@ -42,14 +42,14 @@ impl TimelineStore {
             "voice_channel_id": voice_channel_id,
             "selection_kind": selection_kind,
             "selection_reference": selection_reference,
-            "start_time": isoformat_z(Some(start)),
-            "end_time": isoformat_z(Some(end)),
+            "start_time": isoformat_z(start),
+            "end_time": isoformat_z(end),
             "event_id_start": events.first().map(|event| first_value_string(event, &["event_id", "eventId"])).unwrap_or_default(),
             "event_id_end": events.last().map(|event| first_value_string(event, &["event_id", "eventId"])).unwrap_or_default(),
             "capture_run_ids": capture_runs,
             "voice_bot_ids": voice_bots,
             "quality": "draft",
-            "created_at": isoformat_z(None)
+            "created_at": isoformat_z(utc_now())
         });
         self.ensure_room(guild_id, voice_channel_id, "", "", "")
             .await?;
@@ -106,8 +106,8 @@ impl TimelineStore {
             "guild_id": guild_id,
             "scope": "single_channel",
             "voice_channel_id": voice_channel_id,
-            "start_time": isoformat_z(Some(start)),
-            "end_time": isoformat_z(Some(end)),
+            "start_time": isoformat_z(start),
+            "end_time": isoformat_z(end),
             "quality": "draft"
         });
         let content = match format {
@@ -180,7 +180,7 @@ impl TimelineStore {
             "publish": publish,
             "parent_job_id": parent_job_id.unwrap_or(""),
             "created_by_user_id": created_by_user_id,
-            "created_at": isoformat_z(None),
+            "created_at": isoformat_z(utc_now()),
             "draft_artifact_path": draft_path.display().to_string()
         });
         write_json_file(
@@ -196,8 +196,8 @@ impl TimelineStore {
                 "kind": "publication_created",
                 "publication_id": publication_id,
                 "window_id": string_field(&window, "window_id"),
-                "start_time": isoformat_z(Some(start)),
-                "end_time": isoformat_z(Some(end)),
+                "start_time": isoformat_z(start),
+                "end_time": isoformat_z(end),
                 "state": string_field(&publication, "state"),
                 "publish": publish
             }),
@@ -331,8 +331,7 @@ impl TimelineStore {
             return Ok(());
         }
         let now_ms = instant_ms_dt(utc_now());
-        let created_ms =
-            instant_ms_str(Some(&string_field(publication, "created_at"))).unwrap_or(now_ms);
+        let created_ms = instant_ms_str(&string_field(publication, "created_at")).unwrap_or(now_ms);
         self.ensure_room(&guild_id, &channel_id, "", "", "").await?;
         sqlx::query(
             r#"

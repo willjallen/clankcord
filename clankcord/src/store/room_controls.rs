@@ -42,7 +42,7 @@ impl TimelineStore {
     }
 
     pub async fn upsert_room_control(&self, control: &RoomControl) -> Result<()> {
-        let updated_at_ms = instant_ms_str(Some(&control.updated_at)).ok_or_else(|| {
+        let updated_at_ms = instant_ms_str(&control.updated_at).ok_or_else(|| {
             anyhow::anyhow!(
                 "room control {}:{} has invalid updated_at `{}`",
                 control.guild_id,
@@ -106,7 +106,7 @@ impl TimelineStore {
             }
             changed += 1;
             if control.has_active_marker() {
-                control.updated_at = isoformat_z(Some(now));
+                control.updated_at = isoformat_z(now);
                 self.upsert_room_control(&control).await?;
             } else {
                 self.delete_room_control(&control.guild_id, &control.voice_channel_id)

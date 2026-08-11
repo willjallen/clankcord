@@ -9,7 +9,6 @@ use serde_json::json;
 use clankcord::domain::Ctx;
 use clankcord::model::job::{Job, JobKind, JobState};
 use clankcord::store::JobVisibility;
-use clankcord::time::isoformat_z;
 
 use crate::support::{initialize_test_config, test_store};
 
@@ -143,10 +142,10 @@ async fn runtime_maintenance_times_out_stale_running_jobs() {
     let raw = tempfile::tempdir().unwrap();
     initialize_test_config(raw.path());
     let store = test_store(&raw.path().join("voice")).await;
-    let old_timestamp = isoformat_z(Some(Utc::now() - Duration::minutes(31)));
+    let old_timestamp = Utc::now() - Duration::minutes(31);
     let mut running_stale = Job::discord_voice_status_snapshot("job_source");
     running_stale.mark_running();
-    running_stale.created_at = old_timestamp.clone();
+    running_stale.created_at = old_timestamp;
     running_stale.updated_at = old_timestamp;
     let stale = store.create_job(running_stale).await.unwrap();
     let mut running_maintenance = Job::runtime_maintenance(500);

@@ -9,7 +9,7 @@ use anyhow::Context;
 
 use crate::model::job::{JobKind, JobState};
 use crate::model::scope::RuntimeScopeKind;
-use crate::time::{isoformat_z, parse_instant};
+use crate::time::{isoformat_z, parse_instant, utc_now};
 use crate::util::new_id;
 
 const AUTOMATION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAUT";
@@ -430,7 +430,7 @@ pub struct AutomationPendingRecheck {
 
 impl AutomationRecord {
     pub fn new(spec: AutomationSpec) -> Self {
-        let now = isoformat_z(None);
+        let now = isoformat_z(utc_now());
         Self {
             automation_id: new_id("aut"),
             state: AutomationState::Active,
@@ -476,13 +476,13 @@ impl AutomationRecord {
     }
 
     pub(crate) fn mark_evaluated(&mut self) {
-        self.updated_at = isoformat_z(None);
+        self.updated_at = isoformat_z(utc_now());
         self.last_evaluated_at = self.updated_at.clone();
         self.pending_recheck = None;
     }
 
     pub(crate) fn mark_fired(&mut self) {
-        self.updated_at = isoformat_z(None);
+        self.updated_at = isoformat_z(utc_now());
         self.last_evaluated_at = self.updated_at.clone();
         self.last_fired_at = self.updated_at.clone();
         self.fire_count += 1;
@@ -511,7 +511,7 @@ impl AutomationRecord {
         event_json: Option<String>,
         job_json: Option<String>,
     ) {
-        self.updated_at = isoformat_z(None);
+        self.updated_at = isoformat_z(utc_now());
         self.last_evaluated_at = self.updated_at.clone();
         self.pending_recheck = Some(AutomationPendingRecheck {
             due_at,

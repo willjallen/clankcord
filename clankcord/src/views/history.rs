@@ -140,7 +140,7 @@ pub async fn timeline_tail(ctx: &Ctx, request: TimelineTailRequest) -> Result<Va
         request.limit,
     );
     Ok(
-        json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(Some(start)), "events": events}),
+        json!({"guildId": room.guild_id, "channelId": room.channel_id, "since": isoformat_z(start), "events": events}),
     )
 }
 
@@ -189,7 +189,7 @@ pub async fn timeline_range(ctx: &Ctx, request: TimelineRangeRequest) -> Result<
         channels.push(json!({"voice_channel_id": current_channel_id, "events": events}));
     }
     Ok(
-        json!({"guildId": guild_id, "from": isoformat_z(Some(start)), "to": isoformat_z(Some(end)), "channels": channels}),
+        json!({"guildId": guild_id, "from": isoformat_z(start), "to": isoformat_z(end), "channels": channels}),
     )
 }
 

@@ -123,8 +123,8 @@ async fn audio_segment_slot_inherits_room_wake_priority() {
     let store = test_store(&raw.path().join("voice")).await;
     let now = Utc::now();
     let mut wake_payload = wake_activation_payload("guild", "code");
-    wake_payload.wake_started_at = isoformat_z(Some(now - Duration::seconds(20)));
-    wake_payload.latest_wake_at = isoformat_z(Some(now - Duration::seconds(20)));
+    wake_payload.wake_started_at = isoformat_z(now - Duration::seconds(20));
+    wake_payload.latest_wake_at = isoformat_z(now - Duration::seconds(20));
     wake_payload.max_window_seconds = 3600;
     store
         .create_job(Job::wake_activation(wake_payload))

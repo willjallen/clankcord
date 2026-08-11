@@ -319,12 +319,12 @@ impl<State, Payload> PreV0_2_0Job<State, Payload> {
             requested_by_user_id: self.requested_by_user_id,
             payload,
             attempts: self.attempts,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            next_run_at: self.next_run_at,
-            started_at: self.started_at,
-            completed_at: self.completed_at,
-            cancelled_at: self.cancelled_at,
+            created_at: migrated_instant(&self.created_at, "created_at")?,
+            updated_at: migrated_instant(&self.updated_at, "updated_at")?,
+            next_run_at: migrated_optional_instant(self.next_run_at)?,
+            started_at: migrated_optional_instant(self.started_at)?,
+            completed_at: migrated_optional_instant(self.completed_at)?,
+            cancelled_at: migrated_optional_instant(self.cancelled_at)?,
             parent_job_id: self.parent_job_id,
             root_job_id: self.root_job_id,
             lineage_depth: self.lineage_depth,
@@ -341,4 +341,15 @@ fn is_failed_job_state(state: JobState) -> bool {
             | JobState::FailedTimeout
             | JobState::FailedDraftRetained
     )
+}
+
+fn migrated_instant(raw: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    crate::time::parse_instant(raw)
+        .ok_or_else(|| anyhow::anyhow!("migrated job has invalid {field}: {raw}"))
+}
+
+fn migrated_optional_instant(raw: Option<String>) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    raw.filter(|value| !value.trim().is_empty())
+        .map(|value| migrated_instant(&value, "timestamp"))
+        .transpose()
 }

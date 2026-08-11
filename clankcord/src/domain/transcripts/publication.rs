@@ -16,7 +16,7 @@ use crate::model::job::{
 };
 use crate::model::rooms::RoomConfig;
 use crate::model::scope::RuntimeScope;
-use crate::time::isoformat_z;
+use crate::time::{isoformat_z, utc_now};
 use crate::util::{first_non_empty, preview, string_field};
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;
@@ -60,7 +60,7 @@ pub(crate) async fn publish_materialized_transcript(
         [
             ("publish_job_id", json!(job.id.clone())),
             ("state", json!("discord_publish_queued")),
-            ("updated_at", json!(isoformat_z(None))),
+            ("updated_at", json!(isoformat_z(utc_now()))),
         ],
     )?;
     ctx.store.update_publication(&publication).await?;
@@ -216,7 +216,7 @@ async fn complete_transcript_publication(
             ("discord_thread_id", json!(thread_id)),
             ("discord_message_ids", json!(message_ids.clone())),
             ("state", json!(state)),
-            ("updated_at", json!(isoformat_z(None))),
+            ("updated_at", json!(isoformat_z(utc_now()))),
         ],
     )?;
     ctx.store.update_publication(publication).await?;
@@ -302,7 +302,7 @@ async fn fail_publication_with_error(
         &mut publication,
         [
             ("discord_publish_error", json!(message.clone())),
-            ("updated_at", json!(isoformat_z(None))),
+            ("updated_at", json!(isoformat_z(utc_now()))),
         ],
     )?;
     ctx.store.update_publication(&publication).await?;

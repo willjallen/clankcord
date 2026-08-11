@@ -100,12 +100,12 @@ async fn prepare_command(
                     guild_id: guild_id.clone(),
                     channel_id: channel_id.clone(),
                     from: if command.arguments.from.trim().is_empty() {
-                        isoformat_z(Some(start))
+                        isoformat_z(start)
                     } else {
                         command.arguments.from.clone()
                     },
                     to: if command.arguments.to.trim().is_empty() {
-                        isoformat_z(Some(end))
+                        isoformat_z(end)
                     } else {
                         command.arguments.to.clone()
                     },
@@ -133,8 +133,8 @@ async fn prepare_command(
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
                     channel_id: channel_id.clone(),
-                    from: isoformat_z(Some(start)),
-                    to: isoformat_z(Some(end)),
+                    from: isoformat_z(start),
+                    to: isoformat_z(end),
                     publish: "discord".to_string(),
                     created_by_user_id: command.requested_by_user_id.clone(),
                     parent_job_id: parent_job.id.clone(),
@@ -311,12 +311,12 @@ async fn prepare_command(
                     guild_id: guild_id.clone(),
                     channel_id: channel_id.clone(),
                     since: if command.arguments.from.trim().is_empty() {
-                        isoformat_z(Some(start))
+                        isoformat_z(start)
                     } else {
                         command.arguments.from.clone()
                     },
                     to: if command.arguments.to.trim().is_empty() {
-                        isoformat_z(Some(end))
+                        isoformat_z(end)
                     } else {
                         command.arguments.to.clone()
                     },

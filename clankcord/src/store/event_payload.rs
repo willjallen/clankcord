@@ -194,20 +194,16 @@ pub fn timeline_event_payload(row: &PgRow) -> Result<Value> {
         set_default_string(&mut payload, "speakerLabel", &speaker_label);
     }
     if let Some(started) = started {
-        set_default_string(
-            &mut payload,
-            "segment_start_time",
-            &isoformat_z(Some(started)),
-        );
-        set_default_string(&mut payload, "startedAt", &isoformat_z(Some(started)));
+        set_default_string(&mut payload, "segment_start_time", &isoformat_z(started));
+        set_default_string(&mut payload, "startedAt", &isoformat_z(started));
     }
     if let Some(ended) = ended {
-        set_default_string(&mut payload, "segment_end_time", &isoformat_z(Some(ended)));
-        set_default_string(&mut payload, "endedAt", &isoformat_z(Some(ended)));
+        set_default_string(&mut payload, "segment_end_time", &isoformat_z(ended));
+        set_default_string(&mut payload, "endedAt", &isoformat_z(ended));
     }
     if let Some(created) = created {
-        set_default_string(&mut payload, "created_at", &isoformat_z(Some(created)));
-        set_default_string(&mut payload, "timestamp", &isoformat_z(Some(created)));
+        set_default_string(&mut payload, "created_at", &isoformat_z(created));
+        set_default_string(&mut payload, "timestamp", &isoformat_z(created));
     }
     if !text.is_empty() {
         set_default_string(&mut payload, "text_draft", &text);

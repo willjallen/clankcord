@@ -72,8 +72,8 @@ impl TimelineStore {
             "speaker_label": payload.speaker_label,
             "speaker_username": payload.speaker_username,
             "segment_index": payload.segment_index,
-            "segment_start_time": isoformat_z(Some(payload.segment_start_time)),
-            "segment_end_time": isoformat_z(Some(payload.segment_end_time)),
+            "segment_start_time": isoformat_z(payload.segment_start_time),
+            "segment_end_time": isoformat_z(payload.segment_end_time),
             "duration_ms": payload.duration_ms,
             "source_audio_path": payload.source_audio_path.display().to_string(),
             "audio_checksum": payload.audio_checksum,
@@ -87,7 +87,7 @@ impl TimelineStore {
             "provider": provider,
             "model": model,
             "priority": priority,
-            "created_at": isoformat_z(None),
+            "created_at": isoformat_z(utc_now()),
         });
         sqlx::query(
             r#"

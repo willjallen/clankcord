@@ -1,4 +1,4 @@
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Number, Value, json};
 use uuid::Uuid;
@@ -509,12 +509,18 @@ pub struct Job {
     pub requested_by_user_id: String,
     pub payload: JobPayload,
     pub attempts: i64,
-    pub created_at: String,
-    pub updated_at: String,
-    pub next_run_at: Option<String>,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub cancelled_at: Option<String>,
+    #[serde(with = "crate::time::serde_iso")]
+    pub created_at: DateTime<Utc>,
+    #[serde(with = "crate::time::serde_iso")]
+    pub updated_at: DateTime<Utc>,
+    #[serde(with = "crate::time::serde_iso_opt")]
+    pub next_run_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::time::serde_iso_opt")]
+    pub started_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::time::serde_iso_opt")]
+    pub completed_at: Option<DateTime<Utc>>,
+    #[serde(with = "crate::time::serde_iso_opt")]
+    pub cancelled_at: Option<DateTime<Utc>>,
     pub parent_job_id: Option<String>,
     pub root_job_id: String,
     pub lineage_depth: u8,
@@ -528,7 +534,7 @@ impl Job {
         state: JobState,
         payload: JobPayload,
     ) -> Self {
-        let now = now_string();
+        let now = crate::time::utc_now();
         let id = format!("job_{}", Uuid::new_v4().simple());
         Self {
             id: id.clone(),
@@ -540,7 +546,7 @@ impl Job {
             requested_by_user_id: requested_by_user_id.into(),
             payload,
             attempts: 0,
-            created_at: now.clone(),
+            created_at: now,
             updated_at: now,
             next_run_at: None,
             started_at: None,
@@ -771,10 +777,7 @@ impl Job {
             }),
         );
         if delay_ms > 0 {
-            job.next_run_at = Some(
-                (Utc::now() + chrono::Duration::milliseconds(delay_ms))
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
-            );
+            job.next_run_at = Some(Utc::now() + chrono::Duration::milliseconds(delay_ms));
         }
         job
     }
@@ -1153,10 +1156,10 @@ impl Job {
             "scope_id": self.scope_id.clone(),
             "requested_by_user_id": self.requested_by_user_id.clone(),
             "command_kind": self.command_kind(),
-            "created_at": self.created_at.clone(),
-            "updated_at": self.updated_at.clone(),
-            "started_at": self.started_at.clone().unwrap_or_default(),
-            "completed_at": self.completed_at.clone().unwrap_or_default(),
+            "created_at": crate::time::isoformat_z(self.created_at),
+            "updated_at": crate::time::isoformat_z(self.updated_at),
+            "started_at": self.started_at.map(crate::time::isoformat_z).unwrap_or_default(),
+            "completed_at": self.completed_at.map(crate::time::isoformat_z).unwrap_or_default(),
             "parent_job_id": self.parent_job_id.clone().unwrap_or_default(),
             "root_job_id": self.root_job_id.clone(),
             "lineage_depth": self.lineage_depth,
@@ -1195,16 +1198,16 @@ impl Job {
         );
         object.insert(
             "created_at".to_string(),
-            Value::String(self.created_at.clone()),
+            Value::String(crate::time::isoformat_z(self.created_at)),
         );
         object.insert(
             "updated_at".to_string(),
-            Value::String(self.updated_at.clone()),
+            Value::String(crate::time::isoformat_z(self.updated_at)),
         );
-        insert_optional_string(&mut object, "next_run_at", &self.next_run_at);
-        insert_optional_string(&mut object, "started_at", &self.started_at);
-        insert_optional_string(&mut object, "completed_at", &self.completed_at);
-        insert_optional_string(&mut object, "cancelled_at", &self.cancelled_at);
+        insert_optional_instant(&mut object, "next_run_at", self.next_run_at);
+        insert_optional_instant(&mut object, "started_at", self.started_at);
+        insert_optional_instant(&mut object, "completed_at", self.completed_at);
+        insert_optional_instant(&mut object, "cancelled_at", self.cancelled_at);
         insert_optional_string(&mut object, "parent_job_id", &self.parent_job_id);
         insert_non_empty(&mut object, "root_job_id", &self.root_job_id);
         object.insert(
@@ -1420,12 +1423,24 @@ impl Job {
             "scope_id" => self.scope_id.clone(),
             "state" => self.state.as_str().to_string(),
             "requested_by_user_id" => self.requested_by_user_id.clone(),
-            "created_at" => self.created_at.clone(),
-            "updated_at" => self.updated_at.clone(),
-            "next_run_at" => self.next_run_at.clone().unwrap_or_default(),
-            "started_at" => self.started_at.clone().unwrap_or_default(),
-            "completed_at" => self.completed_at.clone().unwrap_or_default(),
-            "cancelled_at" => self.cancelled_at.clone().unwrap_or_default(),
+            "created_at" => crate::time::isoformat_z(self.created_at),
+            "updated_at" => crate::time::isoformat_z(self.updated_at),
+            "next_run_at" => self
+                .next_run_at
+                .map(crate::time::isoformat_z)
+                .unwrap_or_default(),
+            "started_at" => self
+                .started_at
+                .map(crate::time::isoformat_z)
+                .unwrap_or_default(),
+            "completed_at" => self
+                .completed_at
+                .map(crate::time::isoformat_z)
+                .unwrap_or_default(),
+            "cancelled_at" => self
+                .cancelled_at
+                .map(crate::time::isoformat_z)
+                .unwrap_or_default(),
             "parent_job_id" => self.parent_job_id.clone().unwrap_or_default(),
             "root_job_id" => self.root_job_id.clone(),
             "lineage_depth" => self.lineage_depth.to_string(),
@@ -1482,14 +1497,10 @@ impl Job {
     }
 
     pub fn mark_running(&mut self) {
-        let now = now_string();
+        let now = crate::time::utc_now();
         self.state = JobState::Running;
-        if self
-            .started_at
-            .as_ref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            self.started_at = Some(now.clone());
+        if self.started_at.is_none() {
+            self.started_at = Some(now);
         }
         self.updated_at = now;
     }
@@ -1500,21 +1511,17 @@ impl Job {
     }
 
     pub fn mark_complete(&mut self) {
-        let now = now_string();
+        let now = crate::time::utc_now();
         self.state = JobState::Complete;
-        self.completed_at = Some(now.clone());
+        self.completed_at = Some(now);
         self.updated_at = now;
     }
 
     pub fn mark_cancelled(&mut self) {
-        let now = now_string();
+        let now = crate::time::utc_now();
         self.state = JobState::Cancelled;
-        if self
-            .cancelled_at
-            .as_ref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            self.cancelled_at = Some(now.clone());
+        if self.cancelled_at.is_none() {
+            self.cancelled_at = Some(now);
         }
         self.updated_at = now;
     }
@@ -1536,7 +1543,7 @@ impl Job {
     }
 
     pub fn touch(&mut self) {
-        self.updated_at = now_string();
+        self.updated_at = crate::time::utc_now();
     }
 
     pub fn touched(&self) -> Self {
@@ -1546,6 +1553,15 @@ impl Job {
     }
 }
 
-fn now_string() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+fn insert_optional_instant(
+    object: &mut serde_json::Map<String, Value>,
+    key: &str,
+    value: Option<DateTime<Utc>>,
+) {
+    if let Some(value) = value {
+        object.insert(
+            key.to_string(),
+            Value::String(crate::time::isoformat_z(value)),
+        );
+    }
 }

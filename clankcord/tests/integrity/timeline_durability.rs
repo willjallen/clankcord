@@ -262,10 +262,9 @@ async fn retention_sweep_respects_transcript_and_source_audio_policy() {
         "user-a",
         CommandRequest::agent_task("guild", "code", "user-a", "summarize"),
     );
-    let started = start.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-    job.created_at = started.clone();
-    job.updated_at = started.clone();
-    job.completed_at = Some(started);
+    job.created_at = start;
+    job.updated_at = start;
+    job.completed_at = Some(start);
     job.state = JobState::Complete;
     let job_id = job.id.clone();
     store.create_job(job).await.unwrap();

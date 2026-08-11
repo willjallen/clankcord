@@ -133,9 +133,8 @@ async fn run_agent_task_dispatch_phase(
         Ok(mut dispatched_task) => {
             let mut prepared = ctx.store.get_job(&job_id).await?;
             dispatched_task.phase = AgentTaskPhase::AwaitDelivery;
-            dispatched_task.await_delivery_until = isoformat_z(Some(
-                utc_now() + chrono::Duration::seconds(AWAIT_DELIVERY_GRACE_SECONDS),
-            ));
+            dispatched_task.await_delivery_until =
+                isoformat_z(utc_now() + chrono::Duration::seconds(AWAIT_DELIVERY_GRACE_SECONDS));
             dispatched_task.dispatch_attempts = attempts;
             prepared.metadata.set_agent_task(dispatched_task.clone());
             ctx.store.update_job(&prepared).await?;
@@ -191,9 +190,8 @@ async fn resolve_agent_task_delivery(
     if deadline.is_some_and(|deadline| utc_now() < deadline) {
         let mut polling = latest;
         polling.set_state(JobState::Queued);
-        polling.next_run_at = Some(isoformat_z(Some(
-            utc_now() + chrono::Duration::milliseconds(AWAIT_DELIVERY_POLL_MS),
-        )));
+        polling.next_run_at =
+            Some(utc_now() + chrono::Duration::milliseconds(AWAIT_DELIVERY_POLL_MS));
         ctx.store.update_job(&polling).await?;
         return Ok(json!({
             "dispatched": true,
@@ -229,13 +227,10 @@ fn classify_undelivered_agent_response(response_text: &str) -> AgentTaskOutcome 
 }
 
 async fn cancel_agent_task_job(ctx: &Ctx, mut latest: Job) -> Result<Value> {
-    let cancelled_at = non_empty(
-        latest.cancelled_at.clone().unwrap_or_default(),
-        isoformat_z(None),
-    );
+    let cancelled_at = latest.cancelled_at.unwrap_or_else(utc_now);
     latest.mark_cancelled();
     latest.cancelled_at = Some(cancelled_at);
-    latest.completed_at = Some(isoformat_z(None));
+    latest.completed_at = Some(utc_now());
     latest.metadata.agent_task_mut().result_suppressed = true;
     ctx.store.update_job(&latest).await?;
     ctx.store
@@ -457,10 +452,7 @@ async fn fail_agent_task_job(
         is_infrastructure_error && agent_invocation_infrastructure_failure(&error_text);
     let mut latest = ctx.store.get_job(&job_id).await?;
     if latest.cancel_requested() {
-        let cancelled_at = non_empty(
-            latest.cancelled_at.clone().unwrap_or_default(),
-            isoformat_z(None),
-        );
+        let cancelled_at = latest.cancelled_at.unwrap_or_else(utc_now);
         latest.mark_cancelled();
         latest.cancelled_at = Some(cancelled_at);
         latest.metadata.agent_task_mut().dispatch_error_after_cancel = error_text;
@@ -678,7 +670,7 @@ async fn agent_task_prompt_context(
         .unwrap_or_default();
     let source_event_ids = agent_task_source_event_ids(job);
     let source_events = agent_task_source_events(ctx, &source_event_ids).await?;
-    let end = parse_instant(&job.created_at).unwrap_or_else(utc_now);
+    let end = job.created_at;
     let start = end - chrono::Duration::minutes(5);
     let speech_kinds = set(["speech_segment", "transcript", "discord_text_message"]);
     let events = ctx
@@ -1048,7 +1040,7 @@ fn run_agent_task_preflight(envs: Option<&BTreeMap<String, String>>) -> AgentPre
     }
     AgentPreflightMetadata {
         ok: results.iter().all(|result| result.ok),
-        checked_at: isoformat_z(None),
+        checked_at: isoformat_z(utc_now()),
         checks: results,
     }
 }

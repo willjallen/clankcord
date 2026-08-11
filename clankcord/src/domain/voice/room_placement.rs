@@ -160,7 +160,7 @@ pub(crate) async fn commit_join_room_job(
                 "channelId": room.channel_id,
                 "voice_channel_name": room.channel_name,
                 "channelName": room.channel_name,
-                "updated_at": isoformat_z(None),
+                "updated_at": isoformat_z(utc_now()),
             }))
             .await?;
         Ok(JobOutput::RoomAgentPlacement(RoomAgentPlacementOutput {
@@ -597,7 +597,7 @@ async fn commit_finished_room_session(
         ctx.store.upsert_voice_bot_state(&status).await?;
     }
     if let Some(mut session) = result.session {
-        session.mark_ended(isoformat_z(None));
+        session.mark_ended(isoformat_z(utc_now()));
         ctx.store.upsert_capture_session_status(&session).await?;
         Ok(Some(session))
     } else if let Some(mut session) = ctx
@@ -605,7 +605,7 @@ async fn commit_finished_room_session(
         .get_capture_session_status(&result.session_id)
         .await?
     {
-        session.mark_ended(isoformat_z(None));
+        session.mark_ended(isoformat_z(utc_now()));
         ctx.store.upsert_capture_session_status(&session).await?;
         Ok(Some(session))
     } else {

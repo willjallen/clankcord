@@ -1,4 +1,4 @@
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
@@ -199,10 +199,10 @@ pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Va
         speaker_user_id,
         speaker_label,
         wake_event_id: wake_event_id.clone(),
-        wake_started_at: isoformat_z(Some(wake_started_at)),
-        wake_ended_at: isoformat_z(Some(wake_ended_at)),
+        wake_started_at: isoformat_z(wake_started_at),
+        wake_ended_at: isoformat_z(wake_ended_at),
         latest_wake_event_id: wake_event_id,
-        latest_wake_at: isoformat_z(Some(wake_started_at)),
+        latest_wake_at: isoformat_z(wake_started_at),
         lookback_seconds: activation.lookback_seconds.max(0),
         min_post_seconds: activation.min_post_seconds.max(0),
         speaker_idle_seconds: activation.speaker_idle_seconds.max(0),
@@ -214,7 +214,7 @@ pub async fn schedule_from_wake_event(runtime: &Ctx, event: &Value) -> Result<Va
         replacement_of_job_ids: Vec::new(),
     };
     let mut job = Job::wake_activation(payload.clone());
-    job.next_run_at = Some(ready_at_string(
+    job.next_run_at = Some(ready_at(
         wake_started_at,
         wake_ended_at,
         payload.min_post_seconds,
@@ -317,7 +317,7 @@ pub async fn execute(runtime: &Ctx, job: &Job, payload: &WakeActivationPayload) 
     if now < due_at {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
-        deferred.next_run_at = Some(isoformat_z(Some(due_at)));
+        deferred.next_run_at = Some(due_at);
         runtime.store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
@@ -332,7 +332,7 @@ pub async fn execute(runtime: &Ctx, job: &Job, payload: &WakeActivationPayload) 
         let next_run_at = std::cmp::min(hold.next_run_at, hard_cap);
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
-        deferred.next_run_at = Some(isoformat_z(Some(next_run_at)));
+        deferred.next_run_at = Some(next_run_at);
         runtime.store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
@@ -403,16 +403,14 @@ async fn dispatch_after_request_audio(
     {
         let mut deferred = job.clone();
         deferred.state = JobState::Queued;
-        deferred.next_run_at = Some(isoformat_z(Some(
-            now + chrono::Duration::milliseconds(transcription_poll_ms()),
-        )));
+        deferred.next_run_at = Some(now + chrono::Duration::milliseconds(transcription_poll_ms()));
         runtime.store.update_job(&deferred).await?;
         return Ok(json!({
             "kind": "wake_activation",
             "status": "deferred",
             "reason": "waiting_for_room_transcription",
-            "request_audio_closed_at": isoformat_z(Some(closed_at)),
-            "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+            "request_audio_closed_at": isoformat_z(closed_at),
+            "transcription_wait_deadline_at": isoformat_z(deadline_at),
             "transcription_settlement": settlement.to_json(),
             "next_run_at": deferred.next_run_at,
         }));
@@ -440,7 +438,7 @@ async fn dispatch_after_request_audio(
             "kind": "wake_activation",
             "status": "no_request_captured",
             "reason": "empty_request_text",
-            "request_audio_closed_at": isoformat_z(Some(closed_at)),
+            "request_audio_closed_at": isoformat_z(closed_at),
             "transcription_context_omissions": context_omissions,
         }));
     }
@@ -470,7 +468,7 @@ async fn dispatch_after_request_audio(
                 "kind": "wake_activation_dispatched",
                 "job_id": job.id,
                 "activation_id": payload.activation_id,
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "request_audio_closed_at": isoformat_z(closed_at),
                 "transcription_context_omissions": context_omissions.clone(),
                 "created": created.clone(),
             }),
@@ -479,7 +477,7 @@ async fn dispatch_after_request_audio(
     Ok(json!({
         "kind": "wake_activation",
         "status": "dispatched",
-        "request_audio_closed_at": isoformat_z(Some(closed_at)),
+        "request_audio_closed_at": isoformat_z(closed_at),
         "transcription_context_omissions": context_omissions,
         "created": created,
     }))
@@ -505,9 +503,9 @@ async fn record_activation_window_closed(
                 "latest_wake_event_id": payload.latest_wake_event_id,
                 "speaker_user_id": payload.speaker_user_id,
                 "speaker_label": payload.speaker_label,
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
-                "startedAt": isoformat_z(Some(closed_at)),
-                "endedAt": isoformat_z(Some(closed_at)),
+                "request_audio_closed_at": isoformat_z(closed_at),
+                "startedAt": isoformat_z(closed_at),
+                "endedAt": isoformat_z(closed_at),
             }),
         )
         .await?;
@@ -542,7 +540,7 @@ async fn record_activation_no_request(
                 "job_id": job.id,
                 "activation_id": payload.activation_id,
                 "reason": reason,
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
+                "request_audio_closed_at": isoformat_z(closed_at),
             }),
         )
         .await?;
@@ -573,11 +571,11 @@ async fn fail_activation_transcription(
                 "speaker_user_id": payload.speaker_user_id,
                 "speaker_label": payload.speaker_label,
                 "reason": reason,
-                "request_audio_closed_at": isoformat_z(Some(closed_at)),
-                "transcription_wait_deadline_at": isoformat_z(Some(deadline_at)),
+                "request_audio_closed_at": isoformat_z(closed_at),
+                "transcription_wait_deadline_at": isoformat_z(deadline_at),
                 "transcription_settlement": settlement.to_json(),
-                "startedAt": isoformat_z(None),
-                "endedAt": isoformat_z(None),
+                "startedAt": isoformat_z(utc_now()),
+                "endedAt": isoformat_z(utc_now()),
             }),
         )
         .await?;
@@ -679,7 +677,7 @@ async fn amend_activation_job(
         )
     };
     activation.state = JobState::Queued;
-    activation.next_run_at = Some(ready_at_string(
+    activation.next_run_at = Some(ready_at(
         wake_started_at,
         wake_ended_at,
         min_post_seconds,
@@ -732,7 +730,7 @@ async fn replacement_activation_job(
         payload.replacement_of_job_ids.push(replaced.id.clone());
     }
     let mut job = Job::wake_activation(payload.clone());
-    job.next_run_at = Some(ready_at_string(
+    job.next_run_at = Some(ready_at(
         wake_started_at,
         wake_ended_at,
         payload.min_post_seconds,
@@ -750,7 +748,7 @@ fn amend_payload(
     speaker_label: String,
 ) {
     payload.latest_wake_event_id = wake_event_id.to_string();
-    payload.latest_wake_at = isoformat_z(Some(wake_started_at));
+    payload.latest_wake_at = isoformat_z(wake_started_at);
     payload.speaker_user_id = speaker_user_id;
     payload.speaker_label = speaker_label;
     if payload.wake_event_id != wake_event_id
@@ -1133,18 +1131,17 @@ fn collapse_ws(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn ready_at_string(
+fn ready_at(
     started_at: DateTime<Utc>,
     ended_at: DateTime<Utc>,
     min_post_seconds: i64,
     idle_seconds: i64,
     _flush_grace_seconds: i64,
-) -> String {
-    let due_at = std::cmp::max(
+) -> DateTime<Utc> {
+    std::cmp::max(
         started_at + chrono::Duration::seconds(min_post_seconds),
         ended_at + chrono::Duration::seconds(idle_seconds),
-    );
-    due_at.to_rfc3339_opts(SecondsFormat::Millis, true)
+    )
 }
 
 fn same_speaker(event: &Value, speaker_user_id: &str) -> bool {

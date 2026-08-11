@@ -9,7 +9,7 @@ use crate::model::job::{
     BinaryPayload, CommandRequest, ConfirmationContext, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextDeliveryKind, TextTarget, TextTargetKind,
 };
-use crate::time::isoformat_z;
+use crate::time::{isoformat_z, utc_now};
 
 use crate::domain::Ctx;
 use crate::domain::interactions::commands;
@@ -67,11 +67,11 @@ pub async fn confirmation_context_for_command(
     Ok(ConfirmationContext {
         sensitive,
         delivery: if sensitive { "dm" } else { "channel" }.to_string(),
-        target_window_start: isoformat_z(Some(start)),
-        target_window_end: isoformat_z(Some(end)),
+        target_window_start: isoformat_z(start),
+        target_window_end: isoformat_z(end),
         target_window_duration_seconds: (end - start).num_seconds().max(0),
         source_preview: source_lines,
-        created_at: isoformat_z(None),
+        created_at: isoformat_z(utc_now()),
     })
 }
 
@@ -231,8 +231,8 @@ pub async fn confirmation_card_content(
         format!("Requested by: {requester}"),
         format!(
             "Target window: {} to {}",
-            isoformat_z(Some(start)),
-            isoformat_z(Some(end))
+            isoformat_z(start),
+            isoformat_z(end)
         ),
         format!("Job: {}", job.id),
     ];
@@ -274,7 +274,7 @@ pub async fn approve_confirmation(ctx: &Ctx, job_id: &str, actor_user_id: String
     {
         let confirmation = job.metadata.confirmation_mut();
         confirmation.approved_by_user_id = actor_user_id;
-        confirmation.approved_at = isoformat_z(None);
+        confirmation.approved_at = isoformat_z(utc_now());
     }
     ctx.store.update_job(&job).await?;
     let dispatch_result = match commands::create_command_job(ctx, command.clone(), Some(&job)).await

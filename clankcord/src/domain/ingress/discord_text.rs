@@ -97,7 +97,7 @@ async fn append_thread_message_event(
                 "speaker_label": text_author_label(payload),
                 "text": payload.content,
                 "timestamp": if payload.created_at.trim().is_empty() {
-                    isoformat_z(None)
+                    isoformat_z(utc_now())
                 } else {
                     payload.created_at.clone()
                 },

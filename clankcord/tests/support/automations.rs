@@ -137,7 +137,7 @@ pub fn code_room() -> RoomConfig {
 }
 
 pub fn six_minutes_ago() -> String {
-    isoformat_z(Some(utc_now() - chrono::Duration::minutes(6)))
+    isoformat_z(utc_now() - chrono::Duration::minutes(6))
 }
 
 pub fn ready_bot() -> VoiceBotStatus {

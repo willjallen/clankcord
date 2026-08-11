@@ -255,8 +255,8 @@ impl TimelineStore {
                 serde_json::json!({
                     "event_kind": "forget_applied",
                     "kind": "forget_applied",
-                    "start_time": isoformat_z(Some(start)),
-                    "end_time": isoformat_z(Some(end)),
+                    "start_time": isoformat_z(start),
+                    "end_time": isoformat_z(end),
                     "requested_by_user_id": requested_by_user_id,
                     "unpublished_only": unpublished_only,
                     "event_count": events.len(),

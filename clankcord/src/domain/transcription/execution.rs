@@ -17,7 +17,7 @@ use crate::domain::transcription::{should_drop_low_confidence_transcription, stt
 use crate::model::job::{JobState, TranscriptionMuxPayload, TranscriptionMuxPlanPayload};
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
 use crate::store::{SpeechEventInput, TranscriptionSlotRecord};
-use crate::time::{isoformat_z, utc_now};
+use crate::time::utc_now;
 use crate::util;
 use crate::util::sha256_file;
 
@@ -763,9 +763,8 @@ pub async fn requeue_failed_audio_segment_jobs(ctx: &Ctx, limit: usize) -> Resul
         job.set_state(JobState::Queued);
         job.started_at = None;
         job.completed_at = None;
-        job.next_run_at = Some(isoformat_z(Some(
-            utc_now() + chrono::Duration::seconds(retry_delay_seconds(job.attempts)),
-        )));
+        job.next_run_at =
+            Some(utc_now() + chrono::Duration::seconds(retry_delay_seconds(job.attempts)));
         ctx.store.update_job(&job).await?;
         requeued.push(job.to_value());
     }

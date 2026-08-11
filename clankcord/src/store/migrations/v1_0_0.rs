@@ -21,6 +21,7 @@ use crate::Result;
 use crate::model::job::Job;
 use crate::model::job::{AgentTaskMetadata, AgentTaskOutcome, AgentTaskPhase};
 use crate::store::isoformat_z;
+use crate::time::utc_now;
 
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     purge_removed_job_kinds(transaction).await?;
@@ -222,12 +223,12 @@ impl V8Job {
             requested_by_user_id: self.requested_by_user_id,
             payload: self.payload.into_current()?,
             attempts: self.attempts,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-            next_run_at: self.next_run_at,
-            started_at: self.started_at,
-            completed_at: self.completed_at,
-            cancelled_at: self.cancelled_at,
+            created_at: migrated_instant(&self.created_at, "created_at")?,
+            updated_at: migrated_instant(&self.updated_at, "updated_at")?,
+            next_run_at: migrated_optional_instant(self.next_run_at)?,
+            started_at: migrated_optional_instant(self.started_at)?,
+            completed_at: migrated_optional_instant(self.completed_at)?,
+            cancelled_at: migrated_optional_instant(self.cancelled_at)?,
             parent_job_id: self.parent_job_id,
             root_job_id: self.root_job_id,
             lineage_depth: self.lineage_depth,
@@ -489,7 +490,7 @@ impl V8AgentTaskMetadata {
             || !self.dispatch_error.trim().is_empty()
             || !self.dispatch_stdout_preview.trim().is_empty();
         let (phase, await_delivery_until) = if dispatched {
-            (AgentTaskPhase::AwaitDelivery, isoformat_z(None))
+            (AgentTaskPhase::AwaitDelivery, isoformat_z(utc_now()))
         } else {
             (AgentTaskPhase::Dispatch, String::new())
         };
@@ -514,4 +515,15 @@ impl V8AgentTaskMetadata {
             discord_post: self.discord_post,
         }
     }
+}
+
+fn migrated_instant(raw: &str, field: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    crate::time::parse_instant(raw)
+        .ok_or_else(|| anyhow::anyhow!("migrated job has invalid {field}: {raw}"))
+}
+
+fn migrated_optional_instant(raw: Option<String>) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    raw.filter(|value| !value.trim().is_empty())
+        .map(|value| migrated_instant(&value, "timestamp"))
+        .transpose()
 }

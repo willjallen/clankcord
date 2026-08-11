@@ -177,7 +177,7 @@ impl TimelineStore {
         for row in rows {
             let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
             let mut record = AgentSessionRecord::decode(&payload_blob)?;
-            let reason = if instant_ms_str(Some(&record.max_active_until))
+            let reason = if instant_ms_str(&record.max_active_until)
                 .map(|deadline| deadline <= now_ms)
                 .unwrap_or(false)
             {
@@ -191,7 +191,7 @@ impl TimelineStore {
                 continue;
             };
             record.state = AgentSessionRecordState::Retired;
-            record.retired_at = isoformat_z(Some(now));
+            record.retired_at = isoformat_z(now);
             record.retirement_reason = reason.to_string();
             upsert_agent_session(&self.pool, &record).await?;
             retired.push(record);
@@ -202,11 +202,9 @@ impl TimelineStore {
 
 async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) -> Result<()> {
     let created_at_ms =
-        instant_ms_str(Some(&record.created_at)).unwrap_or_else(|| instant_ms_dt(utc_now()));
-    let last_activity_at_ms =
-        instant_ms_str(Some(&record.last_activity_at)).unwrap_or(created_at_ms);
-    let max_active_until_ms =
-        instant_ms_str(Some(&record.max_active_until)).unwrap_or(created_at_ms);
+        instant_ms_str(&record.created_at).unwrap_or_else(|| instant_ms_dt(utc_now()));
+    let last_activity_at_ms = instant_ms_str(&record.last_activity_at).unwrap_or(created_at_ms);
+    let max_active_until_ms = instant_ms_str(&record.max_active_until).unwrap_or(created_at_ms);
     sqlx::query(
         r#"
         INSERT INTO agent_sessions(
@@ -258,7 +256,7 @@ async fn upsert_agent_session(pool: &sqlx::PgPool, record: &AgentSessionRecord) 
     .bind(created_at_ms)
     .bind(last_activity_at_ms)
     .bind(max_active_until_ms)
-    .bind(instant_ms_str(Some(&record.retired_at)))
+    .bind(instant_ms_str(&record.retired_at))
     .bind(&record.retirement_reason)
     .bind(&record.retired_by_user_id)
     .bind(&record.resumed_from_agent_session_id)

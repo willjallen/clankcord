@@ -100,7 +100,7 @@ impl TimelineStore {
                 if state == crate::model::job::JobState::Running {
                     job.set_state(crate::model::job::JobState::FailedTimeout);
                     job.metadata.error = "stale wake probe exceeded queue age limit".to_string();
-                    job.metadata.timed_out_at = isoformat_z(Some(now));
+                    job.metadata.timed_out_at = isoformat_z(now);
                 } else {
                     job.mark_cancelled();
                     job.metadata.error = "stale queued wake probe was dropped".to_string();
@@ -1535,13 +1535,9 @@ async fn insert_operational_job_outcome(
 
 fn project_job(job: &Job) -> JobProjection {
     let projected = job.payload.projection();
-    let created_at_ms = instant_ms_str(Some(&job.created_at)).unwrap_or(0);
-    let updated_at_ms = instant_ms_str(Some(&job.updated_at)).unwrap_or(created_at_ms);
-    let ready_at_ms = job
-        .next_run_at
-        .as_deref()
-        .and_then(|value| instant_ms_str(Some(value)))
-        .unwrap_or(created_at_ms);
+    let created_at_ms = instant_ms_dt(job.created_at);
+    let updated_at_ms = instant_ms_dt(job.updated_at);
+    let ready_at_ms = job.next_run_at.map(instant_ms_dt).unwrap_or(created_at_ms);
     let terminal = job.state.is_terminal();
     let failed = job.state.is_failed();
     let ephemeral = job.kind.is_ephemeral();
@@ -1549,14 +1545,8 @@ fn project_job(job: &Job) -> JobProjection {
         created_at_ms,
         updated_at_ms,
         ready_at_ms,
-        started_at_ms: job
-            .started_at
-            .as_deref()
-            .and_then(|value| instant_ms_str(Some(value))),
-        completed_at_ms: job
-            .completed_at
-            .as_deref()
-            .and_then(|value| instant_ms_str(Some(value))),
+        started_at_ms: job.started_at.map(instant_ms_dt),
+        completed_at_ms: job.completed_at.map(instant_ms_dt),
         gc_after_ms: ephemeral_gc_after_ms(job, updated_at_ms, terminal, failed),
         terminal,
         failed,
@@ -1577,11 +1567,11 @@ fn sort_jobs_by_created_at(jobs: &mut [Job]) {
     jobs.sort_by_cached_key(|job| (job_order_time(job), job.id.clone()));
 }
 
-fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
+fn job_order_time(job: &Job) -> DateTime<Utc> {
     job.payload
         .projection()
         .order_time
-        .or_else(|| parse_instant(&job.created_at))
+        .unwrap_or(job.created_at)
 }
 
 fn ephemeral_gc_after_ms(

@@ -13,7 +13,7 @@ use crate::domain::rooms::status;
 use crate::domain::voice::capture::wake_circuit;
 use crate::model::job::{Job, JobState};
 use crate::store::VOICE_ADAPTER_SNAPSHOT_STATUS_KEY;
-use crate::time::{instant_ms_dt, isoformat_z, parse_instant, utc_now};
+use crate::time::{instant_ms_dt, isoformat_z, utc_now};
 use crate::util::string_field;
 use crate::views::diagnostics::{
     BacklogKindSummary, FAILURE_WINDOW_SECONDS, JobDiagnosticRow, age_seconds, count_pair_rows,
@@ -34,7 +34,7 @@ pub async fn dashboard_summary_payload(ctx: &Ctx) -> Result<Value> {
     let database = database_health_probe(ctx).await;
     if !database.get("ok").and_then(Value::as_bool).unwrap_or(false) {
         return Ok(json!({
-            "generatedAt": isoformat_z(Some(now)),
+            "generatedAt": isoformat_z(now),
             "health": runtime_health_from_facts(
                 &database,
                 &RuntimeHealthFacts::default(),
@@ -61,7 +61,7 @@ pub async fn dashboard_summary_payload(ctx: &Ctx) -> Result<Value> {
     let (configured_room_count, automation_count) = inventory;
     let wake_provider = wake_circuit::wake_provider_health(&ctx.store).await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "health": runtime_health_from_facts(
             &database,
             &health_facts,
@@ -148,7 +148,7 @@ pub async fn dashboard_health_payload(
         )
         .await?;
     Ok(json!({
-        "generatedAt": isoformat_z(Some(now)),
+        "generatedAt": isoformat_z(now),
         "health": health,
         "database": database,
         "requests": http_requests,
@@ -479,7 +479,7 @@ fn runtime_health_from_facts(
     now: DateTime<Utc>,
 ) -> Value {
     let now_ms = instant_ms_dt(now);
-    let observed_at = isoformat_z(Some(now));
+    let observed_at = isoformat_z(now);
     let mut components = Vec::new();
 
     let database_ok = database.get("ok").and_then(Value::as_bool).unwrap_or(false);
@@ -884,7 +884,7 @@ fn scheduler_fresh_for_seconds() -> i64 {
 fn unavailable_failure_summary(now: DateTime<Utc>) -> Value {
     json!({
         "window": "1h",
-        "since": isoformat_z(Some(now - Duration::seconds(FAILURE_WINDOW_SECONDS))),
+        "since": isoformat_z(now - Duration::seconds(FAILURE_WINDOW_SECONDS)),
         "count": 0,
         "complete": false,
         "coverageStartsAt": Value::Null,
@@ -1291,18 +1291,11 @@ fn load_payload(jobs: &[Job], now: DateTime<Utc>) -> Value {
             .entry(job.state.as_str().to_string())
             .or_insert(0_usize) += 1;
         if job.state == JobState::Queued {
-            if job
-                .next_run_at
-                .as_deref()
-                .and_then(parse_instant)
-                .is_none_or(|due| due <= now)
-            {
+            if job.next_run_at.is_none_or(|due| due <= now) {
                 due_queued += 1;
             }
-            if let Some(created_at) = parse_instant(&job.created_at) {
-                oldest_queued_age_seconds =
-                    oldest_queued_age_seconds.max((now - created_at).num_seconds());
-            }
+            oldest_queued_age_seconds =
+                oldest_queued_age_seconds.max((now - job.created_at).num_seconds());
         }
     }
     let by_kind_rows = by_kind

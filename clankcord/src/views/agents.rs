@@ -11,7 +11,7 @@ use crate::adapters::codex::{parse_codex_trace, usage_payload_info};
 use crate::domain::Ctx;
 use crate::model::agents::task_session_key;
 use crate::model::job::{Job, JobKind, JobState};
-use crate::time::{isoformat_z, ms_to_datetime, parse_instant};
+use crate::time::{isoformat_z, ms_to_datetime};
 use crate::util::{first_non_empty, non_empty, preview, string_field};
 use crate::views::render::dashboard_job_duration_ms;
 
@@ -109,9 +109,7 @@ pub(crate) async fn agent_session_rollups(
 }
 
 fn timestamp(milliseconds: i64) -> String {
-    isoformat_z(Some(
-        ms_to_datetime(milliseconds).expect("validated session timestamp"),
-    ))
+    isoformat_z(ms_to_datetime(milliseconds).expect("validated session timestamp"))
 }
 
 pub async fn dashboard_agent_job(ctx: &Ctx, job_id: &str) -> Result<Value> {
@@ -169,14 +167,14 @@ impl CodexUsageWindow {
     fn to_json(&self) -> Value {
         json!({
             "label": self.label,
-            "since": isoformat_z(Some(self.since)),
+            "since": isoformat_z(self.since),
             "jobs": self.jobs,
             "jobsWithUsage": self.jobs_with_usage,
             "inputTokens": self.input_tokens,
             "cachedInputTokens": self.cached_input_tokens,
             "outputTokens": self.output_tokens,
             "reasoningOutputTokens": self.reasoning_output_tokens,
-            "latestAt": isoformat_z(self.latest_at),
+            "latestAt": self.latest_at.map(isoformat_z).unwrap_or_default(),
         })
     }
 }
@@ -187,9 +185,7 @@ fn codex_usage_rollup(jobs: &[Job], now: DateTime<Utc>) -> Value {
 
     for job in jobs.iter().filter(|job| job.kind == JobKind::AgentTask) {
         let usage = codex_usage_for_job(job);
-        let Some(at) = job_activity_instant(job) else {
-            continue;
-        };
+        let at = job_activity_instant(job);
         if at >= five_hour.since {
             five_hour.add_job(at, &usage);
         }
@@ -217,14 +213,8 @@ fn codex_usage_for_job(job: &Job) -> Value {
     json!({})
 }
 
-fn job_activity_instant(job: &Job) -> Option<DateTime<Utc>> {
-    let timestamp = first_non_empty([
-        job.completed_at.clone().unwrap_or_default(),
-        job.updated_at.clone(),
-        job.started_at.clone().unwrap_or_default(),
-        job.created_at.clone(),
-    ]);
-    parse_instant(&timestamp)
+fn job_activity_instant(job: &Job) -> DateTime<Utc> {
+    job.completed_at.unwrap_or(job.updated_at)
 }
 
 fn usage_token_field(usage: &Value, key: &str) -> i64 {
