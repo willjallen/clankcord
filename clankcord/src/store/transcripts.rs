@@ -361,13 +361,21 @@ impl TimelineStore {
         .await?;
         let artifact_dir = self.durable_publications_dir().join(&publication_id);
         let metadata_path = artifact_dir.join("metadata.json");
-        let mut metadata = read_json_file(&metadata_path, serde_json::json!({}));
-        if !metadata.is_object() {
-            metadata = serde_json::json!({});
-        }
+        let text = fs::read_to_string(&metadata_path).map_err(|error| {
+            anyhow::anyhow!(
+                "publication metadata unreadable at {}: {error}",
+                metadata_path.display()
+            )
+        })?;
+        let mut metadata: serde_json::Value = serde_json::from_str(&text)?;
         metadata
             .as_object_mut()
-            .unwrap()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "publication metadata is not an object: {}",
+                    metadata_path.display()
+                )
+            })?
             .insert("publication".to_string(), publication.clone());
         write_json_file(&metadata_path, &metadata)?;
         Ok(())

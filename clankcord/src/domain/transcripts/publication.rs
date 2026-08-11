@@ -105,7 +105,12 @@ pub(crate) async fn execute_transcript_publication_job(
             .collect::<Vec<_>>();
         if text_children.is_empty() {
             let draft_path = PathBuf::from(string_field(&publication, "draft_artifact_path"));
-            let content = fs::read_to_string(&draft_path).unwrap_or_default();
+            let content = fs::read_to_string(&draft_path).map_err(|error| {
+                anyhow::anyhow!(
+                    "transcript draft artifact unreadable at {}: {error}",
+                    draft_path.display()
+                )
+            })?;
             let chunks = split_message_chunks(&content, MESSAGE_CHUNK_LIMIT);
             let jobs = chunks
                 .into_iter()

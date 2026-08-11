@@ -266,16 +266,6 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
-pub fn read_json_file(path: &Path, fallback: Value) -> Value {
-    if !path.is_file() {
-        return fallback;
-    }
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .unwrap_or(fallback)
-}
-
 pub fn write_json_file(path: &Path, payload: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
