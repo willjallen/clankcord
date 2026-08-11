@@ -92,7 +92,7 @@ green. Tests file by purpose category; regression pins cite fix commits.
 - [ ] 23. Job timestamps typed end-to-end (no ISO-String fields on the core
   record, no parse/format round-trips); time helper API loses its Option
   ceremony; migration if the column representation changes.
-- [ ] 24. CommandArguments fully typed: activation and friends become real
+- [x] 24. CommandArguments fully typed: activation and friends become real
   fields; typed→JSON→typed round-trips and alias-key probing deleted.
 - [x] 25. LiveVoiceSession.mode becomes an enum.
 - [x] 26. Voice tick processing (WAV encode, sha256, fs::write) runs on the
@@ -103,11 +103,13 @@ green. Tests file by purpose category; regression pins cite fix commits.
 
 ### Wave 7 — remainders
 
-- [ ] 27. Dead weight: ChildResolution's unread `child: Job` clone,
-  TranscriptionSlotRecord's unread decoded fields, honest
-  large_enum_variant justifications (box AudioPipelineOutcome::SegmentReady),
-  agent-task history SQL triplication, shared audio-payload struct where it
-  pays.
+- [x] 27. Dead weight: ChildResolution's unread `child: Job` clone,
+  TranscriptionSlotRecord's unread decoded fields (eight total),
+  honest large_enum_variant justifications (SegmentReady boxed),
+  agent-task history SQL triplication. The audio/wake payload field
+  overlap stays by choice: both are positional bincode contracts whose
+  common fields the compiler already polices; merging churns the wire
+  for no real drift risk.
 - [ ] 28. docs/ updated to describe the moved code.
 
 ## Deferred register (unchanged, out of scope for the cleanup sequence)
