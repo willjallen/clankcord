@@ -1,12 +1,12 @@
 use serde_json::json;
 
 use clankcord::adapters::stt::parse_stt_payload;
+use clankcord::domain::transcription::execution::{
+    UntimestampedMuxDisposition, untimestamped_mux_disposition,
+};
 use clankcord::domain::transcription::{
     should_drop_low_confidence_transcription, stt_avg_token_logprob, stt_drop_decision,
     stt_no_speech_probability,
-};
-use clankcord::domain::voice::capture::{
-    UntimestampedMuxDisposition, untimestamped_mux_disposition,
 };
 
 #[tokio::test(flavor = "current_thread")]

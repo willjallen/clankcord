@@ -11,6 +11,7 @@ use crate::domain::maintenance::member_sync;
 use crate::domain::messaging::text_delivery;
 use crate::domain::messaging::typing_indicator;
 use crate::domain::rooms::catalog;
+use crate::domain::transcription::execution as transcription_execution;
 use crate::domain::transcripts::publication;
 use crate::domain::voice::capture::{segments, wake_activations, wake_probes};
 use crate::domain::voice::playback;
@@ -140,7 +141,8 @@ where
         }
         JobPayload::TranscriptionMuxPlan(payload) => {
             Ok(JobDecision::Complete(JobOutput::from_boundary_json(
-                &segments::execute_transcription_mux_plan_job(runtime, job, payload).await?,
+                &transcription_execution::execute_transcription_mux_plan_job(runtime, job, payload)
+                    .await?,
             )?))
         }
         JobPayload::Command(_) => {
@@ -198,7 +200,7 @@ pub(crate) async fn execute_audio_segment(runtime: &Ctx, job: &Job) -> Result<Jo
 pub(crate) async fn execute_transcription_mux(runtime: &Ctx, job: &Job) -> Result<JobOutput> {
     match &job.payload {
         JobPayload::TranscriptionMux(payload) => Ok(JobOutput::from_boundary_json(
-            &segments::execute_transcription_mux_job(runtime, job, payload).await?,
+            &transcription_execution::execute_transcription_mux_job(runtime, job, payload).await?,
         )?),
         payload => anyhow::bail!(
             "job payload {} is not handled by transcription mux executor",

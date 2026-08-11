@@ -2,7 +2,7 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::domain::Ctx;
-use crate::domain::voice::capture::segments;
+use crate::domain::transcription::execution as transcription_execution;
 use crate::engine::JobDecision;
 use crate::model::job::{Job, JobKind, JobOutput, JobState};
 use crate::ports::discord::DiscordApi;
@@ -36,8 +36,8 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
         },
         JobKind::AudioSegment => match routes::execute_audio_segment(ctx, &running).await {
             Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
-            Err(error) if segments::is_retryable_audio_segment_error(&error) => {
-                let retry = segments::retry_plan(error);
+            Err(error) if transcription_execution::is_retryable_audio_segment_error(&error) => {
+                let retry = transcription_execution::retry_plan(error);
                 requeue_dispatched_job(
                     ctx,
                     &job_id,
@@ -51,8 +51,8 @@ pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Va
         },
         JobKind::TranscriptionMux => match routes::execute_transcription_mux(ctx, &running).await {
             Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
-            Err(error) if segments::is_retryable_audio_segment_error(&error) => {
-                let retry = segments::retry_plan(error);
+            Err(error) if transcription_execution::is_retryable_audio_segment_error(&error) => {
+                let retry = transcription_execution::retry_plan(error);
                 requeue_dispatched_job(
                     ctx,
                     &job_id,
@@ -167,8 +167,8 @@ pub(crate) async fn requeue_dispatched_job(
     latest.started_at = None;
     latest.completed_at = None;
     let delay = delay_for_attempt(latest.attempts);
-    latest.next_run_at = Some(crate::store::isoformat_z(Some(
-        crate::store::utc_now() + delay,
+    latest.next_run_at = Some(crate::time::isoformat_z(Some(
+        crate::time::utc_now() + delay,
     )));
     latest.metadata.error = error_text.clone();
     ctx.store.update_job(&latest).await?;

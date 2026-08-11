@@ -5,8 +5,8 @@ use crate::Result;
 use crate::config;
 use crate::domain::Ctx;
 use crate::domain::interactions::agent_sessions;
+use crate::domain::transcription::execution as transcription_execution;
 use crate::domain::transcription::mux;
-use crate::domain::voice::capture::segments;
 use crate::domain::voice::playback;
 use crate::model::job::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
@@ -934,7 +934,7 @@ async fn room_transcription_settlement(
         );
         let pending = matches!(slot.state.as_str(), "queued" | "planned" | "muxing")
             || (slot.state == "failed"
-                && segments::is_retryable_audio_segment_error_text(&slot.error));
+                && transcription_execution::is_retryable_audio_segment_error_text(&slot.error));
         if pending {
             if requester {
                 settlement.requester_pending.push(id);
@@ -979,7 +979,7 @@ async fn room_transcription_settlement(
             closed_at,
         );
         let retryable_failure = job.state == JobState::FailedTimeout
-            || segments::is_retryable_audio_segment_error_text(&job.metadata.error);
+            || transcription_execution::is_retryable_audio_segment_error_text(&job.metadata.error);
         if !job.state.is_terminal() || retryable_failure {
             if requester {
                 settlement.requester_pending.push(id);

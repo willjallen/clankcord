@@ -9,7 +9,7 @@ use crate::support::test_store;
 use chrono::Duration;
 use chrono::Utc;
 use clankcord::domain::Ctx;
-use clankcord::domain::voice::capture;
+use clankcord::domain::transcription::execution;
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
@@ -148,7 +148,7 @@ async fn retryable_failed_transcription_slots_requeue_for_mux_planning() {
     .await
     .unwrap();
 
-    let requeued = capture::requeue_retryable_failed_transcription_slots(&runtime, 10)
+    let requeued = execution::requeue_retryable_failed_transcription_slots(&runtime, 10)
         .await
         .unwrap();
 
