@@ -1141,6 +1141,30 @@ impl Job {
             ]) == JOB_PAYLOAD_BLOB_VERSION
     }
 
+    /// The redacted job projection shared by operator surfaces and
+    /// automation evaluation contexts.
+    pub fn public_view(&self) -> serde_json::Value {
+        serde_json::json!({
+            "job_id": self.id.clone(),
+            "kind": self.kind.as_str(),
+            "state": self.state.as_str(),
+            "scope_kind": self.scope_kind.as_str(),
+            "guild_id": self.guild_id.clone(),
+            "scope_id": self.scope_id.clone(),
+            "requested_by_user_id": self.requested_by_user_id.clone(),
+            "command_kind": self.command_kind(),
+            "created_at": self.created_at.clone(),
+            "updated_at": self.updated_at.clone(),
+            "started_at": self.started_at.clone().unwrap_or_default(),
+            "completed_at": self.completed_at.clone().unwrap_or_default(),
+            "parent_job_id": self.parent_job_id.clone().unwrap_or_default(),
+            "root_job_id": self.root_job_id.clone(),
+            "lineage_depth": self.lineage_depth,
+            "cancellable": self.state.is_cancellable(),
+            "cancel_requested": self.cancel_requested(),
+        })
+    }
+
     pub fn to_value(&self) -> Value {
         let mut object = Map::new();
         object.insert("job_id".to_string(), Value::String(self.id.clone()));

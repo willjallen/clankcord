@@ -103,6 +103,14 @@ async fn approved_jobs_count_active_on_every_dashboard_panel() {
     .await
     .unwrap();
     let summary = &agents["agents"]["summary"];
-    assert_eq!(summary["active"], json!(1), "agents panel agrees: {summary}");
-    assert_eq!(summary["failed"], json!(1), "agents panel agrees: {summary}");
+    assert_eq!(
+        summary["active"],
+        json!(1),
+        "agents panel agrees: {summary}"
+    );
+    assert_eq!(
+        summary["failed"],
+        json!(1),
+        "agents panel agrees: {summary}"
+    );
 }

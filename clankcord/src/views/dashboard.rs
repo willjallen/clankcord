@@ -546,7 +546,7 @@ async fn dashboard_recent_jobs(
 
 async fn dashboard_active_jobs(ctx: &Ctx, limit: usize) -> Result<Vec<Job>> {
     let rows = sqlx::query(
-            r#"
+        r#"
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
@@ -554,10 +554,10 @@ async fn dashboard_active_jobs(ctx: &Ctx, limit: usize) -> Result<Vec<Job>> {
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
             LIMIT $1
             "#,
-        )
-        .bind(limit as i64)
-        .fetch_all(&ctx.store.pool)
-        .await?;
+    )
+    .bind(limit as i64)
+    .fetch_all(&ctx.store.pool)
+    .await?;
     rows.into_iter()
         .map(|row| Job::decode(&row.try_get::<Vec<u8>, _>("payload_blob")?))
         .collect()
@@ -688,7 +688,7 @@ async fn dashboard_overview_job_summary(
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value> {
     let rows = sqlx::query(
-            r#"
+        r#"
             WITH selected AS MATERIALIZED (
               SELECT state, kind, scope_kind, guild_id, scope_id, updated_at_ms,
                      terminal, failed
@@ -713,10 +713,10 @@ async fn dashboard_overview_job_summary(
             FROM selected
             GROUP BY scope_kind, guild_id, scope_id
             "#,
-        )
-        .bind(instant_ms_dt(now - chrono::Duration::hours(1)))
-        .fetch_all(&ctx.store.pool)
-        .await?;
+    )
+    .bind(instant_ms_dt(now - chrono::Duration::hours(1)))
+    .fetch_all(&ctx.store.pool)
+    .await?;
 
     let mut by_state = Vec::new();
     let mut by_kind = Vec::new();
@@ -812,7 +812,7 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
     let since_ms = instant_ms_dt(now - chrono::Duration::hours(1));
     let now_ms = instant_ms_dt(now);
     let job_rows = sqlx::query(
-            r#"
+        r#"
             SELECT kind, state, COUNT(*)::BIGINT AS count
             FROM jobs
             WHERE updated_at_ms >= $1
@@ -820,10 +820,10 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
             GROUP BY kind, state
             ORDER BY count DESC, kind, state
             "#,
-        )
-        .bind(since_ms)
-        .fetch_all(&ctx.store.pool)
-        .await?;
+    )
+    .bind(since_ms)
+    .fetch_all(&ctx.store.pool)
+    .await?;
     let event_rows = sqlx::query(
         r#"
             SELECT started_at_ms - MOD(started_at_ms, 300000) AS bucket_at_ms,
@@ -841,7 +841,7 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
     .fetch_all(&ctx.store.pool)
     .await?;
     let scope_rows = sqlx::query(
-            r#"
+        r#"
             WITH observed AS MATERIALIZED (
               SELECT scope_kind, guild_id, scope_id, COUNT(*)::BIGINT AS jobs,
                      0::BIGINT AS speech, 0::BIGINT AS transcripts, 0::BIGINT AS wake,
@@ -873,11 +873,11 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
             ORDER BY SUM(jobs + speech + transcripts + wake) DESC,
                      scope_kind, guild_id, scope_id
             "#,
-        )
-        .bind(since_ms)
-        .bind(now_ms)
-        .fetch_all(&ctx.store.pool)
-        .await?;
+    )
+    .bind(since_ms)
+    .bind(now_ms)
+    .fetch_all(&ctx.store.pool)
+    .await?;
 
     let jobs_by_kind_state = job_rows
         .into_iter()

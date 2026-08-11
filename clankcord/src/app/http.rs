@@ -25,6 +25,7 @@ use crate::domain::automations::spec;
 use crate::domain::interactions::agent_sessions;
 use crate::domain::messaging::text_delivery;
 use crate::domain::rooms::catalog;
+use crate::domain::rooms::status;
 use crate::model::job::CommandRequest;
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::util::first_value_string;
@@ -33,7 +34,6 @@ use crate::views::history;
 use crate::views::jobs;
 use crate::views::members;
 use crate::views::operations;
-use crate::views::status;
 use crate::views::{
     ContextResolveRequest, DashboardAgentsRequest, DashboardJobsRequest, DashboardOverviewRequest,
     DashboardTimelineRequest, DashboardTranscriptRequest, JobsRequest, ListConversationsRequest,

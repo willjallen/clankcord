@@ -1,7 +1,15 @@
 use serde_json::{Value, json};
 
 use crate::Result;
+use crate::domain::Ctx;
+use crate::domain::interactions::agent_sessions;
+use crate::domain::interactions::confirmations;
 use crate::domain::interactions::requires_confirmation;
+use crate::domain::rooms::catalog;
+use crate::domain::rooms::control_state;
+use crate::domain::transcripts;
+use crate::domain::transcripts::{ForgetRequest, MaterializeTranscriptRequest};
+use crate::domain::voice::playback;
 use crate::engine::JobDecision;
 use crate::model::job::{
     CommandKind, CommandRequest, DiscordVoiceMutePayload, DiscordVoicePlayAudioPayload,
@@ -10,14 +18,6 @@ use crate::model::job::{
 use crate::model::scope::RuntimeScope;
 use crate::store::{isoformat_z, utc_now};
 use crate::util::string_field;
-use crate::domain::Ctx;
-use crate::domain::interactions::agent_sessions;
-use crate::domain::interactions::confirmations;
-use crate::domain::rooms::catalog;
-use crate::domain::rooms::control_state;
-use crate::domain::transcripts;
-use crate::domain::transcripts::{ForgetRequest, MaterializeTranscriptRequest};
-use crate::domain::voice::playback;
 
 pub async fn create_command_job(
     ctx: &Ctx,

@@ -34,7 +34,6 @@ pub struct TimelineRangeRequest {
     pub verbose: bool,
 }
 
-
 #[derive(Debug, Clone, Default)]
 pub struct RenderTranscriptRequest {
     pub window_id: String,

@@ -12,6 +12,7 @@ use crate::config;
 use crate::domain::Ctx;
 use crate::domain::agents::AgentRuntime;
 use crate::domain::automations::{AutomationRecord, AutomationTrigger};
+use crate::domain::rooms::status;
 use crate::domain::voice::capture::wake_circuit;
 use crate::model::job::{Job, JobKind, JobState};
 use crate::store::util::timeline_event_payload;
@@ -19,7 +20,6 @@ use crate::store::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAP
 use crate::store::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now};
 use crate::util::{first_non_empty, non_empty, preview, string_field};
 use crate::views::dashboard;
-use crate::views::status;
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;

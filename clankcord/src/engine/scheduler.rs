@@ -111,10 +111,7 @@ impl ScheduleRound {
                 }),
             );
         }
-        object.insert(
-            "totalScheduled".to_string(),
-            json!(self.total_scheduled()),
-        );
+        object.insert("totalScheduled".to_string(), json!(self.total_scheduled()));
         Value::Object(object)
     }
 }

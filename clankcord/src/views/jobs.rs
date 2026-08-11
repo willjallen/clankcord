@@ -60,29 +60,6 @@ pub async fn get_job_payload(ctx: &Ctx, job_id: &str, verbose: bool) -> Result<V
     })
 }
 
-pub fn public_job_view(job: &Job) -> Value {
-    let state = job.state.as_str().to_string();
-    json!({
-        "job_id": job.id.clone(),
-        "kind": job.kind.as_str(),
-        "state": state.clone(),
-        "scope_kind": job.scope_kind.as_str(),
-        "guild_id": job.guild_id.clone(),
-        "scope_id": job.scope_id.clone(),
-        "requested_by_user_id": job.requested_by_user_id.clone(),
-        "command_kind": job.command_kind(),
-        "created_at": job.created_at.clone(),
-        "updated_at": job.updated_at.clone(),
-        "started_at": job.started_at.clone().unwrap_or_default(),
-        "completed_at": job.completed_at.clone().unwrap_or_default(),
-        "parent_job_id": job.parent_job_id.clone().unwrap_or_default(),
-        "root_job_id": job.root_job_id.clone(),
-        "lineage_depth": job.lineage_depth,
-        "cancellable": job.state.is_cancellable(),
-        "cancel_requested": job.cancel_requested(),
-    })
-}
-
 pub fn public_interaction_job_context(job: &Job) -> Value {
     let state = job.state.as_str().to_string();
     let request = job
@@ -126,7 +103,7 @@ pub async fn cancellable_jobs_for_channel(
         .store
         .list_cancellable_jobs_for_scope(guild_id, channel_id, limit)
         .await?;
-    Ok(jobs.into_iter().map(|job| public_job_view(&job)).collect())
+    Ok(jobs.into_iter().map(|job| job.public_view()).collect())
 }
 
 pub async fn recent_agent_task_jobs_for_channel(

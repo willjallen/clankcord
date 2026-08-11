@@ -11,7 +11,6 @@ use crate::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionS
 use crate::model::job::JobState;
 use crate::store::format_timestamp_local;
 use crate::util::first_non_empty;
-use crate::views::jobs;
 
 pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
     let bots = ctx.store.list_voice_bot_states().await?;
@@ -59,7 +58,7 @@ pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {
         .await?
         .into_iter()
         .filter(|job| job.scope_id == room.channel_id && !job.state.is_terminal())
-        .map(|job| jobs::public_job_view(&job))
+        .map(|job| job.public_view())
         .collect::<Vec<_>>();
     Ok(json!({
         "room": room.to_json(),
