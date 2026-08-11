@@ -26,25 +26,33 @@ The source tree is the layering. Every arrow points downward; `app/` is the only
 
 ```text
 src/
-├── config.rs, errors.rs, util.rs   leaves: configuration, typed errors,
-│                                   shared string/log helpers
+├── config.rs, time.rs, util.rs   leaves: configuration, the instant and
+│                                 duration vocabulary, shared helpers
 ├── model/                 the durable vocabulary: job kind/payload/output/
-│                          record, the JobSpec policy table, runtime scopes
+│                          record, the JobSpec policy table, runtime scopes,
+│                          rooms, voice status, agent session records,
+│                          automation specs
 ├── store/                 Postgres: row mechanics, schema, migrations
-├── ports/                 trait seams (DiscordApi, Transcriber,
-│                          WakeDetector, voice DTOs) — domain calls them,
-│                          adapters implement them
+├── ports/                 boundary vocabulary: the DiscordApi trait the
+│                          engine dispatches through, plus the STT, wake,
+│                          and voice DTOs adapters produce
 ├── engine/                the job engine: JobBus submission, the scheduler
-│                          (due kinds -> spec lookup), the dispatcher, the
-│                          exhaustive payload route, schedule evaluation
+│                          (due kinds -> spec lookup), the one exhaustive
+│                          payload route and its finalization policy,
+│                          schedule evaluation
 ├── domain/                job handlers as free functions over Ctx: agents,
 │                          automations, ingress, interactions, maintenance,
-│                          messaging, rooms, transcription, transcripts,
-│                          voice (placement, playback, capture)
-├── views/                 read models over the store
-├── adapters/              protocol mechanics: Discord gateway and voice
-│                          transport, codex subprocess, STT and wake
-│                          transport
+│                          messaging, rooms, transcription (planning and
+│                          execution), transcripts, voice (placement,
+│                          playback, capture)
+├── views/                 read models over the store, split by
+│                          responsibility: render, search, agents,
+│                          diagnostics, health, timeline surfaces, and the
+│                          dashboard composition on top
+├── adapters/              protocol mechanics: Discord gateway, voice
+│                          transport and its failure classification, codex
+│                          subprocess and trace interpretation, STT and
+│                          wake transport
 ├── app/                   composition roots: the service process, the HTTP
 │                          API and dashboard, CLI manuals, process telemetry
 └── dashboard/             the operator frontend assets
@@ -64,7 +72,7 @@ The agent task is an explicit two-phase machine persisted in its metadata: `Disp
 
 Recovery and debugging start with those durable records. When work is slow or broken, inspect the job, its state, its dependency edges, its typed outcome, and nearby timeline events. Latency comes from concrete operations: a provider call, a Discord API call, an adapter lock, a WAV write, a Postgres query, scheduler ordering, a ready-time delay, or another measurable operation.
 
-Domain code owns policy; adapters own external mechanics behind ports. The STT drop thresholds and the wake circuit breaker live in domain (`domain/transcription`, `domain/voice/capture/wake_circuit`); the wake circuit's state is a Postgres row, so an open circuit survives restart and its half-open probe slot is a leased claim rather than a process flag.
+Domain code owns policy; adapters own external mechanics and hand results across in ports DTOs. The STT drop thresholds, provider-failure retry classification, and the wake circuit breaker live in domain (`domain/transcription`, `domain/voice/capture/wake_circuit`); the wake circuit's state is a Postgres row, so an open circuit survives restart and its half-open probe slot is a leased claim rather than a process flag.
 
 ## Reading Order
 

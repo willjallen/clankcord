@@ -90,13 +90,13 @@ Automations and agent sessions follow the same projection-and-envelope pattern. 
 
 The timeline package separates durable contracts, store primitives, and rendered views.
 
-`timeline/schema.rs` owns table contracts, index contracts, schema creation, and schema invariant checks. It describes the Postgres shape the runtime expects at startup.
+`store/schema.rs` owns table contracts, index contracts, schema creation, and schema invariant checks. It describes the Postgres shape the runtime expects at startup.
 
-`timeline/store/mod.rs` owns the `TimelineStore` handle, constructors, artifact path helpers, and shared store types. Targeted store modules under `timeline/store/` hold read and write primitives for jobs, events, voice state, room controls, members, automations, runtime config, agent sessions, maintenance, and transcripts.
+`store/mod.rs` owns the `TimelineStore` handle, constructors, artifact path helpers, and shared store types. Targeted store modules under `store/` hold read and write primitives for jobs, events, voice state, room controls, members, automations, runtime config, agent sessions, transcription slots, maintenance, and transcripts. `store/event_payload.rs` holds the timeline event payload semantics and the row decoders that produce it.
 
-`timeline/views/` owns read-only projection helpers for status, history, jobs, members, and operator output. Views coalesce facts across store modules into HTTP, CLI, dashboard, and agent-facing JSON. Canonical state remains in Postgres and artifact files.
+`views/` owns read models split by responsibility: `render` (value compaction and job rendering), `search` (the one term normalization and search-SQL builder), `agents` (session rollups and agent-job detail), `diagnostics` (the Postgres and operational diagnostics), `health` (the runtime health rollup), plus the timeline, history, rooms, jobs, and members surfaces, with `dashboard` composed on top. Views coalesce facts across store modules into HTTP, CLI, dashboard, and agent-facing JSON; nothing imports `dashboard` back. Canonical state remains in Postgres and artifact files.
 
-`timeline/util.rs` contains parsing, time, formatting, hashing, audio, and event payload helpers used by the store and views.
+The instant and duration vocabulary — RFC3339 wall-clock strings, epoch milliseconds, relative references — lives in `time.rs` at the crate root; every layer tells time through it. The job record itself carries `DateTime<Utc>` timestamps and persists them as the same millisecond RFC3339 strings its blobs always carried.
 
 ## Artifact Root
 

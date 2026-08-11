@@ -214,6 +214,6 @@ Operator views expose pool usage, table sizes, row counts, table activity, lock 
 
 ## Schema Discipline
 
-`timeline/schema.rs` defines the current table and index contract, creates the schema, applies registered migrations, and asserts invariants at startup. The assertion treats stale columns and stale indexes as contract violations. The database shape is a hard runtime dependency.
+`store/schema.rs` defines the current table and index contract, creates the schema, applies registered migrations, and asserts invariants at startup. The assertion treats stale columns and stale indexes as contract violations. The database shape is a hard runtime dependency.
 
 Schema changes follow the same projection-first rule. A field becomes a column when it affects scheduling, routing, joins, retention, status views, dashboard diagnostics, or bounded user-facing filters. A field remains inside a payload when it is meaningful after the record has already been selected. This keeps the relational shape small, queryable, and tied to real runtime access patterns.

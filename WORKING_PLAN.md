@@ -110,7 +110,7 @@ green. Tests file by purpose category; regression pins cite fix commits.
   overlap stays by choice: both are positional bincode contracts whose
   common fields the compiler already polices; merging churns the wire
   for no real drift risk.
-- [ ] 28. docs/ updated to describe the moved code.
+- [x] 28. docs/ updated to describe the moved code.
 
 ## Deferred register (unchanged, out of scope for the cleanup sequence)
 
