@@ -11,11 +11,11 @@ use crate::domain::Ctx;
 use crate::domain::transcription::mux;
 use crate::domain::transcription::{should_drop_low_confidence_transcription, stt_drop_decision};
 use crate::model::job::{
-    AudioSegmentPayload, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
+    AudioSegmentPayload, JobState, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
 };
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
 use crate::store::TranscriptionSlotRecord;
-use crate::store::{SpeechEventInput, read_wav_mono, sha256_file};
+use crate::store::{SpeechEventInput, isoformat_z, read_wav_mono, sha256_file, utc_now};
 use crate::util;
 
 pub(crate) struct AudioSegmentRetryPlan {
@@ -821,4 +821,54 @@ fn merge_object(target: &mut Value, source: Value) {
     for (key, value) in source {
         target.insert(key.clone(), value.clone());
     }
+}
+
+/// Requeues failed audio-segment jobs whose failure is retryable under
+/// this module's STT retry policy, applying the standard backoff.
+pub async fn requeue_failed_audio_segment_jobs(ctx: &Ctx, limit: usize) -> Result<Vec<Value>> {
+    let mut requeued = Vec::new();
+    for mut job in ctx.store.list_failed_audio_segment_jobs(limit).await? {
+        let retryable = job.state == JobState::FailedTimeout
+            || is_retryable_audio_segment_error_text(&job.metadata.error);
+        if !retryable {
+            continue;
+        }
+        job.attempts = job.attempts.saturating_add(1);
+        job.set_state(JobState::Queued);
+        job.started_at = None;
+        job.completed_at = None;
+        job.next_run_at = Some(isoformat_z(Some(
+            utc_now() + chrono::Duration::seconds(retry_delay_seconds(job.attempts)),
+        )));
+        ctx.store.update_job(&job).await?;
+        requeued.push(job.to_value());
+    }
+    Ok(requeued)
+}
+
+/// Requeues failed transcription slots whose recorded error is retryable
+/// under the same policy.
+pub async fn requeue_retryable_failed_transcription_slots(
+    ctx: &Ctx,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut requeued = Vec::new();
+    for slot in ctx.store.list_failed_transcription_slots(limit).await? {
+        if !is_retryable_audio_segment_error_text(&slot.error) {
+            continue;
+        }
+        if ctx
+            .store
+            .requeue_transcription_slot_from_failed(&slot.slot_id, &slot.error)
+            .await?
+        {
+            requeued.push(json!({
+                "slot_id": slot.slot_id,
+                "source_job_id": slot.source_job_id,
+                "transcription_source_id": slot.transcription_source_id,
+                "error": slot.error,
+            }));
+        }
+    }
+    Ok(requeued)
 }

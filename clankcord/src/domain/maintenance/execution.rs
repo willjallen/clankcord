@@ -9,6 +9,7 @@ use crate::domain::interactions::thread_titles;
 use crate::domain::maintenance::STALE_RUNNING_JOB_TIMEOUT_MINUTES;
 use crate::domain::maintenance::voice_status;
 use crate::domain::transcription::mux;
+use crate::domain::voice::capture::segments;
 use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
@@ -29,17 +30,17 @@ pub(crate) async fn execute_runtime_maintenance_job(
             "job_kind": created.kind.as_str(),
         }));
     }
-    let requeued_audio_segments = ctx
-        .store
-        .requeue_failed_audio_segment_jobs(config::failed_audio_segment_retry_batch_limit())
-        .await?;
+    let requeued_audio_segments = segments::requeue_failed_audio_segment_jobs(
+        ctx,
+        config::failed_audio_segment_retry_batch_limit(),
+    )
+    .await?;
     let recovered_transcription_slots = ctx.store.recover_abandoned_transcription_slots().await?;
-    let requeued_transcription_slots = ctx
-        .store
-        .requeue_retryable_failed_transcription_slots(
-            config::failed_audio_segment_retry_batch_limit(),
-        )
-        .await?;
+    let requeued_transcription_slots = segments::requeue_retryable_failed_transcription_slots(
+        ctx,
+        config::failed_audio_segment_retry_batch_limit(),
+    )
+    .await?;
     let transcription_mux_plan_jobs = mux::ensure_transcription_mux_plan_jobs_for_queued_slots(
         ctx,
         config::transcription_mux_batch_delay_ms(),

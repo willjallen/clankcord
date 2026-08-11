@@ -1,5 +1,4 @@
 use super::*;
-use crate::domain::voice::capture::segments;
 
 pub(crate) const OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS: i64 = 6 * 60 * 60;
 
@@ -537,7 +536,7 @@ impl TimelineStore {
         )
     }
 
-    pub async fn requeue_failed_audio_segment_jobs(&self, limit: usize) -> Result<Vec<Value>> {
+    pub async fn list_failed_audio_segment_jobs(&self, limit: usize) -> Result<Vec<Job>> {
         let limit = limit.clamp(1, 1000) as i64;
         let rows = sqlx::query(
             r#"
@@ -553,26 +552,9 @@ impl TimelineStore {
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
-        let mut requeued = Vec::new();
-        for row in rows {
-            let payload_blob: Vec<u8> = row.try_get("payload_blob")?;
-            let mut job = Job::decode(&payload_blob)?;
-            let retryable = job.state == crate::model::job::JobState::FailedTimeout
-                || segments::is_retryable_audio_segment_error_text(&job.metadata.error);
-            if !retryable {
-                continue;
-            }
-            job.attempts = job.attempts.saturating_add(1);
-            job.set_state(crate::model::job::JobState::Queued);
-            job.started_at = None;
-            job.completed_at = None;
-            job.next_run_at = Some(isoformat_z(Some(
-                utc_now() + chrono::Duration::seconds(segments::retry_delay_seconds(job.attempts)),
-            )));
-            self.update_job(&job).await?;
-            requeued.push(job.to_value());
-        }
-        Ok(requeued)
+        rows.into_iter()
+            .map(|row| Job::decode(&row.try_get::<Vec<u8>, _>("payload_blob")?))
+            .collect()
     }
 
     pub async fn list_jobs(

@@ -7,6 +7,7 @@ use chrono::{Duration, SecondsFormat, TimeZone, Utc};
 use serde_json::json;
 
 use clankcord::domain::Ctx;
+use clankcord::domain::voice::capture;
 use clankcord::model::job::{
     CommandRequest, DiscordTextMessagePayload, DiscordTypingAction, DiscordTypingIndicatorPayload,
     Job, JobKind, JobState, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
@@ -311,7 +312,9 @@ async fn timeline_maintenance_requeues_retryable_failed_audio_segments() {
     let permanent_id = permanent.id.clone();
     store.create_job(permanent).await.unwrap();
 
-    let requeued = store.requeue_failed_audio_segment_jobs(10).await.unwrap();
+    let requeued = capture::requeue_failed_audio_segment_jobs(&Ctx::new(store.clone()), 10)
+        .await
+        .unwrap();
     let requeued_ids = requeued
         .iter()
         .map(|job| job["job_id"].as_str().unwrap().to_string())
