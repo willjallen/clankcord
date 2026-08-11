@@ -65,7 +65,7 @@ pub async fn dashboard_summary_payload(ctx: &Ctx) -> Result<Value> {
     let (active_jobs, mut health_facts, failures, voice, inventory) = tokio::try_join!(
         active_job_aggregates(ctx, now),
         lean_terminal_health_facts(ctx, now),
-        lean_failure_summary(ctx, now),
+        operational_failure_summary(ctx, now, false),
         lean_voice_observation_summary(ctx, now),
         dashboard_inventory_counts(ctx),
     )?;
@@ -532,6 +532,28 @@ struct RuntimeHealthFacts {
     transcription: CapabilityHealthFacts,
     agent_runtime: CapabilityHealthFacts,
     delivery: CapabilityHealthFacts,
+}
+
+/// The job kinds that roll up into capability health, in the buckets
+/// [`RuntimeHealthFacts::capability_mut`] assigns. SQL that feeds the
+/// rollup constrains itself to this list.
+const CAPABILITY_JOB_KINDS: &[&str] = &[
+    "audio_segment",
+    "transcription_mux",
+    "agent_task",
+    "text_delivery",
+    "discord_text_send",
+];
+
+impl RuntimeHealthFacts {
+    fn capability_mut(&mut self, kind: &str) -> Option<&mut CapabilityHealthFacts> {
+        match kind {
+            "audio_segment" | "transcription_mux" => Some(&mut self.transcription),
+            "agent_task" => Some(&mut self.agent_runtime),
+            "text_delivery" | "discord_text_send" => Some(&mut self.delivery),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -1262,13 +1284,7 @@ fn runtime_health_facts_from_rows(jobs: &[JobDiagnosticRow], now_ms: i64) -> Run
         ..RuntimeHealthFacts::default()
     };
     for row in jobs {
-        let capability = match row.kind.as_str() {
-            "audio_segment" | "transcription_mux" => Some(&mut facts.transcription),
-            "agent_task" => Some(&mut facts.agent_runtime),
-            "text_delivery" | "discord_text_send" => Some(&mut facts.delivery),
-            _ => None,
-        };
-        let Some(capability) = capability else {
+        let Some(capability) = facts.capability_mut(&row.kind) else {
             continue;
         };
         if row.is_active() {
@@ -1560,13 +1576,8 @@ fn apply_active_health_facts(
                 .map(|at| age_seconds(now_ms, at))
                 .unwrap_or(0),
         );
-        match row.kind.as_str() {
-            "audio_segment" | "transcription_mux" => {
-                facts.transcription.active += row.count;
-            }
-            "agent_task" => facts.agent_runtime.active += row.count,
-            "text_delivery" | "discord_text_send" => facts.delivery.active += row.count,
-            _ => {}
+        if let Some(capability) = facts.capability_mut(&row.kind) {
+            capability.active += row.count;
         }
     }
 }
@@ -1576,6 +1587,21 @@ async fn lean_terminal_health_facts(
     now: DateTime<Utc>,
 ) -> Result<RuntimeHealthFacts> {
     let since_ms = instant_ms_dt(now) - FAILURE_WINDOW_SECONDS * 1000;
+    let capability_outcomes_sql = format!(
+        r#"
+            SELECT kind, state, failed, COUNT(*)::BIGINT AS outcome_count,
+                   MAX(observed_at_ms) AS latest_at_ms
+            FROM operational_job_outcomes
+            WHERE observed_at_ms >= $1
+              AND kind IN ({})
+            GROUP BY kind, state, failed
+            "#,
+        CAPABILITY_JOB_KINDS
+            .iter()
+            .map(|kind| format!("'{kind}'"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let (latest_maintenance, rows) = tokio::try_join!(
         sqlx::query(
             r#"
@@ -1587,21 +1613,9 @@ async fn lean_terminal_health_facts(
             "#,
         )
         .fetch_optional(&runtime.store.pool),
-        sqlx::query(
-            r#"
-            SELECT kind, state, failed, COUNT(*)::BIGINT AS outcome_count,
-                   MAX(observed_at_ms) AS latest_at_ms
-            FROM operational_job_outcomes
-            WHERE observed_at_ms >= $1
-              AND kind IN (
-                'audio_segment', 'transcription_mux', 'agent_task',
-                'text_delivery', 'discord_text_send'
-              )
-            GROUP BY kind, state, failed
-            "#,
-        )
-        .bind(since_ms)
-        .fetch_all(&runtime.store.pool),
+        sqlx::query(&capability_outcomes_sql)
+            .bind(since_ms)
+            .fetch_all(&runtime.store.pool),
     )?;
     let mut facts = RuntimeHealthFacts::default();
     if let Some(row) = latest_maintenance {
@@ -1612,12 +1626,9 @@ async fn lean_terminal_health_facts(
     }
     for row in rows {
         let kind = row.try_get::<String, _>("kind")?;
-        let capability = match kind.as_str() {
-            "audio_segment" | "transcription_mux" => &mut facts.transcription,
-            "agent_task" => &mut facts.agent_runtime,
-            "text_delivery" | "discord_text_send" => &mut facts.delivery,
-            _ => unreachable!("capability health query constrains job kinds"),
-        };
+        let capability = facts
+            .capability_mut(&kind)
+            .expect("capability health query constrains itself to CAPABILITY_JOB_KINDS");
         let count = row.try_get::<i64, _>("outcome_count")? as usize;
         let state = row.try_get::<String, _>("state")?;
         capability.terminal += count;
@@ -1633,7 +1644,11 @@ async fn lean_terminal_health_facts(
     Ok(facts)
 }
 
-async fn lean_failure_summary(runtime: &Ctx, now: DateTime<Utc>) -> Result<Value> {
+async fn operational_failure_summary(
+    runtime: &Ctx,
+    now: DateTime<Utc>,
+    include_recent: bool,
+) -> Result<Value> {
     let now_ms = instant_ms_dt(now);
     let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
     let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
@@ -1643,35 +1658,33 @@ async fn lean_failure_summary(runtime: &Ctx, now: DateTime<Utc>) -> Result<Value
     .bind(since_ms)
     .fetch_one(&runtime.store.pool)
     .await?;
-    Ok(json!({
-        "window": "1h",
-        "since": ms_iso(since_ms),
-        "count": count,
-        "complete": coverage_start_ms <= since_ms,
-        "coverageStartsAt": ms_iso(coverage_start_ms),
-        "recent": [],
-    }))
+    let recent = if include_recent {
+        recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?
+    } else {
+        Vec::new()
+    };
+    Ok(failure_summary_payload(
+        since_ms,
+        count as usize,
+        coverage_start_ms,
+        recent,
+    ))
 }
 
-async fn detailed_failure_summary(runtime: &Ctx, now: DateTime<Utc>) -> Result<Value> {
-    let now_ms = instant_ms_dt(now);
-    let since_ms = now_ms - FAILURE_WINDOW_SECONDS * 1000;
-    let coverage_start_ms = operational_coverage_start_ms(runtime).await?;
-    let count = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM operational_job_outcomes WHERE failed = TRUE AND observed_at_ms >= $1",
-    )
-    .bind(since_ms)
-    .fetch_one(&runtime.store.pool)
-    .await?;
-    let recent = recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?;
-    Ok(json!({
+fn failure_summary_payload(
+    since_ms: i64,
+    count: usize,
+    coverage_start_ms: i64,
+    recent: Vec<FailureDiagnosticRow>,
+) -> Value {
+    json!({
         "window": "1h",
         "since": ms_iso(since_ms),
         "count": count,
         "complete": coverage_start_ms <= since_ms,
         "coverageStartsAt": ms_iso(coverage_start_ms),
         "recent": recent.into_iter().map(|row| row.to_json()).collect::<Vec<_>>(),
-    }))
+    })
 }
 
 async fn lean_voice_observation_summary(
@@ -2179,7 +2192,7 @@ pub(super) async fn dashboard_latency_by_kind_payload(
     })
     .collect::<Result<Vec<_>>>()?;
     let coverage = window_coverage_payload(coverage_start_ms, since_ms, now_ms);
-    let failures = detailed_failure_summary(runtime, now).await?;
+    let failures = operational_failure_summary(runtime, now, true).await?;
     Ok(json!({
         "coverage": {
             "startsAt": ms_iso(coverage_start_ms),
@@ -2278,14 +2291,12 @@ async fn failure_summary(
         })
         .count();
     let recent = recent_failure_rows(runtime, since_ms, FAILURE_RECENT_LIMIT).await?;
-    Ok(json!({
-        "window": "1h",
-        "since": ms_iso(since_ms),
-        "count": count,
-        "complete": coverage_start_ms <= since_ms,
-        "coverageStartsAt": ms_iso(coverage_start_ms),
-        "recent": recent.into_iter().map(|row| row.to_json()).collect::<Vec<_>>(),
-    }))
+    Ok(failure_summary_payload(
+        since_ms,
+        count,
+        coverage_start_ms,
+        recent,
+    ))
 }
 
 async fn recent_failure_rows(
