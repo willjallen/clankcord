@@ -660,37 +660,44 @@ impl TimelineStore {
         let limit = limit.clamp(1, 500);
         let requester = requester_user_id.trim();
         if requester.is_empty() {
-            let rows = sqlx::query(
-                r#"
-                SELECT p.payload_blob
-                FROM jobs j
-                JOIN job_payloads p ON p.job_id = j.job_id
-                WHERE j.guild_id = $1
-                  AND j.scope_kind = 'voice_channel'
-                  AND j.scope_id = $2
-                  AND j.kind = 'agent_task'
-                  AND j.ephemeral = FALSE
-                  AND j.state IN (
-                    'queued',
-                    'running',
-                    'waiting',
-                    'cancel_requested',
-                    'complete',
-                    'failed',
-                    'failed_timeout'
-                  )
-                ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
-                LIMIT $3
-                "#,
-            )
-            .bind(guild_id)
-            .bind(scope_id)
-            .bind(limit as i64)
-            .fetch_all(&self.pool)
-            .await?;
-            return decode_job_rows(rows);
+            return self
+                .recent_agent_task_page(guild_id, scope_id, None, limit as i64)
+                .await;
         }
-        let preferred_rows = sqlx::query(
+        let mut jobs = self
+            .recent_agent_task_page(guild_id, scope_id, Some((requester, true)), limit as i64)
+            .await?;
+        if jobs.len() < limit {
+            let remaining = (limit - jobs.len()) as i64;
+            jobs.extend(
+                self.recent_agent_task_page(
+                    guild_id,
+                    scope_id,
+                    Some((requester, false)),
+                    remaining,
+                )
+                .await?,
+            );
+        }
+        Ok(jobs)
+    }
+
+    /// One page of the agent-task history for a voice scope, optionally
+    /// restricted to (or excluding) a requester. The state list matches the
+    /// partial indexes on jobs declared in the schema; change both together.
+    async fn recent_agent_task_page(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+        requester: Option<(&str, bool)>,
+        limit: i64,
+    ) -> Result<Vec<Job>> {
+        let requester_clause = match requester {
+            None => "",
+            Some((_, true)) => "AND j.requested_by_user_id = $4",
+            Some((_, false)) => "AND j.requested_by_user_id <> $4",
+        };
+        let sql = format!(
             r#"
             SELECT p.payload_blob
             FROM jobs j
@@ -709,53 +716,16 @@ impl TimelineStore {
                 'failed',
                 'failed_timeout'
               )
-              AND j.requested_by_user_id = $3
+              {requester_clause}
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
-            LIMIT $4
-            "#,
-        )
-        .bind(guild_id)
-        .bind(scope_id)
-        .bind(requester)
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        let mut jobs = decode_job_rows(preferred_rows)?;
-        if jobs.len() < limit {
-            let remaining = (limit - jobs.len()) as i64;
-            let other_rows = sqlx::query(
-                r#"
-                SELECT p.payload_blob
-                FROM jobs j
-                JOIN job_payloads p ON p.job_id = j.job_id
-                WHERE j.guild_id = $1
-                  AND j.scope_kind = 'voice_channel'
-                  AND j.scope_id = $2
-                  AND j.kind = 'agent_task'
-                  AND j.ephemeral = FALSE
-                  AND j.state IN (
-                    'queued',
-                    'running',
-                    'waiting',
-                    'cancel_requested',
-                    'complete',
-                    'failed',
-                    'failed_timeout'
-                  )
-                  AND j.requested_by_user_id <> $3
-                ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
-                LIMIT $4
-                "#,
-            )
-            .bind(guild_id)
-            .bind(scope_id)
-            .bind(requester)
-            .bind(remaining)
-            .fetch_all(&self.pool)
-            .await?;
-            jobs.extend(decode_job_rows(other_rows)?);
+            LIMIT $3
+            "#
+        );
+        let mut query = sqlx::query(&sql).bind(guild_id).bind(scope_id).bind(limit);
+        if let Some((requester, _)) = requester {
+            query = query.bind(requester);
         }
-        Ok(jobs)
+        decode_job_rows(query.fetch_all(&self.pool).await?)
     }
 
     pub async fn list_active_jobs_by_scope_kind(

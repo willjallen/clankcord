@@ -81,7 +81,7 @@ pub(crate) async fn execute_transcript_publication_job(
         crate::domain::children::ChildResolution::Pending => {
             return Ok(JobDecision::Wait);
         }
-        crate::domain::children::ChildResolution::Failed { message, .. } => {
+        crate::domain::children::ChildResolution::Failed { message } => {
             return fail_publication_with_error(ctx, publication, message).await;
         }
         crate::domain::children::ChildResolution::Settled(children) => children,

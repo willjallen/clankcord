@@ -346,7 +346,7 @@ impl ConfirmationJobMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
+#[allow(clippy::large_enum_variant)] // bincode-persisted wire enum: boxing changes the encoded layout
 pub(crate) enum JobMetadataDetail {
     AgentTask(AgentTaskMetadata),
     Confirmation(ConfirmationJobMetadata),

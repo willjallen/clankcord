@@ -4,11 +4,8 @@ use crate::config;
 use crate::model::job::AudioSegmentPayload;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct TranscriptionSlotRecord {
     pub slot_id: String,
-    pub source_job_id: String,
-    pub mux_job_id: String,
     pub state: String,
     pub guild_id: String,
     pub guild_slug: String,
@@ -27,12 +24,7 @@ pub(crate) struct TranscriptionSlotRecord {
     pub duration_ms: i64,
     pub source_audio_path: PathBuf,
     pub audio_checksum: String,
-    pub audio_bytes: u64,
-    pub audio_format: String,
     pub sample_rate_hz: u32,
-    pub channels: u16,
-    pub sample_width_bits: u16,
-    pub post_processing: String,
     pub transcription_source_id: String,
     pub provider: String,
     pub model: String,
@@ -43,7 +35,6 @@ pub(crate) struct TranscriptionSlotRecord {
     pub mux_start_ms: Option<i64>,
     pub mux_end_ms: Option<i64>,
     pub created_at_ms: i64,
-    pub updated_at_ms: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -683,8 +674,6 @@ fn transcription_slot_from_row(row: &PgRow) -> Result<TranscriptionSlotRecord> {
     let payload = json_value(row, "payload_json")?;
     Ok(TranscriptionSlotRecord {
         slot_id: row.try_get("slot_id")?,
-        source_job_id: row.try_get("source_job_id")?,
-        mux_job_id: row.try_get("mux_job_id")?,
         state: row.try_get("state")?,
         guild_id: row.try_get("guild_id")?,
         guild_slug: string_field(&payload, "guild_slug"),
@@ -705,12 +694,7 @@ fn transcription_slot_from_row(row: &PgRow) -> Result<TranscriptionSlotRecord> {
         duration_ms: row.try_get("duration_ms")?,
         source_audio_path: PathBuf::from(row.try_get::<String, _>("source_audio_path")?),
         audio_checksum: row.try_get("audio_checksum")?,
-        audio_bytes: row.try_get::<i64, _>("audio_bytes")?.max(0) as u64,
-        audio_format: row.try_get("audio_format")?,
         sample_rate_hz: row.try_get::<i64, _>("sample_rate_hz")?.max(0) as u32,
-        channels: row.try_get::<i64, _>("channels")?.max(0) as u16,
-        sample_width_bits: row.try_get::<i64, _>("sample_width_bits")?.max(0) as u16,
-        post_processing: row.try_get("post_processing")?,
         transcription_source_id: row.try_get("transcription_source_id")?,
         provider: row.try_get("provider")?,
         model: row.try_get("model")?,
@@ -721,7 +705,6 @@ fn transcription_slot_from_row(row: &PgRow) -> Result<TranscriptionSlotRecord> {
         mux_start_ms: row.try_get("mux_start_ms")?,
         mux_end_ms: row.try_get("mux_end_ms")?,
         created_at_ms: row.try_get("created_at_ms")?,
-        updated_at_ms: row.try_get("updated_at_ms")?,
     })
 }
 

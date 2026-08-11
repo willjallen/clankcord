@@ -22,7 +22,7 @@ use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::util::sha256_file;
 use crate::util::{first_non_empty, string_field};
 
-#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
+#[allow(clippy::large_enum_variant)] // cold per-delivery value: built and consumed once; boxing buys only indirection
 enum TextDeliveryTarget {
     Ready(TextTarget),
     WaitFor(Job),

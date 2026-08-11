@@ -69,7 +69,7 @@ pub(crate) async fn execute_voice_status_sync_job(ctx: &Ctx, job: &Job) -> Resul
             crate::domain::children::ChildResolution::Pending => {
                 return Ok(JobDecision::Wait);
             }
-            crate::domain::children::ChildResolution::Failed { message, .. } => {
+            crate::domain::children::ChildResolution::Failed { message } => {
                 return Ok(JobDecision::fail(message));
             }
             crate::domain::children::ChildResolution::Settled(children) => children,

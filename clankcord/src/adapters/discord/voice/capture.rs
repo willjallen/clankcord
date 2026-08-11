@@ -484,7 +484,7 @@ fn collect_audio_job(outcome: AudioPipelineOutcome, jobs: &mut Vec<Job>) {
 
 fn audio_job_from_outcome(outcome: AudioPipelineOutcome) -> Option<Job> {
     match outcome {
-        AudioPipelineOutcome::SegmentReady { payload, .. } => Some(Job::audio_segment(payload)),
+        AudioPipelineOutcome::SegmentReady { payload, .. } => Some(Job::audio_segment(*payload)),
         _ => None,
     }
 }

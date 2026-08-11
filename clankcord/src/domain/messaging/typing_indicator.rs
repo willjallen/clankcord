@@ -46,7 +46,7 @@ where
         crate::domain::children::ChildResolution::Pending => {
             return Ok(JobDecision::Wait);
         }
-        crate::domain::children::ChildResolution::Failed { message, .. } => {
+        crate::domain::children::ChildResolution::Failed { message } => {
             return Ok(JobDecision::fail(message));
         }
         crate::domain::children::ChildResolution::Settled(_) => {}

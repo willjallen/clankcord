@@ -81,7 +81,6 @@ pub struct SessionAudioPipeline {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form
 pub enum AudioPipelineOutcome {
     NoSession,
     Paused,
@@ -91,8 +90,8 @@ pub enum AudioPipelineOutcome {
         duration_ms: i64,
     },
     SegmentReady {
-        payload: AudioSegmentPayload,
-        segment: SessionAudioSegment,
+        payload: Box<AudioSegmentPayload>,
+        segment: Box<SessionAudioSegment>,
     },
 }
 
@@ -553,7 +552,10 @@ impl SessionAudioPipeline {
             sample_width_bits: artifact.sample_width_bits,
             post_processing,
         };
-        Ok(AudioPipelineOutcome::SegmentReady { payload, segment })
+        Ok(AudioPipelineOutcome::SegmentReady {
+            payload: Box::new(payload),
+            segment: Box::new(segment),
+        })
     }
 
     pub fn capture_wake_probe(
