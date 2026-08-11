@@ -4,7 +4,7 @@ use chrono::{Duration, Utc};
 use serde_json::json;
 
 use clankcord::domain::Ctx;
-use clankcord::domain::automations::AutomationSpec;
+use clankcord::model::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::scope::RuntimeScope;
 use clankcord::time::{instant_ms_dt, isoformat_z};

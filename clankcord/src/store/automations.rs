@@ -6,7 +6,7 @@ use super::*;
 
 use serde_json::json;
 
-use crate::domain::automations::{
+use crate::model::automations::{
     AutomationOwner, AutomationRecord, AutomationSpec, AutomationState,
 };
 use crate::model::job::JobKind;

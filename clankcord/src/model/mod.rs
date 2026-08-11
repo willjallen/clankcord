@@ -2,6 +2,7 @@
 //! Depends on config only; performs no I/O.
 
 pub mod agents;
+pub mod automations;
 pub mod job;
 pub mod rooms;
 pub mod scope;

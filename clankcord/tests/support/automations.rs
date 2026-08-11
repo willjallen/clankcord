@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
 use clankcord::domain::Ctx;
-use clankcord::domain::automations::AutomationSpec;
+use clankcord::model::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::rooms::RoomConfig;
 use clankcord::model::scope::RuntimeScope;

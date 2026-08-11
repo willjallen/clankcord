@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::domain::automations::{
-    AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
-    AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState, AutomationTrigger,
-};
 use crate::model::agents::{
     AgentSessionRecord, AgentSessionRouteKind, dm_route_key, thread_route_key, voice_route_key,
+};
+use crate::model::automations::{
+    AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
+    AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState, AutomationTrigger,
 };
 use crate::model::job::JobMetadata;
 use crate::model::job::{Job, JobKind, JobPayload, JobState};
@@ -457,7 +457,7 @@ impl PreV0_3_0AutomationSpec {
             name: self.name,
             idempotency_key: self.idempotency_key,
             owner: self.owner,
-            scope: crate::domain::automations::AutomationScope {
+            scope: crate::model::automations::AutomationScope {
                 scope_kind: RuntimeScopeKind::VoiceChannel.as_str().to_string(),
                 guild_id: self.scope.guild_id,
                 scope_id: if self.scope.voice_channel_id.is_empty() {

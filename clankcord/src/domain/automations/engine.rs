@@ -8,14 +8,14 @@ use crate::Result;
 use crate::config::PoolConfig;
 use crate::domain::Ctx;
 use crate::domain::automations::room_agents::RoomAgentPlacementAutomation;
-use crate::domain::automations::{
+use crate::domain::rooms::catalog;
+use crate::domain::rooms::control_state;
+use crate::domain::rooms::status;
+use crate::model::automations::{
     AutomationAction, AutomationCondition, AutomationConditionOp, AutomationRecord,
     AutomationScalar, AutomationState, AutomationTextTarget, AutomationTextTargetKind,
     AutomationTrigger,
 };
-use crate::domain::rooms::catalog;
-use crate::domain::rooms::control_state;
-use crate::domain::rooms::status;
 use crate::model::job::{
     CommandRequest, Job, JobKind, JobState, TextDeliveryKind, TextDeliveryPayload, TextTarget,
     TextTargetKind,
@@ -736,9 +736,9 @@ fn text_target(sink: &AutomationTextTarget) -> Result<TextTarget> {
 
 fn automation_requested_by(record: &AutomationRecord) -> String {
     match &record.spec.owner {
-        crate::domain::automations::AutomationOwner::Agent { user_id, .. }
-        | crate::domain::automations::AutomationOwner::User { user_id } => user_id.clone(),
-        crate::domain::automations::AutomationOwner::System => "automation".to_string(),
+        crate::model::automations::AutomationOwner::Agent { user_id, .. }
+        | crate::model::automations::AutomationOwner::User { user_id } => user_id.clone(),
+        crate::model::automations::AutomationOwner::System => "automation".to_string(),
     }
 }
 

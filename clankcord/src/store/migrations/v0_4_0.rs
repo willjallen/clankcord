@@ -1,6 +1,6 @@
 use crate::Result;
-use crate::domain::automations::AutomationRecord;
 use crate::model::agents::AgentSessionRecord;
+use crate::model::automations::AutomationRecord;
 
 pub(super) async fn run(transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     assert_timeline_event_time_contract(transaction).await?;

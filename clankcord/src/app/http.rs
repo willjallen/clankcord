@@ -20,12 +20,12 @@ use crate::dashboard::{
     ALPINE_JS, APP_JS, CHARTS_JS, ECHARTS_JS, EXPLORER_JS, INDEX_HTML, JSON_JS, STYLES_CSS,
     TABLES_JS, TABULATOR_CSS, TABULATOR_JS,
 };
-use crate::domain::automations::AutomationState;
 use crate::domain::automations::spec;
 use crate::domain::interactions::agent_sessions;
 use crate::domain::messaging::text_delivery;
 use crate::domain::rooms::catalog;
 use crate::domain::rooms::status;
+use crate::model::automations::AutomationState;
 use crate::model::job::CommandRequest;
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
 use crate::util::first_value_string;

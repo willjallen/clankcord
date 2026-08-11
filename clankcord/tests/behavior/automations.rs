@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 
-use clankcord::domain::automations::{
+use clankcord::model::automations::{
     AutomationAction, AutomationCondition, AutomationSpec, AutomationState,
     AutomationTextTargetKind, AutomationTrigger,
 };

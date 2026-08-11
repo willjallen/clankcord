@@ -7,8 +7,8 @@ use crate::support::automations::spec_value;
 use crate::support::automations::test_runtime;
 use crate::support::automations::voice_state;
 use crate::support::test_store;
-use clankcord::domain::automations::AutomationSpec;
-use clankcord::domain::automations::AutomationState;
+use clankcord::model::automations::AutomationSpec;
+use clankcord::model::automations::AutomationState;
 use clankcord::model::job::TextTargetKind;
 use serde_json::json;
 

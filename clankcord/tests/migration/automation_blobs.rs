@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use clankcord::domain::automations::{
+use clankcord::model::automations::{
     AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
     AutomationPendingRecheck, AutomationRecord, AutomationState, AutomationTrigger,
 };
