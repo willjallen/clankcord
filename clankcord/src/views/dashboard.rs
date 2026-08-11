@@ -11,7 +11,7 @@ use super::operations::{
 use crate::Result;
 use crate::domain::Ctx;
 use crate::domain::agents::AgentRuntime;
-use crate::model::job::Job;
+use crate::model::job::{Job, JobState};
 use crate::store::JobVisibility;
 use crate::store::util::timeline_event_payload;
 use crate::store::{
@@ -550,7 +550,7 @@ async fn dashboard_active_jobs(ctx: &Ctx, limit: usize) -> Result<Vec<Job>> {
             SELECT p.payload_blob
             FROM jobs j
             JOIN job_payloads p ON p.job_id = j.job_id
-            WHERE j.state IN ('queued', 'running', 'waiting', 'cancel_requested', 'confirmation_pending')
+            WHERE j.terminal = FALSE
             ORDER BY j.updated_at_ms DESC, j.created_at_ms DESC, j.job_id DESC
             LIMIT $1
             "#,
@@ -659,10 +659,7 @@ async fn dashboard_agent_sessions(ctx: &Ctx) -> Result<Vec<Value>> {
                 .unwrap_or_default();
             let status = if active_job_id.is_some() {
                 "running"
-            } else if matches!(
-                latest_state.as_str(),
-                "approval_failed" | "failed" | "failed_timeout" | "failed_draft_retained"
-            ) {
+            } else if latest_state.parse::<JobState>()?.is_failed() {
                 "failed"
             } else {
                 "idle"
@@ -693,10 +690,11 @@ async fn dashboard_overview_job_summary(
     let rows = sqlx::query(
             r#"
             WITH selected AS MATERIALIZED (
-              SELECT state, kind, scope_kind, guild_id, scope_id, updated_at_ms
+              SELECT state, kind, scope_kind, guild_id, scope_id, updated_at_ms,
+                     terminal, failed
               FROM jobs
               WHERE updated_at_ms >= $1
-                 OR state IN ('queued', 'running', 'waiting', 'cancel_requested', 'confirmation_pending')
+                 OR terminal = FALSE
             )
             SELECT 'state' AS dimension, state AS key, '' AS scope_kind,
                    '' AS guild_id, '' AS scope_id, COUNT(*) AS count,
@@ -709,8 +707,8 @@ async fn dashboard_overview_job_summary(
             GROUP BY kind
             UNION ALL
             SELECT 'scope', '', scope_kind, guild_id, scope_id, COUNT(*),
-                   COUNT(*) FILTER (WHERE state IN ('queued', 'running', 'waiting', 'cancel_requested', 'confirmation_pending')),
-                   COUNT(*) FILTER (WHERE state IN ('approval_failed', 'failed', 'failed_timeout', 'failed_draft_retained')),
+                   COUNT(*) FILTER (WHERE terminal = FALSE),
+                   COUNT(*) FILTER (WHERE failed = TRUE),
                    MAX(updated_at_ms)
             FROM selected
             GROUP BY scope_kind, guild_id, scope_id
@@ -736,21 +734,21 @@ async fn dashboard_overview_job_summary(
         match dimension.as_str() {
             "state" => {
                 let state: String = row.try_get("key")?;
+                let job_state: JobState = state.parse()?;
                 total += count;
-                if matches!(
-                    state.as_str(),
-                    "queued" | "running" | "waiting" | "cancel_requested" | "confirmation_pending"
-                ) {
+                if !job_state.is_terminal() {
                     active += count;
+                }
+                if job_state.is_cancellable() {
                     cancellable += count;
                 }
-                match state.as_str() {
-                    "queued" => queued += count,
-                    "running" => running += count,
-                    "waiting" => waiting += count,
-                    "approval_failed" | "failed" | "failed_timeout" | "failed_draft_retained" => {
-                        failed += count
-                    }
+                if job_state.is_failed() {
+                    failed += count;
+                }
+                match job_state {
+                    JobState::Queued => queued += count,
+                    JobState::Running => running += count,
+                    JobState::Waiting => waiting += count,
                     _ => {}
                 }
                 by_state.push(json!({"state": state, "count": count}));
@@ -818,7 +816,7 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
             SELECT kind, state, COUNT(*)::BIGINT AS count
             FROM jobs
             WHERE updated_at_ms >= $1
-               OR state IN ('queued', 'running', 'waiting', 'cancel_requested', 'confirmation_pending')
+               OR terminal = FALSE
             GROUP BY kind, state
             ORDER BY count DESC, kind, state
             "#,
@@ -850,7 +848,7 @@ async fn dashboard_overview_charts(ctx: &Ctx, now: chrono::DateTime<chrono::Utc>
                      MAX(updated_at_ms) AS latest_at_ms
               FROM jobs
               WHERE updated_at_ms >= $1
-                 OR state IN ('queued', 'running', 'waiting', 'cancel_requested', 'confirmation_pending')
+                 OR terminal = FALSE
               GROUP BY scope_kind, guild_id, scope_id
               UNION ALL
               SELECT scope_kind, guild_id, scope_id, 0,

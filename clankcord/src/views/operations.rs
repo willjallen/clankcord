@@ -656,7 +656,7 @@ impl JobDiagnosticRow {
     }
 
     fn is_failed(&self) -> bool {
-        self.failed || is_failed_state(&self.state)
+        self.failed
     }
 
     fn terminal_at_ms(&self) -> Option<i64> {
@@ -3118,7 +3118,7 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSessionView> {
         if !job.state.is_terminal() {
             entry.status = AgentSessionStatus::Running;
             entry.active_job_id = job.id.clone();
-        } else if is_failed_state(job.state.as_str()) {
+        } else if job.state.is_failed() {
             entry.status = AgentSessionStatus::Failed;
             entry.active_job_id.clear();
         } else if entry.status != AgentSessionStatus::Running {
@@ -3609,10 +3609,6 @@ fn push_tool_call(tool_calls: &mut Vec<Value>, timeline: &mut Vec<Value>, mut to
     }
     tool_calls.push(tool_call.clone());
     timeline.push(tool_call);
-}
-
-fn is_failed_state(state: &str) -> bool {
-    state.contains("failed") || state == "approval_failed"
 }
 
 fn count_rows(counts: BTreeMap<String, usize>, label_key: &str) -> Vec<Value> {

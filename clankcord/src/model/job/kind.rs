@@ -149,6 +149,13 @@ impl JobState {
                 | Self::FailedDraftRetained
         )
     }
+
+    pub fn is_failed(self) -> bool {
+        matches!(
+            self,
+            Self::ApprovalFailed | Self::Failed | Self::FailedTimeout | Self::FailedDraftRetained
+        )
+    }
 }
 
 impl fmt::Display for JobState {

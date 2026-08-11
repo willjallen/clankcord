@@ -1592,7 +1592,7 @@ fn project_job(job: &Job) -> JobProjection {
         .and_then(|value| instant_ms_str(Some(value)))
         .unwrap_or(created_at_ms);
     let terminal = job.state.is_terminal();
-    let failed = is_failed_job_state(job.state);
+    let failed = job.state.is_failed();
     let ephemeral = job.kind.is_ephemeral();
     JobProjection {
         created_at_ms,
@@ -1642,16 +1642,6 @@ fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
         crate::model::job::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
         _ => parse_instant(&job.created_at),
     }
-}
-
-fn is_failed_job_state(state: crate::model::job::JobState) -> bool {
-    matches!(
-        state,
-        crate::model::job::JobState::ApprovalFailed
-            | crate::model::job::JobState::Failed
-            | crate::model::job::JobState::FailedTimeout
-            | crate::model::job::JobState::FailedDraftRetained
-    )
 }
 
 fn ephemeral_gc_after_ms(
