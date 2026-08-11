@@ -28,7 +28,7 @@ async fn feedback_slash_records_durable_timeline_event() {
         .unwrap();
 
     let job_id = job.id.clone();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         job,
@@ -131,7 +131,7 @@ async fn wake_slash_schedules_manual_activation_for_invoker_voice_room() {
         .unwrap();
 
     let job_id = job.id.clone();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         job,
@@ -198,7 +198,7 @@ async fn voice_control_slash_commands_use_invoker_voice_room() {
             .unwrap();
 
         let job_id = job.id.clone();
-        clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+        clankcord::engine::dispatcher::dispatch_claimed_job(
             &runtime,
             &clankcord::ports::discord::DiscordApiUnavailable,
             job,

@@ -2,87 +2,43 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::domain::Ctx;
+use crate::domain::interactions::tasks;
 use crate::domain::transcription::execution as transcription_execution;
 use crate::engine::JobDecision;
-use crate::model::job::{Job, JobKind, JobOutput, JobState};
-use crate::ports::discord::DiscordApi;
-
-use crate::domain::interactions::tasks;
-use crate::domain::interactions::thread_titles;
 use crate::engine::routes;
+use crate::engine::routes::Routed;
+use crate::model::job::{Job, JobOutput, JobState};
+use crate::ports::discord::DiscordApi;
 use crate::util;
 
-pub async fn dispatch_claimed_runtime_job<A>(
-    ctx: &Ctx,
-    external_api: &A,
-    running: Job,
-) -> Result<Value>
+/// Finalization policy for every routed execution. Routing itself is the
+/// one exhaustive payload match in [`routes::route`].
+pub async fn dispatch_claimed_job<A>(ctx: &Ctx, external_api: &A, running: Job) -> Result<Value>
 where
     A: DiscordApi,
 {
     let job_id = running.id.clone();
-    match routes::execute(ctx, &running, external_api).await {
-        Ok(decision) => apply_job_decision(ctx, &job_id, decision).await,
-        Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
-    }
-}
-
-pub async fn dispatch_claimed_blocking_job(ctx: &Ctx, running: Job) -> Result<Value> {
-    let job_id = running.id.clone();
-    match running.kind {
-        JobKind::WakeProbe => match routes::execute_wake_probe(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
-            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
-        },
-        JobKind::AudioSegment => match routes::execute_audio_segment(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
-            Err(error) if transcription_execution::is_retryable_audio_segment_error(&error) => {
-                let retry = transcription_execution::retry_plan(error);
-                requeue_dispatched_job(
-                    ctx,
-                    &job_id,
-                    retry.delay_for_attempt,
-                    retry.error,
-                    retry.log_prefix,
-                )
-                .await
-            }
-            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
-        },
-        JobKind::TranscriptionMux => match routes::execute_transcription_mux(ctx, &running).await {
-            Ok(result) => complete_dispatched_job(ctx, &job_id, result).await,
-            Err(error) if transcription_execution::is_retryable_audio_segment_error(&error) => {
-                let retry = transcription_execution::retry_plan(error);
-                requeue_dispatched_job(
-                    ctx,
-                    &job_id,
-                    retry.delay_for_attempt,
-                    retry.error,
-                    retry.log_prefix,
-                )
-                .await
-            }
-            Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
-        },
-        JobKind::AgentTask => tasks::dispatch_claimed_agent_task_job(ctx, running).await,
-        JobKind::AgentThreadTitleRefresh => {
-            let decision = match &running.payload {
-                crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
-                    thread_titles::execute_agent_thread_title_refresh_job(ctx, &running, payload)
-                        .await
-                }
-                payload => anyhow::bail!(
-                    "job kind {} has unexpected payload {}",
-                    running.kind,
-                    payload.kind()
-                ),
-            };
-            match decision {
-                Ok(decision) => apply_job_decision(ctx, &job_id, decision).await,
-                Err(error) => fail_dispatched_job(ctx, &job_id, error).await,
-            }
+    match routes::route(ctx, &running, external_api).await {
+        Routed::Decision(Ok(decision)) => apply_job_decision(ctx, &job_id, decision).await,
+        Routed::Decision(Err(error)) => fail_dispatched_job(ctx, &job_id, error).await,
+        Routed::Output(Ok(output)) => complete_dispatched_job(ctx, &job_id, output).await,
+        Routed::Output(Err(error)) => fail_dispatched_job(ctx, &job_id, error).await,
+        Routed::SttOutput(Ok(output)) => complete_dispatched_job(ctx, &job_id, output).await,
+        Routed::SttOutput(Err(error))
+            if transcription_execution::is_retryable_audio_segment_error(&error) =>
+        {
+            let retry = transcription_execution::retry_plan(error);
+            requeue_dispatched_job(
+                ctx,
+                &job_id,
+                retry.delay_for_attempt,
+                retry.error,
+                retry.log_prefix,
+            )
+            .await
         }
-        kind => anyhow::bail!("job kind {kind} is not handled by blocking dispatcher"),
+        Routed::SttOutput(Err(error)) => fail_dispatched_job(ctx, &job_id, error).await,
+        Routed::AgentTask => tasks::dispatch_claimed_agent_task_job(ctx, running).await,
     }
 }
 

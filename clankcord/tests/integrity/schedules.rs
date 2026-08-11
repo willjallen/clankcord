@@ -116,7 +116,7 @@ async fn runtime_maintenance_submits_background_work_jobs() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,

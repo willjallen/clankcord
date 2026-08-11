@@ -280,7 +280,7 @@ async fn deafen_and_undeafen_commands_create_discord_deafen_jobs() {
     let deafen = command_job(&room, CommandKind::DeafenListening);
     let deafen_id = deafen.id.clone();
     let deafen = store.create_job(deafen).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         deafen,
@@ -314,7 +314,7 @@ async fn deafen_and_undeafen_commands_create_discord_deafen_jobs() {
 
     let undeafen = command_job(&room, CommandKind::ResumeListening);
     let undeafen = store.create_job(undeafen).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         undeafen,

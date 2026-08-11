@@ -350,7 +350,7 @@ async fn leave_room_placement_disconnects_orphan_voice_bot_presence() {
         .await
         .unwrap();
 
-    let result = clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         parent,

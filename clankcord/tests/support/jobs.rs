@@ -105,8 +105,9 @@ pub async fn create_audio_segment_slot(
         .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
         .await
         .unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
         claimed.into_iter().next().unwrap(),
     )
     .await
@@ -173,7 +174,7 @@ pub async fn run_transcription_mux_planner(
         .await
         .unwrap();
     let runtime = Ctx::new(store.clone());
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         claimed.into_iter().next().unwrap(),

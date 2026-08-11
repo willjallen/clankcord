@@ -68,7 +68,7 @@ async fn resume_reactivates_retired_dm_session() {
     store.update_job(&job).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         job,
@@ -162,7 +162,7 @@ async fn retired_start_session_does_not_spawn_agent_task() {
     store.update_job(&running).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -253,7 +253,7 @@ async fn session_response_reroutes_after_resume_takeover() {
     store.update_job(&running).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -331,7 +331,7 @@ async fn voice_resume_reactivates_source_thread_and_takes_over_active_route() {
     store.update_job(&running).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -424,7 +424,7 @@ async fn discord_thread_message_resumes_retired_voice_session() {
     store.update_job(&running_text).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running_text,
@@ -461,7 +461,7 @@ async fn discord_thread_message_resumes_retired_voice_session() {
     let mut running_resume = resume.clone();
     running_resume.mark_running();
     store.update_job(&running_resume).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running_resume,
@@ -575,7 +575,7 @@ async fn session_text_delivery_reopens_deleted_stored_thread() {
     let mut running = store.get_job(&delivery.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -611,7 +611,7 @@ async fn session_text_delivery_reopens_deleted_stored_thread() {
     let mut running = store.get_job(&delivery.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -687,9 +687,13 @@ async fn thread_title_refresh_marks_deleted_thread_unavailable() {
     let mut running = store.get_job(&refresh.id).await.unwrap();
     running.mark_running();
     store.update_job(&running).await.unwrap();
-    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(&runtime, running)
-        .await
-        .unwrap();
+    clankcord::engine::dispatcher::dispatch_claimed_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        running,
+    )
+    .await
+    .unwrap();
 
     let session = store
         .get_agent_session_record("ags_title_deleted")
@@ -736,7 +740,7 @@ async fn maintenance_queues_one_thread_title_refresh_after_one_visible_agent_res
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,

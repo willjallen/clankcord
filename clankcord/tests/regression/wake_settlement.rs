@@ -1009,9 +1009,13 @@ async fn create_transcription_slot_for_wake_test(
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
-    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(runtime, claimed.pop().unwrap())
-        .await
-        .unwrap();
+    clankcord::engine::dispatcher::dispatch_claimed_job(
+        runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        claimed.pop().unwrap(),
+    )
+    .await
+    .unwrap();
     job.id
 }
 

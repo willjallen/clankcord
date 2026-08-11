@@ -333,7 +333,7 @@ where
             let job_id = job.id.clone();
             let kind = job.kind;
             let ctx = Ctx::new(timeline_store);
-            let result = dispatcher::dispatch_claimed_runtime_job(&ctx, &external_api, job).await;
+            let result = dispatcher::dispatch_claimed_job(&ctx, &external_api, job).await;
             if let Err(error) = result {
                 log(&format!(
                     "runtime job worker failed {job_id} ({kind}): {}",
@@ -347,6 +347,7 @@ where
 
     fn spawn_blocking_job(&self, job: Job, permit: OwnedSemaphorePermit) {
         let timeline_store = self.timeline_store.clone();
+        let external_api = self.external_api.clone();
         let notify = self.notify.clone();
         let runtime_handle = tokio::runtime::Handle::current();
         tokio::task::spawn_blocking(move || {
@@ -354,7 +355,7 @@ where
             let kind = job.kind;
             let result = runtime_handle.block_on(async move {
                 let ctx = Ctx::new(timeline_store);
-                dispatcher::dispatch_claimed_blocking_job(&ctx, job).await
+                dispatcher::dispatch_claimed_job(&ctx, &external_api, job).await
             });
             match result {
                 Ok(_) => {}

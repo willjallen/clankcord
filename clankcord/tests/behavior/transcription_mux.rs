@@ -89,8 +89,9 @@ async fn audio_segment_job_queues_transcription_slot_and_mux_plan_job() {
     assert_eq!(claimed.len(), 1);
 
     let runtime = Ctx::new(store.clone());
-    let result = clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
+    let result = clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
         claimed.pop().unwrap(),
     )
     .await
@@ -149,8 +150,9 @@ async fn audio_segment_slot_inherits_room_wake_priority() {
         .await
         .unwrap();
     let runtime = Ctx::new(store.clone());
-    clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
         claimed.into_iter().next().unwrap(),
     )
     .await
@@ -248,8 +250,9 @@ async fn transcription_slot_recovery_handles_terminal_mux_jobs() {
             .claim_due_jobs(JobKind::AudioSegment, 1, &mut BTreeSet::new())
             .await
             .unwrap();
-        clankcord::engine::dispatcher::dispatch_claimed_blocking_job(
+        clankcord::engine::dispatcher::dispatch_claimed_job(
             &runtime,
+            &clankcord::ports::discord::DiscordApiUnavailable,
             claimed.into_iter().next().unwrap(),
         )
         .await

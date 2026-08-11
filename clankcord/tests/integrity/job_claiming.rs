@@ -474,10 +474,13 @@ async fn completed_agent_task_with_missing_response_delivery_completes_terminall
     assert_eq!(claimed.len(), 1);
 
     let runtime = Ctx::new(store.clone());
-    let result =
-        clankcord::engine::dispatcher::dispatch_claimed_blocking_job(&runtime, claimed[0].clone())
-            .await
-            .unwrap();
+    let result = clankcord::engine::dispatcher::dispatch_claimed_job(
+        &runtime,
+        &clankcord::ports::discord::DiscordApiUnavailable,
+        claimed[0].clone(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(result["dispatched"], json!(true));
     assert_eq!(result["outcome"], json!("submitted_without_delivery"));

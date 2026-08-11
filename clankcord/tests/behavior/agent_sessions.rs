@@ -133,7 +133,7 @@ async fn maintenance_retires_capped_agent_sessions() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -181,7 +181,7 @@ async fn maintenance_retires_sessions_when_bound_voice_session_ended() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -227,7 +227,7 @@ async fn user_sunset_retires_session() {
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -298,7 +298,7 @@ async fn dm_text_message_creates_dm_scoped_agent_task_and_event() {
     store.update_job(&running_text).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running_text,
@@ -439,7 +439,7 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     store.update_job(&running).await.unwrap();
     let runtime = Ctx::new(store.clone());
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
@@ -480,7 +480,7 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     running_delivery.mark_running();
     store.update_job(&running_delivery).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running_delivery,
@@ -522,7 +522,7 @@ async fn agent_session_thread_uses_readable_default_name_and_intro() {
     running_delivery.mark_running();
     store.update_job(&running_delivery).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running_delivery,
@@ -576,7 +576,7 @@ async fn maintenance_does_not_requeue_thread_title_refresh_for_same_response_cou
     running.mark_running();
     store.update_job(&running).await.unwrap();
 
-    clankcord::engine::dispatcher::dispatch_claimed_runtime_job(
+    clankcord::engine::dispatcher::dispatch_claimed_job(
         &runtime,
         &clankcord::ports::discord::DiscordApiUnavailable,
         running,
