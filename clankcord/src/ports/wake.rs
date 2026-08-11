@@ -1,15 +1,10 @@
-//! Wake-word seam.
-//!
-//! Adapters implement [`WakeDetector`] over a concrete provider; the wake
-//! circuit breaker (policy in `runtime::domain::voice_capture::wake_circuit`,
+//! Wake-word boundary types. The wake adapter produces these; the wake
+//! circuit breaker (policy in `domain::voice::capture::wake_circuit`,
 //! state in the `wake_circuit` table) decides whether a probe runs at all.
-
-use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::Result;
 use crate::util::number_or_null;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -51,13 +46,4 @@ impl WakeDetectionResult {
         object.insert("scores".to_string(), self.scores.clone());
         Value::Object(object)
     }
-}
-
-pub trait WakeDetector: Send + Sync {
-    fn detect_file(
-        &self,
-        path: &Path,
-        stream_id: &str,
-        reset_stream: bool,
-    ) -> Result<WakeDetectionResult>;
 }
