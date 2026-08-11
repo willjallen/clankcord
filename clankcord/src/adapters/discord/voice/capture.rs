@@ -9,7 +9,7 @@ use crate::adapters::discord::voice::session::{
     AudioPipelineOutcome, SegmentCloseReason, SessionAudioPipeline, SpeechGateConfig,
     WakeProbeConfig, monotonic_seconds,
 };
-use crate::adapters::discord::voice::types::LiveVoiceSession;
+use crate::adapters::discord::voice::types::{CaptureMode, LiveVoiceSession};
 use crate::model::job::Job;
 use crate::model::voice::VoiceCaptureSessionStatus;
 use crate::util::log;
@@ -433,7 +433,7 @@ impl LiveCaptureSession {
 
     pub(super) fn set_deafened(&mut self, deafened: bool) {
         if deafened {
-            self.session.mode = "deafened_paused".to_string();
+            self.session.mode = CaptureMode::DeafenedPaused;
             let buffered_speakers = self.session.buffers.len() as i64;
             if buffered_speakers > 0 {
                 *self
@@ -444,12 +444,12 @@ impl LiveCaptureSession {
             }
             self.session.buffers.clear();
         } else if self.is_deafened() {
-            self.session.mode = "local_buffering".to_string();
+            self.session.mode = CaptureMode::LocalBuffering;
         }
     }
 
     pub(super) fn is_deafened(&self) -> bool {
-        self.session.mode == "deafened_paused"
+        self.session.mode == CaptureMode::DeafenedPaused
     }
 }
 

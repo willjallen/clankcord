@@ -150,8 +150,27 @@ pub struct LiveVoiceSession {
     pub capture_run_id: String,
     #[serde(default)]
     pub assignment_id: String,
-    #[serde(default = "default_session_mode")]
-    pub mode: String,
+    #[serde(default)]
+    pub mode: CaptureMode,
+}
+
+/// The live capture state machine: buffering audio locally, or paused
+/// because the bot deafened. Serialized snake_case into session snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureMode {
+    #[default]
+    LocalBuffering,
+    DeafenedPaused,
+}
+
+impl CaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalBuffering => "local_buffering",
+            Self::DeafenedPaused => "deafened_paused",
+        }
+    }
 }
 
 impl LiveVoiceSession {
@@ -214,7 +233,7 @@ impl LiveVoiceSession {
                 self.capture_run_id.clone()
             },
             assignment_id: self.assignment_id.clone(),
-            mode: self.mode.clone(),
+            mode: self.mode.as_str().to_string(),
             started_at: timestamp_field(&started, "iso"),
             started_at_local: timestamp_field(&started, "local_iso"),
             started_at_discord: timestamp_field(&started, "discord_full"),
@@ -264,8 +283,4 @@ fn timestamp_field_opt(fields: Option<&BTreeMap<String, String>>, key: &str) -> 
         .and_then(|value| value.get(key))
         .cloned()
         .unwrap_or_default()
-}
-
-fn default_session_mode() -> String {
-    "local_buffering".to_string()
 }

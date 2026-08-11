@@ -240,7 +240,7 @@ async fn deafened_voice_session_drops_packets_before_buffering() {
     let raw = tempfile::tempdir().unwrap();
     let pipeline = SessionAudioPipeline::new().with_minimum_utterance_ms(1);
     let mut session = test_voice_session(raw.path());
-    session.mode = "deafened_paused".to_string();
+    session.mode = clankcord::adapters::discord::voice::types::CaptureMode::DeafenedPaused;
     let pcm = vec![0_u8; PCM_20MS_SILENCE.len()];
 
     let outcome = pipeline.handle_pcm_packet(Some(&mut session), "user-a", "Will", "will", &pcm);

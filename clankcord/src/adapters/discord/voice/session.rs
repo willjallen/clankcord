@@ -10,7 +10,7 @@ use crate::adapters::discord::voice::artifacts::{
 };
 use crate::adapters::discord::voice::diagnostics::{DiagnosticsConfig, analyze_pcm_bytes};
 use crate::adapters::discord::voice::types::{
-    LiveVoiceSession, SessionAudioSegment, SpeakerBuffer,
+    CaptureMode, LiveVoiceSession, SessionAudioSegment, SpeakerBuffer,
 };
 use crate::model::job::{AudioSegmentPayload, WakeProbePayload};
 use crate::util::first_non_empty;
@@ -204,7 +204,7 @@ impl SessionAudioPipeline {
         let Some(session) = active_session(session) else {
             return AudioPipelineOutcome::NoSession;
         };
-        if session.mode == "deafened_paused" {
+        if session.mode == CaptureMode::DeafenedPaused {
             note_packet_debug(session, "droppedPausedPcmPackets");
             return AudioPipelineOutcome::Paused;
         }
@@ -259,7 +259,7 @@ impl SessionAudioPipeline {
         let Some(session) = active_session(session) else {
             return AudioPipelineOutcome::NoSession;
         };
-        if session.mode == "deafened_paused" {
+        if session.mode == CaptureMode::DeafenedPaused {
             note_packet_debug(session, "droppedPausedSilencePackets");
             return AudioPipelineOutcome::Paused;
         }
@@ -309,7 +309,7 @@ impl SessionAudioPipeline {
         let Some(session) = active_session(session) else {
             return AudioPipelineOutcome::NoSession;
         };
-        if session.mode == "deafened_paused" {
+        if session.mode == CaptureMode::DeafenedPaused {
             note_packet_debug(session, "droppedPausedEmptyPcmPackets");
             return AudioPipelineOutcome::Paused;
         }
@@ -360,7 +360,7 @@ impl SessionAudioPipeline {
         let Some(session) = active_session(session) else {
             return AudioPipelineOutcome::NoSession;
         };
-        if session.mode == "deafened_paused" {
+        if session.mode == CaptureMode::DeafenedPaused {
             note_packet_debug(session, "droppedPausedSpeakingStates");
             return AudioPipelineOutcome::Paused;
         }

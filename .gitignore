@@ -56,3 +56,4 @@ desktop.ini
 # Local agent/tooling scratch space
 .agents/tmp/
 .agents/cache/
+.claude/worktrees/

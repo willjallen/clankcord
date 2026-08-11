@@ -244,7 +244,7 @@ pub(crate) fn test_voice_session(raw_root: &Path) -> LiveVoiceSession {
         voice_client_debug: Default::default(),
         capture_run_id: "cap_test".to_string(),
         assignment_id: String::new(),
-        mode: "local_buffering".to_string(),
+        mode: clankcord::adapters::discord::voice::types::CaptureMode::LocalBuffering,
     }
 }
 

@@ -18,7 +18,7 @@ use crate::adapters::discord::voice::client_connection::{
     play_voice_file, probe_bot_presence, resolve_member_profile, set_voice_deafen, set_voice_mute,
 };
 use crate::adapters::discord::voice::session::{SpeechGateConfig, WakeProbeConfig};
-use crate::adapters::discord::voice::types::LiveVoiceSession;
+use crate::adapters::discord::voice::types::{CaptureMode, LiveVoiceSession};
 use crate::config::{local_tz, transcription_config};
 use crate::engine::JobBus;
 use crate::model::job::{
@@ -340,7 +340,7 @@ impl LiveVoiceAdapter {
             )]),
             capture_run_id: session_id.clone(),
             assignment_id: request.assignment_id.clone(),
-            mode: "local_buffering".to_string(),
+            mode: CaptureMode::LocalBuffering,
         };
         self.capture_sessions_lock.lock().await.insert(
             session_id.clone(),
