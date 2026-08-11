@@ -15,12 +15,12 @@ use crate::adapters::codex::{
 };
 use crate::config;
 use crate::domain::Ctx;
-use crate::domain::agents::AgentSessionRouteKind;
 use crate::domain::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
 use crate::domain::interactions::agent_sessions;
 use crate::engine::dispatcher;
+use crate::model::agents::AgentSessionRouteKind;
 use crate::model::job::{
     AgentInvocationMetadata, AgentPreflightCheck, AgentPreflightMetadata, AgentTaskMetadata,
     AgentTaskOutcome, AgentTaskPhase, BinaryPayload,
@@ -30,7 +30,9 @@ use crate::model::job::{
     TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 use crate::model::scope::RuntimeScopeKind;
-use crate::store::{JobVisibility, event_text, isoformat_z, parse_instant, set, utc_now};
+use crate::store::{JobVisibility, event_text};
+use crate::time::{isoformat_z, parse_instant, utc_now};
+use crate::util::set;
 use crate::util::{first_non_empty, first_value_string, log, non_empty, preview};
 
 use super::linear_mcp::insert_linear_mcp_env;
@@ -1078,7 +1080,7 @@ fn agent_task_source_event_ids(job: &Job) -> std::collections::BTreeSet<String> 
 
 fn agent_task_request_origin(
     command: Option<&crate::model::job::CommandRequest>,
-    route_kind: &crate::domain::agents::AgentSessionRouteKind,
+    route_kind: &crate::model::agents::AgentSessionRouteKind,
     source_events: &[Value],
     parent: Option<&Job>,
 ) -> AgentPromptRequestOrigin {
@@ -1094,7 +1096,7 @@ fn agent_task_request_origin(
     {
         return AgentPromptRequestOrigin::Text;
     }
-    if *route_kind == crate::domain::agents::AgentSessionRouteKind::Dm {
+    if *route_kind == crate::model::agents::AgentSessionRouteKind::Dm {
         return AgentPromptRequestOrigin::Text;
     }
     if parent.is_some_and(|job| {

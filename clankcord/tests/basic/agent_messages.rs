@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use clankcord::domain::agents::AgentSessionRouteKind;
 use clankcord::domain::interactions::{
     AgentPromptRequestOrigin, AgentTaskPromptContext, build_agent_task_message_from_template_dir,
 };
+use clankcord::model::agents::AgentSessionRouteKind;
 use clankcord::model::job::TextTargetKind;
 
 #[test]

@@ -20,8 +20,8 @@ use sqlx::postgres::PgPoolOptions;
 
 use clankcord::adapters::discord::voice::types::LiveVoiceSession;
 use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
-use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice::VoiceCaptureSessionStatus;
+use clankcord::model::rooms::RoomConfig;
+use clankcord::model::voice::VoiceCaptureSessionStatus;
 use clankcord::store::{SpeechEventInput, TimelineStore};
 
 const LOCAL_TEST_POSTGRES_URL: &str =
@@ -256,5 +256,5 @@ pub(crate) fn merge_json(base: &Value, extra: Value) -> Value {
 
 #[allow(dead_code)]
 pub(crate) fn ended(session: &mut VoiceCaptureSessionStatus) {
-    session.mark_ended(clankcord::store::isoformat_z(None));
+    session.mark_ended(clankcord::time::isoformat_z(None));
 }

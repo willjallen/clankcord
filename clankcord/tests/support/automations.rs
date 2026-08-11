@@ -5,11 +5,12 @@ use serde_json::{Value, json};
 use clankcord::config::{ControlConfig, GuildConfig, PoolConfig};
 use clankcord::domain::Ctx;
 use clankcord::domain::automations::AutomationSpec;
-use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice::VoiceBotStatus;
 use clankcord::model::job::{CommandRequest, Job};
+use clankcord::model::rooms::RoomConfig;
 use clankcord::model::scope::RuntimeScope;
-use clankcord::store::{TimelineStore, isoformat_z, utc_now};
+use clankcord::model::voice::VoiceBotStatus;
+use clankcord::store::TimelineStore;
+use clankcord::time::{isoformat_z, utc_now};
 
 pub fn reminder_spec(idempotency_key: &str) -> AutomationSpec {
     AutomationSpec::from_json(&json!({

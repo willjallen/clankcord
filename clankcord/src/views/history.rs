@@ -4,9 +4,8 @@ use serde_json::{Map, Value, json};
 
 use crate::Result;
 use crate::errors::discord_tool_error;
-use crate::store::{
-    TimelineStore, event_text, isoformat_z, parse_instant, resolve_time_reference, utc_now,
-};
+use crate::store::{TimelineStore, event_text};
+use crate::time::{isoformat_z, parse_instant, resolve_time_reference, utc_now};
 
 use crate::domain::Ctx;
 use crate::domain::rooms::catalog;

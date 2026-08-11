@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::domain::rooms::RoomControl;
+use crate::model::rooms::RoomControl;
 
 impl TimelineStore {
     pub async fn list_room_controls(&self) -> Result<BTreeMap<String, RoomControl>> {

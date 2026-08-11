@@ -4,10 +4,10 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::json;
 
 use clankcord::domain::voice::capture::wake_activations::{execute, schedule_from_wake_event};
-use clankcord::domain::voice::{
+use clankcord::model::job::{AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobState};
+use clankcord::model::voice::{
     SessionCaptureStats, SessionSpeakerCaptureStats, VoiceCaptureSessionStatus,
 };
-use clankcord::model::job::{AudioSegmentPayload, DiscordVoicePlaybackCue, Job, JobKind, JobState};
 
 use crate::support::wake::{append_event, insert_agent_session, string_field, test_runtime};
 use crate::support::{dt, test_store};

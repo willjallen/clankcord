@@ -1,8 +1,8 @@
 use serde_json::json;
 
 use super::*;
-use crate::domain::rooms::RoomConfig;
-use crate::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::model::rooms::RoomConfig;
+use crate::model::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
 
 const ACTIVE_ASSIGNMENT_STATES: &[&str] = &["joining", "capturing", "leaving"];
 pub(crate) const VOICE_ADAPTER_SNAPSHOT_STATUS_KEY: &str = "voice_adapter_snapshot";

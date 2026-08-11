@@ -16,7 +16,7 @@ use crate::model::job::{
     DiscordVoicePlaybackCue, Job, JobKind, JobOutput, RoomAgentPlacementAction,
 };
 use crate::model::scope::RuntimeScope;
-use crate::store::{isoformat_z, utc_now};
+use crate::time::{isoformat_z, utc_now};
 use crate::util::string_field;
 
 pub async fn create_command_job(

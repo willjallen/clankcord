@@ -1,8 +1,8 @@
 //! Room and voice-assignment fixtures shared across category binaries.
 
 use clankcord::domain::Ctx;
-use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice::VoiceBotStatus;
+use clankcord::model::rooms::RoomConfig;
+use clankcord::model::voice::VoiceBotStatus;
 pub fn room_runtime(timeline_store: clankcord::store::TimelineStore, _room: RoomConfig) -> Ctx {
     Ctx::new(timeline_store)
 }

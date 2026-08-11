@@ -11,9 +11,9 @@ use crate::domain::voice::playback;
 use crate::model::job::{
     CommandRequest, DiscordVoicePlaybackCue, Job, JobKind, JobState, WakeActivationPayload,
 };
-use crate::store::{
-    event_end, event_speaker, event_start, event_text, isoformat_z, new_id, parse_instant, utc_now,
-};
+use crate::store::{event_end, event_speaker, event_start, event_text};
+use crate::time::{isoformat_z, parse_instant, utc_now};
+use crate::util::new_id;
 use crate::util::{first_value_string, non_empty};
 
 #[derive(Debug, Clone, Copy)]
@@ -997,7 +997,7 @@ async fn room_transcription_settlement(
 }
 
 fn live_capture_interval(
-    speaker: &crate::domain::voice::SessionSpeakerCaptureStats,
+    speaker: &crate::model::voice::SessionSpeakerCaptureStats,
 ) -> Option<(DateTime<Utc>, DateTime<Utc>)> {
     let has_live_audio =
         speaker.active || speaker.flush_in_flight || speaker.buffered_audio_bytes > 0;

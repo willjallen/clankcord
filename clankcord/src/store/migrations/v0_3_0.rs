@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::domain::agents::{
-    AgentSessionRecord, AgentSessionRouteKind, dm_route_key, thread_route_key, voice_route_key,
-};
 use crate::domain::automations::{
     AutomationAction, AutomationCondition, AutomationDelay, AutomationExpiry, AutomationOwner,
     AutomationPendingRecheck, AutomationRecord, AutomationSpec, AutomationState, AutomationTrigger,
+};
+use crate::model::agents::{
+    AgentSessionRecord, AgentSessionRouteKind, dm_route_key, thread_route_key, voice_route_key,
 };
 use crate::model::job::JobMetadata;
 use crate::model::job::{Job, JobKind, JobPayload, JobState};

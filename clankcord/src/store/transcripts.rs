@@ -390,3 +390,30 @@ fn push_filter_prefix(query: &mut QueryBuilder<'_, Postgres>, has_where: &mut bo
         *has_where = true;
     }
 }
+
+fn write_json_file(path: &Path, payload: &Value) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension(format!(
+        "{}tmp",
+        path.extension()
+            .map(|ext| format!("{}.", ext.to_string_lossy()))
+            .unwrap_or_default()
+    ));
+    fs::write(&tmp, serde_json::to_string_pretty(payload)? + "\n")?;
+    fs::rename(tmp, path)?;
+    Ok(())
+}
+
+fn sorted_unique<I>(values: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    values
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}

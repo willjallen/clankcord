@@ -1,5 +1,4 @@
 use crate::Result;
-use crate::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::model::job::{
     AgentSessionResumePayload, AgentSessionRetirementPayload, AgentSessionStartOutput,
     AgentSessionStartPayload, AgentSessionSunsetPayload, AgentTaskMetadata, AgentTaskPayload,
@@ -21,6 +20,7 @@ use crate::model::job::{
 };
 use crate::model::job::{Job, JobKind, JobPayload, JobState};
 use crate::model::scope::RuntimeScopeKind;
+use crate::model::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use serde::{Deserialize, Serialize};
 
 /// Frozen wire shape: stale_running_job_sweep payloads exist in pre-v1.0.0

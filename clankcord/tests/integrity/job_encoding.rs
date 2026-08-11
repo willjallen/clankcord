@@ -2,13 +2,12 @@
 //! and the public jobs view projection.
 
 use chrono::{SecondsFormat, TimeZone, Utc};
-use clankcord::domain::agents::AgentSessionRecord;
+use clankcord::model::agents::AgentSessionRecord;
 use clankcord::model::job::{DiscordSlashCommandPayload, DiscordTextMessagePayload};
 use clankcord::model::scope::RuntimeScopeKind;
 use serde_json::json;
 
 use clankcord::domain::Ctx;
-use clankcord::domain::rooms::RoomConfig;
 use clankcord::model::job::{
     AgentSessionStartPayload, BinaryPayload, CommandRequest, DiscordForumThreadCreatePayload,
     DiscordForumThreadRenamePayload, DiscordTextSendPayload, DiscordTypingAction,
@@ -21,6 +20,7 @@ use clankcord::model::job::{
     TextTarget, TextTargetKind, TranscriptPublicationPayload, WakeActivationPayload,
     WakeProbePayload,
 };
+use clankcord::model::rooms::RoomConfig;
 use clankcord::model::scope::RuntimeScope;
 use clankcord::views::JobsRequest;
 

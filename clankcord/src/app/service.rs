@@ -19,7 +19,8 @@ use crate::engine::JobBus;
 use crate::engine::RuntimeExecutor;
 use crate::engine::schedules;
 use crate::model::job::{CommandRequest, Job, RuntimeControlAction};
-use crate::store::{TimelineStore, utc_now};
+use crate::store::TimelineStore;
+use crate::time::utc_now;
 use crate::util::log;
 
 type ServiceRuntimeExecutor = RuntimeExecutor<DiscordRuntimeApi>;

@@ -14,7 +14,8 @@ use crate::engine::JobDecision;
 use crate::model::job::{
     Job, JobKind, JobOutput, JobState, OpaqueValue, RuntimeMaintenancePayload,
 };
-use crate::store::{JobVisibility, isoformat_z, parse_instant, utc_now};
+use crate::store::JobVisibility;
+use crate::time::{isoformat_z, parse_instant, utc_now};
 
 pub(crate) async fn execute_runtime_maintenance_job(
     ctx: &Ctx,

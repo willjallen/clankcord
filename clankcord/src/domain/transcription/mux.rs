@@ -14,7 +14,7 @@ use crate::config;
 use crate::domain::Ctx;
 use crate::model::job::{Job, JobState};
 use crate::store::{ActiveMuxStreamRow, TranscriptionSlotRecord};
-use crate::store::{instant_ms_dt, utc_now};
+use crate::time::{instant_ms_dt, utc_now};
 
 /// A provider stream and when it is expected to be free again.
 #[derive(Debug, Clone, Copy)]

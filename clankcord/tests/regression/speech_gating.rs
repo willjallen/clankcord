@@ -11,13 +11,13 @@ use clankcord::adapters::discord::voice::session::AudioPipelineOutcome;
 use clankcord::adapters::discord::voice::session::SegmentCloseReason;
 use clankcord::adapters::discord::voice::session::SessionAudioPipeline;
 use clankcord::adapters::discord::voice::session::WakeProbeConfig;
-use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice::VoiceCaptureSessionStatus;
 use clankcord::model::job::CommandKind;
 use clankcord::model::job::CommandRequest;
 use clankcord::model::job::Job;
 use clankcord::model::job::JobKind;
+use clankcord::model::rooms::RoomConfig;
 use clankcord::model::scope::RuntimeScope;
+use clankcord::model::voice::VoiceCaptureSessionStatus;
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]

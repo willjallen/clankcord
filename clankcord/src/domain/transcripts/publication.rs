@@ -7,7 +7,6 @@ use crate::Result;
 use crate::domain::Ctx;
 use crate::domain::children;
 use crate::domain::messaging::chunks::{MESSAGE_CHUNK_LIMIT, split_message_chunks};
-use crate::domain::rooms::RoomConfig;
 use crate::domain::rooms::catalog;
 use crate::engine::JobDecision;
 use crate::model::job::{
@@ -15,8 +14,9 @@ use crate::model::job::{
     JobOutput, TextDeliveryKind, TextTarget, TextTargetKind, TranscriptPublicationOutput,
     TranscriptPublicationPayload,
 };
+use crate::model::rooms::RoomConfig;
 use crate::model::scope::RuntimeScope;
-use crate::store::isoformat_z;
+use crate::time::isoformat_z;
 use crate::util::{first_non_empty, preview, string_field};
 
 const DISCORD_THREAD_NAME_LIMIT: usize = 100;

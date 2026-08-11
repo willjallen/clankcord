@@ -12,13 +12,13 @@ use crate::support::initialize_test_config;
 use crate::support::rooms::{ready_bot_with, room_runtime, test_room};
 use crate::support::test_state_dir;
 use crate::support::test_store;
-use clankcord::domain::rooms::RoomConfig;
-use clankcord::domain::voice::VoiceCaptureSessionStatus;
 use clankcord::model::job::Job;
 use clankcord::model::job::JobKind;
 use clankcord::model::job::JobState;
 use clankcord::model::job::RoomAgentPlacementAction;
-use clankcord::store::utc_now;
+use clankcord::model::rooms::RoomConfig;
+use clankcord::model::voice::VoiceCaptureSessionStatus;
+use clankcord::time::utc_now;
 use serde_json::json;
 
 #[tokio::test(flavor = "current_thread")]
@@ -566,7 +566,7 @@ async fn voice_assignment_claim_skips_pending_disconnect_bot() {
 
 fn capture_session_for_assignment(
     room: &RoomConfig,
-    assignment: &clankcord::domain::voice::VoiceAssignment,
+    assignment: &clankcord::model::voice::VoiceAssignment,
 ) -> VoiceCaptureSessionStatus {
     VoiceCaptureSessionStatus {
         session_id: assignment.capture_run_id.clone(),

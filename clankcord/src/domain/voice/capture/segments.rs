@@ -14,9 +14,11 @@ use crate::model::job::{
     AudioSegmentPayload, JobState, TranscriptionMuxPayload, TranscriptionMuxPlanPayload,
 };
 use crate::ports::stt::{TranscriptionResult, TranscriptionSpan, TranscriptionWord};
+use crate::store::SpeechEventInput;
 use crate::store::TranscriptionSlotRecord;
-use crate::store::{SpeechEventInput, isoformat_z, read_wav_mono, sha256_file, utc_now};
+use crate::time::{isoformat_z, utc_now};
 use crate::util;
+use crate::util::sha256_file;
 
 pub(crate) struct AudioSegmentRetryPlan {
     pub delay_for_attempt: fn(i64) -> chrono::Duration,
@@ -871,4 +873,29 @@ pub async fn requeue_retryable_failed_transcription_slots(
         }
     }
     Ok(requeued)
+}
+
+pub(crate) fn read_wav_mono(path: &Path, sample_rate: u32) -> Result<Vec<i16>> {
+    let mut reader = hound::WavReader::open(path)?;
+    let spec = reader.spec();
+    if spec.bits_per_sample != 16 || spec.sample_rate != sample_rate {
+        anyhow::bail!(
+            "unsupported wav format for {}: {}ch {}bit {}Hz",
+            path.display(),
+            spec.channels,
+            spec.bits_per_sample,
+            spec.sample_rate
+        );
+    }
+    let samples = reader
+        .samples::<i16>()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    match spec.channels {
+        1 => Ok(samples),
+        2 => Ok(samples
+            .chunks_exact(2)
+            .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
+            .collect()),
+        count => anyhow::bail!("unsupported channel count for {}: {count}", path.display()),
+    }
 }

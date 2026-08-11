@@ -10,14 +10,15 @@ use crate::Result;
 use crate::adapters::codex::{parse_codex_trace, usage_payload_info};
 use crate::config;
 use crate::domain::Ctx;
-use crate::domain::agents::AgentRuntime;
 use crate::domain::automations::{AutomationRecord, AutomationTrigger};
 use crate::domain::rooms::status;
 use crate::domain::voice::capture::wake_circuit;
+use crate::model::agents::task_session_key;
 use crate::model::job::{Job, JobKind, JobState};
-use crate::store::util::timeline_event_payload;
+use crate::store::timeline_event_payload;
 use crate::store::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAPSHOT_STATUS_KEY};
-use crate::store::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, round3, utc_now};
+use crate::time::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, utc_now};
+use crate::util::round3;
 use crate::util::{first_non_empty, non_empty, preview, string_field};
 use crate::views::dashboard;
 
@@ -3069,7 +3070,7 @@ fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSessionView> {
     });
     let mut sessions = BTreeMap::<String, AgentSessionView>::new();
     for job in ordered {
-        let key = AgentRuntime::task_session_key(&job.guild_id, &job.scope_id);
+        let key = task_session_key(&job.guild_id, &job.scope_id);
         let entry = sessions
             .entry(key.clone())
             .or_insert_with(|| AgentSessionView {
@@ -3137,7 +3138,7 @@ async fn agent_session_payload(
     selected: &Job,
     selected_codex: &Value,
 ) -> Result<Value> {
-    let key = AgentRuntime::task_session_key(&selected.guild_id, &selected.scope_id);
+    let key = task_session_key(&selected.guild_id, &selected.scope_id);
     let mut jobs = runtime
         .store
         .list_jobs_by_scope_kind(&selected.guild_id, &selected.scope_id, JobKind::AgentTask)

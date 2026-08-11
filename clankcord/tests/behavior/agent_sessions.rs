@@ -5,7 +5,7 @@ use crate::support::sessions::{
     agent_thread_title_refresh_jobs, insert_active_thread_session, insert_completed_agent_response,
 };
 use clankcord::domain::Ctx;
-use clankcord::domain::agents::{AgentSessionRecord, AgentSessionRecordState, voice_route_key};
+use clankcord::model::agents::{AgentSessionRecord, AgentSessionRecordState, voice_route_key};
 use clankcord::model::job::{
     AgentSessionStartPayload, CommandRequest, DiscordForumThreadCreateOutput,
     DiscordTextMessagePayload, Job, JobKind, JobOutput, JobPayload, JobState, TextDeliveryKind,
@@ -269,7 +269,7 @@ fn agent_session_runtime_scope_covers_voice_dm_and_thread_routes() {
     assert_eq!(dm.scope(), RuntimeScope::dm("user-a"));
 
     let mut thread = voice;
-    thread.route_kind = clankcord::domain::agents::AgentSessionRouteKind::Thread;
+    thread.route_kind = clankcord::model::agents::AgentSessionRouteKind::Thread;
     thread.discord_thread_id = "thread-a".to_string();
     assert_eq!(thread.scope(), RuntimeScope::thread("guild-a", "thread-a"));
 }

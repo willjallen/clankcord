@@ -8,7 +8,7 @@
 //! is a compile error, and the scheduler iterates kinds that are actually due
 //! in Postgres, so a queued row can never sit unschedulable in silence.
 
-use crate::domain::agents;
+use crate::model::agents;
 use crate::model::job::{Job, JobKind, JobPayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

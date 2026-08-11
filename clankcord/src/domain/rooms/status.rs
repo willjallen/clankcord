@@ -4,12 +4,12 @@ use crate::Result;
 use crate::config::local_tz;
 
 use crate::domain::Ctx;
-use crate::domain::rooms::RoomConfig;
 use crate::domain::rooms::catalog;
 use crate::domain::rooms::control_state;
-use crate::domain::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::model::job::JobState;
-use crate::store::format_timestamp_local;
+use crate::model::rooms::RoomConfig;
+use crate::model::voice::{VoiceAssignment, VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::time::format_timestamp_local;
 use crate::util::first_non_empty;
 
 pub async fn status_for_room(ctx: &Ctx, room: &RoomConfig) -> Result<Value> {

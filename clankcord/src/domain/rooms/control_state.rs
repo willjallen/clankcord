@@ -4,10 +4,10 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::Result;
-use crate::store::{isoformat_z, parse_instant, utc_now};
+use crate::time::{isoformat_z, parse_instant, utc_now};
 
 use crate::domain::Ctx;
-use crate::domain::rooms::{RoomConfig, RoomControl};
+use crate::model::rooms::{RoomConfig, RoomControl};
 
 pub async fn pause_room(
     ctx: &Ctx,

@@ -10,6 +10,7 @@ pub mod errors;
 pub mod model;
 pub mod ports;
 pub mod store;
+pub mod time;
 pub mod util;
 pub mod views;
 

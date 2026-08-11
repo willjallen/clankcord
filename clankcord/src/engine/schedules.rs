@@ -14,7 +14,8 @@ use crate::Result;
 use crate::config;
 use crate::engine::JobBus;
 use crate::model::job::{Job, JobKind};
-use crate::store::{TimelineStore, instant_ms_dt, utc_now};
+use crate::store::TimelineStore;
+use crate::time::{instant_ms_dt, utc_now};
 use crate::util::log;
 
 /// Builds the job a schedule row mints. Only kinds that make sense on a

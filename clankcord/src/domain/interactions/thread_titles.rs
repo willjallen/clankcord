@@ -14,7 +14,6 @@ use crate::domain::Ctx;
 use crate::domain::agents::{
     AgentInfrastructureError, AgentInvocationRequest, AgentRole, AgentRuntime,
 };
-use crate::domain::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::domain::interactions::agent_sessions;
 use crate::domain::messaging::session_threads;
 use crate::domain::messaging::session_threads::{
@@ -23,6 +22,7 @@ use crate::domain::messaging::session_threads::{
 use crate::domain::rooms::catalog;
 use crate::engine::JobDecision;
 use crate::errors::discord_error_text_is_unavailable_channel;
+use crate::model::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::model::job::{
     AgentThreadTitleRefreshPayload, DiscordForumThreadRenamePayload, Job, JobKind, JobOutput,
     JobPayload, JobState, TextTargetKind,

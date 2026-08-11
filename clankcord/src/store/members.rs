@@ -7,14 +7,14 @@ impl TimelineStore {
         let updated_at_ms = instant_ms_dt(utc_now());
         for member in members {
             let payload = normalize_member_payload(guild_id, member);
-            let user_id = string_field_map(payload.as_object().unwrap(), "id");
+            let user_id = string_field(&payload, "id");
             if user_id.is_empty() {
                 continue;
             }
-            let username = string_field_map(payload.as_object().unwrap(), "username");
-            let global_name = string_field_map(payload.as_object().unwrap(), "global_name");
-            let nick = string_field_map(payload.as_object().unwrap(), "nick");
-            let display_name = string_field_map(payload.as_object().unwrap(), "display_name");
+            let username = string_field(&payload, "username");
+            let global_name = string_field(&payload, "global_name");
+            let nick = string_field(&payload, "nick");
+            let display_name = string_field(&payload, "display_name");
             let normalized_search = member_search_blob(&payload);
             sqlx::query(
                 r#"

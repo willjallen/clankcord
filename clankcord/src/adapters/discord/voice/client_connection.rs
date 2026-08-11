@@ -31,7 +31,7 @@ use crate::adapters::discord::gateway::components;
 use crate::adapters::discord::voice::capture::VoiceData;
 use crate::adapters::discord::voice::live::LiveVoiceAdapter;
 use crate::config;
-use crate::domain::voice::VoiceBotStatus;
+use crate::model::voice::VoiceBotStatus;
 use crate::ports::voice::{VoiceClientReady, VoiceMemberProfile, VoiceStateInfo};
 use crate::util::log;
 

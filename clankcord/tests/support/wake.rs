@@ -2,7 +2,7 @@
 
 use chrono::SecondsFormat;
 use clankcord::domain::Ctx;
-use clankcord::domain::agents::AgentSessionRecord;
+use clankcord::model::agents::AgentSessionRecord;
 use clankcord::store::SpeechEventInput;
 use clankcord::store::TimelineStore;
 use serde_json::Value;

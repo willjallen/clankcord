@@ -10,7 +10,7 @@ use crate::model::job::{
     BinaryPayload, CommandRequest, ConfirmationContext, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextDeliveryKind, TextTarget, TextTargetKind,
 };
-use crate::store::isoformat_z;
+use crate::time::isoformat_z;
 
 use crate::domain::Ctx;
 use crate::domain::interactions::commands;

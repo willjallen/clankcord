@@ -5,7 +5,6 @@ use std::path::Path;
 use crate::Result;
 use crate::config;
 use crate::domain::Ctx;
-use crate::domain::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::domain::interactions::agent_sessions;
 use crate::domain::messaging::session_threads;
 use crate::domain::messaging::session_threads::{
@@ -13,13 +12,14 @@ use crate::domain::messaging::session_threads::{
     discord_error_text_unavailable_channel_id,
 };
 use crate::engine::JobDecision;
+use crate::model::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::model::job::{
     BinaryPayload, DiscordForumThreadCreatePayload, DiscordTextSendPayload, Job, JobKind,
     JobOutput, JobState, TextAttachmentPayload, TextDeliveryOutput, TextDeliveryPayload,
     TextTarget, TextTargetKind,
 };
 use crate::model::scope::{RuntimeScope, RuntimeScopeKind};
-use crate::store::sha256_file;
+use crate::util::sha256_file;
 use crate::util::{first_non_empty, string_field};
 
 #[allow(clippy::large_enum_variant)] // wire/decision enums: boxing buys nothing on the encoded form

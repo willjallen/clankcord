@@ -1,7 +1,7 @@
 //! Agent-session fixtures shared across category binaries.
 
 use chrono::SecondsFormat;
-use clankcord::domain::agents::AgentSessionRecord;
+use clankcord::model::agents::AgentSessionRecord;
 use clankcord::model::job::CommandRequest;
 use clankcord::model::job::Job;
 use clankcord::model::job::JobKind;

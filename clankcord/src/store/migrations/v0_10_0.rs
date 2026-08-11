@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::Result;
-use crate::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 use crate::model::job::{
     AgentSessionStartOutput, AgentTaskMetadata, BinaryPayload, DiscordForumThreadCreateOutput,
     DiscordForumThreadRenameOutput, DiscordTextSendOutput, DiscordTypingIndicatorOutput,
@@ -12,6 +11,7 @@ use crate::model::job::{
 };
 use crate::model::job::{Job, JobKind, JobPayload, JobState};
 use crate::model::scope::RuntimeScopeKind;
+use crate::model::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 
 const JOB_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKJOB";
 const PRE_V0_10_0_JOB_PAYLOAD_BLOB_VERSION: u16 = 7;

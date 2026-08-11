@@ -7,7 +7,8 @@ use anyhow::Context;
 use crate::domain::Ctx;
 use crate::model::job::{JobKind, JobState};
 use crate::model::scope::RuntimeScopeKind;
-use crate::store::{isoformat_z, new_id, parse_instant};
+use crate::time::{isoformat_z, parse_instant};
+use crate::util::new_id;
 
 const AUTOMATION_PAYLOAD_BLOB_MAGIC: &[u8; 8] = b"CLANKAUT";
 const AUTOMATION_PAYLOAD_BLOB_VERSION: u16 = 1;

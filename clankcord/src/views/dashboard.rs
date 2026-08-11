@@ -10,11 +10,11 @@ use super::operations::{
 };
 use crate::Result;
 use crate::domain::Ctx;
-use crate::domain::agents::AgentRuntime;
+use crate::model::agents::task_session_key;
 use crate::model::job::{Job, JobState};
 use crate::store::JobVisibility;
-use crate::store::util::timeline_event_payload;
-use crate::store::{
+use crate::store::timeline_event_payload;
+use crate::time::{
     instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, resolve_time_reference, utc_now,
 };
 use crate::util::{first_non_empty, preview};
@@ -665,7 +665,7 @@ async fn dashboard_agent_sessions(ctx: &Ctx) -> Result<Vec<Value>> {
                 "idle"
             };
             Ok(json!({
-                "key": AgentRuntime::task_session_key(&guild_id, &scope_id),
+                "key": task_session_key(&guild_id, &scope_id),
                 "role": "task",
                 "scope_kind": row.try_get::<String, _>("scope_kind")?,
                 "guild_id": guild_id,

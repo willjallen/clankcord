@@ -4,7 +4,7 @@ use crate::Result;
 use crate::errors::discord_tool_error;
 
 use crate::domain::Ctx;
-use crate::domain::rooms::RoomConfig;
+use crate::model::rooms::RoomConfig;
 use crate::util::{non_empty, slugify};
 
 pub async fn known_rooms(ctx: &Ctx) -> Result<Vec<RoomConfig>> {

@@ -2,11 +2,11 @@ use serde_json::json;
 
 use crate::Result;
 use crate::domain::Ctx;
-use crate::domain::agents::AgentSessionRecord;
 use crate::domain::interactions::agent_sessions;
 use crate::engine::JobDecision;
+use crate::model::agents::AgentSessionRecord;
 use crate::model::job::{CommandRequest, DiscordTextMessagePayload, Job, JobOutput};
-use crate::store::{isoformat_z, parse_instant, utc_now};
+use crate::time::{isoformat_z, parse_instant, utc_now};
 use crate::util;
 
 pub(crate) async fn prepare(

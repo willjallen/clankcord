@@ -2,8 +2,8 @@
 
 use serde_json::json;
 
-use clankcord::domain::rooms::RoomConfig;
 use clankcord::model::job::RoomAgentPlacementAction;
+use clankcord::model::rooms::RoomConfig;
 use clankcord::store::TimelineStore;
 
 use crate::support::automations::{

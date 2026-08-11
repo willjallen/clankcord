@@ -10,7 +10,7 @@ use clankcord::model::job::CommandRequest;
 use clankcord::model::job::Job;
 use clankcord::model::job::JobState;
 use clankcord::model::scope::RuntimeScope;
-use clankcord::store::isoformat_z;
+use clankcord::time::isoformat_z;
 use clankcord::views::DashboardOverviewRequest;
 use serde_json::json;
 

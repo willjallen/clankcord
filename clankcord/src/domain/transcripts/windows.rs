@@ -9,7 +9,7 @@ use crate::domain::Ctx;
 use crate::domain::rooms::catalog;
 use crate::domain::transcripts::publication;
 use crate::errors::discord_tool_error;
-use crate::store::{parse_instant, resolve_time_reference, utc_now};
+use crate::time::{parse_instant, resolve_time_reference, utc_now};
 use crate::util::{first_non_empty, non_empty, string_field};
 
 #[derive(Debug, Clone, Default)]

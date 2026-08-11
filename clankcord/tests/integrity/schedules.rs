@@ -8,7 +8,8 @@ use serde_json::json;
 
 use clankcord::domain::Ctx;
 use clankcord::model::job::{Job, JobKind, JobState};
-use clankcord::store::{JobVisibility, isoformat_z};
+use clankcord::store::JobVisibility;
+use clankcord::time::isoformat_z;
 
 use crate::support::{initialize_test_config, test_store};
 

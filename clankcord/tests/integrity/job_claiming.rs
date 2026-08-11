@@ -13,7 +13,7 @@ use clankcord::model::job::{
     Job, JobKind, JobState, TextDeliveryKind, TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 use clankcord::model::scope::RuntimeScope;
-use clankcord::store::isoformat_z;
+use clankcord::time::isoformat_z;
 
 use crate::support::job_wire::encode_current_agent_task;
 use crate::support::jobs::{

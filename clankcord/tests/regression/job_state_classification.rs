@@ -9,7 +9,7 @@ use chrono::Utc;
 use clankcord::domain::Ctx;
 use clankcord::model::job::{CommandRequest, Job, JobState};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::store::isoformat_z;
+use clankcord::time::isoformat_z;
 use clankcord::views::{DashboardAgentsRequest, DashboardOverviewRequest};
 use serde_json::json;
 

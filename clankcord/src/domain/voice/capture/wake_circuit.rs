@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 
 use crate::Result;
 use crate::config;
+use crate::store::TimelineStore;
 use crate::store::WakeCircuitAdmission;
-use crate::store::{TimelineStore, instant_ms_dt, ms_to_datetime, utc_now};
+use crate::time::{instant_ms_dt, ms_to_datetime, utc_now};
 
 /// Extra slack past the provider timeout before an abandoned half-open probe
 /// lease is considered expired and another probe may claim it.

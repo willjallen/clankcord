@@ -5,9 +5,9 @@ use crate::support::cli::{clankcord, stderr, stdout};
 use crate::support::initialize_test_config;
 use crate::support::rooms::{room_runtime, test_room};
 use crate::support::test_store;
-use clankcord::domain::rooms::RoomConfig;
 use clankcord::model::job::CommandRequest;
 use clankcord::model::job::JobKind;
+use clankcord::model::rooms::RoomConfig;
 use clankcord::store::TimelineStore;
 use serde_json::json;
 

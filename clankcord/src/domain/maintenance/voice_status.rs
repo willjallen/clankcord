@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Result;
-use crate::store::utc_now;
+use crate::time::utc_now;
 use serde_json::Value;
 
 use crate::domain::Ctx;
-use crate::domain::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
+use crate::model::voice::{VoiceBotStatus, VoiceCaptureSessionStatus};
 
 pub async fn sync_voice_adapter_status(
     ctx: &Ctx,

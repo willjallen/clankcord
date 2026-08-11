@@ -380,7 +380,7 @@ impl TimelineStore {
     ) -> Result<Value> {
         let mut payload = event.as_object().cloned().unwrap_or_default();
         set_default_string(&mut payload, "event_id", &new_id("evt"));
-        let event_id = string_field_map(&payload, "event_id");
+        let event_id = string_value(payload.get("event_id"));
         set_default_string(&mut payload, "eventId", &event_id);
         for (key, value) in [
             ("scope_kind", scope.kind.as_str()),
@@ -419,11 +419,11 @@ impl TimelineStore {
             }
         }
         set_default_string(&mut payload, "created_at", &isoformat_z(None));
-        let created_at = string_field_map(&payload, "created_at");
+        let created_at = string_value(payload.get("created_at"));
         set_default_string(&mut payload, "timestamp", &created_at);
         let kind = non_empty(
-            string_field_map(&payload, "event_kind"),
-            non_empty(string_field_map(&payload, "kind"), "event".to_string()),
+            string_value(payload.get("event_kind")),
+            non_empty(string_value(payload.get("kind")), "event".to_string()),
         );
         set_default_string(&mut payload, "event_kind", &kind);
         set_default_string(&mut payload, "kind", &kind);
@@ -438,7 +438,7 @@ impl TimelineStore {
         let speaker_label = if !speaker.is_empty() || SPEECH_KINDS.contains(&kind.as_str()) {
             event_speaker(&payload_value)
         } else {
-            string_field_map(&payload, "speaker_label")
+            string_value(payload.get("speaker_label"))
         };
         let conversation_id = first_string(
             &payload,
@@ -1314,10 +1314,10 @@ impl TimelineStore {
             .and_then(|row| json_value(row, "payload_json").ok())
             .and_then(|value| value.as_object().cloned())
             .unwrap_or_default();
-        let mut active_id = string_field_map(&conversation, "conversation_id");
+        let mut active_id = string_value(conversation.get("conversation_id"));
         let last_speech_at = parse_instant(&non_empty(
-            string_field_map(&conversation, "end_time"),
-            string_field_map(&conversation, "last_speech_at"),
+            string_value(conversation.get("end_time")),
+            string_value(conversation.get("last_speech_at")),
         ));
         let gap_ms = last_speech_at.map(|last| ((started_at - last).num_milliseconds()).max(0));
         let new_conversation =
@@ -1395,7 +1395,7 @@ impl TimelineStore {
         );
         conversation.insert("participants".to_string(), Value::Array(participants));
         conversation.insert("participant_labels".to_string(), Value::Object(labels));
-        if string_field_map(&conversation, "title").is_empty() && !text.is_empty() {
+        if string_value(conversation.get("title")).is_empty() && !text.is_empty() {
             conversation.insert(
                 "title".to_string(),
                 Value::String(text.chars().take(80).collect()),

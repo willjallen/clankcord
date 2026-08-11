@@ -2,7 +2,6 @@ use serde_json::json;
 
 use crate::Result;
 use crate::domain::Ctx;
-use crate::domain::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::domain::children;
 use crate::domain::messaging::session_threads;
 use crate::domain::messaging::session_threads::{
@@ -10,6 +9,7 @@ use crate::domain::messaging::session_threads::{
     discord_error_unavailable_channel_id,
 };
 use crate::engine::JobDecision;
+use crate::model::agents::{AgentSessionRecord, AgentSessionRouteKind};
 use crate::model::job::{
     DiscordTypingIndicatorOutput, DiscordTypingIndicatorPayload, Job, JobOutput, TextTarget,
     TextTargetKind,

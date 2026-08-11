@@ -9,7 +9,7 @@ use clankcord::domain::Ctx;
 use clankcord::model::job::{
     AudioSegmentPayload, Job, JobKind, TextDeliveryPayload, WakeActivationPayload, WakeProbePayload,
 };
-use clankcord::store::sha256_file;
+use clankcord::util::sha256_file;
 
 pub fn text_delivery_payload(content: &str) -> TextDeliveryPayload {
     TextDeliveryPayload::from_json(&json!({

@@ -2,6 +2,12 @@ use serde_json::Value;
 
 use crate::Result;
 use crate::model::job::{Job, JobKind};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::Path;
+
+use sha2::{Digest, Sha256};
+use uuid::Uuid;
 
 pub fn log(message: &str) {
     eprintln!("[clankcord-voice] {message}");
@@ -97,4 +103,23 @@ pub(crate) fn single_child_of_kind(children: &[Job], kind: JobKind) -> Result<&J
         anyhow::bail!("expected exactly one {kind} child, found {}", matches.len());
     }
     Ok(matches[0])
+}
+
+pub fn new_id(prefix: &str) -> String {
+    format!("{prefix}_{}", Uuid::new_v4().simple())
+}
+
+pub fn sha256_file(path: &Path) -> Result<String> {
+    let mut digest = Sha256::new();
+    let mut file = fs::File::open(path)?;
+    std::io::copy(&mut file, &mut digest)?;
+    Ok(format!("sha256:{:x}", digest.finalize()))
+}
+
+pub(crate) fn round3(value: f64) -> f64 {
+    (value * 1000.0).round() / 1000.0
+}
+
+pub(crate) fn set<const N: usize>(values: [&str; N]) -> BTreeSet<String> {
+    values.into_iter().map(ToString::to_string).collect()
 }

@@ -7,7 +7,7 @@ use clankcord::domain::Ctx;
 use clankcord::domain::automations::AutomationSpec;
 use clankcord::model::job::{CommandRequest, Job};
 use clankcord::model::scope::RuntimeScope;
-use clankcord::store::{instant_ms_dt, isoformat_z};
+use clankcord::time::{instant_ms_dt, isoformat_z};
 use clankcord::views::{
     DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest, DashboardOverviewRequest,
     DashboardTimelineRequest, DashboardTranscriptRequest, default_dashboard_categories,

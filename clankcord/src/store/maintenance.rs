@@ -752,3 +752,18 @@ fn retention_policy_for_scope_time(
         .map(|context| context.policy)
         .unwrap_or(default_policy)
 }
+
+fn excerpt(content: &str, needle: &str, radius: usize) -> String {
+    let lower = content.to_lowercase();
+    let Some(index) = lower.find(needle) else {
+        return content
+            .chars()
+            .take(radius * 2)
+            .collect::<String>()
+            .trim()
+            .to_string();
+    };
+    let start = index.saturating_sub(radius);
+    let end = (index + needle.len() + radius).min(content.len());
+    content[start..end].trim().to_string()
+}
