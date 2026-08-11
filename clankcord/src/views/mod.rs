@@ -17,4 +17,3 @@ pub use history::{
 };
 pub use jobs::JobsRequest;
 pub use members::{MemberGetRequest, MemberResolveRequest, MemberSearchRequest};
-pub use operations::parse_codex_trace;

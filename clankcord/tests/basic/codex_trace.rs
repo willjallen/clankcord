@@ -1,4 +1,4 @@
-use clankcord::views::parse_codex_trace;
+use clankcord::adapters::codex::parse_codex_trace;
 use serde_json::Value;
 
 #[test]
