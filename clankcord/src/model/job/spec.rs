@@ -513,7 +513,13 @@ pub(crate) fn ordering_key(job: &Job) -> String {
         | JobPayload::AgentSessionRetirement(_)
         | JobPayload::StaleWakeProbeSweep(_)
         | JobPayload::EphemeralJobGc(_) => "runtime:maintenance".to_string(),
-        _ => String::new(),
+        // Unordered kinds: segment work is sequenced by its projected
+        // segment columns, mux claims are stream-scoped, runtime control
+        // targets a single job row, and non-agent commands run freely.
+        JobPayload::AudioSegment(_)
+        | JobPayload::Command(_)
+        | JobPayload::RuntimeControl(_)
+        | JobPayload::TranscriptionMux(_) => String::new(),
     }
 }
 
