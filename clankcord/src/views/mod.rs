@@ -11,9 +11,8 @@ pub use dashboard::{
     parse_dashboard_filter,
 };
 pub use history::{
-    ContextResolveRequest, ForgetRequest, ListConversationsRequest, MaterializeTranscriptRequest,
-    ParticipantTraceRequest, RenderTranscriptRequest, SearchTranscriptsRequest,
-    TimelineRangeRequest, TimelineTailRequest,
+    ContextResolveRequest, ListConversationsRequest, ParticipantTraceRequest,
+    RenderTranscriptRequest, SearchTranscriptsRequest, TimelineRangeRequest, TimelineTailRequest,
 };
 pub use jobs::JobsRequest;
 pub use members::{MemberGetRequest, MemberResolveRequest, MemberSearchRequest};

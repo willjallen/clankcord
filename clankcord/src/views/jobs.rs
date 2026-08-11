@@ -184,12 +184,3 @@ pub async fn command_interaction_context(
         "recent_job_ids": recent_job_ids,
     }))
 }
-
-pub async fn retry_job_payload(ctx: &Ctx, job_id: &str) -> Result<Value> {
-    let mut job = ctx.store.get_job(job_id).await?;
-    job.set_state(JobState::Queued);
-    job.metadata.error.clear();
-    job.metadata.reset_agent_task_retry();
-    ctx.store.update_job(&job).await?;
-    Ok(job.to_value())
-}

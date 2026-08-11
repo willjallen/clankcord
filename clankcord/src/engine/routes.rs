@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::Result;
 use crate::domain::Ctx;
@@ -17,11 +17,10 @@ use crate::domain::voice::playback;
 use crate::domain::voice::room_placement;
 use crate::engine::JobDecision;
 use crate::model::job::{
-    Job, JobOutput, JobPayload, RoomAgentPlacementAction, RoomAgentPlacementPayload,
+    Job, JobOutput, JobPayload, JobState, RoomAgentPlacementAction, RoomAgentPlacementPayload,
     RuntimeControlAction, RuntimeControlPayload,
 };
 use crate::ports::discord::DiscordApi;
-use crate::views::jobs;
 
 pub(crate) async fn execute<A>(runtime: &Ctx, job: &Job, external_api: &A) -> Result<JobDecision>
 where
@@ -229,7 +228,7 @@ mod runtime_control {
     ) -> Result<JobDecision> {
         let output = match payload.action {
             RuntimeControlAction::RetryJob => {
-                let target = jobs::retry_job_payload(runtime, &payload.target_job_id).await?;
+                let target = retry_job(runtime, &payload.target_job_id).await?;
                 JobOutput::from_boundary_json(
                     &json!({"kind": "runtime_control", "action": "retry_job", "target": target}),
                 )?
@@ -311,4 +310,15 @@ mod room_agents {
             }
         }
     }
+}
+
+/// Requeues a terminal job for another run: state returns to queued, the
+/// recorded error clears, and agent-task retry accounting resets.
+async fn retry_job(runtime: &Ctx, job_id: &str) -> Result<Value> {
+    let mut job = runtime.store.get_job(job_id).await?;
+    job.set_state(JobState::Queued);
+    job.metadata.error.clear();
+    job.metadata.reset_agent_task_retry();
+    runtime.store.update_job(&job).await?;
+    Ok(job.to_value())
 }

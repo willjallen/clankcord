@@ -10,15 +10,14 @@ use crate::model::job::{
 use crate::model::scope::RuntimeScope;
 use crate::store::{isoformat_z, utc_now};
 use crate::util::string_field;
-use crate::views::{ForgetRequest, MaterializeTranscriptRequest};
-
 use crate::domain::Ctx;
 use crate::domain::interactions::agent_sessions;
 use crate::domain::interactions::confirmations;
 use crate::domain::rooms::catalog;
 use crate::domain::rooms::control_state;
+use crate::domain::transcripts;
+use crate::domain::transcripts::{ForgetRequest, MaterializeTranscriptRequest};
 use crate::domain::voice::playback;
-use crate::views::history;
 
 pub async fn create_command_job(
     ctx: &Ctx,
@@ -95,7 +94,7 @@ async fn prepare_command(
     match job_kind {
         "materialize_transcript" => {
             let (start, end) = command.window_times(None);
-            let materialized = history::materialize_transcript(
+            let materialized = transcripts::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -129,7 +128,7 @@ async fn prepare_command(
         "make_permanent" => {
             let end = utc_now();
             let start = end - chrono::Duration::minutes(30);
-            let materialized = history::materialize_transcript(
+            let materialized = transcripts::materialize_transcript(
                 ctx,
                 MaterializeTranscriptRequest {
                     guild_id: guild_id.clone(),
@@ -305,7 +304,7 @@ async fn prepare_command(
         }
         "forget_window" => {
             let (start, end) = command.window_times(None);
-            let result = history::forget(
+            let result = transcripts::forget(
                 ctx,
                 ForgetRequest {
                     window_id: command.arguments.window_id.clone(),
