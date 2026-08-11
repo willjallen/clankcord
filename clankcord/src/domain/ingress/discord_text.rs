@@ -123,14 +123,7 @@ fn agent_task_for_thread_message(
         payload.content.clone(),
     );
     command.requested_by_speaker_label = text_author_label(payload);
-    let mut arguments = command.arguments.to_json();
-    if let Some(object) = arguments.as_object_mut() {
-        object.insert(
-            "source_event_ids".to_string(),
-            serde_json::Value::Array(vec![serde_json::Value::String(event_id)]),
-        );
-    }
-    command.arguments = crate::model::job::CommandArguments::from_json(Some(&arguments))?;
+    command.arguments.source_event_ids = vec![event_id];
 
     Ok(Job::agent_task_for_session(
         session.agent_session_id.clone(),

@@ -235,6 +235,34 @@ impl FromStr for CommandKind {
     }
 }
 
+/// The wake-activation context an agent task carries when a voice wake
+/// produced it; presence alone marks the request's voice origin.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandActivation {
+    #[serde(default)]
+    pub activation_id: String,
+    #[serde(default)]
+    pub wake_event_id: String,
+    #[serde(default)]
+    pub latest_wake_event_id: String,
+    #[serde(default)]
+    pub amended_wake_event_ids: Vec<String>,
+    #[serde(default)]
+    pub wake_started_at: String,
+    #[serde(default)]
+    pub wake_ended_at: String,
+    #[serde(default)]
+    pub latest_wake_at: String,
+    #[serde(default)]
+    pub voice_channel_name: String,
+    #[serde(default)]
+    pub speaker_user_id: String,
+    #[serde(default)]
+    pub speaker_label: String,
+    #[serde(default)]
+    pub source_event_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct CommandArguments {
     pub query: String,
@@ -254,6 +282,8 @@ pub struct CommandArguments {
     pub duration_seconds: Option<i64>,
     pub muted: Option<bool>,
     pub unpublished_only: Option<bool>,
+    pub source_event_ids: Vec<String>,
+    pub activation: Option<CommandActivation>,
     opaque: BinaryPayload,
 }
 
@@ -283,6 +313,12 @@ impl CommandArguments {
             duration_seconds: i64_field(object, &["duration_seconds", "durationSeconds"]),
             muted: bool_field(object, &["muted"]),
             unpublished_only: bool_field(object, &["unpublished_only", "unpublishedOnly"]),
+            source_event_ids: string_array(object, "source_event_ids"),
+            activation: object
+                .get("activation")
+                .filter(|value| value.is_object())
+                .map(|value| serde_json::from_value(value.clone()))
+                .transpose()?,
             opaque: BinaryPayload::from_json(object)?,
         })
     }
@@ -316,6 +352,24 @@ impl CommandArguments {
             map.insert(
                 "unpublished_only".to_string(),
                 Value::Bool(unpublished_only),
+            );
+        }
+        if !self.source_event_ids.is_empty() {
+            map.insert(
+                "source_event_ids".to_string(),
+                Value::Array(
+                    self.source_event_ids
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(activation) = &self.activation {
+            map.insert(
+                "activation".to_string(),
+                serde_json::to_value(activation).expect("CommandActivation serializes to JSON"),
             );
         }
         Value::Object(map)

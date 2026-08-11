@@ -1057,21 +1057,17 @@ fn agent_task_source_event_ids(job: &Job) -> std::collections::BTreeSet<String> 
     let Some(command) = job.command() else {
         return Default::default();
     };
-    let arguments = command.arguments.to_json();
-    let mut ids = string_array_field(&arguments, "source_event_ids")
-        .into_iter()
+    let mut ids = command
+        .arguments
+        .source_event_ids
+        .iter()
+        .cloned()
         .collect::<std::collections::BTreeSet<_>>();
-    if let Some(activation) = arguments.get("activation") {
-        ids.extend(string_array_field(activation, "source_event_ids"));
-        for key in [
-            "wake_event_id",
-            "latest_wake_event_id",
-            "activation_event_id",
-            "latest_activation_event_id",
-        ] {
-            let value = first_value_string(activation, &[key]);
+    if let Some(activation) = &command.arguments.activation {
+        ids.extend(activation.source_event_ids.iter().cloned());
+        for value in [&activation.wake_event_id, &activation.latest_wake_event_id] {
             if !value.is_empty() {
-                ids.insert(value);
+                ids.insert(value.clone());
             }
         }
     }
@@ -1085,7 +1081,7 @@ fn agent_task_request_origin(
     parent: Option<&Job>,
 ) -> AgentPromptRequestOrigin {
     if command
-        .map(|command| command.arguments.to_json().get("activation").is_some())
+        .map(|command| command.arguments.activation.is_some())
         .unwrap_or(false)
     {
         return AgentPromptRequestOrigin::Voice;
@@ -1126,20 +1122,4 @@ fn agent_prompt_event_line(event: &Value) -> String {
         "unknown".to_string(),
     ]);
     format!("[{timestamp}] {speaker}: {text}")
-}
-
-fn string_array_field(value: &Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-                .collect()
-        })
-        .unwrap_or_default()
 }
