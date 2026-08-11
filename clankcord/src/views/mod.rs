@@ -3,6 +3,7 @@ pub(crate) mod history;
 pub mod jobs;
 pub(crate) mod members;
 pub mod operations;
+pub(crate) mod search;
 
 pub use dashboard::{
     DashboardAgentsRequest, DashboardFilter, DashboardJobsRequest, DashboardOverviewRequest,

@@ -40,38 +40,38 @@ green. Tests file by purpose category; regression pins cite fix commits.
 
 ### Wave 3 — hierarchy restoration
 
-- [ ] 7. Codex wire-format interpretation (parse_codex_trace and friends)
+- [x] 7. Codex wire-format interpretation (parse_codex_trace and friends)
   moves from views/operations.rs to adapters/codex; the always-Null
   rate-limit stub and its dead caller machinery are deleted.
-- [ ] 8. Durable write paths leave views: job retry into domain; history
+- [x] 8. Durable write paths leave views: job retry into domain; history
   forget/materialize into domain; engine/routes and interaction commands
   import downward only.
-- [ ] 9. Automation evaluation context built from domain/store facts, not the
+- [x] 9. Automation evaluation context built from domain/store facts, not the
   room status view payload.
-- [ ] 10. Automations persistence (`impl TimelineStore` + raw SQL CRUD) moves
+- [x] 10. Automations persistence (`impl TimelineStore` + raw SQL CRUD) moves
   from domain/automations/spec.rs into store.
-- [ ] 11. Audio-segment retry policy stops executing inside store; store keeps
+- [x] 11. Audio-segment retry policy stops executing inside store; store keeps
   dumb primitives, domain applies policy.
-- [ ] 12. Job-payload field projection becomes one exhaustive match owned
+- [x] 12. Job-payload field projection becomes one exhaustive match owned
   beside the payload enum (no wildcard defaults); the missing MemberSync
   `source_job_id` arm is added.
-- [ ] 13. Persisted types owned by domain (RoomConfig, VoiceBotStatus,
+- [x] 13. Persisted types owned by domain (RoomConfig, VoiceBotStatus,
   route-key computation used by model) move into model; imports point one
   way.
-- [ ] 14. STT/wake ports become real (adapters implement the traits, domain
+- [x] 14. STT/wake ports become real (adapters implement the traits, domain
   consumes them, app injects) or the traits die — no documented fiction.
   The codex adapter surface gets the same decision.
-- [ ] 15. errors.rs Discord knowledge moves into adapters/discord; the
+- [x] 15. errors.rs Discord knowledge moves into adapters/discord; the
   crate-root error surface stops encoding one adapter's wire format.
-- [ ] 16. store/util.rs dissolved to owning layers (time, fs/hash, WAV decode,
+- [x] 16. store/util.rs dissolved to owning layers (time, fs/hash, WAV decode,
   event-payload helpers); verbatim duplicates with src/util.rs collapsed;
   dead pub items (`overlaps`) deleted; single-call-site helpers inlined.
-- [ ] 17. Transcription execution moves to domain/transcription; voice/capture
+- [x] 17. Transcription execution moves to domain/transcription; voice/capture
   keeps capture.
 
 ### Wave 4 — one dispatch spine
 
-- [ ] 18. Routing/blocking/executor declarations collapse into the single
+- [x] 18. Routing/blocking/executor declarations collapse into the single
   exhaustive payload match in engine; routes and dispatcher derive from it;
   the false compiler-enforcement doc comment goes away with the hazard it
   described.

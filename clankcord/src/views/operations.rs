@@ -21,6 +21,7 @@ use crate::time::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, utc
 use crate::util::round3;
 use crate::util::{first_non_empty, non_empty, preview, string_field};
 use crate::views::dashboard;
+use crate::views::search;
 
 const AGENT_ARTIFACT_MAX_BYTES: usize = 2 * 1024 * 1024;
 const AGENT_SESSION_JOB_LIMIT: usize = 100;
@@ -234,6 +235,7 @@ async fn recent_events_by_kind_filtered(
              AND r.voice_channel_id = e.scope_id
                 "#,
         );
+        search::push_event_member_joins(&mut statement, true, true);
     }
     statement.push(
         r#"
@@ -261,7 +263,7 @@ async fn recent_events_by_kind_filtered(
     if let Some(channel) = channel {
         statement.push(" AND e.scope_id = ").push_bind(channel);
     }
-    push_transcript_event_search(&mut statement, query);
+    search::push_event_search(&mut statement, query, search::SearchField::All);
     statement
         .push(" ORDER BY e.started_at_ms DESC, e.sequence DESC, e.event_id DESC LIMIT ")
         .push_bind(limit as i64)
@@ -295,73 +297,6 @@ pub async fn dashboard_agent_job(ctx: &Ctx, job_id: &str) -> Result<Value> {
         anyhow::bail!("job {job_id} is not an agent task");
     }
     agent_job_payload(ctx, &job).await
-}
-
-fn push_transcript_event_search(statement: &mut QueryBuilder<'_, Postgres>, raw_query: &str) {
-    let terms = raw_query
-        .split_whitespace()
-        .map(transcript_search_term)
-        .filter(|term| !term.is_empty())
-        .collect::<Vec<_>>();
-    if terms.is_empty() {
-        return;
-    }
-    let search_expression = transcript_event_search_sql();
-    for term in terms {
-        statement
-            .push(" AND strpos(lower(")
-            .push(search_expression)
-            .push("), ")
-            .push_bind(term)
-            .push(") > 0");
-    }
-}
-
-fn transcript_event_search_sql() -> &'static str {
-    r#"concat_ws(' ',
-                e.event_kind,
-                e.text,
-                e.speaker_label,
-                e.payload_json->>'kind',
-                e.payload_json->>'text',
-                e.payload_json->>'feedback_message',
-                e.payload_json->>'reason',
-                e.payload_json->>'quality',
-                e.payload_json->>'job_kind',
-                e.payload_json->>'state',
-                e.payload_json->>'command_kind',
-                e.payload_json->>'command_name',
-                r.guild_slug,
-                r.voice_channel_name,
-                r.voice_channel_slug,
-                e.payload_json->>'guild_slug',
-                e.payload_json->>'voice_channel_name',
-                e.payload_json->>'voice_channel_slug',
-                e.payload_json->>'speaker_label',
-                e.payload_json->>'speaker_username',
-                e.payload_json #>> '{result,kind}',
-                e.payload_json #>> '{result,status}',
-                e.payload_json #>> '{result,reason}',
-                e.payload_json #>> '{result,action}',
-                e.payload_json #>> '{result,message}',
-                e.payload_json #>> '{result,summary}',
-                e.payload_json #>> '{command_result,kind}',
-                e.payload_json #>> '{command_result,status}',
-                e.payload_json #>> '{command_result,reason}',
-                e.payload_json #>> '{command_result,action}',
-                e.payload_json #>> '{command_result,message}',
-                e.payload_json #>> '{command_result,summary}',
-                e.payload_json #>> '{command_response,kind}',
-                e.payload_json #>> '{command_response,status}',
-                e.payload_json #>> '{command_response,reason}',
-                e.payload_json #>> '{command_response,action}',
-                e.payload_json #>> '{command_response,message}',
-                e.payload_json #>> '{command_response,summary}'
-            )"#
-}
-
-fn transcript_search_term(term: &str) -> String {
-    term.trim_start_matches('/').to_lowercase()
 }
 
 pub(super) fn dashboard_job_value(job: &Job) -> Value {
