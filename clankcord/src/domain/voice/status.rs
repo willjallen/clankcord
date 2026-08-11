@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -25,7 +25,7 @@ impl VoiceBotStatus {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+        serde_json::to_value(self).expect("VoiceBotStatus serializes to JSON")
     }
 }
 
@@ -53,7 +53,7 @@ impl VoiceAssignment {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+        serde_json::to_value(self).expect("VoiceAssignment serializes to JSON")
     }
 }
 
@@ -138,6 +138,6 @@ impl VoiceCaptureSessionStatus {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+        serde_json::to_value(self).expect("VoiceCaptureSessionStatus serializes to JSON")
     }
 }

@@ -156,8 +156,7 @@ pub async fn suppress_room_auto_join(
         control.auto_join_suppressed_by_user_id = Some(requested_by_user_id.to_string());
     })
     .await?;
-    let _ = ctx
-        .store
+    ctx.store
         .append_event(
             &room.guild_id,
             &room.channel_id,
@@ -170,7 +169,7 @@ pub async fn suppress_room_auto_join(
                 "requested_by_user_id": requested_by_user_id,
             }),
         )
-        .await;
+        .await?;
     Ok(control)
 }
 
@@ -193,8 +192,7 @@ pub async fn set_room_manual_hold(
         },
     )
     .await?;
-    let _ = ctx
-        .store
+    ctx.store
         .append_event(
             &room.guild_id,
             &room.channel_id,
@@ -207,7 +205,7 @@ pub async fn set_room_manual_hold(
                 "requested_by_user_id": requested_by_user_id,
             }),
         )
-        .await;
+        .await?;
     Ok(control)
 }
 

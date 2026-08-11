@@ -50,7 +50,7 @@ impl AutomationSpec {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+        serde_json::to_value(self).expect("AutomationSpec serializes to JSON")
     }
 
     pub fn normalize(&mut self) {
@@ -443,7 +443,7 @@ impl AutomationRecord {
     }
 
     pub fn to_json(&self) -> Value {
-        serde_json::to_value(self).unwrap_or_else(|_| json!({}))
+        serde_json::to_value(self).expect("AutomationRecord serializes to JSON")
     }
 
     pub(crate) fn encode(&self) -> Result<Vec<u8>> {

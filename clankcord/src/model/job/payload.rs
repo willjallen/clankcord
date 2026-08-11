@@ -90,8 +90,8 @@ impl BinaryPayload {
             return json!({});
         }
         bincode::deserialize::<OpaqueValue>(&self.bytes)
-            .map(|value| value.to_json())
-            .unwrap_or_else(|_| json!({}))
+            .expect("BinaryPayload holds bincode this codebase encoded")
+            .to_json()
     }
 
     pub fn is_empty(&self) -> bool {
