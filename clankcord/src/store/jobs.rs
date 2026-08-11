@@ -1564,6 +1564,7 @@ async fn insert_operational_job_outcome(
 }
 
 fn project_job(job: &Job) -> JobProjection {
+    let projected = job.payload.projection();
     let created_at_ms = instant_ms_str(Some(&job.created_at)).unwrap_or(0);
     let updated_at_ms = instant_ms_str(Some(&job.updated_at)).unwrap_or(created_at_ms);
     let ready_at_ms = job
@@ -1594,34 +1595,23 @@ fn project_job(job: &Job) -> JobProjection {
         lane: crate::model::job::spec::spec(job.kind).lane.as_str(),
         ordering_key: crate::model::job::spec::ordering_key(job),
         command_kind: job.command_kind(),
-        source_job_id: source_job_id(job),
-        stream_id: wake_probe_stream_id(job).unwrap_or_default().to_string(),
-        target_job_id: target_job_id(job),
-        speaker_user_id: speaker_user_id(job),
-        segment_end_ms: audio_segment_end_ms(job),
-    }
-}
-
-fn wake_probe_stream_id(job: &Job) -> Option<&str> {
-    match &job.payload {
-        crate::model::job::JobPayload::WakeProbe(payload) => Some(payload.stream_id.as_str()),
-        _ => None,
+        source_job_id: projected.source_job_id,
+        stream_id: projected.wake_probe_stream_id,
+        target_job_id: projected.target_job_id,
+        speaker_user_id: projected.speaker_user_id,
+        segment_end_ms: projected.audio_segment_end_time.map(instant_ms_dt),
     }
 }
 
 fn sort_jobs_by_created_at(jobs: &mut [Job]) {
-    jobs.sort_by(|left, right| {
-        job_order_time(left)
-            .cmp(&job_order_time(right))
-            .then_with(|| left.id.cmp(&right.id))
-    });
+    jobs.sort_by_cached_key(|job| (job_order_time(job), job.id.clone()));
 }
 
 fn job_order_time(job: &Job) -> Option<DateTime<Utc>> {
-    match &job.payload {
-        crate::model::job::JobPayload::WakeProbe(payload) => Some(payload.probe_start_time),
-        _ => parse_instant(&job.created_at),
-    }
+    job.payload
+        .projection()
+        .order_time
+        .or_else(|| parse_instant(&job.created_at))
 }
 
 fn ephemeral_gc_after_ms(
@@ -1640,78 +1630,6 @@ fn ephemeral_gc_after_ms(
         spec.gc_ok_seconds
     };
     Some(updated_at_ms.saturating_add(seconds * 1000))
-}
-
-fn source_job_id(job: &Job) -> String {
-    match &job.payload {
-        crate::model::job::JobPayload::TextDelivery(payload) => payload.source_job_id.clone(),
-        crate::model::job::JobPayload::DiscordTextSend(payload) => payload.source_job_id.clone(),
-        crate::model::job::JobPayload::DiscordForumThreadCreate(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::DiscordForumThreadRename(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::DiscordTypingIndicator(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::DiscordVoicePlayback(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::DiscordVoiceMute(payload) => payload.source_job_id.clone(),
-        crate::model::job::JobPayload::DiscordVoiceDeafen(payload) => payload.source_job_id.clone(),
-        crate::model::job::JobPayload::DiscordVoicePlayAudio(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::VoiceStatusSync(payload) => payload.source_job_id.clone(),
-        crate::model::job::JobPayload::DiscordVoiceStatusSnapshot(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::AutomationEvaluation(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::AgentSessionRetirement(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::AgentThreadTitleRefresh(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::StaleWakeProbeSweep(payload) => {
-            payload.source_job_id.clone()
-        }
-        crate::model::job::JobPayload::EphemeralJobGc(payload) => payload.source_job_id.clone(),
-        _ => String::new(),
-    }
-}
-
-fn target_job_id(job: &Job) -> String {
-    match &job.payload {
-        crate::model::job::JobPayload::RuntimeControl(payload) => payload.target_job_id.clone(),
-        crate::model::job::JobPayload::Command(payload) => payload.command.target_job_id.clone(),
-        crate::model::job::JobPayload::AgentTask(payload) => payload.command.target_job_id.clone(),
-        crate::model::job::JobPayload::ConfirmationRequired(payload) => {
-            payload.command.target_job_id.clone()
-        }
-        _ => String::new(),
-    }
-}
-
-fn speaker_user_id(job: &Job) -> String {
-    match &job.payload {
-        crate::model::job::JobPayload::AudioSegment(payload) => payload.speaker_user_id.clone(),
-        crate::model::job::JobPayload::WakeActivation(payload) => payload.speaker_user_id.clone(),
-        crate::model::job::JobPayload::WakeProbe(payload) => payload.speaker_user_id.clone(),
-        _ => String::new(),
-    }
-}
-
-fn audio_segment_end_ms(job: &Job) -> Option<i64> {
-    match &job.payload {
-        crate::model::job::JobPayload::AudioSegment(payload) => {
-            Some(instant_ms_dt(payload.segment_end_time))
-        }
-        _ => None,
-    }
 }
 
 #[derive(Debug, Clone)]

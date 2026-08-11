@@ -1759,3 +1759,97 @@ fn bool_field(value: &Value, keys: &[&str]) -> Option<bool> {
         _ => None,
     })
 }
+
+/// The payload-derived columns the store projects onto job rows — lineage
+/// lookups, lane filters, and scheduler ordering read these. One
+/// exhaustive match: adding a payload variant forces an explicit
+/// projection decision.
+#[derive(Debug, Clone, Default)]
+pub struct PayloadProjection {
+    pub source_job_id: String,
+    pub target_job_id: String,
+    pub speaker_user_id: String,
+    pub wake_probe_stream_id: String,
+    pub audio_segment_end_time: Option<chrono::DateTime<chrono::Utc>>,
+    pub order_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl JobPayload {
+    pub fn projection(&self) -> PayloadProjection {
+        let mut row = PayloadProjection::default();
+        match self {
+            Self::AudioSegment(payload) => {
+                row.speaker_user_id = payload.speaker_user_id.clone();
+                row.audio_segment_end_time = Some(payload.segment_end_time);
+            }
+            Self::WakeActivation(payload) => {
+                row.speaker_user_id = payload.speaker_user_id.clone();
+            }
+            Self::AgentTask(payload) => {
+                row.target_job_id = payload.command.target_job_id.clone();
+            }
+            Self::DiscordTextMessage(_) => {}
+            Self::DiscordSlashCommand(_) => {}
+            Self::TextDelivery(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordTextSend(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordForumThreadCreate(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::DiscordForumThreadRename(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::AgentSessionStart(_) => {}
+            Self::AgentSessionSunset(_) => {}
+            Self::AgentSessionResume(_) => {}
+            Self::AgentSessionRetirement(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::AgentThreadTitleRefresh(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::TranscriptPublication(_) => {}
+            Self::ConfirmationRequired(payload) => {
+                row.target_job_id = payload.command.target_job_id.clone();
+            }
+            Self::Command(payload) => {
+                row.target_job_id = payload.command.target_job_id.clone();
+            }
+            Self::RoomAgentPlacement(_) => {}
+            Self::DiscordVoiceJoin(_) => {}
+            Self::DiscordVoiceLeave(_) => {}
+            Self::DiscordVoicePlayback(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::DiscordVoiceMute(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordVoicePlayAudio(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::RuntimeControl(payload) => row.target_job_id = payload.target_job_id.clone(),
+            Self::WakeProbe(payload) => {
+                row.speaker_user_id = payload.speaker_user_id.clone();
+                row.wake_probe_stream_id = payload.stream_id.clone();
+                row.order_time = Some(payload.probe_start_time);
+            }
+            Self::RuntimeMaintenance(_) => {}
+            Self::VoiceStatusSync(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordVoiceStatusSnapshot(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::AutomationEvaluation(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::StaleWakeProbeSweep(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::EphemeralJobGc(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordVoiceDeafen(payload) => row.source_job_id = payload.source_job_id.clone(),
+            Self::DiscordTypingIndicator(payload) => {
+                row.source_job_id = payload.source_job_id.clone();
+            }
+            Self::TranscriptionMux(_) => {}
+            Self::TranscriptionMuxPlan(_) => {}
+            Self::MemberSync(payload) => row.source_job_id = payload.source_job_id.clone(),
+        }
+        row
+    }
+}
