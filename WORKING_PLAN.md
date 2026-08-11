@@ -83,7 +83,7 @@ green. Tests file by purpose category; regression pins cite fix commits.
 - [x] 20. One agent-session rollup implementation with one status precedence.
 - [x] 21. Health capability kind-to-bucket mapping defined once; the
   lean/detailed failure-summary pair unified.
-- [ ] 22. operations.rs / dashboard.rs reseamed by responsibility (health,
+- [x] 22. operations.rs / dashboard.rs reseamed by responsibility (health,
   Postgres diagnostics, agents, timeline); imports between view modules run
   one direction.
 
