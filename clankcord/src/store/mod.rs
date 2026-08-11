@@ -10,6 +10,7 @@ pub use util::{
 };
 
 mod agent_sessions;
+mod automations;
 mod events;
 mod jobs;
 mod maintenance;
