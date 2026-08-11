@@ -20,6 +20,7 @@ use crate::store::{OPERATIONAL_JOB_OUTCOME_RETENTION_SECONDS, VOICE_ADAPTER_SNAP
 use crate::time::{instant_ms_dt, isoformat_z, ms_to_datetime, parse_instant, utc_now};
 use crate::util::round3;
 use crate::util::{first_non_empty, non_empty, preview, string_field};
+use crate::views::agents;
 use crate::views::dashboard;
 use crate::views::search;
 
@@ -2993,54 +2994,6 @@ fn usage_token_field(usage: &Value, key: &str) -> i64 {
         .unwrap_or(0)
 }
 
-fn agent_sessions_from_jobs(jobs: &[Job]) -> Vec<AgentSessionView> {
-    let mut ordered = jobs
-        .iter()
-        .filter(|job| job.kind == JobKind::AgentTask)
-        .collect::<Vec<_>>();
-    ordered.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.id.cmp(&right.id))
-    });
-    let mut sessions = BTreeMap::<String, AgentSessionView>::new();
-    for job in ordered {
-        let key = task_session_key(&job.guild_id, &job.scope_id);
-        let entry = sessions
-            .entry(key.clone())
-            .or_insert_with(|| AgentSessionView {
-                key,
-                role: "task".to_string(),
-                guild_id: job.guild_id.clone(),
-                scope_id: job.scope_id.clone(),
-                created_at: job.created_at.clone(),
-                ..AgentSessionView::default()
-            });
-        entry.invocation_count += 1;
-        entry.latest_job_id = job.id.clone();
-        entry.last_used_at = job.updated_at.clone();
-        if let Some(task) = job.metadata.agent_task() {
-            if !task.agent.session_id.trim().is_empty() {
-                entry.session_id = task.agent.session_id.clone();
-            }
-            if !task.dispatch_error.trim().is_empty() {
-                entry.last_error = task.dispatch_error.clone();
-            }
-        }
-        if !job.state.is_terminal() {
-            entry.status = AgentSessionStatus::Running;
-            entry.active_job_id = job.id.clone();
-        } else if job.state.is_failed() {
-            entry.status = AgentSessionStatus::Failed;
-            entry.active_job_id.clear();
-        } else if entry.status != AgentSessionStatus::Running {
-            entry.status = AgentSessionStatus::Idle;
-            entry.active_job_id.clear();
-        }
-    }
-    sessions.into_values().collect()
-}
-
 async fn agent_job_payload(runtime: &Ctx, job: &Job) -> Result<Value> {
     let metadata = job.metadata.agent_task().cloned().unwrap_or_default();
     let raw = read_text_artifact(&metadata.raw_result_path, AGENT_ARTIFACT_MAX_BYTES);
@@ -3078,10 +3031,11 @@ async fn agent_session_payload(
         .store
         .list_jobs_by_scope_kind(&selected.guild_id, &selected.scope_id, JobKind::AgentTask)
         .await?;
-    let current = agent_sessions_from_jobs(&jobs)
-        .into_iter()
-        .find(|session| session.key == key)
-        .map(|session| session.to_json());
+    let current =
+        agents::agent_session_rollups(runtime, Some((&selected.guild_id, &selected.scope_id)))
+            .await?
+            .into_iter()
+            .find(|session| session.get("key").and_then(Value::as_str) == Some(key.as_str()));
     let selected_session_id = agent_job_session_id(selected, selected_codex);
     jobs.sort_by(|left, right| {
         left.created_at
@@ -3288,57 +3242,4 @@ fn scope_job_rows(scopes: BTreeMap<String, ScopeJobSummary>) -> Vec<Value> {
             })
         })
         .collect()
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(super) struct AgentSessionView {
-    pub key: String,
-    pub role: String,
-    pub guild_id: String,
-    pub scope_id: String,
-    pub session_id: String,
-    pub active_job_id: String,
-    pub latest_job_id: String,
-    pub status: AgentSessionStatus,
-    pub invocation_count: u64,
-    pub created_at: String,
-    pub last_used_at: String,
-    pub last_error: String,
-}
-
-impl AgentSessionView {
-    pub fn to_json(&self) -> Value {
-        json!({
-            "key": self.key,
-            "role": self.role,
-            "guild_id": self.guild_id,
-            "scope_id": self.scope_id,
-            "session_id": self.session_id,
-            "active_job_id": self.active_job_id,
-            "latest_job_id": self.latest_job_id,
-            "status": self.status.as_str(),
-            "invocation_count": self.invocation_count,
-            "created_at": self.created_at,
-            "last_used_at": self.last_used_at,
-            "last_error": self.last_error,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum AgentSessionStatus {
-    #[default]
-    Idle,
-    Running,
-    Failed,
-}
-
-impl AgentSessionStatus {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Idle => "idle",
-            Self::Running => "running",
-            Self::Failed => "failed",
-        }
-    }
 }

@@ -1,3 +1,4 @@
+pub(crate) mod agents;
 pub mod dashboard;
 pub(crate) mod history;
 pub mod jobs;
