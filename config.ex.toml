@@ -45,7 +45,6 @@ approval_policy = "never"
 [codex.linear_mcp]
 enabled = true
 url = "https://mcp.linear.app/mcp"
-api_key_secret = "clankcord_linear_api_key"
 
 [agents]
 thread_auto_archive_minutes = 1440

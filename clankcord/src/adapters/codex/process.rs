@@ -219,10 +219,7 @@ pub(crate) fn codex_linear_mcp_config_args() -> Vec<String> {
             toml_string_literal(&linear.url)
         ),
         "-c".to_string(),
-        format!(
-            "mcp_servers.linear.bearer_token_env_var={}",
-            toml_string_literal(config::CODEX_LINEAR_MCP_TOKEN_ENV)
-        ),
+        "mcp_servers.linear.auth=\"oauth\"".to_string(),
     ]
 }
 

@@ -11,10 +11,6 @@ fn codex_invocation_options_are_loaded_from_config_toml() {
     assert!(!config.codex.fast_mode);
     assert!(config.codex.linear_mcp.enabled);
     assert_eq!(config.codex.linear_mcp.url, "https://mcp.linear.app/mcp");
-    assert_eq!(
-        config.codex.linear_mcp.api_key_secret,
-        "clankcord_linear_api_key"
-    );
 }
 
 #[test]
@@ -51,7 +47,6 @@ fn codex_linear_mcp_config_is_required() {
 [codex.linear_mcp]
 enabled = true
 url = "https://mcp.linear.app/mcp"
-api_key_secret = "clankcord_linear_api_key"
 "#,
         "",
     );
@@ -60,6 +55,19 @@ api_key_secret = "clankcord_linear_api_key"
         toml::from_str::<AppConfig>(&config_text).expect_err("config must require linear_mcp");
 
     assert!(error.to_string().contains("missing field `linear_mcp`"));
+}
+
+#[test]
+fn stale_codex_linear_mcp_api_key_config_is_rejected() {
+    let config_text = include_str!("../../config.ex.toml").replace(
+        "url = \"https://mcp.linear.app/mcp\"",
+        "url = \"https://mcp.linear.app/mcp\"\napi_key_secret = \"stale-token-secret\"",
+    );
+
+    let error = toml::from_str::<AppConfig>(&config_text)
+        .expect_err("config must reject bearer-token Linear authentication");
+
+    assert!(error.to_string().contains("unknown field `api_key_secret`"));
 }
 
 #[test]

@@ -35,8 +35,6 @@ use crate::runtime::{
     TextDeliveryPayload, TextTarget, TextTargetKind,
 };
 
-use super::linear_mcp::insert_linear_mcp_env;
-
 const AGENT_UNAVAILABLE_MESSAGE: &str =
     "It looks like ChatGPT is unavailable right now. Try again later.";
 
@@ -1044,7 +1042,6 @@ fn agent_task_env(
             repo_dir.display().to_string(),
         );
     }
-    insert_linear_mcp_env(&mut vars)?;
     Ok(vars)
 }
 
