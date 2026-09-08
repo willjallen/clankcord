@@ -4,6 +4,13 @@ version = "0.13.0"
 edition = "2024"
 default-run = "clankcord"
 
+[workspace]
+members = ["vendor/songbird"]
+resolver = "3"
+
+[patch.crates-io]
+songbird = { path = "vendor/songbird" }
+
 [dependencies]
 anyhow = "1"
 axum = { version = "0.8", features = ["macros"] }

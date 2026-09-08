@@ -87,6 +87,10 @@ Join cue analysis uses the capture-session debug notes for `botVoiceStateAt`, `j
 
 `LiveCaptureSession` receives Discord voice packets. It filters voice bot users, resolves speaker profiles, records voice-state updates for human users, buffers per-speaker PCM, preserves decode-loss frames as silence where appropriate, commits live capture stats for active sessions, and flushes ready speaker buffers by maximum segment duration or silence timeout.
 
+Speaking events bind Discord audio-stream identifiers (SSRCs) to users. Several streams can belong to one user during a device transfer. A voice ClientDisconnect event contains a user ID without the departing device's session or SSRC, so capture preserves stream mappings and buffered speech when that event arrives. A real departure flushes remaining speech through the ordinary silence or packet-idle threshold. Within each voice tick, a user's real audio takes precedence over silence from their other streams, and multiple silent streams advance that user's silence clock once. Mapping changes and disconnect observations log the capture session, user, and SSRCs for handoff diagnosis.
+
+The pinned Songbird receive patch retains SSRC identity for the bot's voice transport and expires decoders by packet inactivity. This keeps delayed user-level disconnect cleanup from deleting a replacement device's decryption identity. Cargo and the container build use the same local dependency source; its provenance, scope, and regression commands are in `clankcord/vendor/songbird/CLANKCORD.md`.
+
 Each flush writes a per-speaker WAV artifact and emits an `audio_segment` job. The same capture path writes rolling wake-probe WAV artifacts and emits `wake_probe` jobs. By the time either job reaches the scheduler, the referenced artifact exists and the payload carries enough metadata to verify and interpret it.
 
 ```text

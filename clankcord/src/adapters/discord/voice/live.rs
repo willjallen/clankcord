@@ -1293,16 +1293,7 @@ impl LiveVoiceAdapter {
         let Some(session) = session else {
             return;
         };
-        let (jobs, status) = {
-            let mut live_session = session.lock().await;
-            let jobs = live_session.note_client_disconnect(user_id);
-            let status = live_session.metadata(local_tz());
-            (jobs, status)
-        };
-        for job in jobs {
-            self.submit_capture_job(job).await;
-        }
-        self.persist_capture_session_status(&status).await;
+        session.lock().await.note_client_disconnect(user_id);
     }
 
     pub(super) async fn handle_voice_tick(

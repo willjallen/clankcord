@@ -15,6 +15,7 @@ RUN apt-get update \
         pkg-config \
     && rm -rf /var/lib/apt/lists/*
 COPY clankcord/Cargo.toml clankcord/Cargo.lock ./
+COPY clankcord/vendor ./vendor
 RUN --mount=type=cache,id=clankcord-cargo-registry,target=/usr/local/cargo/registry \
     --mount=type=cache,id=clankcord-cargo-git,target=/usr/local/cargo/git/db \
     target="$(rustc -vV | sed -n 's/^host: //p')" \

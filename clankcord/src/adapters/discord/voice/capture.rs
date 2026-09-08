@@ -12,6 +12,10 @@ use crate::adapters::discord::voice::session::{
 use crate::adapters::discord::voice::types::LiveVoiceSession;
 use crate::runtime::{Job, VoiceCaptureSessionStatus, log};
 
+#[cfg(test)]
+#[path = "../../../../tests/voice/handoff.rs"]
+mod handoff_tests;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CaptureUser {
     pub id: String,
@@ -279,7 +283,13 @@ impl LiveCaptureSession {
     }
 
     pub(super) fn note_speaking_state(&mut self, ssrc: u32, user: CaptureUser, active: bool) {
-        self.ssrc_users.insert(ssrc, user.clone());
+        let previous = self.ssrc_users.insert(ssrc, user.clone());
+        if previous.as_ref().map(|user| &user.id) != Some(&user.id) {
+            log(&format!(
+                "voice stream mapped session={} ssrc={ssrc} user={}",
+                self.session.session_id, user.id
+            ));
+        }
         if self.is_deafened() {
             *self
                 .session
@@ -303,29 +313,20 @@ impl LiveCaptureSession {
         );
     }
 
-    pub(super) fn note_client_disconnect(&mut self, user_id: &str) -> Vec<Job> {
-        self.ssrc_users.retain(|_, user| user.id != user_id);
-        let session_id = self.session.session_id.clone();
-        let pipeline = self.pipeline.clone();
-        {
-            let mut handler = SessionCaptureHandler {
-                pipeline: pipeline.clone(),
-                session: &mut self.session,
-            };
-            handler.handle_speaking_state(&session_id, user_id, "", "", false);
-        }
-        let mut jobs = self.capture_wake_probes(vec![user_id.to_string()], true);
-        match pipeline.close_speaker_segment_with_reason(
-            &mut self.session,
-            user_id,
-            SegmentCloseReason::Disconnect,
-        ) {
-            Ok(outcome) => collect_audio_job(outcome, &mut jobs),
-            Err(error) => {
-                log(&format!("voice disconnect flush failed: {error}"));
-            }
-        }
-        jobs
+    pub(super) fn note_client_disconnect(&mut self, user_id: &str) {
+        // Discord supplies only a user ID here. During a device handoff this can
+        // describe the old device after the new device has already started sending.
+        // Keep the transport's SSRC bindings and in-flight speech; actual departures
+        // stop sending packets and are flushed by the ordinary packet timeout.
+        let ssrcs = self
+            .ssrc_users
+            .iter()
+            .filter_map(|(ssrc, user)| (user.id == user_id).then_some(*ssrc))
+            .collect::<Vec<_>>();
+        log(&format!(
+            "voice client disconnect observed session={} user={user_id} retained_ssrcs={ssrcs:?}",
+            self.session.session_id
+        ));
     }
 
     pub(super) fn write_voice_tick(
@@ -354,11 +355,12 @@ impl LiveCaptureSession {
         let mut touched_user_ids = BTreeSet::new();
         for (ssrc, data) in speaking {
             let user = self.ssrc_users.get(&ssrc).cloned();
-            if let Some(user_id) = data
-                .user
-                .as_ref()
-                .map(|user| user.id.clone())
-                .or_else(|| user.as_ref().map(|user| user.id.clone()))
+            if data.has_packet
+                && let Some(user_id) = data
+                    .user
+                    .as_ref()
+                    .map(|user| user.id.clone())
+                    .or_else(|| user.as_ref().map(|user| user.id.clone()))
             {
                 touched_user_ids.insert(user_id);
             }
@@ -368,7 +370,12 @@ impl LiveCaptureSession {
             let Some(user) = self.ssrc_users.get(&ssrc).cloned() else {
                 continue;
             };
-            touched_user_ids.insert(user.id.clone());
+            // Multiple device streams can belong to the same user. Advance their
+            // silence clock at most once, and only if no real packet arrived on
+            // another stream this tick. Synthetic concealment is not real audio.
+            if !touched_user_ids.insert(user.id.clone()) {
+                continue;
+            }
             self.write_voice_data(
                 Some(user),
                 VoiceData {

@@ -56,7 +56,6 @@ pub enum SegmentCloseReason {
     EndSilence,
     PacketTimeout,
     MaxSegment,
-    Disconnect,
     Finalize,
     ManualFlush,
 }
@@ -67,7 +66,6 @@ impl SegmentCloseReason {
             Self::EndSilence => "end_silence",
             Self::PacketTimeout => "packet_timeout",
             Self::MaxSegment => "max_segment",
-            Self::Disconnect => "disconnect",
             Self::Finalize => "finalize",
             Self::ManualFlush => "manual_flush",
         }
