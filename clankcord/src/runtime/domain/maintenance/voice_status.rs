@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::Result;
-use crate::runtime::timeline::utc_now;
+use crate::runtime::timeline::{parse_instant, utc_now};
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::runtime::{Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
@@ -9,11 +10,20 @@ use crate::runtime::{Runtime, VoiceBotStatus, VoiceCaptureSessionStatus};
 impl Runtime {
     pub async fn sync_voice_adapter_status(
         &self,
+        observed_at: DateTime<Utc>,
         bots: Vec<VoiceBotStatus>,
         sessions: Vec<VoiceCaptureSessionStatus>,
         voice_state_guild_ids: Vec<String>,
         voice_states: Vec<Value>,
     ) -> Result<()> {
+        if self
+            .timeline_store
+            .voice_adapter_snapshot_observed_at()
+            .await?
+            .is_some_and(|latest| latest >= observed_at)
+        {
+            return Ok(());
+        }
         let bot_count = bots.len();
         let session_count = sessions.len();
         let voice_state_guild_count = voice_state_guild_ids.len();
@@ -61,7 +71,9 @@ impl Runtime {
 
         let mut closed_capture_runs = BTreeSet::new();
         for session in self.timeline_store.list_active_capture_sessions().await? {
-            if active_session_ids.contains(&session.session_id) {
+            if active_session_ids.contains(&session.session_id)
+                || parse_instant(&session.started_at).is_some_and(|started| started > observed_at)
+            {
                 continue;
             }
             if assignments_by_capture_run
@@ -88,7 +100,10 @@ impl Runtime {
         }
 
         for assignment in active_assignments {
-            if assignment.state == "joining" {
+            if assignment.state == "joining"
+                || parse_instant(&assignment.assigned_at)
+                    .is_some_and(|assigned| assigned > observed_at)
+            {
                 continue;
             }
             if closed_capture_runs.contains(&assignment.capture_run_id) {
@@ -123,6 +138,7 @@ impl Runtime {
 
         self.timeline_store
             .record_voice_adapter_snapshot(
+                observed_at,
                 bot_count,
                 session_count,
                 voice_state_guild_count,

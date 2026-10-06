@@ -905,6 +905,7 @@ async fn room_placement_restart_sync_prevents_stale_voice_rows_from_triggering_a
     let mut restarted = test_runtime(store.clone());
     restarted
         .sync_voice_adapter_status(
+            clankcord::runtime::timeline::utc_now(),
             vec![ready_bot()],
             Vec::new(),
             vec!["guild".to_string()],

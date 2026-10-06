@@ -86,6 +86,8 @@ Agent thread title refresh is selected directly by the maintenance handler. Each
 
 Voice status sync is the maintenance path that reconciles adapter state with durable runtime state. The runtime parent creates a `discord_voice_status_snapshot` child, the domain handler calls the Discord voice API for bot and session status, and the parent resumes to commit that snapshot into durable runtime state. The live capture loop also commits per-session capture stats while audio is flowing so wake activation can read current speaker activity, buffered audio bytes, and last PCM timestamps.
 
+The snapshot child's claim time bounds its observation time. A parent requests a fresh child when the newest completed snapshot is more than 60 seconds old. Synchronization applies observations in increasing time order and closes missing captures only when their session or assignment started before the observation. Health reports retain the observation time through the parent commit.
+
 ```text
 voice_status_sync
       |

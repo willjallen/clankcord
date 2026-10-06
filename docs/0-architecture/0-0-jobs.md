@@ -86,6 +86,10 @@ Some parents need their handler invoked again after child completion. The resolv
 
 The scheduler drains durable work in passes. A pass first resolves waiting parents whose children have reached terminal states. It then finds queued jobs whose ready time has arrived, claims them according to execution policy, and spawns workers. When a pass resolves or schedules anything, the dispatcher immediately runs another pass. When ready work is exhausted, the dispatcher sleeps until a notification arrives or the next ready time is due. If due queued work remains after a drain pass, the dispatcher uses a short bounded retry interval and drains again.
 
+Each pass visits due job kinds in the order of their oldest queued job's ready time, creation time, and id. Kinds sharing a lane compete in this order, so older background work receives capacity before a newer recurring maintenance tick. Claims within each kind retain their ordering-key and lane limits.
+
+Waiting-parent selection checks dependency completion in Postgres and returns only parents with at least one child and no nonterminal children. The resolver fetches child details for those parents when determining their next state.
+
 Execution policy chooses where a job runs. Runtime-exclusive and runtime-snapshot jobs execute domain code. Runtime-snapshot domain handlers call typed adapter APIs when a job requires Discord IO. Blocking snapshot jobs run provider, process, file, transcription, wake, and Codex work outside async workers. Runtime maintenance is runtime-domain work: `runtime_maintenance` schedules the next tick and submits ordinary background jobs; those jobs then run through the same lanes, ordering keys, dependencies, outputs, and failures as any other work.
 
 Lanes bound concurrency by class of work. Wake probes have separate capacity from audio segment preparation and muxed transcription. Agent tasks have separate capacity from Discord text sends. Voice control has its own lane. Ordering keys serialize work that would race while allowing unrelated work to proceed.

@@ -306,12 +306,15 @@ where
 
     pub(crate) async fn schedule_due_jobs(&self) -> Result<Value> {
         let mut scheduled = Map::new();
-        let due_kinds = self.timeline_store.due_job_kinds().await?;
         for policy in JOB_EXECUTION_POLICIES {
-            if !due_kinds.contains(&policy.kind) {
-                scheduled.insert(policy.kind.as_str().to_string(), idle_policy_report(policy));
-                continue;
-            }
+            scheduled.insert(policy.kind.as_str().to_string(), idle_policy_report(policy));
+        }
+        for kind in self.timeline_store.due_job_kinds().await? {
+            let policy = JOB_EXECUTION_POLICIES
+                .iter()
+                .copied()
+                .find(|policy| policy.kind == kind)
+                .expect("every job kind has an execution policy");
             scheduled.insert(
                 policy.kind.as_str().to_string(),
                 self.schedule_policy(policy).await?,

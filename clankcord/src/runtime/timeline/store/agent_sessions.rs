@@ -3,6 +3,57 @@ use super::*;
 use crate::runtime::{AgentSessionRecord, AgentSessionRecordState, AgentSessionRouteKind};
 
 impl TimelineStore {
+    pub async fn agent_thread_title_refresh_attempt_count(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+        agent_session_id: &str,
+    ) -> Result<usize> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX((payload_json->>'response_count')::bigint), 0)
+            FROM timeline_events
+            WHERE guild_id = $1 AND scope_kind = 'voice_channel' AND scope_id = $2
+              AND event_kind = 'agent_thread_title_refresh_attempted'
+              AND forgotten = FALSE
+              AND payload_json->>'agent_session_id' = $3
+            "#,
+        )
+        .bind(guild_id)
+        .bind(scope_id)
+        .bind(agent_session_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count as usize)
+    }
+
+    pub async fn latest_agent_thread_title(
+        &self,
+        guild_id: &str,
+        scope_id: &str,
+        agent_session_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(sqlx::query_scalar(
+            r#"
+            SELECT btrim(payload_json->>'title')
+            FROM timeline_events
+            WHERE guild_id = $1 AND scope_kind = 'voice_channel' AND scope_id = $2
+              AND event_kind = 'agent_thread_titled'
+              AND forgotten = FALSE
+              AND payload_json->>'agent_session_id' = $3
+              AND btrim(payload_json->>'title') <> ''
+            ORDER BY COALESCE((payload_json->>'response_count')::bigint, 0) DESC,
+                     started_at_ms DESC, sequence DESC, event_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(guild_id)
+        .bind(scope_id)
+        .bind(agent_session_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
     pub async fn create_agent_session_record(
         &self,
         record: AgentSessionRecord,

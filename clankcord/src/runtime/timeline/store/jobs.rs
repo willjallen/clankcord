@@ -174,24 +174,29 @@ impl TimelineStore {
         Ok(())
     }
 
-    pub async fn due_job_kinds(&self) -> Result<BTreeSet<crate::runtime::JobKind>> {
+    pub async fn due_job_kinds(&self) -> Result<Vec<crate::runtime::JobKind>> {
         let now_ms = instant_ms_dt(utc_now());
         let rows = sqlx::query(
             r#"
-            SELECT DISTINCT kind
-            FROM jobs
-            WHERE state = 'queued'
-              AND ready_at_ms <= $1
+            SELECT kind
+            FROM (
+                SELECT DISTINCT ON (kind) kind, ready_at_ms, created_at_ms, job_id
+                FROM jobs
+                WHERE state = 'queued'
+                  AND ready_at_ms <= $1
+                ORDER BY kind, ready_at_ms, created_at_ms, job_id
+            ) due
+            ORDER BY ready_at_ms, created_at_ms, job_id
             "#,
         )
         .bind(now_ms)
         .fetch_all(&self.pool)
         .await?;
-        let mut kinds = BTreeSet::new();
+        let mut kinds = Vec::new();
         for row in rows {
             let raw: String = row.try_get("kind")?;
             if let Ok(kind) = raw.parse::<crate::runtime::JobKind>() {
-                kinds.insert(kind);
+                kinds.push(kind);
             }
         }
         Ok(kinds)
@@ -1203,10 +1208,19 @@ impl TimelineStore {
     pub async fn resolve_waiting_jobs(&self) -> Result<Vec<Value>> {
         let parent_rows = sqlx::query(
             r#"
-            SELECT job_id, kind, state
-            FROM jobs
-            WHERE state = 'waiting'
-            ORDER BY updated_at_ms, created_at_ms, job_id
+            SELECT parent.job_id, parent.kind, parent.state
+            FROM jobs parent
+            WHERE parent.state = 'waiting'
+              AND EXISTS (
+                SELECT 1 FROM job_dependencies d WHERE d.parent_job_id = parent.job_id
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM job_dependencies d
+                JOIN jobs child ON child.job_id = d.child_job_id
+                WHERE d.parent_job_id = parent.job_id AND child.terminal = FALSE
+              )
+            ORDER BY parent.updated_at_ms, parent.created_at_ms, parent.job_id
             "#,
         )
         .fetch_all(&self.pool)

@@ -35,12 +35,12 @@ impl TimelineStore {
 
     pub async fn record_voice_adapter_snapshot(
         &self,
+        observed_at: DateTime<Utc>,
         bot_count: usize,
         session_count: usize,
         voice_state_guild_count: usize,
         voice_state_count: usize,
     ) -> Result<()> {
-        let observed_at = utc_now();
         let observed_at_ms = instant_ms_dt(observed_at);
         sqlx::query(
             r#"
@@ -63,6 +63,18 @@ impl TimelineStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn voice_adapter_snapshot_observed_at(&self) -> Result<Option<DateTime<Utc>>> {
+        let observed_at: Option<i64> =
+            sqlx::query_scalar("SELECT updated_at_ms FROM runtime_status WHERE status_key = $1")
+                .bind(VOICE_ADAPTER_SNAPSHOT_STATUS_KEY)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(
+            observed_at
+                .map(|value| ms_to_datetime(value).expect("valid snapshot observation time")),
+        )
     }
 
     pub async fn list_voice_bot_states(&self) -> Result<Vec<VoiceBotStatus>> {

@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::prompts::{
     render_agent_thread_title_prompt_from_dir, render_configured_agent_thread_title_prompt,
@@ -19,7 +19,7 @@ use crate::runtime::domain::messaging::session_threads::{
     UNAVAILABLE_SESSION_THREAD_STATUS, discord_error_text_unavailable_channel_id,
 };
 use crate::runtime::timeline::JobVisibility;
-use crate::runtime::util::{first_non_empty, first_value_string, preview};
+use crate::runtime::util::{first_non_empty, preview};
 use crate::runtime::{
     AgentSessionRecord, AgentSessionRouteKind, AgentThreadTitleRefreshPayload,
     DiscordForumThreadRenamePayload, Job, JobKind, JobOutput, JobPayload, JobState, Runtime,
@@ -426,68 +426,22 @@ impl Runtime {
         &self,
         record: &AgentSessionRecord,
     ) -> Result<usize> {
-        let mut count = 0usize;
-        for event in self
-            .timeline_store
-            .load_events(
+        self.timeline_store
+            .agent_thread_title_refresh_attempt_count(
                 &record.guild_id,
                 &record.scope_id,
-                None,
-                None,
-                None,
-                None,
-                false,
+                &record.agent_session_id,
             )
-            .await?
-        {
-            if first_value_string(&event, &["event_kind", "kind"])
-                != "agent_thread_title_refresh_attempted"
-                || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
-            {
-                continue;
-            }
-            count = count.max(usize_event_field(&event, "response_count"));
-        }
-        Ok(count)
+            .await
     }
 
     async fn latest_agent_thread_title(
         &self,
         record: &AgentSessionRecord,
     ) -> Result<Option<String>> {
-        let mut latest = None::<(usize, String)>;
-        for event in self
-            .timeline_store
-            .load_events(
-                &record.guild_id,
-                &record.scope_id,
-                None,
-                None,
-                None,
-                None,
-                false,
-            )
-            .await?
-        {
-            if first_value_string(&event, &["event_kind", "kind"]) != "agent_thread_titled"
-                || first_value_string(&event, &["agent_session_id"]) != record.agent_session_id
-            {
-                continue;
-            }
-            let title = first_value_string(&event, &["title"]);
-            if title.trim().is_empty() {
-                continue;
-            }
-            let response_count = usize_event_field(&event, "response_count");
-            if latest
-                .as_ref()
-                .map(|(latest_count, _)| response_count >= *latest_count)
-                .unwrap_or(true)
-            {
-                latest = Some((response_count, title));
-            }
-        }
-        Ok(latest.map(|(_, title)| title))
+        self.timeline_store
+            .latest_agent_thread_title(&record.guild_id, &record.scope_id, &record.agent_session_id)
+            .await
     }
 }
 
@@ -614,14 +568,6 @@ fn compact_preview(value: &str, limit: usize) -> String {
         .chars()
         .take(limit)
         .collect()
-}
-
-fn usize_event_field(value: &Value, key: &str) -> usize {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .and_then(|value| usize::try_from(value).ok())
-        .unwrap_or(0)
 }
 
 fn agent_thread_title_workdir(agent_session_id: &str) -> PathBuf {

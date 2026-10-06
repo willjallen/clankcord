@@ -91,7 +91,8 @@ impl Runtime {
         }
         if let Some(snapshot_job) = children
             .iter()
-            .find(|child| child.kind == JobKind::DiscordVoiceStatusSnapshot)
+            .filter(|child| child.kind == JobKind::DiscordVoiceStatusSnapshot)
+            .max_by_key(|child| &child.started_at)
         {
             let Some(JobOutput::DiscordVoiceStatusSnapshot(output)) =
                 snapshot_job.metadata.output.clone()
@@ -101,6 +102,16 @@ impl Runtime {
                     snapshot_job.id
                 )));
             };
+            let observed_at = snapshot_job
+                .started_at
+                .as_deref()
+                .and_then(parse_instant)
+                .expect("a completed voice snapshot has a claim timestamp");
+            if utc_now() - observed_at > chrono::Duration::seconds(60) {
+                return Ok(JobDecision::WaitFor(vec![
+                    Job::discord_voice_status_snapshot(job.id.clone()),
+                ]));
+            }
             let bot_count = output.bots.len();
             let session_count = output.sessions.len();
             let voice_states = output
@@ -111,6 +122,7 @@ impl Runtime {
             let voice_state_count = voice_states.len();
             let voice_state_guild_count = output.voice_state_guild_ids.len();
             self.sync_voice_adapter_status(
+                observed_at,
                 output.bots,
                 output.sessions,
                 output.voice_state_guild_ids,

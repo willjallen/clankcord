@@ -84,7 +84,7 @@ async fn dashboard_health_reasons_are_terse_measured_operator_state() {
     heartbeat.mark_complete();
     store.create_job(heartbeat).await.unwrap();
     store
-        .record_voice_adapter_snapshot(0, 0, 0, 0)
+        .record_voice_adapter_snapshot(Utc::now(), 0, 0, 0, 0)
         .await
         .unwrap();
     let runtime = Runtime::from_store(store).unwrap();
@@ -823,7 +823,7 @@ async fn stale_voice_rows_are_separated_from_current_dashboard_status() {
         .await
         .unwrap();
     store
-        .record_voice_adapter_snapshot(1, 1, 1, 1)
+        .record_voice_adapter_snapshot(Utc::now(), 1, 1, 1, 1)
         .await
         .unwrap();
     let stale_at_ms = (Utc::now() - Duration::minutes(2)).timestamp_millis();
